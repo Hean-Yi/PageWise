@@ -8,6 +8,8 @@ public struct PaperSearchResult: Identifiable, Sendable, Equatable {
     public let blockID: UUID?
     public let isTranslation: Bool
     public let matchedText: String
+    public let matchingContext: String
+    public let hasAmbiguousTranslationContext: Bool
 }
 
 public protocol FixedPageTextLocating: Sendable {
@@ -37,16 +39,37 @@ public enum PaperTextSearch {
             for candidate in texts {
                 guard let match = candidate.text.range(of: term, options: [.caseInsensitive, .diacriticInsensitive])
                 else { continue }
+                let context = matchingContext(candidate.text, around: match)
+                let ambiguous =
+                    candidate.translated
+                    && paper.blocks.contains {
+                        $0.sourcePage == block.sourcePage && containsLocationContext(context, in: $0.text)
+                    }
                 results.append(
                     PaperSearchResult(
                         id: "\(paper.id.uuidString)-\(block.id.uuidString)-\(candidate.translated)",
                         paperID: paper.id, text: excerpt(candidate.text, around: match), sourcePage: block.sourcePage,
                         blockID: block.id, isTranslation: candidate.translated,
-                        matchedText: String(candidate.text[match])))
+                        matchedText: String(candidate.text[match]), matchingContext: context,
+                        hasAmbiguousTranslationContext: ambiguous))
                 if results.count == maximumResults { return results }
             }
         }
         return results
+    }
+
+    static func containsLocationContext(_ context: String, in text: String) -> Bool {
+        // PDFKit may insert line breaks inside a phrase, including between adjacent CJK characters.
+        let query = context.filter { !$0.isWhitespace }
+        guard !query.isEmpty else { return false }
+        return text.filter { !$0.isWhitespace }.range(of: query, options: [.caseInsensitive, .diacriticInsensitive])
+            != nil
+    }
+
+    private static func matchingContext(_ text: String, around match: Range<String.Index>) -> String {
+        let start = text.index(match.lowerBound, offsetBy: -40, limitedBy: text.startIndex) ?? text.startIndex
+        let end = text.index(match.upperBound, offsetBy: 40, limitedBy: text.endIndex) ?? text.endIndex
+        return String(text[start..<end])
     }
 
     private static func excerpt(_ text: String, around match: Range<String.Index>) -> String {

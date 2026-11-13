@@ -106,6 +106,11 @@ extension ReaderModel {
             navigateToSourcePage(result.sourcePage, blockID: result.blockID, preferredMode: targetMode)
             return
         }
+        if result.hasAmbiguousTranslationContext {
+            navigateToSourcePage(result.sourcePage, blockID: nil, preferredMode: "original")
+            status = "原文与译文的定位上下文相同，无法区分匹配位置，已打开原文第 \(result.sourcePage + 1) 页。"
+            return
+        }
         let request = UUID()
         let startingMode = mode
         let locator = pageTextLocator
@@ -115,7 +120,8 @@ extension ReaderModel {
             let pageKey: String?
             let failed: Bool
             do {
-                pageKey = try await locator.pageKey(matching: result.matchedText, in: candidates, root: root)
+                let locatorText = result.isTranslation ? result.matchingContext : result.matchedText
+                pageKey = try await locator.pageKey(matching: locatorText, in: candidates, root: root)
                 failed = false
             } catch is CancellationError {
                 return

@@ -39,6 +39,62 @@ import Testing
     await reopened.flushReadingPosition()
 }
 
+@Test(arguments: ["reselect", "evidence", "duplicate"])
+@MainActor func reopeningCurrentPaperKeepsItsLoadedNavigation(action: String) async throws {
+    let root = workspaceDirectory()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let model = try ReaderModel(root: root)
+    await model.load()
+    await model.addDemo()
+    let paper = try #require(model.paper)
+    await model.loadNavigation()
+    let items = model.navigationItems
+    #expect(!items.isEmpty)
+    switch action {
+    case "reselect":
+        model.select(paper.id)
+    case "evidence":
+        let block = try #require(paper.blocks.last)
+        model.jump(
+            to: Evidence(
+                id: "current-paper", title: paper.title, text: block.text, paperID: paper.id,
+                blockID: block.id, sourcePage: block.sourcePage))
+    default:
+        let imported = await model.importURLs([root.appendingPathComponent(paper.originalPath)])
+        #expect(imported == [paper.id])
+    }
+    #expect(model.selectedPaperID == paper.id)
+    #expect(model.selectedSection == "library")
+    #expect(model.navigationItems == items)
+    model.select(nil)
+    await model.flushReadingPosition()
+}
+
+@Test @MainActor func reselectingCurrentPaperPreservesPendingNavigationRequest() async throws {
+    let root = workspaceDirectory()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let model = try ReaderModel(root: root)
+    await model.load()
+    let paper = workspacePaper()
+    let other = workspacePaper()
+    model.state.papers = [paper, other]
+    model.select(paper.id)
+    let request = UUID()
+    model.navigationRequestID = request
+    model.navigationLoading = true
+    model.selectedSection = "calendar"
+    model.select(paper.id)
+    #expect(model.navigationRequestID == request)
+    #expect(model.navigationLoading)
+    #expect(model.selectedSection == "library")
+    model.select(other.id)
+    #expect(model.navigationRequestID == nil)
+    #expect(!model.navigationLoading)
+    #expect(model.navigationItems.isEmpty)
+    model.select(nil)
+    await model.flushReadingPosition()
+}
+
 @Test @MainActor func bookmarksDeduplicateAndReturnToExactLayoutAcrossModes() async throws {
     let root = workspaceDirectory()
     defer { try? FileManager.default.removeItem(at: root) }
@@ -178,37 +234,32 @@ import Testing
     await reopened.flushReadingPosition()
 }
 
-@Test @MainActor func translatedSearchFindsTheActualContinuationPageWithoutChangingArtifacts() async throws {
+@Test(arguments: [
+    ("精确定位", "精确定位译文续页，不能跳到只有英文的首页。", "精确定位"),
+    ("Transformer", "中文解释说明 Transformer 如何使用注意力连接输入与输出。", "中文解释"),
+])
+@MainActor func translatedSearchFindsTheActualContinuationPageWithoutChangingArtifacts(
+    query: String, translation: String, translationMarker: String
+) async throws {
     let root = workspaceDirectory()
     defer { try? FileManager.default.removeItem(at: root) }
     let model = try ReaderModel(root: root)
     await model.load()
-    let block = TextBlock(
-        sourcePage: 0,
-        text: String(
-            repeating: "The long original paragraph stays on immutable pages while its translation follows. ",
-            count: 130))
-    let translation = "精确定位译文续页，不能跳到只有英文的首页。"
-    let pages = try PageRenderer().render(
-        [BilingualBlock(block: block, translation: translation)], to: root, prefix: "long-search")
+    let paper = try renderedSplitSearchPaper(root: root, translation: translation)
+    let pages = paper.translatedPages
     #expect(pages.count > 1)
     let bytes = try pages.map { try Data(contentsOf: root.appendingPathComponent($0.relativePath)) }
     let first = try #require(PDFDocument(url: root.appendingPathComponent(pages[0].relativePath)))
-    #expect(first.string?.contains("精确定位") == false)
+    #expect(first.string?.contains(translationMarker) == false)
     let expected = try #require(
         pages.firstIndex { page in
-            PDFDocument(url: root.appendingPathComponent(page.relativePath))?.string?.contains("精确定位") == true
+            PDFDocument(url: root.appendingPathComponent(page.relativePath))?.string?.contains(translationMarker)
+                == true
         })
     #expect(expected > 0)
-    var paper = Paper(
-        title: "Long local fixture", digest: "long", originalPath: "original.pdf", pageCount: 1, blocks: [block],
-        warnings: [], canReflow: true)
-    paper.translatedPages = pages
-    paper.translations[block.id.uuidString] = translation
-    paper.translatedBlockCount = 1
     model.state.papers = [paper]
     model.select(paper.id)
-    let result = try #require(model.searchInPaper("精确定位").first)
+    let result = try #require(model.searchInPaper(query).first { $0.isTranslation })
     model.navigate(to: result)
     await model.searchNavigationTask?.value
     #expect(model.visiblePage == expected)
@@ -216,6 +267,23 @@ import Testing
     for (index, page) in pages.enumerated() {
         #expect(try Data(contentsOf: root.appendingPathComponent(page.relativePath)) == bytes[index])
     }
+    model.select(nil)
+    await model.flushReadingPosition()
+}
+
+@Test @MainActor func ambiguousTranslationContextFallsBackToOriginalInsteadOfClaimingATranslationPage() async throws {
+    let root = workspaceDirectory()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let model = try ReaderModel(root: root)
+    await model.load()
+    let paper = try renderedSplitSearchPaper(root: root, translation: "Transformer")
+    model.state.papers = [paper]
+    model.select(paper.id)
+    model.navigate(to: try #require(model.searchInPaper("Transformer").first { $0.isTranslation }))
+    await model.searchNavigationTask?.value
+    #expect(model.mode == "original")
+    #expect(model.visiblePage == 0)
+    #expect(model.status.contains("无法区分"))
     model.select(nil)
     await model.flushReadingPosition()
 }
@@ -323,6 +391,24 @@ private func splitSearchPaper() -> Paper {
     var paper = workspacePaper()
     paper.translatedPages.append(
         PageArtifact(blockIDs: paper.translatedPages[0].blockIDs, sourcePage: 2, relativePath: "continuation.pdf"))
+    return paper
+}
+
+@MainActor private func renderedSplitSearchPaper(root: URL, translation: String) throws -> Paper {
+    let block = TextBlock(
+        sourcePage: 0,
+        text: "Transformer appears in the original English paragraph. "
+            + String(
+                repeating: "The long original paragraph stays on immutable pages while its translation follows. ",
+                count: 130))
+    let pages = try PageRenderer().render(
+        [BilingualBlock(block: block, translation: translation)], to: root, prefix: "long-search")
+    var paper = Paper(
+        title: "Long local fixture", digest: "long", originalPath: "original.pdf", pageCount: 1, blocks: [block],
+        warnings: [], canReflow: true)
+    paper.translatedPages = pages
+    paper.translations[block.id.uuidString] = translation
+    paper.translatedBlockCount = 1
     return paper
 }
 

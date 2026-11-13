@@ -102,6 +102,7 @@ public final class ReaderModel {
     public func select(_ id: UUID?) {
         if let id, pendingImportIDs.contains(id) { return }
         if let id, !state.papers.contains(where: { $0.id == id }) { return }
+        let changedPaper = selectedPaperID != id
         invalidateSearchNavigation()
         endReading()
         selectedPaperID = id
@@ -109,9 +110,11 @@ public final class ReaderModel {
         selectionRects = []
         visiblePage = 0
         jumpPage = nil
-        navigationRequestID = nil
-        navigationLoading = false
-        navigationItems = []
+        if changedPaper {
+            navigationRequestID = nil
+            navigationLoading = false
+            navigationItems = []
+        }
         selectedSection = "library"
         restoreWorkspace()
         beginReading()

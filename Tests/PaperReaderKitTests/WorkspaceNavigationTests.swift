@@ -65,10 +65,24 @@ import Testing
 }
 
 @Test func fixedPageTextMatchingHandlesPDFLineBreaksWithoutInventingAMatch() {
-    #expect(PDFPageTextLocator.contains("精确定位", in: "已有文字\n精确\n定位译文"))
-    #expect(PDFPageTextLocator.contains("query key", in: "QUERY\nkey"))
-    #expect(!PDFPageTextLocator.contains("attention", in: "unrelated text"))
-    #expect(!PDFPageTextLocator.contains(" \n", in: "unrelated text"))
+    #expect(PaperTextSearch.containsLocationContext("精确定位", in: "已有文字\n精确\n定位译文"))
+    #expect(PaperTextSearch.containsLocationContext("query key", in: "QUERY\nkey"))
+    #expect(!PaperTextSearch.containsLocationContext("attention", in: "unrelated text"))
+    #expect(!PaperTextSearch.containsLocationContext(" \n", in: "unrelated text"))
+}
+
+@Test func translatedSearchContextKeepsRealSurroundingTextWithoutDisplayEllipses() throws {
+    var paper = navigationPaper()
+    let prefix = String(repeating: "前", count: 70)
+    let suffix = String(repeating: "后", count: 70)
+    paper.translations[paper.blocks[1].id.uuidString] = prefix + "Transformer" + suffix
+    let result = try #require(PaperTextSearch.search("Transformer", in: paper).first { $0.isTranslation })
+    #expect(
+        result.matchingContext == String(repeating: "前", count: 40) + "Transformer" + String(repeating: "后", count: 40))
+    #expect(!result.hasAmbiguousTranslationContext)
+    paper.translations[paper.blocks[1].id.uuidString] = paper.blocks[1].text
+    let ambiguous = try #require(PaperTextSearch.search("Attention", in: paper).first { $0.isTranslation })
+    #expect(ambiguous.hasAmbiguousTranslationContext)
 }
 
 @Test func fixedPageTextLocatorReportsMissingArtifacts() async throws {
