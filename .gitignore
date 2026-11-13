@@ -26,3 +26,6 @@ Artifacts/
 *.sqlite-shm
 
 # Keep Package.resolved tracked when the application project is created.
+
+# Local SwiftPM IDE metadata
+.swiftpm/

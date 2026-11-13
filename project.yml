@@ -1,0 +1,47 @@
+name: PaperReader
+options:
+  bundleIdPrefix: dev.paperreader
+  deploymentTarget:
+    macOS: "15.0"
+    iOS: "18.0"
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    GENERATE_INFOPLIST_FILE: YES
+    CURRENT_PROJECT_VERSION: 1
+    MARKETING_VERSION: 0.1.0
+packages:
+  PaperReader:
+    path: .
+targets:
+  PaperReader:
+    type: application
+    platform: macOS
+    sources: [App]
+    dependencies:
+      - package: PaperReader
+        product: PaperReaderUI
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.paperreader.mac
+        ENABLE_APP_SANDBOX: YES
+        ENABLE_USER_SELECTED_FILES: readwrite
+        ENABLE_OUTGOING_NETWORK_CONNECTIONS: YES
+        CODE_SIGN_IDENTITY: "-"
+        CODE_SIGN_ENTITLEMENTS: App/PaperReader.entitlements
+        INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.education
+  PaperReader-iPad:
+    type: application
+    platform: iOS
+    sources: [App]
+    dependencies:
+      - package: PaperReader
+        product: PaperReaderUI
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.paperreader.ipad
+        TARGETED_DEVICE_FAMILY: "2"
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
+        INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents: YES
+        INFOPLIST_KEY_UISupportedInterfaceOrientations: "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight UIInterfaceOrientationPortraitUpsideDown"

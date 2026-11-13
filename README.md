@@ -1,31 +1,76 @@
 # PaperReader
 
-面向计算机 / AI 论文的 Apple 原生阅读工具：逐段双语重排、自由手写批注、基于论文的 AI 问答，以及与 Obsidian 相连的阅读记录。
+本地优先的 Mac / iPad 论文阅读 MVP：PDF 导入与重排、逐段双语固定页、批注与 GLM 问答，以及 Obsidian 笔记和阅读日历。
 
-当前状态：需求访谈已完成主要范围确认，Git 已初始化；本仓库目前只有规范与设计文档，没有可运行的应用。详细架构属于待评审方案，关键可行性需要原型验证。
+当前已提供可构建应用，最低 macOS 15 / iPadOS 18。先做本地版本；iCloud 应用同步将在开发者会员可用后接入。完整能力和验证边界见 [MVP 状态](docs/mvp-status.md)。
 
-## 产品约定
+## 启动
 
-- Mac 为主，iPad 也能独立检索、下载、处理、翻译和阅读论文；第一版不包含 iPhone。
-- 最低 macOS 15；iPadOS 18 是暂定基线，尚未获得用户对具体版本的明确确认。
-- 英文原段后接中文译文；前几段完成即可阅读，后续逐页追加。已发布页面不再重新排版，手写批注与页面绑定。
-- 无法可靠转换时说明原因，回退到原始 PDF；原始文件始终保留。
-- 翻译、问答和记忆整理使用用户本地配置的 GLM API；预留其他供应商适配。
-- 划线提问以当前论文为主要证据，其他论文和指定 Obsidian 目录辅助；长期记忆自动整理，可查看、修改和删除。
-- 每篇论文对应一份 Markdown 笔记，用户点击后保存；是否整理讨论记录需要单独询问，保留用户自己的文字。
-- 日历自动记录并支持补记、修正；本地功能不依赖自建服务器。
-- 先本地开发，成熟后购买开发者会员，再完成 CloudKit 同步验证和朋友分发。Obsidian 的 iCloud Drive 文件访问单独设计。
+Mac（需要 Xcode）：
 
-## 文档入口
+```bash
+bash scripts/run-mac.sh
+```
 
-- [已确认需求与边界](docs/requirements.md)
-- [技术选型、替代方案与来源](docs/technology.md)
-- [架构和交互设计草案](docs/superpowers/specs/2026-11-13-paperreader-design.md)
-- [代码规范与验证要求](docs/engineering.md)
-- [仓库协作约定](AGENTS.md)
+也可以打开 `PaperReader.xcodeproj`，选择 **PaperReader** scheme 后运行。本地 Mac 构建使用 ad-hoc 签名，不需要付费开发者会员。
 
-## 开发环境
+iPad：在 Xcode 中选择 **PaperReader-iPad** scheme 和 iPad 模拟器。真机需要在 Signing & Capabilities 配置自己的 Team；免费账号的安装有效期限制仍适用。当前交付已完成模拟器目标构建，未实测 Pencil 真机。
 
-2026-11-13 已检测到 Xcode 26.2、Swift 6.2.3 和 Git 2.56.0。安装的 SDK 为 macOS / iOS 26.2；这不代表已验证 macOS 15 / iPadOS 18 的运行兼容性。旧系统需要后续真机或对应模拟器验证。
+工程文件已提交，正常构建不需要 XcodeGen。修改 `project.yml` 后才需要 `xcodegen generate`（开发时使用 2.46.0）。
 
-目前未创建 Xcode 工程、Swift Package、签名配置或远程仓库，因此没有应用构建或测试命令可运行。设计评审后的首项工作是验证固定页面、文字定位与 Pencil 批注的最小阅读原型。
+## 使用流程
+
+1. 在 Mac 从 Finder 拖入一个或多个 PDF，或点击“导入 PDF”。也可点击“先试读一篇本地示例”，无需 API。
+2. 应用保留原始文件，对可靠的文字型 PDF 生成新的可选文字固定页面；复杂内容明确提示并回退原始 PDF。
+3. 打开“模型与笔记设置”，填写 GLM / Chat Completions 兼容 HTTPS 基础地址、实际可用的模型名称与 API Key。密钥只进入设备 Keychain；留空保留原密钥。
+4. 点击“翻译 / 继续”。每批最多三个段落完成后追加双语页；已经显示的页面不会因后续翻译移动。切出应用后暂停，回来后点击继续。
+5. 选中正文后高亮或提问。回答以当前论文为主，附可定位的证据；研究关注点自动记录到“研究记忆”，可编辑或删除。
+6. 在 iPad 点击“手写”使用 Apple Pencil，退出手写模式后可正常选文。笔迹与页面绑定，独立保存，不覆盖 PDF。
+7. 在设置中选择 Obsidian 子目录。点击“保存笔记”时选择是否整理讨论；需要总结时先点击“生成论文总结”。保存会保留用户区，检测生成区的外部修改，并导出手写 PNG 附件。
+8. 阅读日历记录前台会话，支持补记和删除错误记录。长时间无操作会暂停估计计时。
+
+## 本地数据
+
+数据保存在应用沙盒的 Application Support/PaperReader 目录；PDF、固定页及笔迹按论文 UUID 保存，SQLite 保存本地记录。密钥不进入 SQLite、笔记或日志。`PAPERREADER_DATA_DIR` 仅供非沙盒开发/测试指定独立数据目录。
+
+当前未启用自动跨设备同步，因此两端是独立的本地书库。不要把正在使用的 SQLite 数据库放到 iCloud Drive 让两台设备共同写。Obsidian 目录通过系统选择器单独授权。
+
+## 检查
+
+```bash
+bash scripts/check.sh
+```
+
+包含严格 Swift 格式检查、26 项自动化测试、原创 PDF 冒烟验证、Mac 签名构建及 iPad 模拟器构建。真实 API 调用不包含在默认测试中。
+
+仅检查核心与工作流：
+
+```bash
+swift test
+swift run ReaderSmoke .local/smoke
+```
+
+冒烟验证会在独立目录生成原创 PDF、双语排版预览与笔记，用于验证页面完整性；其中的中文示例明确标记为测试内容，不是 GLM 结果。
+
+## 当前边界
+
+- 支持文字型单栏及可靠的简单双栏重排；扫描件、正文图形/图表、复杂数学结构或已有特殊批注回退原始 PDF。无 OCR，不宣称任意论文无损转换。
+- 当前在线检索来源为 arXiv；部分标题采用词项匹配，候选需用户确认。没有覆盖所有出版社或接入通用网页搜索。
+- 检索是本地分词与结构/选区优先的基础 RAG；没有启用向量模型或 FTS5 索引。中文问句检索未选中的英文远端段落仍有召回局限。
+- 文本模型问答不识别图像、图表或手写公式；跨页高亮目前明确限制为选区的第一页。
+- 字号与页面模板当前固定，没有换字号/重建版式 UI。超长段落可能达到模型输出上限，会停止并保留已完成内容。
+- 未进行真实 GLM 账户、Pencil 真机、macOS 15 / iPadOS 18 旧系统运行测试。Computer Use 审批拒绝了操作新应用，因此未完成 Finder 拖拽和原生交互的人工验收。
+
+## 项目结构
+
+```text
+App/                         Native app entry and entitlements
+Sources/PaperReaderKit/       Models, SQLite, PDF, model and note services
+Sources/PaperReaderUI/        SwiftUI views and application workflows
+Sources/ReaderSmoke/          Offline integration smoke tool
+Tests/                       Core, PDF and workflow tests
+scripts/                     Build, run and validation commands
+docs/                        Requirements, design and delivery status
+```
+
+文档：[需求](docs/requirements.md) · [技术选型](docs/technology.md) · [设计](docs/superpowers/specs/2026-11-13-paperreader-design.md) · [代码规范](docs/engineering.md) · [实施计划](docs/superpowers/plans/2026-11-13-local-mvp.md)
