@@ -69,6 +69,7 @@ extension ReaderModel {
 
     public func recordVisiblePage(_ pageIndex: Int) {
         guard pageKeys.indices.contains(pageIndex) else { return }
+        if pageIndex != visiblePage { invalidateSearchNavigation() }
         visiblePage = pageIndex
         updateReadingPosition()
         scheduleWorkspaceSave()
@@ -93,9 +94,49 @@ extension ReaderModel {
     }
 
     public func navigate(to result: PaperSearchResult) {
-        guard result.paperID == selectedPaperID else { return }
-        navigateToSourcePage(
-            result.sourcePage, blockID: result.blockID, preferredMode: result.isTranslation ? "translated" : mode)
+        guard result.paperID == selectedPaperID, let paper else { return }
+        invalidateSearchNavigation()
+        let targetMode = result.isTranslation ? "translated" : mode
+        let pages = targetMode == "translated" ? paper.translatedPages : paper.previewPages
+        let candidates = pages.filter { page in
+            !pendingArtifactIDs.contains(page.id) && page.sourcePage == result.sourcePage
+                && (result.blockID.map { page.blockIDs.contains($0) } ?? true)
+        }
+        guard targetMode != "original", candidates.count > 1 else {
+            navigateToSourcePage(result.sourcePage, blockID: result.blockID, preferredMode: targetMode)
+            return
+        }
+        let request = UUID()
+        let startingMode = mode
+        let locator = pageTextLocator
+        let root = root
+        searchNavigationRequestID = request
+        searchNavigationTask = Task { @MainActor [weak self] in
+            let pageKey: String?
+            let failed: Bool
+            do {
+                pageKey = try await locator.pageKey(matching: result.matchedText, in: candidates, root: root)
+                failed = false
+            } catch is CancellationError {
+                return
+            } catch {
+                pageKey = nil
+                failed = true
+            }
+            guard let self, !Task.isCancelled, self.searchNavigationRequestID == request,
+                self.selectedPaperID == result.paperID, self.mode == startingMode,
+                self.selectedSection == "library", self.isActive
+            else { return }
+            self.searchNavigationRequestID = nil
+            self.searchNavigationTask = nil
+            self.applySearchDestination(pageKey, result: result, targetMode: targetMode, failed: failed)
+        }
+    }
+
+    func invalidateSearchNavigation() {
+        searchNavigationRequestID = nil
+        searchNavigationTask?.cancel()
+        searchNavigationTask = nil
     }
 
     public func loadNavigation() async {
@@ -190,6 +231,7 @@ extension ReaderModel {
     }
 
     private func applyPosition(_ position: ReaderPosition) {
+        invalidateSearchNavigation()
         selectionText = ""
         selectionRects = []
         mode = position.mode
@@ -198,6 +240,22 @@ extension ReaderModel {
         updateReadingPosition()
         scheduleWorkspaceSave(immediately: true)
         touch()
+    }
+
+    private func applySearchDestination(
+        _ pageKey: String?, result: PaperSearchResult, targetMode: String, failed: Bool
+    ) {
+        guard let paper else { return }
+        if let pageKey,
+            let position = PaperPageLocator.resolve(pageKey: pageKey, in: paper, excluding: pendingArtifactIDs),
+            position.mode == targetMode
+        {
+            applyPosition(position)
+        } else if let original = PaperPageLocator.position(sourcePage: result.sourcePage, mode: "original", in: paper) {
+            applyPosition(original)
+            let reason = failed ? "固定页面暂无法读取" : "未能在固定页中定位匹配文字"
+            status = "\(reason)，已打开原文第 \(result.sourcePage + 1) 页。"
+        }
     }
 
     private func navigateToStablePage(_ pageKey: String, paperID: UUID) {

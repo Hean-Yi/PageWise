@@ -1,4 +1,5 @@
 import Foundation
+import PDFKit
 import PaperReaderKit
 import Testing
 
@@ -175,6 +176,154 @@ import Testing
     #expect(reopened.visiblePage == 2)
     reopened.select(nil)
     await reopened.flushReadingPosition()
+}
+
+@Test @MainActor func translatedSearchFindsTheActualContinuationPageWithoutChangingArtifacts() async throws {
+    let root = workspaceDirectory()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let model = try ReaderModel(root: root)
+    await model.load()
+    let block = TextBlock(
+        sourcePage: 0,
+        text: String(
+            repeating: "The long original paragraph stays on immutable pages while its translation follows. ",
+            count: 130))
+    let translation = "精确定位译文续页，不能跳到只有英文的首页。"
+    let pages = try PageRenderer().render(
+        [BilingualBlock(block: block, translation: translation)], to: root, prefix: "long-search")
+    #expect(pages.count > 1)
+    let bytes = try pages.map { try Data(contentsOf: root.appendingPathComponent($0.relativePath)) }
+    let first = try #require(PDFDocument(url: root.appendingPathComponent(pages[0].relativePath)))
+    #expect(first.string?.contains("精确定位") == false)
+    let expected = try #require(
+        pages.firstIndex { page in
+            PDFDocument(url: root.appendingPathComponent(page.relativePath))?.string?.contains("精确定位") == true
+        })
+    #expect(expected > 0)
+    var paper = Paper(
+        title: "Long local fixture", digest: "long", originalPath: "original.pdf", pageCount: 1, blocks: [block],
+        warnings: [], canReflow: true)
+    paper.translatedPages = pages
+    paper.translations[block.id.uuidString] = translation
+    paper.translatedBlockCount = 1
+    model.state.papers = [paper]
+    model.select(paper.id)
+    let result = try #require(model.searchInPaper("精确定位").first)
+    model.navigate(to: result)
+    await model.searchNavigationTask?.value
+    #expect(model.visiblePage == expected)
+    #expect(model.workspace(for: paper.id).position?.pageKey == pages[expected].id.uuidString)
+    for (index, page) in pages.enumerated() {
+        #expect(try Data(contentsOf: root.appendingPathComponent(page.relativePath)) == bytes[index])
+    }
+    model.select(nil)
+    await model.flushReadingPosition()
+}
+
+@Test @MainActor func missingSearchArtifactFallsBackToOriginalWithAnExplanation() async throws {
+    let root = workspaceDirectory()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let model = try ReaderModel(root: root)
+    await model.load()
+    let paper = splitSearchPaper()
+    model.state.papers = [paper]
+    model.select(paper.id)
+    model.navigate(to: try #require(model.searchInPaper("注意力").first))
+    await model.searchNavigationTask?.value
+    #expect(model.mode == "original")
+    #expect(model.visiblePage == 2)
+    #expect(model.status.contains("无法读取"))
+    #expect(model.status.contains("原文第 3 页"))
+    model.select(nil)
+    await model.flushReadingPosition()
+}
+
+@Test @MainActor func unmatchedSearchTextFallsBackToOriginalWithAnExplanation() async throws {
+    let root = workspaceDirectory()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let locator = ControlledPageTextLocator()
+    let model = try ReaderModel(root: root, pageTextLocator: locator)
+    await model.load()
+    let paper = splitSearchPaper()
+    model.state.papers = [paper]
+    model.select(paper.id)
+    model.navigate(to: try #require(model.searchInPaper("注意力").first))
+    let task = model.searchNavigationTask
+    await locator.waitUntilRequested()
+    await locator.complete(with: nil)
+    await task?.value
+    #expect(model.mode == "original")
+    #expect(model.visiblePage == 2)
+    #expect(model.status.contains("未能在固定页中定位匹配文字"))
+    model.select(nil)
+    await model.flushReadingPosition()
+}
+
+@Test(arguments: ["page", "mode", "paper", "library", "background"])
+@MainActor func delayedSearchNavigationCannotOverwriteANewerReaderAction(action: String) async throws {
+    let root = workspaceDirectory()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let locator = ControlledPageTextLocator()
+    let model = try ReaderModel(root: root, pageTextLocator: locator)
+    await model.load()
+    let paper = splitSearchPaper()
+    let other = workspacePaper()
+    model.state.papers = [paper, other]
+    model.select(paper.id)
+    model.navigate(to: try #require(model.searchInPaper("注意力").first))
+    let task = model.searchNavigationTask
+    await locator.waitUntilRequested()
+    switch action {
+    case "page": model.recordVisiblePage(1)
+    case "mode": model.changeMode(to: "original")
+    case "paper": model.select(other.id)
+    case "library": model.select(nil)
+    default: model.setActive(false)
+    }
+    let expectedPaper = model.selectedPaperID
+    let expectedMode = model.mode
+    let expectedPage = model.visiblePage
+    let matchedPage = action == "page" ? paper.translatedPages[0] : paper.translatedPages[1]
+    // This test service deliberately completes after cancellation to exercise the request identity guard.
+    await locator.complete(with: matchedPage.id.uuidString)
+    await task?.value
+    #expect(model.selectedPaperID == expectedPaper)
+    #expect(model.mode == expectedMode)
+    #expect(model.visiblePage == expectedPage)
+    model.select(nil)
+    await model.flushReadingPosition()
+}
+
+private actor ControlledPageTextLocator: FixedPageTextLocating {
+    private var continuation: CheckedContinuation<String?, Never>?
+    private var requestObserver: CheckedContinuation<Void, Never>?
+    private var requested = false
+
+    func pageKey(matching matchedText: String, in pages: [PageArtifact], root: URL) async throws -> String? {
+        await withCheckedContinuation { continuation in
+            self.continuation = continuation
+            requested = true
+            requestObserver?.resume()
+            requestObserver = nil
+        }
+    }
+
+    func waitUntilRequested() async {
+        if requested { return }
+        await withCheckedContinuation { requestObserver = $0 }
+    }
+
+    func complete(with pageKey: String?) {
+        continuation?.resume(returning: pageKey)
+        continuation = nil
+    }
+}
+
+private func splitSearchPaper() -> Paper {
+    var paper = workspacePaper()
+    paper.translatedPages.append(
+        PageArtifact(blockIDs: paper.translatedPages[0].blockIDs, sourcePage: 2, relativePath: "continuation.pdf"))
+    return paper
 }
 
 private func workspaceDirectory() -> URL {

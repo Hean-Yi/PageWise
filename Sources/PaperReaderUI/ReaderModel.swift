@@ -35,11 +35,14 @@ public final class ReaderModel {
     let vault: VaultService
     let arxiv = ArxivClient()
     let outlineService = PDFOutlineService()
+    let pageTextLocator: any FixedPageTextLocating
     @ObservationIgnored private var saveQueue: Task<Bool, Never>?
     @ObservationIgnored var workspaceSaveTask: Task<Void, Never>?
     @ObservationIgnored var workspaceRevision = 0
     @ObservationIgnored var savedWorkspaceRevision = 0
     @ObservationIgnored var navigationRequestID: UUID?
+    @ObservationIgnored var searchNavigationRequestID: UUID?
+    @ObservationIgnored var searchNavigationTask: Task<Void, Never>?
     @ObservationIgnored var translationTasks: [UUID: Task<Void, Never>] = [:]
     @ObservationIgnored var readingStart: Date?
     @ObservationIgnored var readingPaper: UUID?
@@ -48,9 +51,11 @@ public final class ReaderModel {
 
     public init(
         root: URL? = nil, client: ModelClient = ModelClient(),
-        credentials: any ModelCredentialStore = DeviceModelCredentials()
+        credentials: any ModelCredentialStore = DeviceModelCredentials(),
+        pageTextLocator: any FixedPageTextLocating = PDFPageTextLocator()
     ) throws {
         self.client = client
+        self.pageTextLocator = pageTextLocator
         let location =
             root
             ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -97,6 +102,7 @@ public final class ReaderModel {
     public func select(_ id: UUID?) {
         if let id, pendingImportIDs.contains(id) { return }
         if let id, !state.papers.contains(where: { $0.id == id }) { return }
+        invalidateSearchNavigation()
         endReading()
         selectedPaperID = id
         selectionText = ""

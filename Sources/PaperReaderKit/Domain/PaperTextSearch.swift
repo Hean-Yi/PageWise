@@ -7,6 +7,11 @@ public struct PaperSearchResult: Identifiable, Sendable, Equatable {
     public let sourcePage: Int
     public let blockID: UUID?
     public let isTranslation: Bool
+    public let matchedText: String
+}
+
+public protocol FixedPageTextLocating: Sendable {
+    func pageKey(matching matchedText: String, in pages: [PageArtifact], root: URL) async throws -> String?
 }
 
 public enum PaperTextSearch {
@@ -36,7 +41,8 @@ public enum PaperTextSearch {
                     PaperSearchResult(
                         id: "\(paper.id.uuidString)-\(block.id.uuidString)-\(candidate.translated)",
                         paperID: paper.id, text: excerpt(candidate.text, around: match), sourcePage: block.sourcePage,
-                        blockID: block.id, isTranslation: candidate.translated))
+                        blockID: block.id, isTranslation: candidate.translated,
+                        matchedText: String(candidate.text[match])))
                 if results.count == maximumResults { return results }
             }
         }

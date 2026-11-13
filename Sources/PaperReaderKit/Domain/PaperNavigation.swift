@@ -17,9 +17,12 @@ public struct PaperNavigationItem: Identifiable, Sendable, Equatable {
 
     public static func pages(for paper: Paper) -> [PaperNavigationItem] {
         var excerpts: [Int: String] = [:]
-        for block in paper.blocks where excerpts[block.sourcePage] == nil {
+        let paperTitle = paper.title.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        for block in paper.blocks {
             let text = block.text.split(whereSeparator: \.isWhitespace).joined(separator: " ")
-            if !text.isEmpty { excerpts[block.sourcePage] = String(text.prefix(80)) }
+            guard !text.isEmpty, text.compare(paperTitle, options: .caseInsensitive) != .orderedSame else { continue }
+            if let existing = excerpts[block.sourcePage], existing.count >= 60 || text.count < 60 { continue }
+            excerpts[block.sourcePage] = String(text.prefix(80))
         }
         return (0..<max(0, paper.pageCount)).map { page in
             let label = "第 \(page + 1) 页"

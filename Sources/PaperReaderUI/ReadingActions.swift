@@ -29,6 +29,7 @@ extension ReaderModel {
         if active {
             beginReading()
         } else {
+            invalidateSearchNavigation()
             endReading()
             for task in translationTasks.values { task.cancel() }
         }

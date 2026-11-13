@@ -58,9 +58,25 @@ import Testing
     #expect(hit.blockID == paper.blocks[1].id)
     #expect(hit.sourcePage == 2)
     #expect(PaperTextSearch.search("ATTENTION", in: paper).first?.isTranslation == false)
+    #expect(PaperTextSearch.search("ATTENTION", in: paper).first?.matchedText == "Attention")
     #expect(PaperTextSearch.search("秘密", in: paper).isEmpty)
     #expect(PaperTextSearch.search("注意力", in: paper, excluding: [paper.translatedPages[0].id]).isEmpty)
     #expect(PaperTextSearch.search(" \n ", in: paper).isEmpty)
+}
+
+@Test func fixedPageTextMatchingHandlesPDFLineBreaksWithoutInventingAMatch() {
+    #expect(PDFPageTextLocator.contains("精确定位", in: "已有文字\n精确\n定位译文"))
+    #expect(PDFPageTextLocator.contains("query key", in: "QUERY\nkey"))
+    #expect(!PDFPageTextLocator.contains("attention", in: "unrelated text"))
+    #expect(!PDFPageTextLocator.contains(" \n", in: "unrelated text"))
+}
+
+@Test func fixedPageTextLocatorReportsMissingArtifacts() async throws {
+    let page = PageArtifact(blockIDs: [], sourcePage: 0, relativePath: "missing.pdf")
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    await #expect(throws: (any Error).self) {
+        try await PDFPageTextLocator().pageKey(matching: "match", in: [page], root: root)
+    }
 }
 
 @Test func paperSearchCapsResultsAndPageFallbackDoesNotInventHeadings() {
@@ -71,6 +87,26 @@ import Testing
     #expect(items.map(\.sourcePage) == [0, 1, 2])
     #expect(items.allSatisfy { !$0.isOutline && $0.depth == 0 })
     #expect(items[0].title.contains("Repeated matching text 0"))
+}
+
+@Test func pageFallbackSkipsRepeatedPaperTitleAndPrefersRealBodyExcerpt() {
+    var paper = navigationPaper()
+    paper.title = "Understanding Attention"
+    let body =
+        "This paragraph is long enough to describe the real content on the first source page without inventing a heading."
+    paper.blocks = [
+        TextBlock(sourcePage: 0, text: "  Understanding   Attention \n"),
+        TextBlock(sourcePage: 0, text: "Abstract"),
+        TextBlock(sourcePage: 0, text: body),
+        TextBlock(sourcePage: 1, text: paper.title),
+        TextBlock(sourcePage: 1, text: "Only a short real excerpt."),
+        TextBlock(sourcePage: 2, text: paper.title),
+    ]
+    let items = PaperNavigationItem.pages(for: paper)
+    #expect(items[0].title == "第 1 页 · " + String(body.prefix(80)))
+    #expect(items[1].title == "第 2 页 · Only a short real excerpt.")
+    #expect(items[2].title == "第 3 页")
+    #expect(items.allSatisfy { !$0.isOutline })
 }
 
 @Test @MainActor func pdfOutlineServiceUsesRealTitlesAndNestedPageDestinations() async throws {
