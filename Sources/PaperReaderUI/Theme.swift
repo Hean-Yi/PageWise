@@ -7,13 +7,14 @@ import SwiftUI
 #endif
 
 enum ReaderTheme {
-    static let accent = adaptive(light: (0.12, 0.43, 0.37), dark: (0.46, 0.76, 0.66))
-    static let canvas = adaptive(light: (0.97, 0.97, 0.95), dark: (0.09, 0.10, 0.11))
-    static let surface = adaptive(light: (1, 1, 0.995), dark: (0.13, 0.14, 0.15))
-    static let sidebar = adaptive(light: (0.94, 0.95, 0.93), dark: (0.11, 0.12, 0.12))
+    static let accent = adaptive(light: (0.64, 0.30, 0.20), dark: (0.88, 0.57, 0.43))
+    static let canvas = adaptive(light: (0.98, 0.975, 0.96), dark: (0.14, 0.135, 0.125))
+    static let surface = adaptive(light: (1, 0.995, 0.985), dark: (0.18, 0.17, 0.155))
+    static let sidebar = adaptive(light: (0.945, 0.935, 0.91), dark: (0.115, 0.11, 0.10))
+    static let elevated = adaptive(light: (0.955, 0.94, 0.905), dark: (0.22, 0.20, 0.175))
     static let ink = Color.primary
     static let muted = Color.secondary
-    static let line = Color.primary.opacity(0.08)
+    static let line = Color.primary.opacity(0.09)
 
     private static func adaptive(light: (Double, Double, Double), dark: (Double, Double, Double)) -> Color {
         #if os(macOS)

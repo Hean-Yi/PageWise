@@ -1,0 +1,111 @@
+import PaperReaderKit
+import SwiftUI
+
+struct ReaderNotesView: View {
+    @Bindable var model: ReaderModel
+    let summarize: () -> Void
+    let saveNote: () -> Void
+    let didNavigate: () -> Void
+
+    var body: some View {
+        VStack(spacing: 0) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 26) {
+                    bookmarks
+                    highlights
+                    summary
+                }.padding(20)
+            }
+            Divider()
+            Button(action: saveNote) {
+                Label("保存到 Obsidian", systemImage: "square.and.arrow.up")
+                    .font(.system(size: 12, weight: .medium)).frame(maxWidth: .infinity).padding(.vertical, 12)
+                    .background(ReaderTheme.elevated, in: RoundedRectangle(cornerRadius: 9))
+            }.buttonStyle(.plain).padding(16)
+        }
+    }
+
+    private var bookmarks: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            heading("书签", icon: "bookmark", count: model.currentBookmarks.count)
+            if model.currentBookmarks.isEmpty {
+                Button(action: model.toggleBookmark) {
+                    Label("标记当前页", systemImage: "plus").font(.system(size: 12))
+                }.buttonStyle(.borderless).foregroundStyle(ReaderTheme.muted).disabled(model.pageKeys.isEmpty)
+            } else {
+                ForEach(model.currentBookmarks) { mark in
+                    HStack(spacing: 10) {
+                        Button {
+                            model.navigate(to: mark)
+                            didNavigate()
+                        } label: {
+                            HStack(spacing: 8) {
+                                Image(systemName: "bookmark.fill").foregroundStyle(ReaderTheme.accent)
+                                Text("\(readingModeTitle(mark.mode)) · 第 \(mark.pageIndex + 1) 页")
+                                Spacer()
+                                Image(systemName: "arrow.up.right").foregroundStyle(ReaderTheme.muted)
+                            }.contentShape(Rectangle())
+                        }.buttonStyle(.plain)
+                        Button {
+                            model.removeBookmark(mark.id)
+                        } label: {
+                            Image(systemName: "xmark")
+                        }
+                        .buttonStyle(.plain).foregroundStyle(ReaderTheme.muted).help("移除书签").accessibilityLabel("移除书签")
+                    }.font(.system(size: 12)).padding(12)
+                        .background(ReaderTheme.canvas, in: RoundedRectangle(cornerRadius: 8))
+                }
+            }
+        }
+    }
+
+    private var highlights: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            heading("划线", icon: "highlighter", count: model.currentHighlights.count)
+            if model.currentHighlights.isEmpty {
+                Text("选中正文，留下重点。").font(.system(size: 12)).foregroundStyle(ReaderTheme.muted)
+            } else {
+                ForEach(model.currentHighlights.reversed()) { mark in
+                    Button {
+                        model.navigate(to: mark)
+                        didNavigate()
+                    } label: {
+                        HStack(alignment: .top, spacing: 10) {
+                            RoundedRectangle(cornerRadius: 1).fill(ReaderTheme.accent.opacity(0.5)).frame(width: 2)
+                            VStack(alignment: .leading, spacing: 9) {
+                                Text(mark.text).font(.system(size: 12)).lineSpacing(4).lineLimit(7)
+                                    .multilineTextAlignment(.leading)
+                                HStack {
+                                    Text("第 \(mark.pageIndex + 1) 页")
+                                    Spacer()
+                                    Image(systemName: "arrow.up.right")
+                                }.font(.system(size: 10)).foregroundStyle(ReaderTheme.muted)
+                            }
+                        }.fixedSize(horizontal: false, vertical: true).padding(.vertical, 6).contentShape(Rectangle())
+                    }.buttonStyle(.plain)
+                }
+            }
+        }
+    }
+
+    private var summary: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            heading("总结", icon: "text.alignleft", count: nil)
+            if let text = model.paper?.summary, !text.isEmpty {
+                Text(text).font(.system(size: 13)).lineSpacing(5).textSelection(.enabled)
+            }
+            Button(action: summarize) {
+                Label(model.paper?.summary.isEmpty == false ? "重新生成" : "生成论文总结", systemImage: "sparkles")
+                    .font(.system(size: 12))
+            }.buttonStyle(.borderless).disabled(model.busyAI)
+        }
+    }
+
+    private func heading(_ title: String, icon: String, count: Int?) -> some View {
+        HStack(spacing: 7) {
+            Label(title, systemImage: icon)
+            if let count { Text("\(count)").foregroundStyle(ReaderTheme.muted) }
+            Spacer()
+        }.font(.system(size: 12, weight: .medium))
+    }
+}

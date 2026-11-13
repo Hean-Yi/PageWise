@@ -77,7 +77,7 @@ private final class PDFCoordinator: NSObject, @preconcurrency PDFPageOverlayView
         view.pageOverlayViewProvider = self
         #if os(macOS)
             view.acceptsDraggedFiles = false
-            view.backgroundColor = NSColor(calibratedWhite: 0.93, alpha: 1)
+            view.backgroundColor = NSColor(ReaderTheme.canvas)
         #else
             view.backgroundColor = UIColor.secondarySystemBackground
         #endif
@@ -94,6 +94,23 @@ private final class PDFCoordinator: NSObject, @preconcurrency PDFPageOverlayView
         defer { isUpdating = false }
         self.penEnabled = penEnabled
         view.isInMarkupMode = penEnabled
+        // SwiftUI may update the old representable once after the reader is dismissed.
+        guard model.paper != nil else {
+            view.document = nil
+            displayedDocument = nil
+            identity = ""
+            keys = []
+            paperID = nil
+            highlightIDs = []
+            #if os(iOS)
+                for canvas in canvases.values {
+                    toolPicker.setVisible(false, forFirstResponder: canvas)
+                    toolPicker.removeObserver(canvas)
+                }
+                canvases = [:]
+            #endif
+            return
+        }
         let newIdentity = model.pageURLs.map(\.path).joined(separator: "|")
         if identity != newIdentity {
             let oldPage = identity.isEmpty ? 0 : model.visiblePage
@@ -139,10 +156,13 @@ private final class PDFCoordinator: NSObject, @preconcurrency PDFPageOverlayView
             highlightIDs.insert(mark.id)
         }
         if let index = model.jumpPage, let page = view.document?.page(at: index) {
+            view.clearSelection()
             view.go(to: page)
             Task { @MainActor [weak self] in
-                guard let self, self.identity == newIdentity, self.model.jumpPage == index else { return }
-                self.model.visiblePage = index
+                guard let self, self.identity == newIdentity, self.model.jumpPage == index,
+                    self.paperID == self.model.selectedPaperID, self.keys == self.model.pageKeys
+                else { return }
+                self.model.recordVisiblePage(index)
                 self.model.jumpPage = nil
             }
         }
@@ -159,7 +179,7 @@ private final class PDFCoordinator: NSObject, @preconcurrency PDFPageOverlayView
     }
 
     @objc func selectionChanged() {
-        guard !isUpdating else { return }
+        guard !isUpdating, paperID == model.selectedPaperID, keys == model.pageKeys else { return }
         guard let view, let selected = view.currentSelection, let page = selected.pages.first,
             let document = view.document, let text = selected.string,
             !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -196,8 +216,10 @@ private final class PDFCoordinator: NSObject, @preconcurrency PDFPageOverlayView
     }
 
     @objc func pageChanged() {
-        guard !isUpdating, let view, let page = view.currentPage, let document = view.document else { return }
-        model.visiblePage = document.index(for: page)
+        guard !isUpdating, paperID == model.selectedPaperID, keys == model.pageKeys,
+            let view, let page = view.currentPage, let document = view.document
+        else { return }
+        model.recordVisiblePage(document.index(for: page))
         model.touch()
     }
 
