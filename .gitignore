@@ -1,0 +1,28 @@
+# macOS / Xcode
+.DS_Store
+.build/
+DerivedData/
+build/
+xcuserdata/
+*.xcuserstate
+*.xcresult/
+*.ipa
+*.dSYM/
+
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
+Config/Local.xcconfig
+*.p12
+*.mobileprovision
+*.provisionprofile
+
+# Private runtime data; licensed fixtures belong in Tests/Fixtures instead.
+.local/
+LocalData/
+Artifacts/
+*.sqlite-wal
+*.sqlite-shm
+
+# Keep Package.resolved tracked when the application project is created.
