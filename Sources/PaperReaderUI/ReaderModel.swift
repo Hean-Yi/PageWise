@@ -21,6 +21,8 @@ public final class ReaderModel {
     public var selectionPage = 0
     public var visiblePage = 0
     public var jumpPage: Int?
+    public var navigationItems: [PaperNavigationItem] = []
+    public var navigationLoading = false
     public var vaultName = "未选择目录"
     public var loaded = false
     public var loadFailure: String?
@@ -32,7 +34,12 @@ public final class ReaderModel {
     let configurationStore: ModelConfigurationStore
     let vault: VaultService
     let arxiv = ArxivClient()
+    let outlineService = PDFOutlineService()
     @ObservationIgnored private var saveQueue: Task<Bool, Never>?
+    @ObservationIgnored var workspaceSaveTask: Task<Void, Never>?
+    @ObservationIgnored var workspaceRevision = 0
+    @ObservationIgnored var savedWorkspaceRevision = 0
+    @ObservationIgnored var navigationRequestID: UUID?
     @ObservationIgnored var translationTasks: [UUID: Task<Void, Never>] = [:]
     @ObservationIgnored var readingStart: Date?
     @ObservationIgnored var readingPaper: UUID?
@@ -89,19 +96,23 @@ public final class ReaderModel {
 
     public func select(_ id: UUID?) {
         if let id, pendingImportIDs.contains(id) { return }
+        if let id, !state.papers.contains(where: { $0.id == id }) { return }
         endReading()
         selectedPaperID = id
         selectionText = ""
         selectionRects = []
         visiblePage = 0
-        jumpPage = 0
-        mode = paper?.translatedPages.isEmpty == false ? "translated" : "reflow"
-        if paper?.canReflow == false { mode = "original" }
+        jumpPage = nil
+        navigationRequestID = nil
+        navigationLoading = false
+        navigationItems = []
         selectedSection = "library"
+        restoreWorkspace()
         beginReading()
     }
 
     @discardableResult func save() async -> Bool {
+        guard loaded else { return false }
         let snapshot = state
         let previous = saveQueue
         let store = store
@@ -261,7 +272,9 @@ public final class ReaderModel {
                         throw ReaderError.message("页面未能保存，翻译已停止；先前页面仍保留。")
                     }
                     self.pendingArtifactIDs.subtract(publicationIDs)
-                    if self.selectedPaperID == id { self.mode = "translated" }
+                    if self.selectedPaperID == id && self.mode != "translated" {
+                        self.changeMode(to: "translated")
+                    }
                 }
             } catch is CancellationError { self.status = "翻译已暂停，已完成页面已保存" } catch {
                 self.message = error.localizedDescription
@@ -291,8 +304,8 @@ public final class ReaderModel {
     public func jump(to evidence: Evidence) {
         if let id = evidence.paperID {
             select(id)
-            mode = "original"
-            jumpPage = evidence.sourcePage ?? 0
+            guard selectedPaperID == id else { return }
+            navigateToSourcePage(evidence.sourcePage ?? 0, blockID: evidence.blockID, preferredMode: mode)
         } else if let path = evidence.notePath {
             message = "参考笔记：\(URL(fileURLWithPath: path).lastPathComponent)\n\n\(evidence.text)"
         }

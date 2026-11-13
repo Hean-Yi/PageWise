@@ -13,6 +13,8 @@ extension ReaderModel {
         lastInteraction = Date()
     }
     public func endReading() {
+        updateReadingPosition()
+        scheduleWorkspaceSave(immediately: true)
         guard let start = readingStart, let id = readingPaper else { return }
         let end = min(Date(), lastInteraction.addingTimeInterval(300))
         readingStart = nil

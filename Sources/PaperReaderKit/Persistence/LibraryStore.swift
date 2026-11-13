@@ -39,7 +39,7 @@ public actor LibraryStore {
     }
 
     public func load() throws -> LibraryState {
-        try Self.database(at: databaseURL) { db in
+        let data: Data? = try Self.database(at: databaseURL) { db in
             var statement: OpaquePointer?
             guard sqlite3_prepare_v2(db, "SELECT payload FROM library WHERE id=1", -1, &statement, nil) == SQLITE_OK
             else {
@@ -47,18 +47,23 @@ public actor LibraryStore {
             }
             defer { sqlite3_finalize(statement) }
             let result = sqlite3_step(statement)
-            if result == SQLITE_DONE { return LibraryState() }
+            if result == SQLITE_DONE { return nil }
             guard result == SQLITE_ROW, let pointer = sqlite3_column_blob(statement, 0) else {
                 throw ReaderError.message("本地书库读取失败，原文件已保留。")
             }
-            let data = Data(bytes: pointer, count: Int(sqlite3_column_bytes(statement, 0)))
-            let state = try JSONDecoder().decode(LibraryState.self, from: data)
-            guard state.version == 1 else { throw ReaderError.message("书库来自更新版本，请升级应用。") }
-            return state
+            return Data(bytes: pointer, count: Int(sqlite3_column_bytes(statement, 0)))
         }
+        guard let data else { return LibraryState() }
+        let state = try JSONDecoder().decode(LibraryState.self, from: data)
+        let header = try JSONDecoder().decode(SnapshotHeader.self, from: data)
+        if header.version < LibraryState.currentVersion { try save(state) }
+        return state
     }
 
     public func save(_ state: LibraryState) throws {
+        guard state.version == LibraryState.currentVersion else {
+            throw ReaderError.message("不能写入不受支持的书库版本，原有资料已保留。")
+        }
         let data = try JSONEncoder().encode(state)
         try Self.database(at: databaseURL) { db in
             try Self.execute(db, "BEGIN IMMEDIATE")
@@ -87,6 +92,10 @@ public actor LibraryStore {
                 throw error
             }
         }
+    }
+
+    private struct SnapshotHeader: Decodable {
+        let version: Int
     }
 
     private static func database<T>(at url: URL, body: (OpaquePointer) throws -> T) throws -> T {
