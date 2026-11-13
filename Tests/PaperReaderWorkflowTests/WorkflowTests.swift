@@ -15,7 +15,7 @@ private struct FakeModelTransport: HTTPTransport {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: root) }
     let model = try ReaderModel(
-        root: root, client: ModelClient(transport: FakeModelTransport()), keyProvider: { "test-only" })
+        root: root, client: ModelClient(transport: FakeModelTransport()), credentials: WorkflowCredentials())
     await model.load()
     await model.addDemo()
     let paper = try #require(model.paper)
@@ -26,7 +26,9 @@ private struct FakeModelTransport: HTTPTransport {
     let ids = await model.importURLs([root.appendingPathComponent(paper.originalPath)])
     #expect(ids == [paper.id])
     #expect(model.state.papers.count == 1)
-    model.modelSettings.model = "test"
+    var settings = model.modelSettings
+    settings.model = "test"
+    try model.saveSettings(settings, key: nil)
     model.startTranslation()
     for _ in 0..<500 {
         if model.translating.isEmpty { break }
@@ -67,7 +69,7 @@ private struct FakeModelTransport: HTTPTransport {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: root) }
     let model = try ReaderModel(
-        root: root, client: ModelClient(transport: FakeModelTransport()), keyProvider: { "test-only" })
+        root: root, client: ModelClient(transport: FakeModelTransport()), credentials: WorkflowCredentials())
     await model.load()
     let scanned = Paper(
         title: "Scan", digest: "scan", originalPath: "scan.pdf", pageCount: 1, blocks: [], warnings: ["No text"],

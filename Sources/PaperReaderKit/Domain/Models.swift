@@ -160,13 +160,6 @@ public struct LibraryState: Codable, Sendable {
     public init() {}
 }
 
-public struct ModelSettings: Codable, Sendable {
-    public var baseURL = "https://open.bigmodel.cn/api/paas/v4"
-    public var model = ""
-    public var temperature = 0.2
-    public init() {}
-}
-
 public enum ReaderError: Error, LocalizedError, Sendable {
     case message(String)
     public var errorDescription: String? {

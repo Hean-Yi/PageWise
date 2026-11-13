@@ -1,6 +1,6 @@
 # MVP 交付状态
 
-日期：2026-11-13。范围：可运行的本地 MVP，尚不是完整设计中的同步版本。
+更新：2026-11-14。范围：可运行的本地 MVP，尚不是完整设计中的同步版本。
 
 ## 已实现
 
@@ -13,7 +13,9 @@
 - 自动研究记忆：根据讨论提取有来源的关注点，提取失败时保留原问题。用户可修正和删除，旧记录不会自动重新生成。
 - 论文总结；手动保存 Obsidian，讨论整理单独询问；管理区哈希冲突保护，写入恢复日志防止笔记与书库关联状态中断。
 - 阅读日历、估计时长、补记及删除错误记录；同一天重叠时段取并集。
-- 窄窗口优先展示阅读内容，讨论改为弹出面板；侧栏选择支持折叠导航。
+- 统一暖灰、墨色和青绿色界面；卡片书库、按需讨论、月份网格和阅读日标记、记忆与搜索卡片。窄窗口讨论改为弹出面板。
+- 用户可修改 GLM / 兼容服务的地址、模型和密钥；草稿取消不生效，主动连接测试不发送论文或笔记；换地址不复用旧密钥，提交失败保留旧配置。
+- 新重排页以缩进、细线和颜色区分双语，去掉重复语言标签；旧制品不修改。PDF 展示逐字校验几何后，从源页恢复划线及复制文字。
 
 ## 实际技术与设计草案的区别
 
@@ -28,24 +30,25 @@
 | Check | Result |
 | --- | --- |
 | swift-format strict | PASS |
-| Swift tests | 26 PASS |
-| PDF tests (subset) | 11 PASS |
+| Swift tests | 42 PASS |
+| PDF rendering + display tests (subset) | 16 PASS |
 | ReaderSmoke | PASS |
 | macOS application build | PASS |
 | iPad simulator application build | PASS |
 | Mac ad-hoc signature + entitlements | PASS |
 | PDF visual inspection | PASS |
-| GUI interaction | NOT VERIFIED |
+| Mac GUI visual / interaction checks | PASS (scoped below) |
 | Real GLM account | NOT VERIFIED |
 | Physical Pencil device | NOT VERIFIED |
-| macOS 15 / iPadOS 18 runtime | NOT VERIFIED |
+| macOS 15.7.7 runtime | PASS (scoped below) |
+| iPadOS 18 runtime | NOT VERIFIED |
 | CloudKit | NOT IMPLEMENTED |
 
 测试覆盖：本地原文保留、无效文件拒绝、单/双栏顺序、扫描/图形降级、原始批注不丢弃、双语长段落逐字符完整性、旧页面不变、源页映射、数据库重启、模型截断/鉴权失败、晚段落和中文选区的证据优先、Obsidian 用户区保留和中断恢复、阅读时间并集，以及带测试模型的导入→翻译→高亮→问答→重启工作流。
 
 本轮也进行两阶段独立审查。修复了未提交页面可能显示、选区被上下文预算挤出、笔记写入与数据库关联中断、扫描件仅凭辅助资料作答、Mac 目录书签权限和 iPad 折叠导航问题。
 
-页面视觉检查使用本地生成的原创文档，包括双语首页和长段落续页；不等于已用真实论文集证明普遍排版质量。26 项测试中的模型响应和 arXiv feed 使用测试 transport，未消费用户 API 额度。
+页面视觉检查使用本地生成的原创文档，包括双语首页和长段落续页；不等于已用真实论文集证明普遍排版质量。42 项测试中的模型响应和 arXiv feed 使用测试 transport，未消费用户 API 额度。
 
 ## 尚需使用者验证
 
@@ -55,4 +58,8 @@
 4. 使用实际 Obsidian iCloud 子目录检查文件下载、外部编辑和冲突状态；当前测试使用本地临时目录。
 5. 旧系统与多样真实论文验收后，再扩展 HTML/复杂图表解析及语义检索。
 
-Computer Use 自动审批拒绝了操作 PaperReader 应用窗口。本轮保留构建、服务/工作流测试和离线页面视觉检查结果，未将它们冒充交互式验收。
+2026-11-14 经用户授权，Computer Use 已检查 Mac 原生窗口：空书库、示例导入与重排、阅读区、按需讨论、选文与复制、设置草稿取消及地址/缺密钥错误、笔记设置关闭、月份网格切换日期、研究记忆空态和搜索输入页。测试使用原创示例及独立本地视觉验收目录；没有调用真实 GLM、下载真实论文或修改用户 Obsidian。
+
+实测修复了 macOS 15.7.7 下 PDFKit 辅助功能读取时的崩溃。多页面展示不再转移来源 PDFPage；展示副本逐字验证数量和几何（容差 0.01 pt），中文兼容字映射通过源页字符范围恢复，避免全局正规化改变数学符号。测试包含逐像素渲染一致、精确中文/数学选文、原文件不变与复制来源恢复；仍不等于任意 PDF 已完成兼容性验收。
+
+深色外观采用动态颜色，但未做逐屏人工验收；iPad 本轮完成编译，窄屏与 Pencil 仍需真机验收。

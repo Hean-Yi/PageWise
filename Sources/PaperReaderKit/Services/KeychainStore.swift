@@ -3,10 +3,10 @@ import Security
 
 public enum KeychainStore {
     private static let service = "dev.paperreader.api"
-    public static func load() throws -> String {
+    public static func load(account: String = "model-key") throws -> String {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service, kSecAttrAccount as String: "model-key",
+            kSecAttrService as String: service, kSecAttrAccount as String: account,
             kSecReturnData as String: true, kSecMatchLimit as String: kSecMatchLimitOne,
         ]
         var result: CFTypeRef?
@@ -18,10 +18,10 @@ public enum KeychainStore {
         }
         return value
     }
-    public static func save(_ value: String) throws {
+    public static func save(_ value: String, account: String = "model-key") throws {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service, kSecAttrAccount as String: "model-key",
+            kSecAttrService as String: service, kSecAttrAccount as String: account,
         ]
         if value.isEmpty {
             let result = SecItemDelete(query as CFDictionary)

@@ -15,7 +15,7 @@ public final class ReaderModel {
     public var translating: Set<UUID> = []
     public private(set) var pendingArtifactIDs: Set<UUID> = []
     private var pendingImportIDs: Set<UUID> = []
-    public var modelSettings = ModelSettings()
+    public private(set) var modelSettings = ModelSettings()
     public var selectionText = ""
     public var selectionRects: [[Double]] = []
     public var selectionPage = 0
@@ -29,7 +29,7 @@ public final class ReaderModel {
     let importer: PDFImporter
     let renderer = PageRenderer()
     let client: ModelClient
-    @ObservationIgnored let keyProvider: @Sendable () throws -> String
+    let configurationStore: ModelConfigurationStore
     let vault: VaultService
     let arxiv = ArxivClient()
     @ObservationIgnored private var saveQueue: Task<Bool, Never>?
@@ -41,10 +41,9 @@ public final class ReaderModel {
 
     public init(
         root: URL? = nil, client: ModelClient = ModelClient(),
-        keyProvider: @escaping @Sendable () throws -> String = { try KeychainStore.load() }
+        credentials: any ModelCredentialStore = DeviceModelCredentials()
     ) throws {
         self.client = client
-        self.keyProvider = keyProvider
         let location =
             root
             ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -53,11 +52,8 @@ public final class ReaderModel {
         store = try LibraryStore(directory: location)
         importer = PDFImporter(root: location)
         vault = VaultService(root: location)
-        if let data = try? Data(contentsOf: location.appendingPathComponent("model-settings.json")),
-            let settings = try? JSONDecoder().decode(ModelSettings.self, from: data)
-        {
-            modelSettings = settings
-        }
+        configurationStore = ModelConfigurationStore(directory: location, credentials: credentials)
+        modelSettings = try configurationStore.load()
     }
 
     public var paper: Paper? { state.papers.first { $0.id == selectedPaperID } }
@@ -83,7 +79,6 @@ public final class ReaderModel {
         guard !loaded else { return }
         do {
             state = try await store.load()
-            if let first = state.papers.first { select(first.id) }
             if let folder = try? await vault.directory() { vaultName = folder.lastPathComponent }
             loaded = true
         } catch {
@@ -208,8 +203,8 @@ public final class ReaderModel {
                 self.translationTasks[id] = nil
             }
             do {
-                let key = try self.keyProvider()
                 let config = self.modelSettings
+                let key = try self.modelKey(for: config)
                 guard !key.isEmpty, !config.model.isEmpty else {
                     throw ReaderError.message("请先打开设置，填写模型名称并保存 API Key。")
                 }
@@ -303,13 +298,12 @@ public final class ReaderModel {
         }
     }
 
-    public func saveSettings(key: String?) {
-        do {
-            if let key { try KeychainStore.save(key) }
-            let data = try JSONEncoder().encode(modelSettings)
-            try data.write(to: root.appendingPathComponent("model-settings.json"), options: .atomic)
-            status = "模型设置已保存；密钥仅保存在此设备钥匙串"
-        } catch { message = error.localizedDescription }
+    @discardableResult
+    public func saveSettings(_ draft: ModelSettings, key: String?, removeKey: Bool = false) throws -> String? {
+        let result = try configurationStore.save(draft, key: key, removeKey: removeKey)
+        modelSettings = result.settings
+        status = result.warning ?? "模型设置已保存，下次模型请求将使用新配置"
+        return result.warning
     }
 
     public func selectVault(_ url: URL) async {

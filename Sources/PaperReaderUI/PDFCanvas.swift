@@ -14,6 +14,22 @@ struct PDFCanvas: View {
     }
 }
 
+@MainActor
+private final class ReaderPDFView: PDFView {
+    var copyTextProvider: (() -> String?)?
+
+    override func copy(_ sender: Any?) {
+        guard currentSelection != nil else { return }
+        guard let text = copyTextProvider?(), !text.isEmpty else { return }
+        #if os(macOS)
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(text, forType: .string)
+        #else
+            UIPasteboard.general.string = text
+        #endif
+    }
+}
+
 #if os(macOS)
     private struct PlatformPDF: NSViewRepresentable {
         let model: ReaderModel
@@ -38,10 +54,12 @@ struct PDFCanvas: View {
 private final class PDFCoordinator: NSObject, @preconcurrency PDFPageOverlayViewProvider {
     let model: ReaderModel
     weak var view: PDFView?
+    var displayedDocument: PDFDisplayDocument?
     var identity = ""
     var keys: [String] = []
     var highlightIDs: Set<UUID> = []
     var penEnabled = false
+    var isUpdating = false
     var paperID: UUID?
     #if os(iOS)
         let toolPicker = PKToolPicker()
@@ -50,13 +68,15 @@ private final class PDFCoordinator: NSObject, @preconcurrency PDFPageOverlayView
 
     init(model: ReaderModel) { self.model = model }
     func makeView() -> PDFView {
-        let view = PDFView()
+        let view = ReaderPDFView()
+        view.copyTextProvider = { [weak self] in self?.selectedSourceText() }
         view.autoScales = true
         view.displayMode = .singlePageContinuous
         view.displayDirection = .vertical
         view.displaysPageBreaks = true
         view.pageOverlayViewProvider = self
         #if os(macOS)
+            view.acceptsDraggedFiles = false
             view.backgroundColor = NSColor(calibratedWhite: 0.93, alpha: 1)
         #else
             view.backgroundColor = UIColor.secondarySystemBackground
@@ -70,7 +90,10 @@ private final class PDFCoordinator: NSObject, @preconcurrency PDFPageOverlayView
     }
 
     func update(_ view: PDFView, penEnabled: Bool) {
+        isUpdating = true
+        defer { isUpdating = false }
         self.penEnabled = penEnabled
+        view.isInMarkupMode = penEnabled
         let newIdentity = model.pageURLs.map(\.path).joined(separator: "|")
         if identity != newIdentity {
             let oldPage = identity.isEmpty ? 0 : model.visiblePage
@@ -81,13 +104,18 @@ private final class PDFCoordinator: NSObject, @preconcurrency PDFPageOverlayView
                 for canvas in canvases.values { toolPicker.removeObserver(canvas) }
                 canvases = [:]
             #endif
-            let document = PDFDocument()
-            for url in model.pageURLs {
-                if let part = PDFDocument(url: url) {
-                    for n in 0..<part.pageCount {
-                        if let page = part.page(at: n) { document.insert(page, at: document.pageCount) }
-                    }
-                }
+            let document: PDFDocument
+            do {
+                let loaded = try PDFDisplayDocument.load(urls: model.pageURLs, expectedPageCount: keys.count)
+                displayedDocument = loaded
+                document = loaded.document
+            } catch {
+                view.document = nil
+                displayedDocument = nil
+                highlightIDs = []
+                let message = error.localizedDescription
+                Task { @MainActor [weak model] in model?.message = message }
+                return
             }
             view.document = document
             highlightIDs = []
@@ -112,7 +140,11 @@ private final class PDFCoordinator: NSObject, @preconcurrency PDFPageOverlayView
         }
         if let index = model.jumpPage, let page = view.document?.page(at: index) {
             view.go(to: page)
-            Task { @MainActor [weak model] in if model?.jumpPage == index { model?.jumpPage = nil } }
+            Task { @MainActor [weak self] in
+                guard let self, self.identity == newIdentity, self.model.jumpPage == index else { return }
+                self.model.visiblePage = index
+                self.model.jumpPage = nil
+            }
         }
         #if os(iOS)
             for canvas in canvases.values { canvas.isUserInteractionEnabled = penEnabled }
@@ -127,21 +159,44 @@ private final class PDFCoordinator: NSObject, @preconcurrency PDFPageOverlayView
     }
 
     @objc func selectionChanged() {
+        guard !isUpdating else { return }
         guard let view, let selected = view.currentSelection, let page = selected.pages.first,
-            let document = view.document, let text = selected.string, !text.isEmpty
-        else { return }
+            let document = view.document, let text = selected.string,
+            !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else {
+            model.captureSelection(text: "", rects: [], page: model.visiblePage)
+            return
+        }
         let lines = selected.selectionsByLine().filter { $0.pages.contains(page) }
         let rects = lines.map { line -> [Double] in
             let r = line.bounds(for: page)
             return [r.minX, r.minY, r.width, r.height]
         }
-        let captured = selected.pages.count > 1 ? lines.compactMap(\.string).joined(separator: "\n") : text
-        model.captureSelection(text: captured, rects: rects, page: document.index(for: page))
+        let pageIndex = document.index(for: page)
+        guard let captured = displayedDocument?.text(for: selected, on: pageIndex),
+            !captured.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else {
+            model.captureSelection(text: "", rects: [], page: model.visiblePage)
+            return
+        }
+        model.captureSelection(text: captured, rects: rects, page: pageIndex)
         if selected.pages.count > 1 { model.status = "跨页选择暂按第一页记录；请逐页划线以保留准确位置" }
     }
 
+    private func selectedSourceText() -> String? {
+        guard let view, let selection = view.currentSelection, let document = view.document,
+            let displayedDocument
+        else { return nil }
+        var parts: [String] = []
+        for page in selection.pages.sorted(by: { document.index(for: $0) < document.index(for: $1) }) {
+            guard let text = displayedDocument.text(for: selection, on: document.index(for: page)) else { return nil }
+            parts.append(text)
+        }
+        return parts.joined(separator: "\n")
+    }
+
     @objc func pageChanged() {
-        guard let view, let page = view.currentPage, let document = view.document else { return }
+        guard !isUpdating, let view, let page = view.currentPage, let document = view.document else { return }
         model.visiblePage = document.index(for: page)
         model.touch()
     }

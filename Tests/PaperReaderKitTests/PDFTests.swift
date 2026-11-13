@@ -215,8 +215,10 @@ import Testing
             for line in page.selection(for: page.bounds(for: .cropBox))?.selectionsByLine() ?? [] {
                 let bounds = line.bounds(for: page)
                 let content = (line.string ?? "").filter { !$0.isWhitespace }
-                let isLabel = ["ORIGINAL", "ORIGINAL/CONTINUED", "中文译文", "中文译文/CONTINUED"].contains(content)
-                if !isLabel && bounds.minY >= 72 && bounds.maxY <= 720 {
+                let isPageChrome = content == "PAPERREADER" || content == "SOURCEPAGE4"
+                if !isPageChrome {
+                    #expect(bounds.minX >= 55 && bounds.maxX <= 557)
+                    #expect(bounds.minY >= 71 && bounds.maxY <= 721)
                     bodyText += line.string ?? ""
                 }
             }
@@ -237,6 +239,37 @@ import Testing
             #expect(try Data(contentsOf: directory.appendingPathComponent(filename)) == bytes)
         }
         #expect(appended.allSatisfy { $0.sourcePage == 4 && $0.blockIDs == [next.id] })
+    }
+
+    @MainActor @Test func newPagesUseVisualSeparationWithoutAddingOrRemovingBodyLabels() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let first = TextBlock(sourcePage: 2, text: "ORIGINAL belongs to the quoted source text.")
+        let second = TextBlock(sourcePage: 2, text: "The next paragraph begins without a repeated language label.")
+        let translation = "中文译文是需要保留的原始文字。"
+        let artifacts = try PageRenderer().render(
+            [BilingualBlock(block: first, translation: translation), BilingualBlock(block: second, translation: nil)],
+            to: directory, prefix: "clean-reading")
+        #expect(artifacts.count == 1)
+        let artifact = try #require(artifacts.first)
+        let document = try #require(PDFDocument(url: directory.appendingPathComponent(artifact.relativePath)))
+        let page = try #require(document.page(at: 0))
+        let text = try #require(page.string)
+        #expect(text.components(separatedBy: "ORIGINAL").count == 2)
+        #expect(text.components(separatedBy: "中文译文").count == 2)
+        #expect(text.contains("PAPERREADER"))
+        #expect(text.contains("SOURCE PAGE 3"))
+        let originalBounds = try #require(document.findString("ORIGINAL", withOptions: []).first).bounds(for: page)
+        let translationBounds = try #require(document.findString("中文译文", withOptions: []).first).bounds(for: page)
+        #expect(translationBounds.minX > originalBounds.minX)
+        #expect(translationBounds.maxY < originalBounds.minY)
+        let bodyText = (page.selection(for: page.bounds(for: .cropBox))?.selectionsByLine() ?? []).filter {
+            let bounds = $0.bounds(for: page)
+            return bounds.minY >= 71 && bounds.maxY <= 721
+        }.compactMap(\.string).joined().filter { !$0.isWhitespace }
+        let expected = (first.text + translation + second.text).filter { !$0.isWhitespace }
+        #expect(bodyText == expected)
+        #expect(artifact.blockIDs == [first.id, second.id])
     }
 
     @MainActor @Test func sourcePagesRemainAccurateWhenSeveralBlocksAreRendered() throws {

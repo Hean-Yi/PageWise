@@ -9,55 +9,59 @@ struct ReadingCalendarView: View {
     @State private var addPaper: UUID?
     private var day: DateInterval { Calendar.current.dateInterval(of: .day, for: date)! }
     private var entries: [ReadingEntry] { model.state.reading.filter { $0.start < day.end && $0.end > day.start } }
+    private var readingMinutes: Int { Int(ReadingMetrics.seconds(entries, during: day) / 60) }
+    private var paperCount: Int { Set(entries.map(\.paperID)).count }
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
-                HStack {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("每一次阅读，都留下痕迹。").font(.system(.largeTitle, design: .serif))
-                        Text("自动记录前台阅读，支持补记与修正。时长为估计值。").foregroundStyle(.secondary)
-                    }
+            VStack(alignment: .leading, spacing: 28) {
+                HStack(alignment: .center) {
+                    Text("阅读日历").font(.system(size: 32, weight: .regular, design: .serif))
                     Spacer()
-                    Button("补记阅读") {
+                    Button {
                         addPaper = model.selectedPaperID ?? model.state.papers.first?.id
                         showAdd = true
-                    }.disabled(model.state.papers.isEmpty)
+                    } label: {
+                        Label("补记", systemImage: "plus")
+                    }
+                    .buttonStyle(.bordered).disabled(model.state.papers.isEmpty)
+                    .accessibilityLabel("补记阅读记录")
                 }
-                HStack(alignment: .top, spacing: 30) {
-                    DatePicker("选择日期", selection: $date, displayedComponents: .date).datePickerStyle(.graphical).frame(
-                        maxWidth: 350)
-                    VStack(alignment: .leading, spacing: 14) {
-                        Text(date.formatted(date: .complete, time: .omitted)).font(.headline)
-                        Text("\(Int(ReadingMetrics.seconds(entries, during: day) / 60)) 分钟")
-                            .font(.system(size: 44, weight: .light, design: .rounded)).foregroundStyle(.teal)
-                        Text("\(Set(entries.map(\.paperID)).count) 篇论文 · 重叠时段不重复计时").font(.callout).foregroundStyle(
-                            .secondary)
-                    }.padding(.top, 20)
+                ViewThatFits(in: .horizontal) {
+                    HStack(alignment: .top, spacing: 24) {
+                        calendarCard.frame(width: 340)
+                        statistics.frame(minWidth: 240, maxWidth: .infinity, alignment: .leading)
+                    }
+                    VStack(alignment: .leading, spacing: 24) {
+                        calendarCard
+                        statistics
+                    }
                 }
+                HStack {
+                    Text("当日阅读").font(.headline)
+                    Spacer()
+                    Text("\(entries.count) 条记录").font(.caption).foregroundStyle(ReaderTheme.muted)
+                }.padding(.top, 8)
                 if entries.isEmpty {
-                    ContentUnavailableView("这一天尚无阅读记录", systemImage: "calendar", description: Text("打开论文开始阅读，或手动补记。"))
-                }
-                ForEach(entries.sorted { $0.start > $1.start }) { entry in
-                    HStack {
-                        Image(systemName: "doc.text").font(.title2).foregroundStyle(.teal)
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text(model.state.papers.first { $0.id == entry.paperID }?.title ?? "论文").font(.headline)
-                            Text(
-                                "\(entry.start.formatted(date: .omitted, time: .shortened)) · \(max(1, Int(entry.end.timeIntervalSince(entry.start) / 60))) 分钟 · \(entry.manual ? "手动补记" : "自动记录")"
-                            ).font(.caption).foregroundStyle(.secondary)
+                    VStack(spacing: 14) {
+                        Image(systemName: "book.closed").font(.system(size: 32, weight: .light))
+                        Text("暂无阅读记录").font(.subheadline)
+                    }
+                    .foregroundStyle(ReaderTheme.muted)
+                    .frame(maxWidth: .infinity, minHeight: 160)
+                } else {
+                    LazyVStack(spacing: 14) {
+                        ForEach(entries.sorted { $0.start > $1.start }) { entry in
+                            timelineRow(entry)
                         }
-                        Spacer()
-                        Button("阅读") { model.select(entry.paperID) }
-                        Button(role: .destructive) {
-                            model.deleteReading(entry.id)
-                        } label: {
-                            Image(systemName: "trash")
-                        }.help("删除此条记录后可重新补记")
-                    }.padding(16).background(.quaternary.opacity(0.3), in: RoundedRectangle(cornerRadius: 12))
+                    }
                 }
-            }.padding(32).frame(maxWidth: 1000, alignment: .leading)
-        }.sheet(isPresented: $showAdd) {
+            }
+            .padding(28).frame(maxWidth: 960, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .center)
+        }
+        .background(ReaderTheme.canvas).foregroundStyle(ReaderTheme.ink).tint(ReaderTheme.accent)
+        .sheet(isPresented: $showAdd) {
             NavigationStack {
                 Form {
                     Picker("论文", selection: $addPaper) {
@@ -75,48 +79,158 @@ struct ReadingCalendarView: View {
                         }
                         ToolbarItem(placement: .cancellationAction) { Button("取消") { showAdd = false } }
                     }
-            }.frame(minWidth: 380, minHeight: 250)
+            }
+            .tint(ReaderTheme.accent)
+            #if os(macOS)
+                .frame(minWidth: 380, minHeight: 250)
+            #endif
+        }
+    }
+
+    private var calendarCard: some View {
+        ReadingMonthGrid(selection: $date, entries: model.state.reading)
+            .padding(20).frame(maxWidth: .infinity)
+            .background(ReaderTheme.surface, in: RoundedRectangle(cornerRadius: 16))
+            .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(ReaderTheme.line))
+    }
+
+    private var statistics: some View {
+        VStack(alignment: .leading, spacing: 24) {
+            Text(date.formatted(.dateTime.month(.wide).day().weekday(.wide).locale(Locale(identifier: "zh_CN"))))
+                .font(.subheadline).foregroundStyle(ReaderTheme.muted)
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text("\(readingMinutes)")
+                    .font(.system(size: 64, weight: .regular, design: .serif))
+                    .foregroundStyle(ReaderTheme.accent)
+                    .monospacedDigit()
+                Text("分钟").font(.subheadline).foregroundStyle(ReaderTheme.muted)
+            }
+            .accessibilityElement(children: .combine)
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text("\(paperCount)").font(.system(size: 32, weight: .regular, design: .serif)).monospacedDigit()
+                Text("篇论文").font(.subheadline).foregroundStyle(ReaderTheme.muted)
+                Spacer()
+                Image(systemName: "book.pages").font(.system(size: 24, weight: .light))
+                    .foregroundStyle(ReaderTheme.accent.opacity(0.55)).accessibilityHidden(true)
+            }
+            .accessibilityElement(children: .combine)
+            Text("估计时长").font(.caption2).foregroundStyle(ReaderTheme.muted)
+        }.padding(22)
+    }
+
+    private func timelineRow(_ entry: ReadingEntry) -> some View {
+        let title = model.state.papers.first { $0.id == entry.paperID }?.title ?? "论文"
+        return HStack(alignment: .top, spacing: 12) {
+            Text(entry.start.formatted(date: .omitted, time: .shortened))
+                .font(.system(.caption, design: .monospaced)).foregroundStyle(ReaderTheme.muted)
+                .frame(width: 54, alignment: .trailing).padding(.top, 21)
+            Circle().fill(ReaderTheme.accent).frame(width: 6, height: 6).padding(.top, 24)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 14) {
+                Text(title).font(.body.weight(.medium)).lineLimit(2)
+                HStack(spacing: 8) {
+                    Text(
+                        entry.end.timeIntervalSince(entry.start) < 60
+                            ? "不足 1 分钟" : "\(Int(entry.end.timeIntervalSince(entry.start) / 60)) 分钟")
+                    if entry.manual {
+                        Text("补记").padding(.horizontal, 6).padding(.vertical, 2)
+                            .background(ReaderTheme.canvas, in: Capsule())
+                    }
+                    Spacer(minLength: 0)
+                    Button {
+                        model.select(entry.paperID)
+                    } label: {
+                        Image(systemName: "arrow.up.right")
+                    }
+                    .accessibilityLabel("阅读\(title)").help("打开论文")
+                    Button(role: .destructive) {
+                        model.deleteReading(entry.id)
+                    } label: {
+                        Image(systemName: "trash")
+                    }
+                    .accessibilityLabel("删除阅读记录").help("删除记录")
+                }
+                .font(.caption).foregroundStyle(ReaderTheme.muted).buttonStyle(.borderless)
+            }
+            .padding(18).frame(maxWidth: .infinity, alignment: .leading)
+            .background(ReaderTheme.surface, in: RoundedRectangle(cornerRadius: 12))
+            .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(ReaderTheme.line))
         }
     }
 }
 
 struct MemoryView: View {
     @Bindable var model: ReaderModel
+    private var memories: [MemoryItem] { model.state.memories.filter { !$0.deleted } }
+
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                Text("研究记忆").font(.system(.largeTitle, design: .serif))
-                Text("自动保存讨论中的研究关注点。每条都有来源，可修改或删除；它们用于理解你的背景，不作为论文事实。")
-                    .foregroundStyle(.secondary)
-                if model.state.memories.allSatisfy(\.deleted) {
-                    ContentUnavailableView(
-                        "记忆从讨论开始", systemImage: "brain.head.profile", description: Text("阅读论文并提问后，这里会自动整理你关注的问题。"))
+            VStack(alignment: .leading, spacing: 28) {
+                HStack(alignment: .firstTextBaseline, spacing: 12) {
+                    Text("研究记忆").font(.system(size: 32, weight: .regular, design: .serif))
+                    Text("\(memories.count)").font(.system(.title3, design: .monospaced))
+                        .foregroundStyle(ReaderTheme.muted)
+                    Spacer()
                 }
-                ForEach(model.state.memories.filter { !$0.deleted }) { memory in
-                    VStack(alignment: .leading, spacing: 10) {
-                        TextField(
-                            "研究关注点",
-                            text: Binding(
-                                get: { model.state.memories.first { $0.id == memory.id }?.text ?? "" },
-                                set: { model.updateMemory(id: memory.id, text: $0) }), axis: .vertical
-                        )
-                        .textFieldStyle(.plain).font(.body)
-                        HStack {
-                            Text(memory.userEdited ? "已由你修正" : "来自阅读讨论 · 自动记录").font(.caption).foregroundStyle(
-                                .secondary)
-                            Spacer()
-                            if let source = model.state.chats.first(where: { $0.id == memory.sourceID }) {
-                                Button("查看来源") { model.select(source.paperID) }
-                            }
-                            Button(role: .destructive) {
-                                model.deleteMemory(memory.id)
-                            } label: {
-                                Image(systemName: "trash")
-                            }
-                        }.buttonStyle(.borderless)
-                    }.padding(18).background(.teal.opacity(0.05), in: RoundedRectangle(cornerRadius: 12))
+                if memories.isEmpty {
+                    VStack(spacing: 16) {
+                        Image(systemName: "brain.head.profile").font(.system(size: 42, weight: .ultraLight))
+                        Text("从一次讨论开始").font(.headline)
+                        Button {
+                            model.select(model.selectedPaperID ?? model.state.papers.first?.id)
+                        } label: {
+                            Label("去阅读", systemImage: "arrow.up.right")
+                        }
+                        .buttonStyle(.borderless).foregroundStyle(ReaderTheme.accent).font(.caption)
+                    }
+                    .foregroundStyle(ReaderTheme.muted)
+                    .frame(maxWidth: .infinity, minHeight: 320)
+                } else {
+                    LazyVStack(spacing: 16) {
+                        ForEach(memories) { memory in
+                            memoryCard(memory)
+                        }
+                    }
                 }
-            }.padding(32).frame(maxWidth: 900, alignment: .leading)
+            }
+            .padding(28).frame(maxWidth: 860, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .center)
         }
+        .background(ReaderTheme.canvas).foregroundStyle(ReaderTheme.ink).tint(ReaderTheme.accent)
+    }
+
+    private func memoryCard(_ memory: MemoryItem) -> some View {
+        VStack(alignment: .leading, spacing: 20) {
+            TextField(
+                "研究关注点",
+                text: Binding(
+                    get: { model.state.memories.first { $0.id == memory.id }?.text ?? "" },
+                    set: { model.updateMemory(id: memory.id, text: $0) }), axis: .vertical
+            )
+            .textFieldStyle(.plain).font(.system(size: 16)).lineSpacing(5)
+            .accessibilityLabel("编辑研究记忆")
+            HStack(spacing: 14) {
+                Label(memory.userEdited ? "已编辑" : "自动整理", systemImage: memory.userEdited ? "pencil" : "sparkle")
+                    .font(.caption)
+                Spacer()
+                if let source = model.state.chats.first(where: { $0.id == memory.sourceID }) {
+                    Button {
+                        model.select(source.paperID)
+                    } label: {
+                        Label("来源", systemImage: "arrow.up.right")
+                    }.help("打开来源论文")
+                }
+                Button(role: .destructive) {
+                    model.deleteMemory(memory.id)
+                } label: {
+                    Image(systemName: "trash")
+                }
+                .accessibilityLabel("删除此条记忆").help("删除记忆")
+            }
+            .font(.caption).foregroundStyle(ReaderTheme.muted).buttonStyle(.borderless)
+        }
+        .padding(22).frame(maxWidth: .infinity, alignment: .leading)
+        .background(ReaderTheme.surface, in: RoundedRectangle(cornerRadius: 14))
+        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(ReaderTheme.line))
     }
 }

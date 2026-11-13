@@ -7,59 +7,137 @@ struct SearchView: View {
     @State private var query = ""
     @State private var results: [PaperCandidate] = []
     @State private var busy = false
+    @State private var downloading = false
     @State private var searched = false
+    @FocusState private var searchFocused: Bool
+
     var body: some View {
-        NavigationStack {
-            VStack(alignment: .leading, spacing: 16) {
-                Text("输入完整或近似标题。明确匹配会直接下载；其他结果请确认作者与年份。")
-                    .font(.callout).foregroundStyle(.secondary)
-                HStack {
-                    TextField("例如：Attention Is All You Need", text: $query).textFieldStyle(.roundedBorder).onSubmit {
-                        search()
+        VStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: 24) {
+                HStack(alignment: .center, spacing: 10) {
+                    Text("查找论文").font(.system(size: 28, weight: .regular, design: .serif))
+                    Text("arXiv").font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(ReaderTheme.muted)
+                        .padding(.horizontal, 8).padding(.vertical, 4)
+                        .background(ReaderTheme.surface, in: Capsule())
+                    Spacer()
+                    Button {
+                        dismiss()
+                    } label: {
+                        Image(systemName: "xmark").font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(ReaderTheme.muted)
+                            .frame(width: 30, height: 30)
+                            .background(ReaderTheme.surface, in: Circle())
                     }
-                    Button("查找", action: search).disabled(busy || query.isEmpty)
+                    .buttonStyle(.plain).keyboardShortcut(.cancelAction).accessibilityLabel("关闭查找论文")
                 }
-                if busy { ProgressView("正在访问 arXiv…").frame(maxWidth: .infinity) }
-                if searched && results.isEmpty && !busy {
-                    ContentUnavailableView(
-                        "没有找到匹配论文", systemImage: "doc.text.magnifyingglass",
-                        description: Text("当前支持 arXiv。可缩短标题重试，或直接导入本地 PDF。"))
+                HStack(spacing: 12) {
+                    Image(systemName: "magnifyingglass").font(.title3).foregroundStyle(ReaderTheme.accent)
+                    TextField("输入论文标题", text: $query).textFieldStyle(.plain).font(.body)
+                        .focused($searchFocused).onSubmit { search() }.disabled(busy)
+                        .autocorrectionDisabled()
+                    Button("查找", action: search)
+                        .buttonStyle(.borderedProminent)
+                        .disabled(busy || query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
-                List(results) { item in
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text(item.title).font(.headline)
-                        Text("\(item.year) · \(item.authors)").font(.caption).foregroundStyle(.secondary).lineLimit(2)
-                        HStack {
-                            Link("查看来源", destination: URL(string: item.id) ?? item.pdfURL)
-                            Spacer()
-                            Button("确认并下载") {
-                                busy = true
-                                Task {
-                                    await model.download(item)
-                                    busy = false
-                                    dismiss()
-                                }
-                            }.disabled(busy)
-                        }.font(.callout)
-                    }.padding(.vertical, 8)
-                }.listStyle(.plain)
-            }.padding(20)
-                .navigationTitle("查找论文")
-                .toolbar { ToolbarItem(placement: .cancellationAction) { Button("关闭") { dismiss() } } }
-        }.frame(minWidth: 480, idealWidth: 650, minHeight: 480)
+                .padding(14)
+                .background(ReaderTheme.surface, in: RoundedRectangle(cornerRadius: 12))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12)
+                        .strokeBorder(searchFocused ? ReaderTheme.accent.opacity(0.55) : ReaderTheme.line))
+            }.padding(24)
+            Divider().overlay(ReaderTheme.line)
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 14) {
+                    if busy {
+                        HStack(spacing: 8) {
+                            ProgressView().controlSize(.small)
+                            Text(downloading ? "下载中…" : "查找中…").font(.subheadline)
+                        }
+                        .foregroundStyle(ReaderTheme.muted).frame(maxWidth: .infinity).padding(.vertical, 20)
+                    }
+                    if results.isEmpty && !busy {
+                        emptyState
+                    } else {
+                        if !results.isEmpty {
+                            Text("\(results.count) 个结果").font(.caption).foregroundStyle(ReaderTheme.muted)
+                        }
+                        ForEach(results) { item in
+                            candidateCard(item)
+                        }
+                    }
+                }.padding(24)
+            }
+        }
+        .background(ReaderTheme.canvas).foregroundStyle(ReaderTheme.ink).tint(ReaderTheme.accent)
+        #if os(macOS)
+            .frame(width: 640, height: 660)
+        #else
+            .presentationSizing(.form)
+        #endif
+        .onAppear { searchFocused = true }
     }
+
+    private var emptyState: some View {
+        VStack(spacing: 16) {
+            Image(systemName: "doc.text.magnifyingglass")
+                .font(.system(size: 44, weight: .ultraLight)).foregroundStyle(ReaderTheme.accent.opacity(0.6))
+            Text(searched ? "未找到论文" : "按标题查找").font(.headline)
+            if searched {
+                Text("试试更短的标题").font(.subheadline).foregroundStyle(ReaderTheme.muted)
+            }
+        }
+        .frame(maxWidth: .infinity, minHeight: 280)
+    }
+
+    private func candidateCard(_ item: PaperCandidate) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(item.title).font(.system(size: 16, weight: .medium)).fixedSize(horizontal: false, vertical: true)
+            Text(item.authors).font(.caption).foregroundStyle(ReaderTheme.muted).lineLimit(2)
+            HStack(spacing: 12) {
+                Text(String(item.year)).font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(ReaderTheme.muted)
+                Link(destination: URL(string: item.id) ?? item.pdfURL) {
+                    Image(systemName: "arrow.up.right").font(.caption)
+                }
+                .foregroundStyle(ReaderTheme.muted).help("查看 arXiv 来源")
+                .accessibilityLabel("查看\(item.title)的来源")
+                Spacer()
+                Button {
+                    busy = true
+                    downloading = true
+                    Task {
+                        await model.download(item)
+                        busy = false
+                        downloading = false
+                        dismiss()
+                    }
+                } label: {
+                    Label("下载", systemImage: "arrow.down")
+                }.buttonStyle(.borderedProminent).controlSize(.small).disabled(busy)
+            }
+        }
+        .padding(20).frame(maxWidth: .infinity, alignment: .leading)
+        .background(ReaderTheme.surface, in: RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(ReaderTheme.line))
+    }
+
     private func search() {
-        guard !busy, !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        let term = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !busy, !term.isEmpty else { return }
         busy = true
+        downloading = false
         Task {
-            results = await model.search(query)
+            results = await model.search(term)
             searched = true
-            let exact = results.filter { ArxivClient.normalized($0.title) == ArxivClient.normalized(query) }
+            let exact = results.filter { ArxivClient.normalized($0.title) == ArxivClient.normalized(term) }
             if exact.count == 1 {
+                downloading = true
                 await model.download(exact[0])
                 dismiss()
             }
             busy = false
+            downloading = false
         }
     }
 }

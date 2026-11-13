@@ -32,18 +32,15 @@ public struct ModelClient: Sendable {
     public init(transport: any HTTPTransport = NetworkTransport()) { self.transport = transport }
 
     public func complete(settings: ModelSettings, key: String, system: String, user: String) async throws -> String {
-        guard !key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        let settings = try settings.normalized()
+        let key = key.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !key.isEmpty else {
             throw ReaderError.message("请先在设置中保存 API Key。")
         }
-        guard !settings.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            throw ReaderError.message("请填写账户可用的模型名称。")
+        guard !key.contains(where: { $0.isWhitespace }) else {
+            throw ReaderError.message("API Key 中不能包含空格或换行。")
         }
-        guard let base = URL(string: settings.baseURL), base.scheme == "https", base.host != nil,
-            base.user == nil, base.password == nil, base.query == nil, base.fragment == nil
-        else {
-            throw ReaderError.message("API 地址必须是有效的 HTTPS 基础地址，不能包含密钥或查询参数。")
-        }
-        let endpoint = base.appendingPathComponent("chat/completions")
+        let endpoint = try settings.endpointURL()
         var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
