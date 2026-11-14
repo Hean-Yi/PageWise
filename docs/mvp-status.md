@@ -1,5 +1,16 @@
 # MVP 交付状态
 
+## 最新验证：工程目录与职责整理（2026-11-14）
+
+源码现按核心领域/用例/适配器，以及 UI 协调/功能页面/平台桥接/设计系统分层。拆分混合的领域模型、日历与记忆页面、Obsidian/日历/记忆操作、拖动临时状态、主题与插图；测试按相同类别归档，共用假凭据进入 Support。职责与新增文件规则见 [工程结构](architecture.md)，已同步至 README、engineering.md 与 AGENTS.md。
+
+保持原有 Package products、targets、Xcode App 入口、公开 API、访问级别、数据库 v4 编码与业务行为。Swift Package 编译清单包含核心 38、UI 36、核心测试 16、工作流测试 10 个 Swift 文件；历史规格与计划继续作为历史记录保留。
+
+完成验证：`bash scripts/check.sh` 通过，包含严格格式、140 项测试、ReaderSmoke、Mac 与 iPad 模拟器目标构建。Swift 符号图逐项比较 1,401 个公开声明，新增/删除/变更均为零；195 个测试及辅助函数名完整保留，原有非 import/括号代码行无丢失。当前入口文档链接与 Git 差异检查通过，两阶段审查无未解决问题。
+
+日志 `.local/structure-validation.log`，清单审计 `.local/structure-audit.json`。本轮没有改变 UI 行为、生成新的用户页面、修改用户资料或调用真实 API，因此未重复手势、视觉和真机验收。
+
+
 ## 最新验证：多 PDF 批量导入（2026-11-14）
 
 核对现有拖放入口：`LibraryView.dropDestination(for: URL.self)` 过滤整组本地 PDF URL 后，完整传给 `ReaderModel.importURLs`；文件选择器同样启用了多选。没有只取首个文件。本轮无需改变应用行为，新增两项工作流回归测试。

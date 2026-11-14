@@ -83,13 +83,16 @@ swift run ReaderSmoke .local/smoke
 ## 项目结构
 
 ```text
-App/                         Native app entry and entitlements
-Sources/PaperReaderKit/       Models, SQLite, PDF, model and note services
-Sources/PaperReaderUI/        SwiftUI views and application workflows
-Sources/ReaderSmoke/          Offline integration smoke tool
-Tests/                       Core, PDF and workflow tests
-scripts/                     Build, run and validation commands
-docs/                        Requirements, design and delivery status
+App/                                      Application entry and signing
+Sources/PaperReaderKit/{Domain,Application,Infrastructure,Samples}/
+Sources/PaperReaderUI/{Application,Features,Platform,DesignSystem}/
+Sources/CSQLite/                           SQLite C module bridge
+Sources/ReaderSmoke/                       Offline integration smoke tool
+Tests/{PaperReaderKitTests,PaperReaderWorkflowTests}/
+scripts/                                  Build and validation commands
+docs/                                     Product and engineering documents
 ```
+
+详细职责、依赖方向与新文件归属见 [工程结构](docs/architecture.md)。
 
 文档：[需求](docs/requirements.md) · [技术选型](docs/technology.md) · [设计](docs/superpowers/specs/2026-11-13-paperreader-design.md) · [代码规范](docs/engineering.md) · [实施计划](docs/superpowers/plans/2026-11-13-local-mvp.md)

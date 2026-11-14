@@ -3,7 +3,7 @@
 ## Scope and communication
 
 - 默认使用中文交流与编写产品文档；代码标识符使用英文。
-- 修改前阅读 README.md、docs/requirements.md 和相关设计章节；工程约定见 docs/engineering.md。
+- 修改前阅读 README.md、docs/requirements.md 和相关设计章节；工程约定见 docs/engineering.md，目录与文件归属见 docs/architecture.md。
 - 区分用户已确认需求、设计建议、实测结果。不得把框架能力描述为应用已经实现的功能。
 - 设计已获用户确认，当前任务为本地 MVP 实现；不得自行部署、创建远程仓库或上传资料。
 - 普通可逆的仓库编辑、格式修正和相关检查直接完成；产品范围变化说明影响，再向用户澄清。
@@ -22,6 +22,7 @@
 
 - 使用 Swift 6、SwiftUI、结构化并发；新增平台 API 必须检查 macOS 15 / 暂定 iPadOS 18 的可用性。
 - UI、领域逻辑、存储、文件系统和外部服务分离。View 中不直接访问数据库或调用模型 API。
+- 新文件按 docs/architecture.md 的职责目录放置；不向库 target 根目录堆放 Swift 文件，不新增通用 Models/Utils 杂项文件。功能页面、应用协调、平台桥接与测试辅助分别归类。
 - 数据迁移必须显式、可测试；禁止以删除用户数据库作为升级方案。
 - 为关键行为添加有意义的测试：页面不变、批注定位、恢复与去重、引用正确、笔记保留和同步冲突。
 - 测试默认使用本地 fixture 和假服务；真实 API 调用属于用户明确授权的集成验证。
