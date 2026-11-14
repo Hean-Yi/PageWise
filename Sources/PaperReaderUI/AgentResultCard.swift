@@ -109,16 +109,22 @@ struct AgentActivityLog: View {
     }
 
     private func row(_ item: AgentActivity) -> some View {
-        HStack(spacing: 7) {
-            if item.status == .running {
-                ProgressView().controlSize(.mini)
-            } else {
-                Image(systemName: item.status == .succeeded ? "checkmark" : "exclamationmark.circle")
-                    .font(.system(size: 10))
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 7) {
+                if item.status == .running {
+                    ProgressView().controlSize(.mini)
+                } else {
+                    Image(systemName: item.status == .succeeded ? "checkmark" : "exclamationmark.circle")
+                        .font(.system(size: 10))
+                }
+                Text(title(for: item.toolName))
+                if let count = item.resultCount { Text("· \(count) 个结果") }
+                Spacer(minLength: 0)
             }
-            Text(title(for: item.toolName))
-            if let count = item.resultCount { Text("· \(count) 个结果") }
-            Spacer(minLength: 0)
+            if let message = item.message, item.status == .failed || item.resultCount == 0 {
+                Text(message).font(.system(size: 11)).lineLimit(4)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }.help(item.message ?? title(for: item.toolName))
     }
 
