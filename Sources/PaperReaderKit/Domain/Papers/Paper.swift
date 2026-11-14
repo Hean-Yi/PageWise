@@ -12,6 +12,9 @@ public struct Paper: Identifiable, Codable, Sendable {
     public var canReflow: Bool
     public var previewPages: [PageArtifact] = []
     public var translatedPages: [PageArtifact] = []
+    public var htmlReading: HTMLReadingArtifact?
+    /// Stable reading anchors; HTML sections and legacy PDF pages share navigation semantics.
+    public var readingPages: [PageArtifact] { htmlReading?.sections ?? translatedPages }
     public var translations: [String: String] = [:]
     public var translatedBlockCount = 0
     public var addedAt = Date()

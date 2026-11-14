@@ -91,7 +91,7 @@ public enum PaperPageLocator {
         let pages: [PageArtifact]
         switch mode {
         case "reflow": pages = paper.previewPages
-        case "translated": pages = paper.translatedPages
+        case "translated": pages = paper.readingPages
         default: return []
         }
         return pages.filter { !pending.contains($0.id) }

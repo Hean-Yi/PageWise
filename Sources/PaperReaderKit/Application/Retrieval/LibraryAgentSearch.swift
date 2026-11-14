@@ -18,7 +18,7 @@ public enum LibraryAgentSearch {
             let titleScore = terms.filter { title.contains($0) }.count * 5
             var best: TextBlock?
             var bestScore = 0
-            let published = Set(paper.translatedPages.flatMap(\.blockIDs))
+            let published = Set(paper.readingPages.flatMap(\.blockIDs))
             for block in paper.blocks
             where paper.pageCount > 0
                 && ((block.sourcePage >= 0 && block.sourcePage < paper.pageCount)

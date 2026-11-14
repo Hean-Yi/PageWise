@@ -20,12 +20,28 @@ extension ReaderModel {
         }
         isImporting = true
         var importedIDs: [UUID] = []
-        defer { isImporting = false }
+        defer {
+            isImporting = false
+            importProgressToken = nil
+            importProgress = nil
+        }
         for url in urls {
             do {
                 status = "正在解析 \(url.lastPathComponent)…"
+                let token = UUID()
+                importProgressToken = token
+                importProgress = PDFImportProgress(sequence: 0, stage: "准备导入")
                 var imported = try await importer.importPDF(
-                    at: url, preservingComplexPages: true, structuredBlocks: structuredBlocks)
+                    at: url, preservingComplexPages: true, structuredBlocks: structuredBlocks
+                ) { [weak self] progress in
+                    Task { @MainActor [weak self] in
+                        guard let self, self.importProgressToken == token,
+                            progress.sequence > (self.importProgress?.sequence ?? -1)
+                        else { return }
+                        self.importProgress = progress
+                    }
+                }
+                importProgress = PDFImportProgress(sequence: Int.max, stage: "提交书库")
                 let importedDirectory = root.appendingPathComponent(imported.originalPath).deletingLastPathComponent()
                 var retained = false
                 defer { if !retained { try? FileManager.default.removeItem(at: importedDirectory) } }
@@ -138,13 +154,26 @@ extension ReaderModel {
                         pairs.append(BilingualBlock(block: block, translation: translation))
                     }
                     try Task.checkCancellation()
+                    let useHTML = current.translatedPages.isEmpty
                     let relative = "Papers/\(id.uuidString)/translated"
-                    let rendered = try await StructuredPageRenderer().render(
-                        pairs, to: self.root.appendingPathComponent(relative),
-                        originalURL: self.root.appendingPathComponent(current.originalPath))
+                    let html: HTMLReadingArtifact?
+                    let rendered: [PageArtifact]
+                    if useHTML {
+                        html = try await HTMLReadingStore().append(
+                            pairs, to: current.htmlReading, paper: current, root: self.root)
+                        rendered = []
+                    } else {
+                        html = nil
+                        rendered = try await StructuredPageRenderer().render(
+                            pairs, to: self.root.appendingPathComponent(relative),
+                            originalURL: self.root.appendingPathComponent(current.originalPath))
+                    }
                     var retained = false
                     defer {
                         if !retained {
+                            if useHTML, let fresh = self.state.papers.first(where: { $0.id == id }) {
+                                try? HTMLReadingStore.cleanup(root: self.root, paper: fresh)
+                            }
                             for page in rendered {
                                 try? FileManager.default.removeItem(
                                     at: self.root.appendingPathComponent(relative).appendingPathComponent(
@@ -154,6 +183,7 @@ extension ReaderModel {
                     }
                     try Task.checkCancellation()
                     guard var publication = self.state.papers.first(where: { $0.id == id }) else { return }
+                    if let html { publication.htmlReading = html }
                     publication.translatedPages.append(
                         contentsOf: rendered.map { page in
                             var page = page
@@ -173,6 +203,11 @@ extension ReaderModel {
                         throw ReaderError.message("页面未能保存，翻译已停止；先前页面仍保留。")
                     }
                     retained = true
+                    if useHTML {
+                        do { try HTMLReadingStore.cleanup(root: self.root, paper: publication) } catch {
+                            self.status = "阅读内容已保存，临时文件将在下次打开时清理。"
+                        }
+                    }
                     if self.selectedPaperID == id && self.mode != "translated" {
                         self.changeMode(to: "translated")
                     }

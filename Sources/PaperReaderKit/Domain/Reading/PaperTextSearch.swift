@@ -26,7 +26,7 @@ public enum PaperTextSearch {
         let term = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !term.isEmpty else { return [] }
         let published = Set(
-            paper.translatedPages.filter { !pending.contains($0.id) }.flatMap(\.blockIDs))
+            paper.readingPages.filter { !pending.contains($0.id) }.flatMap(\.blockIDs))
         let completed = Set(paper.blocks.prefix(max(0, paper.translatedBlockCount)).map(\.id))
         var results: [PaperSearchResult] = []
         for block in paper.blocks

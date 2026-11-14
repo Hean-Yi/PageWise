@@ -80,3 +80,10 @@ Swift Package 自动递归发现每个 target 目录下的 Swift 文件。当前
 `Infrastructure/HTML/Images` 分离图片来源本地化、ImageIO/CoreGraphics 解码、SVG 静态文档规范化和 HTML 图件替换。领域层只保存尺寸、局部失败提示和短期覆盖核验数据，不依赖图片或 WebKit 类型。
 
 `Infrastructure/PDF/Import/Figures` 负责 PDF 图注几何定位、灰度像素/连通区域分析和高清裁剪；失败图件替换由 PDFImporter 协调。领域层的 FigureCaption 保存独立图注结构，使补图后仍能翻译图注而不翻译图内标签。`scripts/FigureCropAudit.swift` 与 `audit-figure-crops.sh` 是基于人工真值框的本地开发验证器，不属于应用运行依赖。
+
+
+## HTML 连续阅读
+
+`Domain/Papers/HTMLReadingArtifact` 描述唯一已提交 HTML、资源引用与稳定内容锚点；`Paper.readingPages` 为 HTML 内容段和旧 PDF 页面提供统一导航，不代表 HTML 仍然分页。`Infrastructure/HTML/Reading` 负责文件生成、资源去重与未提交文件回收；`Platform/HTML` 负责 WKWebView、隔离脚本桥、选文和滚动事件。已发布 HTML 只追加段落，文本高亮使用 UTF-16 范围和原文核验，旧 PDF 高亮继续使用矩形坐标。
+
+阅读器最多保留一个空的 WebKit 实例用于预热，网站数据存储为非持久化；它不保留论文版本或另建磁盘缓存。实际文档及资源属于用户阅读制品，随数据库提交事务发布。

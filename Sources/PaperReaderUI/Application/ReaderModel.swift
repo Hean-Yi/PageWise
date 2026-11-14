@@ -11,6 +11,10 @@ public final class ReaderModel {
     public var message: String?
     public var status = "仅保存在此设备"
     public var isImporting = false
+    public var importProgress: PDFImportProgress?
+    public var selectionHTMLRange: [Int]?
+    public var usesHTMLReading: Bool { mode == "translated" && paper?.htmlReading != nil }
+    var importProgressToken: UUID?
     public var busyAI = false
     public var translating: Set<UUID> = []
     public private(set) var pendingArtifactIDs: Set<UUID> = []
@@ -69,7 +73,7 @@ public final class ReaderModel {
     public var paper: Paper? { state.papers.first { $0.id == selectedPaperID } }
     public var activePages: [PageArtifact] {
         guard let paper else { return [] }
-        let pages = mode == "translated" ? paper.translatedPages : paper.previewPages
+        let pages = mode == "translated" ? paper.readingPages : paper.previewPages
         return pages.filter { !pendingArtifactIDs.contains($0.id) }
     }
     public var pageURLs: [URL] {
@@ -181,10 +185,12 @@ public final class ReaderModel {
         paper.blocks = publication.blocks
         paper.translations = publication.translations
         paper.translatedPages = publication.translatedPages
+        paper.htmlReading = publication.htmlReading
         paper.translatedBlockCount = publication.translatedBlockCount
     }
 
     public func captureSelection(text: String, rects: [[Double]], page: Int) {
+        selectionHTMLRange = nil
         selectionText = text
         selectionRects = rects
         selectionPage = page
@@ -193,10 +199,11 @@ public final class ReaderModel {
 
     public func highlightSelection() {
         guard let id = selectedPaperID, !selectionText.isEmpty, pageKeys.indices.contains(selectionPage) else { return }
-        state.highlights.append(
-            Highlight(
-                paperID: id, pageKey: pageKeys[selectionPage], pageIndex: selectionPage, text: selectionText,
-                rects: selectionRects))
+        var highlight = Highlight(
+            paperID: id, pageKey: pageKeys[selectionPage], pageIndex: selectionPage, text: selectionText,
+            rects: selectionRects)
+        highlight.textRange = selectionHTMLRange
+        state.highlights.append(highlight)
         Task { await save() }
     }
 
@@ -207,7 +214,7 @@ public final class ReaderModel {
             if let page = evidence.sourcePage {
                 navigateToSourcePage(page, blockID: evidence.blockID, preferredMode: mode)
             } else if let blockID = evidence.blockID, let paper,
-                let page = paper.translatedPages.first(where: { $0.blockIDs.contains(blockID) }),
+                let page = paper.readingPages.first(where: { $0.blockIDs.contains(blockID) }),
                 let position = PaperPageLocator.resolve(pageKey: page.id.uuidString, in: paper)
             {
                 navigateToSourcePage(page.sourcePage, blockID: blockID, preferredMode: position.mode)

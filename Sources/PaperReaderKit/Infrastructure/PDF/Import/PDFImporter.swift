@@ -11,20 +11,28 @@ public actor PDFImporter {
         self.root = root
     }
 
-    public func importPDF(at url: URL, preservingComplexPages: Bool = false, structuredBlocks: [TextBlock]? = nil)
+    public func importPDF(
+        at url: URL, preservingComplexPages: Bool = false, structuredBlocks: [TextBlock]? = nil,
+        onProgress: @Sendable (PDFImportProgress) -> Void = { _ in }
+    )
         throws -> Paper
     {
         let scoped = url.startAccessingSecurityScopedResource()
         defer { if scoped { url.stopAccessingSecurityScopedResource() } }
         try Task.checkCancellation()
         guard url.isFileURL else { throw ReaderError.message("请选择本地 PDF 文件。") }
+        var sequence = 0
+        func report(_ stage: String, _ completed: Int = 0, _ total: Int? = nil) {
+            sequence += 1
+            onProgress(PDFImportProgress(sequence: sequence, stage: stage, completed: completed, total: total))
+        }
+        report("读取 PDF")
         let bytes = try Data(contentsOf: url)
         guard bytes.prefix(1_024).range(of: Data("%PDF-".utf8)) != nil,
             let document = PDFDocument(data: bytes), document.pageCount > 0
         else { throw ReaderError.message("文件不是有效的 PDF，未导入。") }
         guard !document.isLocked else { throw ReaderError.message("PDF 已加密，请先在本地解锁后再导入。") }
 
-        let analysis = try PDFProcessor.extract(from: document, preservingComplexPages: preservingComplexPages)
         let structured = try structuredBlocks.flatMap { blocks -> [TextBlock]? in
             guard document.allowsCopying, !blocks.isEmpty, blocks.allSatisfy({ $0.richContent != nil }),
                 (0..<document.pageCount).allSatisfy({
@@ -35,9 +43,17 @@ public actor PDFImporter {
                         == true
                 })
             else { return nil }
-            let pageTexts = (0..<document.pageCount).map { Self.normalized(document.page(at: $0)?.string ?? "") }
+            let rawPageTexts = (0..<document.pageCount).map { document.page(at: $0)?.string ?? "" }
+            let pageTexts = rawPageTexts.map(Self.normalized)
+            var completedBlocks = 0
+            report("检查正文与补全图片", 0, blocks.count)
             var richBytes = blocks.reduce(0) { $0 + ($1.richContent?.html.utf8.count ?? 0) }
             let mappedBlocks = try blocks.map { block in
+                try Task.checkCancellation()
+                defer {
+                    completedBlocks += 1
+                    report("检查正文与补全图片", completedBlocks, blocks.count)
+                }
                 var mapped = block
                 let needle = Self.normalized(block.richContent?.figureCaption?.text ?? block.text)
                 let matches = pageTexts.indices.filter { !needle.isEmpty && pageTexts[$0].contains(needle) }
@@ -74,11 +90,14 @@ public actor PDFImporter {
             let htmlWords = Self.words(mappedBlocks.map(\.text).joined(separator: " "))
             let graphicLabels = mappedBlocks.compactMap { $0.richContent?.imageTextForCoverage }.map(Self.normalized)
             let retainedPages = Set(mappedBlocks.filter { $0.preservesSourcePage == true }.map(\.sourcePage))
+            report("核对原文覆盖", 0, document.pageCount)
             for index in 0..<document.pageCount {
+                try Task.checkCancellation()
+                defer { report("核对原文覆盖", index + 1, document.pageCount) }
                 // The complete source page is already part of the reading result. Missing
                 // image labels on this page must not reject unrelated structured content.
                 if retainedPages.contains(index) { continue }
-                let words = Self.words(document.page(at: index)?.string ?? "")
+                let words = Self.words(rawPageTexts[index])
                 // SVG exporters may outline letters and keep data-text glyph labels. These
                 // labels can explain a PDF word without pretending to be ordered body text.
                 let covered = words.filter { word in
@@ -90,6 +109,14 @@ public actor PDFImporter {
             }
             return mappedBlocks
         }
+        // Structured content already passed coverage checks; do not also perform PDF column analysis.
+        let analysis =
+            try structured == nil
+            ? PDFProcessor.extract(from: document, preservingComplexPages: preservingComplexPages) { completed, total in
+                report("解析 PDF 页面", completed, total)
+            }
+            : PDFProcessingResult(blocks: [], warnings: [], canReflow: true)
+        report("保存原始 PDF")
         let id = UUID()
         let papersDirectory = root.appendingPathComponent("Papers", isDirectory: true)
         let staging = papersDirectory.appendingPathComponent(".import-\(UUID().uuidString)", isDirectory: true)

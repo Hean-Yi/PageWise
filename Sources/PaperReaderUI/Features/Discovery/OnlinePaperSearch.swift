@@ -13,6 +13,11 @@ public final class OnlinePaperSearch {
     public private(set) var error: String?
     public private(set) var contextNotice: String?
     public private(set) var importingID: String?
+    private var importStage = "下载 PDF"
+    public var importProgress: PDFImportProgress {
+        if importStage == "本地处理", let progress = reader.importProgress { return progress }
+        return PDFImportProgress(sequence: 0, stage: importStage)
+    }
     public private(set) var imported: [String: UUID] = [:]
     public private(set) var importErrors: [String: String] = [:]
     public private(set) var targetShelfID: UUID?
@@ -112,6 +117,7 @@ public final class OnlinePaperSearch {
             importErrors[candidate.id] = "目标书架已删除，请关闭查找后从其他书架重试。"
             return
         }
+        importStage = "下载 PDF"
         importingID = candidate.id
         importErrors[candidate.id] = nil
         importTask = Task { [weak self] in
@@ -128,12 +134,13 @@ public final class OnlinePaperSearch {
             do {
                 let url = try await self.discovery.download(candidate)
                 defer { try? FileManager.default.removeItem(at: url) }
+                self.importStage = "获取正文与图片"
                 let structured: [TextBlock]?
                 do { structured = try await self.discovery.structuredContent(candidate) } catch is CancellationError {
                     throw CancellationError()
                 } catch { structured = nil }
                 try Task.checkCancellation()
-                try Task.checkCancellation()
+                self.importStage = "本地处理"
                 let ids = await self.reader.importURLs(
                     [url], selectAfterImport: false, metadata: candidate, shelfID: shelfID, moveDuplicateToShelf: true,
                     structuredBlocks: structured)

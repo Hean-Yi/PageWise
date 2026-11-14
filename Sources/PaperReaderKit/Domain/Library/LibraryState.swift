@@ -1,7 +1,7 @@
 import Foundation
 
 public struct LibraryState: Codable, Sendable {
-    public static let currentVersion = 5
+    public static let currentVersion = 6
     public var version = currentVersion
     public var papers: [Paper] = []
     public var highlights: [Highlight] = []
@@ -53,6 +53,7 @@ public struct LibraryState: Codable, Sendable {
         }
         // v5 introduces optional structured blocks and retained source pages. Missing v1-v4
         // fields decode to nil; all published page IDs, annotations and preview records survive.
+        // v6 adds optional HTML reading artifacts and text-range highlights. Old PDF IDs remain unchanged.
         try validateOrdering()
         try validateShelves()
         version = Self.currentVersion

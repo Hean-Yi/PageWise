@@ -79,6 +79,11 @@ struct SearchView: View {
                         .buttonStyle(.borderedProminent).controlSize(.small).disabled(search.importingID != nil)
                 }
             }
+            if search.importingID == item.id {
+                ProgressView(value: search.importProgress.fraction) {
+                    Text(search.importProgress.label).font(.caption)
+                }.progressViewStyle(.linear)
+            }
             if let error = search.importErrors[item.id] {
                 Text(error).font(.caption).foregroundStyle(ReaderTheme.accent)
             }

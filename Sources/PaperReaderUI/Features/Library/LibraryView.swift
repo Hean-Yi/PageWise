@@ -138,6 +138,7 @@ public struct LibraryView: View {
             }
         }
         .background(ReaderTheme.canvas)
+        .task { HTMLWebViewPool.prewarm() }
         .toolbar {
             ToolbarItem {
                 Button {
@@ -152,8 +153,16 @@ public struct LibraryView: View {
         .overlay(alignment: .bottom) {
             if model.isImporting || !model.translating.isEmpty {
                 HStack(spacing: 10) {
-                    ProgressView().controlSize(.small)
-                    Text(model.status).font(.caption).lineLimit(1)
+                    if model.isImporting, let progress = model.importProgress {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text(progress.label).font(.caption).lineLimit(1)
+                            ProgressView(value: progress.fraction).progressViewStyle(.linear)
+                                .accessibilityLabel(progress.label)
+                        }.frame(width: 250)
+                    } else {
+                        ProgressView().controlSize(.small)
+                        Text(model.status).font(.caption).lineLimit(1)
+                    }
                 }.padding(.horizontal, 18).padding(.vertical, 12)
                     .background(.regularMaterial, in: Capsule()).padding(18)
             } else if let toast {

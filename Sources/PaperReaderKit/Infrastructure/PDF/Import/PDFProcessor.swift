@@ -17,14 +17,18 @@ public enum PDFProcessor {
         return try extract(from: document)
     }
 
-    static func extract(from document: PDFDocument, preservingComplexPages: Bool = false) throws -> PDFProcessingResult
-    {
+    static func extract(
+        from document: PDFDocument, preservingComplexPages: Bool = false,
+        onProgress: (Int, Int) -> Void = { _, _ in }
+    ) throws -> PDFProcessingResult {
         var blocks: [TextBlock] = []
         var warnings: [String] = []
         if !document.allowsCopying {
             return PDFProcessingResult(blocks: [], warnings: ["此 PDF 不允许文字提取，已保留原始 PDF 阅读。"], canReflow: false)
         }
+        onProgress(0, document.pageCount)
         for pageIndex in 0..<document.pageCount {
+            defer { onProgress(pageIndex + 1, document.pageCount) }
             try Task.checkCancellation()
             guard let page = document.page(at: pageIndex) else {
                 warnings.append("第 \(pageIndex + 1) 页无法读取，已回退到原始 PDF。")
@@ -63,6 +67,8 @@ public enum PDFProcessor {
             if source.rangeOfCharacter(from: CharacterSet(charactersIn: "∑∏∫√∂∇≈≠≤≥⊗⊕")) != nil {
                 warnings.append("第 \(pageIndex + 1) 页含尚未验证的数学结构，使用原始 PDF 保留公式。")
             }
+            // This page is already retained intact; no column/character analysis can change that decision.
+            if preservingComplexPages, warnings.count > warningStart { continue }
             let extraction = positionedLines(on: page)
             guard extraction.reliable else {
                 warnings.append("第 \(pageIndex + 1) 页文字坐标不完整或重叠，无法保证阅读顺序，使用原始 PDF。")

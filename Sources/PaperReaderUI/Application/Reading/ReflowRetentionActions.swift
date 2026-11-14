@@ -7,7 +7,7 @@ extension ReaderModel {
     func retireUnusedPreview(for paperID: UUID) async {
         guard let index = state.papers.firstIndex(where: { $0.id == paperID }) else { return }
         let paper = state.papers[index]
-        guard !paper.previewPages.isEmpty, !paper.translatedPages.isEmpty,
+        guard !paper.previewPages.isEmpty, !paper.readingPages.isEmpty,
             paper.translatedBlockCount == paper.blocks.count,
             !(selectedPaperID == paperID && mode == "reflow")
         else { return }

@@ -14,7 +14,8 @@ let package = Package(
         .systemLibrary(name: "CSQLite", pkgConfig: "sqlite3"),
         .target(name: "PaperReaderKit", dependencies: ["CSQLite", "SwiftSoup"],
             resources: [.copy("Resources/ThirdPartyNotices.txt")]),
-        .target(name: "PaperReaderUI", dependencies: ["PaperReaderKit"]),
+        .target(name: "PaperReaderUI", dependencies: ["PaperReaderKit"],
+            resources: [.copy("Platform/HTML/ReaderWarmup.html")]),
         .executableTarget(name: "ReaderSmoke", dependencies: ["PaperReaderKit"]),
         .testTarget(name: "PaperReaderKitTests", dependencies: ["PaperReaderKit"]),
         .testTarget(name: "PaperReaderWorkflowTests", dependencies: ["PaperReaderKit", "PaperReaderUI"])

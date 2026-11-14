@@ -75,6 +75,8 @@ struct ReaderView: View {
                                 Button("开始翻译", action: translate).buttonStyle(.borderedProminent).controlSize(.large)
                                     .disabled(model.translating.contains(model.selectedPaperID ?? UUID()))
                             }.frame(maxWidth: .infinity, maxHeight: .infinity)
+                        } else if model.usesHTMLReading {
+                            HTMLCanvas(model: model)
                         } else {
                             PDFCanvas(model: model, penEnabled: penEnabled).frame(maxWidth: 820)
                         }
@@ -140,7 +142,9 @@ struct ReaderView: View {
                 Picker("阅读模式", selection: Binding(get: { model.mode }, set: { model.changeMode(to: $0) })) {
                     Text("原版").tag("original")
                     if model.paper?.previewPages.isEmpty == false { Text("旧重排").tag("reflow") }
-                    if model.paper?.translatedPages.isEmpty == false { Text("双语重排").tag("translated") }
+                    if model.paper?.readingPages.isEmpty == false {
+                        Text(model.paper?.htmlReading != nil ? "连续阅读" : "双语重排").tag("translated")
+                    }
                 }.pickerStyle(.segmented).labelsHidden().frame(width: 186)
             }
             if model.translating.contains(model.selectedPaperID ?? UUID()) {
@@ -168,25 +172,30 @@ struct ReaderView: View {
 
     private func readingBar(width: CGFloat) -> some View {
         HStack(spacing: 12) {
-            Button {
-                model.navigateToPage(model.visiblePage - 1)
-            } label: {
-                Image(systemName: "chevron.left")
+            if model.usesHTMLReading {
+                Text("连续阅读 · \(model.visiblePage + 1) / \(model.pageKeys.count) 段")
+                    .font(.caption).foregroundStyle(ReaderTheme.muted)
+            } else {
+                Button {
+                    model.navigateToPage(model.visiblePage - 1)
+                } label: {
+                    Image(systemName: "chevron.left")
+                }
+                .disabled(model.visiblePage <= 0).help("上一页").accessibilityLabel("上一页")
+                HStack(spacing: 4) {
+                    TextField("页码", text: $pageInput).textFieldStyle(.plain).multilineTextAlignment(.center)
+                        .frame(width: 28).focused($pageFocused).onSubmit(jumpToPage).accessibilityLabel("跳转页码")
+                    Text("/ \(model.pageKeys.count)").foregroundStyle(ReaderTheme.muted)
+                }.font(.system(size: 11, design: .monospaced)).padding(.horizontal, 9).padding(.vertical, 5)
+                    .background(ReaderTheme.surface, in: RoundedRectangle(cornerRadius: 6))
+                    .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(ReaderTheme.line))
+                Button {
+                    model.navigateToPage(model.visiblePage + 1)
+                } label: {
+                    Image(systemName: "chevron.right")
+                }
+                .disabled(model.visiblePage >= model.pageKeys.count - 1).help("下一页").accessibilityLabel("下一页")
             }
-            .disabled(model.visiblePage <= 0).help("上一页").accessibilityLabel("上一页")
-            HStack(spacing: 4) {
-                TextField("页码", text: $pageInput).textFieldStyle(.plain).multilineTextAlignment(.center)
-                    .frame(width: 28).focused($pageFocused).onSubmit(jumpToPage).accessibilityLabel("跳转页码")
-                Text("/ \(model.pageKeys.count)").foregroundStyle(ReaderTheme.muted)
-            }.font(.system(size: 11, design: .monospaced)).padding(.horizontal, 9).padding(.vertical, 5)
-                .background(ReaderTheme.surface, in: RoundedRectangle(cornerRadius: 6))
-                .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(ReaderTheme.line))
-            Button {
-                model.navigateToPage(model.visiblePage + 1)
-            } label: {
-                Image(systemName: "chevron.right")
-            }
-            .disabled(model.visiblePage >= model.pageKeys.count - 1).help("下一页").accessibilityLabel("下一页")
             Button(action: model.toggleBookmark) {
                 Image(systemName: model.isCurrentPageBookmarked ? "bookmark.fill" : "bookmark")
                     .foregroundStyle(model.isCurrentPageBookmarked ? ReaderTheme.accent : ReaderTheme.muted)
@@ -206,8 +215,10 @@ struct ReaderView: View {
                 }
             }
             #if os(iOS)
-                Toggle(isOn: $penEnabled) { Image(systemName: "pencil.tip.crop.circle") }
-                    .toggleStyle(.button).accessibilityLabel("手写批注")
+                if !model.usesHTMLReading {
+                    Toggle(isOn: $penEnabled) { Image(systemName: "pencil.tip.crop.circle") }
+                        .toggleStyle(.button).accessibilityLabel("手写批注")
+                }
             #endif
         }.buttonStyle(.borderless).font(.caption).padding(.horizontal, 22).frame(height: 46)
             .background(ReaderTheme.canvas)

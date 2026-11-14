@@ -36,7 +36,7 @@ private struct FakeModelTransport: HTTPTransport {
     }
     #expect(model.translating.isEmpty)
     #expect(model.paper?.translatedBlockCount == paper.blocks.count)
-    #expect(model.paper?.translatedPages.isEmpty == false)
+    #expect(model.paper?.readingPages.isEmpty == false)
     #expect(try Data(contentsOf: firstURL) == bytes)
     model.captureSelection(text: "Attention", rects: [[56, 500, 100, 20]], page: 0)
     model.highlightSelection()
@@ -84,7 +84,7 @@ private struct FakeModelTransport: HTTPTransport {
     #expect(model.message?.contains("没有可读取的文字") == true)
 }
 
-@Test @MainActor func structuredTranslationRetainsOnlyOriginalAndFinalPagesAfterRestart() async throws {
+@Test @MainActor func structuredTranslationRetainsOnlyOriginalAndFinalHTMLAfterRestart() async throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: root) }
     let model = try ReaderModel(
@@ -115,9 +115,11 @@ private struct FakeModelTransport: HTTPTransport {
     #expect(paper.translatedBlockCount == blocks.count)
     #expect(paper.blocks.allSatisfy { $0.richContent == nil })
     #expect(paper.previewPages.isEmpty)
+    let htmlArtifact = try #require(paper.htmlReading)
+    #expect(paper.translatedPages.isEmpty)
     let expected = Set(
-        ["original.pdf"]
-            + paper.translatedPages.map { "translated/" + URL(fileURLWithPath: $0.relativePath).lastPathComponent })
+        ["original.pdf", "reading/" + URL(fileURLWithPath: htmlArtifact.relativePath).lastPathComponent]
+            + htmlArtifact.assets.map { "reading/" + URL(fileURLWithPath: $0).lastPathComponent })
     let paperRoot = root.appendingPathComponent(paper.originalPath).deletingLastPathComponent()
     let enumerator = try #require(
         FileManager.default.enumerator(at: paperRoot, includingPropertiesForKeys: [.isRegularFileKey]))
@@ -129,10 +131,10 @@ private struct FakeModelTransport: HTTPTransport {
     }
     #expect(actual == expected)
     #expect(try Data(contentsOf: root.appendingPathComponent(paper.originalPath)) == original)
-    let ids = paper.translatedPages.map(\.id)
+    let ids = paper.readingPages.map(\.id)
     let reopened = try ReaderModel(root: root)
     await reopened.load()
-    #expect(reopened.state.papers[0].translatedPages.map(\.id) == ids)
+    #expect(reopened.state.papers[0].readingPages.map(\.id) == ids)
     #expect(reopened.state.papers[0].blocks.allSatisfy { $0.richContent == nil })
 }
 

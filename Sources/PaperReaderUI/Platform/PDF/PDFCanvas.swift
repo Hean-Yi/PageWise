@@ -73,7 +73,7 @@ private final class PDFCoordinator: NSObject, @preconcurrency PDFPageOverlayView
         view.autoScales = true
         view.displayMode = .singlePageContinuous
         view.displayDirection = .vertical
-        view.displaysPageBreaks = true
+        view.displaysPageBreaks = false
         view.pageOverlayViewProvider = self
         #if os(macOS)
             view.acceptsDraggedFiles = false

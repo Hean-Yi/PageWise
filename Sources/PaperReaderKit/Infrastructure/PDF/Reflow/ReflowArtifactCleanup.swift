@@ -18,6 +18,7 @@ public enum ReflowArtifactCleanup {
             }
         }
         for paper in papers {
+            try HTMLReadingStore.cleanup(root: root, paper: paper)
             let directory = root.appendingPathComponent("Papers/\(paper.id.uuidString)", isDirectory: true)
             let referenced = Set((paper.previewPages + paper.translatedPages).map(\.relativePath))
             for folder in ["preview", "translated"] {

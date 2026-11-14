@@ -94,7 +94,7 @@ extension ReaderModel {
         let blockID = mode == "original" ? nil : activePages[safe: visiblePage]?.blockIDs.first
         if requestedMode == "translated",
             PaperPageLocator.position(sourcePage: sourcePage!, blockID: blockID, mode: requestedMode, in: paper) == nil,
-            let first = paper.translatedPages.first,
+            let first = paper.readingPages.first,
             let position = PaperPageLocator.resolve(pageKey: first.id.uuidString, in: paper)
         {
             applyPosition(position)
@@ -117,7 +117,7 @@ extension ReaderModel {
         guard result.paperID == selectedPaperID, let paper else { return }
         invalidateSearchNavigation()
         let targetMode = result.isTranslation || result.sourcePage < 0 ? "translated" : mode
-        let pages = targetMode == "translated" ? paper.translatedPages : paper.previewPages
+        let pages = targetMode == "translated" ? paper.readingPages : paper.previewPages
         let candidates = pages.filter { page in
             !pendingArtifactIDs.contains(page.id)
                 && (result.blockID.map { page.blockIDs.contains($0) } ?? (page.sourcePage == result.sourcePage))
