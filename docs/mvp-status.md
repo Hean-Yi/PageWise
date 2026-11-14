@@ -55,6 +55,8 @@ Agent 验收宿主使用真实视图、协调器和导入流程，注入假模�
 
 两阶段审查修复了候选年份被挤掉、重复候选状态不一致、异常负页数检索，以及最终回答失败后丢失已展示证据的续聊上下文。最终审查无未解决问题。仍未调用真实 GLM、外网论文下载、用户 Obsidian 写入或 Pencil 真机；iPad 本轮只完成目标构建。检索仍是基础关键词检索，在线来源仍限 arXiv，书库 Agent 会话重启后不保留。
 
+本地合并至 `main` 后重新运行 114 项测试，全部通过。交付应用位于 `.local/PaperReader.app`，签名验证通过；Computer Use 已检查该路径实际运行的应用、默认封面书架和 Agent 侧栏。先前版本保留在 `.local/PaperReader-before-bookshelf-e0b7aad.app`，验证日志保留在 `.local/bookshelf-validation.log` 与 `.local/bookshelf-main-test.log`。未创建远程仓库或推送。
+
 ## 上一轮验证：阅读工作台（2026-11-14）
 
 本轮参考 NeoRead 的阅读工作流与 Claude 风格摘要，以原创 SwiftUI 实现，没有复制参考仓库源码或资产。设计取舍见 [阅读工作台设计](superpowers/specs/2026-11-14-reading-workspace.md)。
