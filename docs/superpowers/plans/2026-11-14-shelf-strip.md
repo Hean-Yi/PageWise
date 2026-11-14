@@ -8,9 +8,11 @@
 
 **Tech Stack:** Swift 6 / SwiftUI / AppKit bridge；macOS 15 / iPadOS 18。
 
-- [ ] 修改 Sources/PaperReaderUI/TopicShelvesView.swift：ScrollViewReader + 横向 ScrollView，HStack 顺序固定为未分类、ForEach(shelves)、末尾加号；用紧凑标签替代预览卡片。每项保留 Mac NativeShelfDrop 和 iPad onDrop，未分类传 nil。点击选中、右键改名/删除不回归。
-- [ ] 新建/改名仅按需展开 TextField 与 checkmark/xmark 按钮；非空且未保存时可确认，Return 保存、Escape 关闭。createShelf 返回 id 后 selectedShelfID = id，ScrollViewReader.scrollTo(id, anchor: .trailing) 保证选中项可见。尊重 accessibilityReduceMotion。
-- [ ] 修改 Sources/PaperReaderUI/LibraryWorkspaceView.swift：标题显示 collection.title；移除下方重复书架名称，只保留排序与查询结果标识。保留继续阅读、论文大封面、已读排序、全库标题检索及 AddPaperCover { onlineSearch.open(shelfID: collection == .all ? selectedShelfID : nil) }。
-- [ ] 运行 xcrun swift-format format/lint 与 swift test；现有 OnlinePaperSearchTests 覆盖目标切换、重复导入归属以及进行中导入捕获，不为静态布局添加镜像测试。源码与相关修正各自 commit。
-- [ ] 在隔离原创样例通过 Computer Use 检查未分类第一项、末尾加号、新建自动选中、横向滚动、改名/删除、页内检索目标、导入后留在对应书架；不调用真实 API。
-- [ ] 运行 bash scripts/check.sh（格式、核心/工作流测试、PDF 冒烟、Mac 与 iPad 构建）；记录真实结果及人工拖拽边界。更新 README 与 mvp-status，commit 后本地合并 main、更新 .local/PaperReader.app；不推送。
+- [x] 修改 Sources/PaperReaderUI/TopicShelvesView.swift：统一 ShelfScrollTarget ID、scrollTargetLayout + 独立 scrollPosition 绑定的横向 ScrollView，HStack 顺序固定为未分类、ForEach(shelves)、末尾加号；用紧凑标签替代预览卡片。每项保留 Mac NativeShelfDrop 和 iPad onDrop，未分类传 nil。点击选中、右键改名/删除不回归。
+- [x] 新建/改名仅按需展开 TextField 与 checkmark/xmark 按钮；非空且未保存时可确认，Return 保存、Escape 关闭。createShelf 返回 id 后 selectedShelfID = id，更新滚动目标绑定保证选中项可见；首次恢复和删除后布局改变也由绑定定位，手动滚动不改变书架选择。尊重 accessibilityReduceMotion。
+- [x] 修改 Sources/PaperReaderUI/LibraryWorkspaceView.swift：标题显示 collection.title；移除下方重复书架名称，只保留排序与查询结果标识。保留继续阅读、论文大封面、已读排序、全库标题检索及 AddPaperCover { onlineSearch.open(shelfID: collection == .all ? selectedShelfID : nil) }。
+- [x] 运行 xcrun swift-format format/lint 与 swift test；现有 OnlinePaperSearchTests 覆盖目标切换、重复导入归属以及进行中导入捕获，不为静态布局添加镜像测试。源码与相关修正各自 commit。
+- [x] 在隔离原创样例通过 Computer Use 检查未分类第一项、末尾加号、新建自动选中、横向滚动、改名/删除、页内检索目标、导入后留在对应书架；不调用真实 API。
+- [x] 运行 bash scripts/check.sh（格式、核心/工作流测试、PDF 冒烟、Mac 与 iPad 构建）；记录真实结果及人工拖拽边界。更新 README 与 mvp-status，commit 后本地合并 main、更新 .local/PaperReader.app；不推送。
+
+验收：3808023 完整检查通过（128 tests、格式、原创 PDF 冒烟、Mac/iPad 构建）；Computer Use 已验证新建、改名、取消、水平系统滚动、当前主题导入、阅读返回与删除回首项。Mac 真实拖拽仍沿用上一轮待人工验收边界。
