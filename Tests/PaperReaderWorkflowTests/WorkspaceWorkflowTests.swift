@@ -13,7 +13,7 @@ import Testing
     let paper = workspacePaper()
     model.state.papers = [paper]
     model.select(paper.id)
-    #expect(model.workspace(for: paper.id).status == .reading)
+    #expect(model.workspace(for: paper.id).status == .finished)
     #expect(model.workspace(for: paper.id).lastOpenedAt != nil)
     model.toggleFavorite(paper.id)
     model.changeMode(to: "reflow")
@@ -37,6 +37,124 @@ import Testing
     #expect(try #require(reopened.workspace(for: paper.id).lastOpenedAt) >= #require(saved.lastOpenedAt))
     reopened.select(nil)
     await reopened.flushReadingPosition()
+}
+
+@Test(arguments: ["original", "reflow", "translated"])
+@MainActor func reachingFinalSourcePagePersistsCompletionAcrossRestartAndReview(mode: String) async throws {
+    let root = workspaceDirectory()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let model = try ReaderModel(root: root)
+    await model.load()
+    let paper = workspacePaper()
+    model.state.papers = [paper]
+    model.state.workspace[paper.id.uuidString] = PaperWorkspace(
+        status: .reading, position: ReaderPosition(mode: "original", pageKey: "original-0", pageIndex: 0))
+    model.select(paper.id)
+    #expect(model.workspace(for: paper.id).status == .reading)
+    model.changeMode(to: mode)
+    model.navigateToSourcePage(2, blockID: nil, preferredMode: mode)
+    #expect(model.mode == mode)
+    #expect(model.workspace(for: paper.id).status == .finished)
+    model.select(nil)
+    await model.flushReadingPosition()
+
+    let reopened = try ReaderModel(root: root)
+    await reopened.load()
+    #expect(reopened.workspace(for: paper.id).status == .finished)
+    #expect(LibraryQuery.papers(in: reopened.state, collection: .reading).isEmpty)
+    #expect(LibraryQuery.papers(in: reopened.state, collection: .finished).map(\.id) == [paper.id])
+    reopened.select(paper.id)
+    reopened.navigateToSourcePage(0)
+    #expect(reopened.workspace(for: paper.id).status == .finished)
+    #expect(PaperPageLocator.sourcePage(for: try #require(reopened.workspace(for: paper.id).position), in: paper) == 0)
+    reopened.select(nil)
+    await reopened.flushReadingPosition()
+    let stored = try await LibraryStore(directory: root).load()
+    #expect(stored.workspace[paper.id.uuidString]?.status == .finished)
+}
+
+@Test @MainActor func explicitlyUnreadAtFinalPageSurvivesRestartAndResumesAfterChangingPage() async throws {
+    let root = workspaceDirectory()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let model = try ReaderModel(root: root)
+    await model.load()
+    let paper = workspacePaper()
+    model.state.papers = [paper]
+    model.select(paper.id)
+    let lastPosition = try #require(model.workspace(for: paper.id).position)
+    model.setReadingStatus(.unread, for: paper.id)
+    model.recordVisiblePage(model.visiblePage)
+    model.select(nil)
+    await model.flushReadingPosition()
+
+    let reopened = try ReaderModel(root: root)
+    await reopened.load()
+    #expect(reopened.workspace(for: paper.id).status == .unread)
+    #expect(reopened.workspace(for: paper.id).position == lastPosition)
+    #expect(LibraryQuery.papers(in: reopened.state, collection: .finished).isEmpty)
+    reopened.select(paper.id)
+    reopened.recordVisiblePage(reopened.visiblePage)
+    await reopened.flushReadingPosition()
+    #expect(reopened.workspace(for: paper.id).status == .unread)
+    #expect(reopened.workspace(for: paper.id).position == lastPosition)
+    reopened.changeMode(to: "original")
+    #expect(reopened.workspace(for: paper.id).status == .unread)
+    reopened.navigateToPage(0)
+    #expect(reopened.workspace(for: paper.id).status == .reading)
+    #expect(
+        ReadingProgress.resolve(paper: paper, workspace: reopened.workspace(for: paper.id)) == .reading(percent: 33))
+    reopened.navigateToPage(2)
+    #expect(reopened.workspace(for: paper.id).status == .finished)
+    reopened.select(nil)
+    await reopened.flushReadingPosition()
+}
+
+@Test(arguments: ["original", "reflow", "translated"])
+@MainActor func legacyFinalPositionMatchesCollectionsBeforeOpeningAndPersistsWhenOpened(mode: String) async throws {
+    let root = workspaceDirectory()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let paper = workspacePaper()
+    let position = try #require(PaperPageLocator.position(sourcePage: 2, mode: mode, in: paper))
+    var state = LibraryState()
+    state.papers = [paper]
+    state.workspace[paper.id.uuidString] = PaperWorkspace(isFavorite: true, status: .reading, position: position)
+    try await LibraryStore(directory: root).save(state)
+    let model = try ReaderModel(root: root)
+    await model.load()
+    #expect(model.selectedPaperID == nil)
+    #expect(LibraryQuery.papers(in: model.state, collection: .reading).isEmpty)
+    #expect(LibraryQuery.papers(in: model.state, collection: .finished).map(\.id) == [paper.id])
+    #expect(LibraryQuery.papers(in: model.state, collection: .favorites).map(\.id) == [paper.id])
+    #expect(LibraryCollection.finished.includes(model.workspace(for: paper.id), for: paper))
+    model.select(paper.id)
+    #expect(model.workspace(for: paper.id).status == .finished)
+    #expect(model.workspace(for: paper.id).position == position)
+    model.select(nil)
+    await model.flushReadingPosition()
+    let stored = try await LibraryStore(directory: root).load()
+    #expect(stored.workspace[paper.id.uuidString]?.status == .finished)
+    #expect(stored.version == state.version)
+}
+
+@Test @MainActor func settingReadingAtFinalPageRetainsCompletionAndPosition() async throws {
+    let root = workspaceDirectory()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let model = try ReaderModel(root: root)
+    await model.load()
+    let paper = workspacePaper()
+    model.state.papers = [paper]
+    let lastPosition = try #require(PaperPageLocator.position(sourcePage: 2, mode: "translated", in: paper))
+    model.state.workspace[paper.id.uuidString] = PaperWorkspace(status: .reading, position: lastPosition)
+    model.setReadingStatus(.reading, for: paper.id)
+    #expect(model.workspace(for: paper.id).status == .finished)
+    #expect(model.workspace(for: paper.id).position == lastPosition)
+    model.setReadingStatus(.unread, for: paper.id)
+    #expect(model.workspace(for: paper.id).status == .unread)
+    #expect(model.workspace(for: paper.id).position == lastPosition)
+    model.setReadingStatus(.reading, for: paper.id)
+    #expect(model.workspace(for: paper.id).status == .finished)
+    #expect(model.workspace(for: paper.id).position == lastPosition)
+    await model.flushReadingPosition()
 }
 
 @Test(arguments: ["reselect", "evidence", "duplicate"])
@@ -175,6 +293,8 @@ import Testing
     await model.load()
     let paper = workspacePaper()
     model.state.papers = [paper]
+    model.state.workspace[paper.id.uuidString] = PaperWorkspace(
+        status: .reading, position: ReaderPosition(mode: "original", pageKey: "original-0", pageIndex: 0))
     model.select(paper.id)
     model.changeMode(to: "original")
     model.navigateToPage(0)
@@ -184,9 +304,11 @@ import Testing
     let store = try LibraryStore(directory: root)
     let beforeDebounce = try await store.load()
     #expect(beforeDebounce.workspace[paper.id.uuidString]?.position?.pageIndex == 0)
+    #expect(beforeDebounce.workspace[paper.id.uuidString]?.status == .reading)
     try await Task.sleep(for: .milliseconds(700))
     let afterDebounce = try await store.load()
     #expect(afterDebounce.workspace[paper.id.uuidString]?.position?.pageIndex == 2)
+    #expect(afterDebounce.workspace[paper.id.uuidString]?.status == .finished)
     model.select(nil)
     await model.flushReadingPosition()
 }

@@ -7,10 +7,12 @@ extension ReaderModel {
     }
 
     public func setReadingStatus(_ status: PaperReadingStatus, for paperID: UUID) {
-        guard state.papers.contains(where: { $0.id == paperID }) else { return }
+        guard let paper = state.papers.first(where: { $0.id == paperID }) else { return }
         var workspace = workspace(for: paperID)
-        guard workspace.status != status else { return }
+        let previous = workspace
         workspace.status = status
+        workspace.status = ReadingProgress.resolve(paper: paper, workspace: workspace).readingStatus
+        guard workspace != previous else { return }
         state.workspace[paperID.uuidString] = workspace
         workspaceRevision += 1
         scheduleWorkspaceSave(immediately: true)
@@ -192,8 +194,18 @@ extension ReaderModel {
             position = restored ?? PaperPageLocator.initialPosition(in: paper, excluding: pendingArtifactIDs)
         }
         workspace.lastOpenedAt = Date()
-        if workspace.status == .unread { workspace.status = .reading }
+        if workspace.status == .unread {
+            var started = workspace
+            started.status = .reading
+            // Reopening an explicitly unread paper must not reactivate its saved completion.
+            if ReadingProgress.resolve(paper: paper, workspace: started) != .finished {
+                workspace.status = .reading
+            }
+        } else {
+            workspace.status = ReadingProgress.resolve(paper: paper, workspace: workspace).readingStatus
+        }
         workspace.position = position
+        workspace.status = ReadingProgress.resolve(paper: paper, workspace: workspace).readingStatus
         state.workspace[paper.id.uuidString] = workspace
         workspaceRevision += 1
         if let position {
@@ -207,8 +219,16 @@ extension ReaderModel {
     func updateReadingPosition() {
         guard let paper, let position = currentPosition else { return }
         var workspace = workspace(for: paper.id)
-        guard workspace.position != position else { return }
+        let previous = workspace
+        workspace.status = ReadingProgress.resolve(paper: paper, workspace: workspace).readingStatus
+        if workspace.status == .unread {
+            let previousPage = workspace.position.flatMap { PaperPageLocator.sourcePage(for: $0, in: paper) }
+            let currentPage = PaperPageLocator.sourcePage(for: position, in: paper)
+            if previousPage != currentPage { workspace.status = .reading }
+        }
         workspace.position = position
+        workspace.status = ReadingProgress.resolve(paper: paper, workspace: workspace).readingStatus
+        guard workspace != previous else { return }
         state.workspace[paper.id.uuidString] = workspace
         workspaceRevision += 1
     }

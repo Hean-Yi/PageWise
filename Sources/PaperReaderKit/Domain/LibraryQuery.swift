@@ -19,11 +19,11 @@ public enum LibraryCollection: String, CaseIterable, Identifiable, Sendable {
         case .favorites: "star"
         }
     }
-    public func includes(_ workspace: PaperWorkspace) -> Bool {
+    public func includes(_ workspace: PaperWorkspace, for paper: Paper) -> Bool {
         switch self {
         case .all: true
-        case .reading: workspace.status == .reading
-        case .finished: workspace.status == .finished
+        case .reading: ReadingProgress.resolve(paper: paper, workspace: workspace).readingStatus == .reading
+        case .finished: ReadingProgress.resolve(paper: paper, workspace: workspace).readingStatus == .finished
         case .favorites: workspace.isFavorite
         }
     }
@@ -46,11 +46,20 @@ public enum LibraryQuery {
         in state: LibraryState, collection: LibraryCollection = .all, query: String = "", sort: LibrarySort = .recent
     ) -> [Paper] {
         let terms = query.split(whereSeparator: \.isWhitespace).map(String.init)
+        let finishedIDs = Set(
+            state.papers.filter {
+                collection == .all
+                    && LibraryCollection.finished.includes(
+                        state.workspace[$0.id.uuidString] ?? PaperWorkspace(), for: $0)
+            }.map(\.id))
         return state.papers.filter { paper in
             let preferences = state.workspace[paper.id.uuidString] ?? PaperWorkspace()
-            return collection.includes(preferences)
+            return collection.includes(preferences, for: paper)
                 && terms.allSatisfy { paper.title.localizedStandardContains($0) }
         }.sorted { lhs, rhs in
+            let leftFinished = finishedIDs.contains(lhs.id)
+            let rightFinished = finishedIDs.contains(rhs.id)
+            if leftFinished != rightFinished { return !leftFinished }
             switch sort {
             case .recent:
                 let a = state.workspace[lhs.id.uuidString]?.lastOpenedAt ?? .distantPast

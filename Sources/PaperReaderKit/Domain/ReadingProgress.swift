@@ -1,6 +1,6 @@
 import Foundation
 
-/// The last source page reached, not an estimate of how much was understood or completed.
+/// Source-page progress, with completion retained until the user changes the reading status.
 public enum ReadingProgress: Equatable, Sendable {
     case notStarted
     case reading(percent: Int?)
@@ -15,7 +15,16 @@ public enum ReadingProgress: Equatable, Sendable {
                 let page = PaperPageLocator.sourcePage(for: position, in: paper),
                 page >= 0, page < paper.pageCount
             else { return .reading(percent: nil) }
-            return .reading(percent: min(100, max(0, Int(Double(page + 1) / Double(paper.pageCount) * 100))))
+            if page == paper.pageCount - 1 { return .finished }
+            return .reading(percent: min(99, Int(Double(page + 1) / Double(paper.pageCount) * 100)))
+        }
+    }
+
+    public var readingStatus: PaperReadingStatus {
+        switch self {
+        case .notStarted: .unread
+        case .reading: .reading
+        case .finished: .finished
         }
     }
 
