@@ -3,6 +3,7 @@ import SwiftUI
 
 struct ReaderView: View {
     @Bindable var model: ReaderModel
+    @Binding var libraryAgentPresented: Bool
     let openSettings: () -> Void
     @State private var showAssistant = true
     @State private var assistantTab = "chat"
@@ -80,7 +81,7 @@ struct ReaderView: View {
                     }.frame(maxWidth: .infinity, maxHeight: .infinity)
                     readingBar(width: width)
                 }
-                if showAssistant && width >= 900 {
+                if showAssistant && !libraryAgentPresented && width >= 900 {
                     Divider()
                     assistant.frame(width: 312)
                 }
@@ -92,7 +93,16 @@ struct ReaderView: View {
             Button("取消", role: .cancel) {}
         }
         .onChange(of: model.visiblePage) { _, page in if !pageFocused { pageInput = "\(page + 1)" } }
-        .onAppear { pageInput = "\(model.visiblePage + 1)" }
+        .onAppear {
+            pageInput = "\(model.visiblePage + 1)"
+            if libraryAgentPresented { showAssistant = false }
+        }
+        .onChange(of: libraryAgentPresented) { _, presented in
+            if presented {
+                showAssistant = false
+                showAssistantSheet = false
+            }
+        }
         .onChange(of: model.selectedPaperID) { _, _ in
             question = ""
             pageInput = "\(model.visiblePage + 1)"
@@ -187,6 +197,7 @@ struct ReaderView: View {
             if !model.selectionText.isEmpty {
                 Button(action: model.highlightSelection) { Label("高亮", systemImage: "highlighter") }
                 Button {
+                    libraryAgentPresented = false
                     assistantTab = "chat"
                     if width < 900 { showAssistantSheet = true } else { showAssistant = true }
                     question = "请结合全文解释选中内容。"
@@ -345,6 +356,7 @@ struct ReaderView: View {
         Task { await model.ask(text) }
     }
     private func toggleAssistant(width: CGFloat) {
+        libraryAgentPresented = false
         if width < 900 { showAssistantSheet = true } else { showAssistant.toggle() }
     }
     private func requestSettings() {

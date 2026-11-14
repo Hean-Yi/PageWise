@@ -121,6 +121,7 @@ struct BookshelfItem: View {
                     .help("论文选项").accessibilityLabel("\(paper.title)的选项")
             }.frame(height: 30).opacity(showsActions ? 1 : 0)
         }
+        .contentShape(Rectangle())
         .onHover { hovered = $0 }
         .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: highlighted)
         .contextMenu { actions }

@@ -4,6 +4,10 @@ import UniformTypeIdentifiers
 
 public struct LibraryView: View {
     @Bindable var model: ReaderModel
+    @State private var agent: LibraryAgent
+    @State private var showAgent = false
+    @State private var agentDraft = ""
+    @State private var pendingAgentSettings = false
     @State private var showImporter = false
     @State private var showSettings = false
     @State private var showSearch = false
@@ -16,9 +20,47 @@ public struct LibraryView: View {
     @Environment(\.scenePhase) private var scenePhase
     private let timer = Timer.publish(every: 60, on: .main, in: .common).autoconnect()
 
-    public init(model: ReaderModel) { self.model = model }
+    public init(model: ReaderModel, agent: LibraryAgent? = nil) {
+        self.model = model
+        _agent = State(initialValue: agent ?? LibraryAgent(reader: model))
+    }
 
     public var body: some View {
+        navigationSurface
+            .fileImporter(isPresented: $showImporter, allowedContentTypes: [.pdf], allowsMultipleSelection: true) {
+                result in
+                switch result {
+                case .success(let urls): Task { await model.importURLs(urls) }
+                case .failure(let error): model.message = error.localizedDescription
+                }
+            }
+            .sheet(isPresented: $showSettings) { SettingsView(model: model) }
+            .sheet(isPresented: $showSearch) { SearchView(model: model) }
+            .alert(
+                "PaperReader",
+                isPresented: Binding(get: { model.message != nil }, set: { if !$0 { model.message = nil } })
+            ) {
+                Button("好") { model.message = nil }
+            } message: {
+                Text(model.message ?? "")
+            }
+            .task { await model.load() }
+            .task(id: model.status) {
+                guard model.loaded, model.status != "仅保存在此设备", !model.isImporting, model.translating.isEmpty else {
+                    return
+                }
+                toast = model.status
+                do {
+                    try await Task.sleep(for: .seconds(4))
+                    toast = nil
+                } catch {}
+            }
+            .onChange(of: model.selectedPaperID) { _, id in if id != nil { preferredColumn = .detail } }
+            .onChange(of: scenePhase) { _, phase in model.setActive(phase == .active) }
+            .onReceive(timer) { _ in model.tick() }
+    }
+
+    private var navigationSurface: some View {
         NavigationSplitView(columnVisibility: $columns, preferredCompactColumn: $preferredColumn) {
             Group {
                 if isReading {
@@ -39,6 +81,10 @@ public struct LibraryView: View {
                     preferredColumn = .sidebar
                 }
             }.keyboardShortcut("f").hidden().accessibilityHidden(true)
+        }
+        .background {
+            Button("导入 PDF") { showImporter = true }
+                .keyboardShortcut("o").hidden().accessibilityHidden(true)
         }
         .overlay {
             if dragTarget {
@@ -61,64 +107,45 @@ public struct LibraryView: View {
         } isTargeted: {
             dragTarget = $0
         }
-        .fileImporter(isPresented: $showImporter, allowedContentTypes: [.pdf], allowsMultipleSelection: true) {
-            result in
-            switch result {
-            case .success(let urls): Task { await model.importURLs(urls) }
-            case .failure(let error): model.message = error.localizedDescription
-            }
-        }
-        .sheet(isPresented: $showSettings) { SettingsView(model: model) }
-        .sheet(isPresented: $showSearch) { SearchView(model: model) }
-        .alert(
-            "PaperReader", isPresented: Binding(get: { model.message != nil }, set: { if !$0 { model.message = nil } })
-        ) {
-            Button("好") { model.message = nil }
-        } message: {
-            Text(model.message ?? "")
-        }
-        .task { await model.load() }
-        .task(id: model.status) {
-            guard model.loaded, model.status != "仅保存在此设备", !model.isImporting, model.translating.isEmpty else { return }
-            toast = model.status
-            do {
-                try await Task.sleep(for: .seconds(4))
-                toast = nil
-            } catch {}
-        }
-        .onChange(of: model.selectedPaperID) { _, id in if id != nil { preferredColumn = .detail } }
-        .onChange(of: scenePhase) { _, phase in model.setActive(phase == .active) }
-        .onReceive(timer) { _ in model.tick() }
     }
 
     private var detailContent: some View {
-        Group {
-            if let failure = model.loadFailure {
-                ContentUnavailableView(
-                    "无法打开书库", systemImage: "externaldrive.badge.exclamationmark", description: Text(failure))
-            } else if !model.loaded {
-                ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if model.selectedSection == "calendar" {
-                ReadingCalendarView(model: model)
-            } else if model.selectedSection == "memory" {
-                MemoryView(model: model)
-            } else if model.paper != nil {
-                ReaderView(model: model, openSettings: { showSettings = true })
-            } else {
-                LibraryWorkspaceView(
-                    model: model, collection: $collection, findRequest: findRequest,
-                    searchOnline: { showSearch = true })
+        GeometryReader { proxy in
+            let inline = proxy.size.width >= 900
+            HStack(spacing: 0) {
+                workspaceContent.frame(maxWidth: .infinity, maxHeight: .infinity)
+                if showAgent && inline {
+                    Divider()
+                    agentPanel(inline: true).frame(width: 360)
+                }
+            }
+            .sheet(
+                isPresented: Binding(get: { showAgent && !inline }, set: { showAgent = $0 }),
+                onDismiss: {
+                    if pendingAgentSettings {
+                        pendingAgentSettings = false
+                        showSettings = true
+                    }
+                }
+            ) {
+                agentPanel(inline: false)
+                    #if os(macOS)
+                        .frame(width: 400, height: 650)
+                    #else
+                        .presentationSizing(.form)
+                    #endif
             }
         }
         .background(ReaderTheme.canvas)
         .toolbar {
             ToolbarItem {
-                Menu {
-                    Button("导入 PDF…", systemImage: "doc.badge.plus") { showImporter = true }.keyboardShortcut("o")
-                    Button("查找论文…", systemImage: "magnifyingglass") { showSearch = true }
+                Button {
+                    showAgent.toggle()
                 } label: {
-                    Image(systemName: "plus")
-                }.help("添加论文")
+                    Label("Agent", systemImage: "sparkle")
+                }.help("书库 Agent").accessibilityLabel("书库 Agent")
+                    .foregroundStyle(showAgent ? ReaderTheme.accent : ReaderTheme.muted)
+                    .disabled(!model.loaded || model.loadFailure != nil)
             }
         }
         .overlay(alignment: .bottom) {
@@ -132,6 +159,42 @@ public struct LibraryView: View {
                 Label(toast, systemImage: "checkmark.circle.fill").font(.caption).lineLimit(2)
                     .padding(.horizontal, 18).padding(.vertical, 12)
                     .background(.regularMaterial, in: Capsule()).padding(18).allowsHitTesting(false)
+            }
+        }
+    }
+
+    private func agentPanel(inline: Bool) -> some View {
+        LibraryAgentView(
+            agent: agent, model: model, draft: $agentDraft,
+            openSettings: {
+                if inline {
+                    showSettings = true
+                } else {
+                    pendingAgentSettings = true
+                    showAgent = false
+                }
+            },
+            close: { showAgent = false },
+            didNavigate: { if !inline { showAgent = false } })
+    }
+
+    private var workspaceContent: some View {
+        Group {
+            if let failure = model.loadFailure {
+                ContentUnavailableView(
+                    "无法打开书库", systemImage: "externaldrive.badge.exclamationmark", description: Text(failure))
+            } else if !model.loaded {
+                ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if model.selectedSection == "calendar" {
+                ReadingCalendarView(model: model)
+            } else if model.selectedSection == "memory" {
+                MemoryView(model: model)
+            } else if model.paper != nil {
+                ReaderView(model: model, libraryAgentPresented: $showAgent, openSettings: { showSettings = true })
+            } else {
+                LibraryWorkspaceView(
+                    model: model, collection: $collection, findRequest: findRequest,
+                    searchOnline: { showSearch = true })
             }
         }
     }
