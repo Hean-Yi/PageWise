@@ -120,7 +120,10 @@ public final class ReaderModel {
         beginReading()
     }
 
-    @discardableResult func save(cancellable: Bool = false, adding importedPaper: Paper? = nil) async -> Bool {
+    @discardableResult func save(
+        cancellable: Bool = false, adding importedPaper: Paper? = nil,
+        shelfChange: ShelfChange? = nil, importShelfID: UUID? = nil
+    ) async -> Bool {
         guard loaded else { return false }
         let previous = saveQueue
         let store = store
@@ -132,9 +135,17 @@ public final class ReaderModel {
                 // Take the latest state after preceding writes. Uncommitted imports never enter
                 // public state or unrelated queued snapshots, and are published only after commit.
                 var snapshot = self.state
-                if let importedPaper { snapshot.papers.insert(importedPaper, at: 0) }
+                if let importedPaper {
+                    snapshot.papers.insert(importedPaper, at: 0)
+                    if let importShelfID {
+                        try snapshot.apply(.move(paperID: importedPaper.id, shelfID: importShelfID))
+                    }
+                }
+                if let shelfChange { try snapshot.apply(shelfChange) }
                 try await store.save(snapshot, respectingCancellation: cancellable)
                 if let importedPaper { self.state.papers.insert(importedPaper, at: 0) }
+                self.state.shelves = snapshot.shelves
+                self.state.paperShelfIDs = snapshot.paperShelfIDs
                 return true
             } catch is CancellationError {
                 return false
@@ -152,7 +163,7 @@ public final class ReaderModel {
     }
 
     @discardableResult public func importURLs(
-        _ urls: [URL], selectAfterImport: Bool = true, metadata: PaperCandidate? = nil
+        _ urls: [URL], selectAfterImport: Bool = true, metadata: PaperCandidate? = nil, shelfID: UUID? = nil
     ) async -> [UUID] {
         if let metadata, ArxivClient.verified(metadata) == nil {
             message = "论文来源无效，未导入。"
@@ -178,6 +189,7 @@ public final class ReaderModel {
                 defer { if !retained { try? FileManager.default.removeItem(at: importedDirectory) } }
                 try Task.checkCancellation()
                 if let existing = state.papers.first(where: { $0.digest == imported.digest }) {
+                    if let shelfID, !(await movePaper(existing.id, to: shelfID)) { return importedIDs }
                     // The unused duplicate directory is removed by the staging cleanup above.
                     if selectAfterImport { select(existing.id) }
                     importedIDs.append(existing.id)
@@ -206,7 +218,7 @@ public final class ReaderModel {
                 }
                 try Task.checkCancellation()
                 pendingImportIDs.insert(imported.id)
-                guard await save(cancellable: true, adding: imported) else {
+                guard await save(cancellable: true, adding: imported, importShelfID: shelfID) else {
                     pendingImportIDs.remove(imported.id)
                     status = Task.isCancelled ? "已停止导入" : "导入未保存，请检查磁盘空间后重试"
                     return importedIDs

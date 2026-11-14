@@ -6,7 +6,7 @@ import Testing
 
 @Test func versionOneSnapshotMigratesWithoutLosingExistingRecords() throws {
     let state = try JSONDecoder().decode(LibraryState.self, from: versionOneWorkspaceFixture)
-    #expect(state.version == 2)
+    #expect(state.version == LibraryState.currentVersion)
     let encoded = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(state)) as? [String: Any])
     let original = try #require(JSONSerialization.jsonObject(with: versionOneWorkspaceFixture) as? [String: Any])
     for key in ["papers", "highlights", "chats", "memories", "reading"] {
@@ -42,7 +42,7 @@ import Testing
     try await store.save(state)
     let reopened = try LibraryStore(directory: root)
     let loaded = try await reopened.load()
-    #expect(loaded.version == 2)
+    #expect(loaded.version == LibraryState.currentVersion)
     #expect(loaded.workspace == state.workspace)
     #expect(loaded.bookmarks == state.bookmarks)
 }
@@ -53,10 +53,10 @@ import Testing
     let store = try LibraryStore(directory: root)
     try writeWorkspaceFixture(versionOneWorkspaceFixture, root: root)
     let upgraded = try await store.load()
-    #expect(upgraded.version == 2)
+    #expect(upgraded.version == LibraryState.currentVersion)
     let stored = try readWorkspaceFixture(root: root)
     let json = try #require(JSONSerialization.jsonObject(with: stored) as? [String: Any])
-    #expect(json["version"] as? Int == 2)
+    #expect(json["version"] as? Int == LibraryState.currentVersion)
     #expect(upgraded.memories[1].deleted)
 
     var future = json

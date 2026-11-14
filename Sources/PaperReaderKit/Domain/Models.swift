@@ -151,7 +151,7 @@ public struct ReadingEntry: Identifiable, Codable, Sendable {
 }
 
 public struct LibraryState: Codable, Sendable {
-    public static let currentVersion = 2
+    public static let currentVersion = 3
     public var version = currentVersion
     public var papers: [Paper] = []
     public var highlights: [Highlight] = []
@@ -160,16 +160,18 @@ public struct LibraryState: Codable, Sendable {
     public var reading: [ReadingEntry] = []
     public var workspace: [String: PaperWorkspace] = [:]
     public var bookmarks: [PageBookmark] = []
+    public var shelves: [Shelf] = []
+    public var paperShelfIDs: [String: UUID] = [:]
     public init() {}
 
     private enum CodingKeys: String, CodingKey {
-        case version, papers, highlights, chats, memories, reading, workspace, bookmarks
+        case version, papers, highlights, chats, memories, reading, workspace, bookmarks, shelves, paperShelfIDs
     }
 
     public init(from decoder: any Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         let storedVersion = try values.decode(Int.self, forKey: .version)
-        guard storedVersion == 1 || storedVersion == Self.currentVersion else {
+        guard (1...Self.currentVersion).contains(storedVersion) else {
             throw ReaderError.message("书库版本不受支持，请使用兼容的应用版本。原有资料已保留。")
         }
         papers = try values.decode([Paper].self, forKey: .papers)
@@ -186,6 +188,12 @@ public struct LibraryState: Codable, Sendable {
             workspace = try values.decode([String: PaperWorkspace].self, forKey: .workspace)
             bookmarks = try values.decode([PageBookmark].self, forKey: .bookmarks)
         }
+        // v1/v2 did not contain topic shelves. Their paper and page records remain unchanged.
+        if storedVersion >= 3 {
+            shelves = try values.decode([Shelf].self, forKey: .shelves)
+            paperShelfIDs = try values.decode([String: UUID].self, forKey: .paperShelfIDs)
+        }
+        try validateShelves()
         version = Self.currentVersion
     }
 }
