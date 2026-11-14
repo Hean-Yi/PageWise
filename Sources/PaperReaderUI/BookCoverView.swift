@@ -85,19 +85,28 @@ struct BookshelfItem: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 15) {
-            Button {
-                model.select(paper.id)
-            } label: {
+            ZStack {
                 BookCoverView(paper: paper)
                     .shadow(
                         color: .black.opacity(highlighted ? 0.22 : 0.14), radius: highlighted ? 16 : 10, x: 0,
                         y: highlighted ? 14 : 9
                     )
                     .offset(y: highlighted && !reduceMotion ? -6 : 0)
-                    .contentShape(Rectangle())
-            }.buttonStyle(.plain).focused($focus, equals: .cover)
-                .accessibilityLabel("打开论文：\(paper.title)")
-                .accessibilityValue(progress.label).help(paper.title)
+            }
+            .contentShape(Rectangle())
+            .onTapGesture { model.select(paper.id) }
+            .onDrag { PaperShelfDrag.provider(paper.id) }
+            .focusable().focused($focus, equals: .cover)
+            .onKeyPress(keys: [.return, .space]) { _ in
+                model.select(paper.id)
+                return .handled
+            }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("打开论文：\(paper.title)")
+            .accessibilityValue(progress.label)
+            .accessibilityAddTraits(.isButton)
+            .accessibilityAction { model.select(paper.id) }
+            .help(paper.title)
             HStack(spacing: 7) {
                 Text(progress.label).font(.system(size: 11)).foregroundStyle(ReaderTheme.muted)
                 Spacer(minLength: 0)
@@ -125,7 +134,6 @@ struct BookshelfItem: View {
         .onHover { hovered = $0 }
         .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: highlighted)
         .contextMenu { actions }
-        .onDrag { PaperShelfDrag.provider(paper.id) }
     }
 
     @ViewBuilder private var actions: some View {

@@ -9,7 +9,7 @@ enum PaperShelfDrag {
     static func provider(_ paperID: UUID) -> NSItemProvider {
         let provider = NSItemProvider()
         let data = Data(paperID.uuidString.utf8)
-        provider.registerDataRepresentation(forTypeIdentifier: typeIdentifier, visibility: .ownProcess) { completion in
+        provider.registerDataRepresentation(forTypeIdentifier: typeIdentifier, visibility: .all) { completion in
             completion(data, nil)
             return nil
         }
@@ -116,6 +116,8 @@ struct TopicShelvesView: View {
                 }
             }
             .font(.system(size: 12)).padding(12)
+            .frame(maxWidth: .infinity, minHeight: 44)
+            .contentShape(Rectangle())
             .background(ReaderTheme.ink.opacity(0.035), in: RoundedRectangle(cornerRadius: 8))
             .onDrop(of: [PaperShelfDrag.typeIdentifier], isTargeted: nil) { providers in
                 PaperShelfDrag.receive(providers, model: model, shelfID: nil)
