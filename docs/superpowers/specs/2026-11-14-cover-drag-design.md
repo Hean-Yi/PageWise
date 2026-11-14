@@ -7,3 +7,5 @@
 实现边界：SwiftUI 承担封面渲染与动画，Mac 仍使用 AppKit 原生拖放会话，避免透明交互层截图为空。iPad 复用排序与持久化逻辑和系统拖放预览。原始 PDF、阅读位置及固定页面不变。键盘与触摸可使用论文菜单调整顺序，避免只依赖鼠标。
 
 验证包括顺序更新、隐藏项保留、完成分组、取消恢复、无效引用、保存失败、旧快照升级与重启恢复；用独立原创样例检查拖动预览与让位。Computer Use 对原生拖动的真实光标位置存在已知限制，不把自动化无回调等同于人工操作通过。
+
+实现参考：[Apple ImageRenderer](https://developer.apple.com/documentation/swiftui/imagerenderer) 用于从实际 SwiftUI 书封生成拖动图；[NSDraggingItem.setDraggingFrame](https://developer.apple.com/documentation/appkit/nsdraggingitem/setdraggingframe(_:contents:)) 使用源视图坐标系放置 NSImage，取消动画由原生拖动会话处理。这些为平台能力，应用验证结果单独记录在 MVP 状态文档。
