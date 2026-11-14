@@ -52,55 +52,53 @@ struct TopicShelvesView: View {
     @State private var editingID: UUID?
     @State private var name = ""
     @State private var saving = false
+    @State private var scrollTargetID: ShelfScrollTarget? = .unclassified
     @FocusState private var nameFocused: Bool
 
     var body: some View {
-        ScrollViewReader { scroll in
-            VStack(alignment: .leading, spacing: 12) {
-                ScrollView(.horizontal) {
-                    HStack(spacing: 8) {
-                        shelfItem(name: "未分类论文", icon: "tray", shelfID: nil)
-                            .id("unclassified")
-                        ForEach(model.state.shelves) { shelf in
-                            shelfItem(name: shelf.name, icon: "books.vertical", shelfID: shelf.id)
-                                .id(shelf.id)
-                                .contextMenu {
-                                    Button("打开书架") { selectedShelfID = shelf.id }
-                                    Button("改名") { beginEditing(shelf) }
-                                        .disabled(saving)
-                                    Button("删除书架", role: .destructive) {
-                                        Task {
-                                            if await model.deleteShelf(shelf.id), selectedShelfID == shelf.id {
-                                                selectedShelfID = nil
-                                            }
+        VStack(alignment: .leading, spacing: 12) {
+            ScrollView(.horizontal) {
+                HStack(spacing: 8) {
+                    shelfItem(name: "未分类论文", icon: "tray", shelfID: nil)
+                        .id(ShelfScrollTarget.unclassified)
+                    ForEach(model.state.shelves) { shelf in
+                        shelfItem(name: shelf.name, icon: "books.vertical", shelfID: shelf.id)
+                            .id(ShelfScrollTarget.shelf(shelf.id))
+                            .contextMenu {
+                                Button("打开书架") { selectedShelfID = shelf.id }
+                                Button("改名") { beginEditing(shelf) }
+                                    .disabled(saving)
+                                Button("删除书架", role: .destructive) {
+                                    Task {
+                                        if await model.deleteShelf(shelf.id), selectedShelfID == shelf.id {
+                                            selectedShelfID = nil
                                         }
-                                    }.disabled(saving)
-                                }
-                        }
-                        Button {
-                            beginEditing(nil)
-                        } label: {
-                            Image(systemName: "plus").frame(width: 44, height: 44)
-                        }
-                        .buttonStyle(.plain).foregroundStyle(ReaderTheme.muted)
-                        .help("新建书架").accessibilityLabel("新建书架").disabled(saving)
+                                    }
+                                }.disabled(saving)
+                            }
                     }
-                }
-                if editing {
-                    nameEditor
-                        .transition(reduceMotion ? .opacity : .opacity.combined(with: .move(edge: .top)))
-                }
+                    Button {
+                        beginEditing(nil)
+                    } label: {
+                        Image(systemName: "plus").frame(width: 44, height: 44)
+                    }
+                    .buttonStyle(.plain).foregroundStyle(ReaderTheme.muted)
+                    .help("新建书架").accessibilityLabel("新建书架").disabled(saving)
+                    .id(ShelfScrollTarget.add)
+                }.scrollTargetLayout()
             }
-            .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: editing)
-            .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: selectedShelfID)
-            .onChange(of: selectedShelfID, initial: true) { previousID, id in
-                withAnimation(reduceMotion || previousID == id ? nil : .easeInOut(duration: 0.18)) {
-                    if let id {
-                        scroll.scrollTo(id, anchor: .center)
-                    } else {
-                        scroll.scrollTo("unclassified", anchor: .leading)
-                    }
-                }
+            .scrollPosition(id: $scrollTargetID, anchor: .leading)
+            if editing {
+                nameEditor
+                    .transition(reduceMotion ? .opacity : .opacity.combined(with: .move(edge: .top)))
+            }
+        }
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: editing)
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: selectedShelfID)
+        .onChange(of: selectedShelfID, initial: true) { previousID, id in
+            withAnimation(reduceMotion || previousID == id ? nil : .easeInOut(duration: 0.18)) {
+                // Keep scroll position separate from selection so manual scrolling does not change the shelf.
+                scrollTargetID = id.map(ShelfScrollTarget.shelf) ?? .unclassified
             }
         }
     }
@@ -169,6 +167,12 @@ struct TopicShelvesView: View {
             if saved { cancelEditing() }
         }
     }
+}
+
+private enum ShelfScrollTarget: Hashable {
+    case unclassified
+    case shelf(UUID)
+    case add
 }
 
 private struct TopicShelfItem: View {
