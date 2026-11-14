@@ -19,12 +19,16 @@
                 with: .leftMouseUp, location: NSPoint(x: 50, y: 70), modifierFlags: [], timestamp: 2,
                 windowNumber: 0, context: nil, eventNumber: 2, clickCount: 1, pressure: 0))
         view.mouseDown(with: down)
+        #expect(view.mouseDownEvent === down)
+        #expect(view.mouseDownEvent?.type == .leftMouseDown)
         #expect(focusCount == 1)
         #expect(openCount == 0)
         view.mouseUp(with: up)
+        #expect(view.mouseDownEvent == nil)
         #expect(openCount == 1)
         // A stray mouse-up cannot open the paper a second time.
         view.mouseUp(with: up)
+        #expect(view.mouseDownEvent == nil)
         #expect(openCount == 1)
     }
 

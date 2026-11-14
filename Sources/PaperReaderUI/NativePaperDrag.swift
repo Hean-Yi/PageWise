@@ -24,6 +24,7 @@ import Foundation
         var focusCover: (() -> Void)?
         var openPaper: (() -> Void)?
         private var mouseDownPoint: NSPoint?
+        private(set) var mouseDownEvent: NSEvent?
         private var dragged = false
 
         override var acceptsFirstResponder: Bool { false }
@@ -31,25 +32,30 @@ import Foundation
 
         override func mouseDown(with event: NSEvent) {
             mouseDownPoint = convert(event.locationInWindow, from: nil)
+            mouseDownEvent = event
             dragged = false
             focusCover?()
             ShelfDragDiagnostics.record("source-down")
         }
 
         override func mouseDragged(with event: NSEvent) {
-            guard !dragged, let start = mouseDownPoint, let paperID else { return }
+            guard !dragged, let start = mouseDownPoint, let downEvent = mouseDownEvent, let paperID else { return }
             let point = convert(event.locationInWindow, from: nil)
             guard hypot(point.x - start.x, point.y - start.y) >= 3 else { return }
             dragged = true
             let draggingItem = NSDraggingItem(pasteboardWriter: Self.pasteboardItem(paperID))
             draggingItem.setDraggingFrame(bounds, contents: dragImage())
             ShelfDragDiagnostics.record("source-begin start=\(start) point=\(point) window=\(event.locationInWindow)")
-            let session = beginDraggingSession(with: [draggingItem], event: event, source: self)
+            // AppKit uses the initiating mouse-down location to calculate the drag image offset.
+            let session = beginDraggingSession(with: [draggingItem], event: downEvent, source: self)
             session.animatesToStartingPositionsOnCancelOrFail = true
         }
 
         override func mouseUp(with event: NSEvent) {
-            defer { mouseDownPoint = nil }
+            defer {
+                mouseDownPoint = nil
+                mouseDownEvent = nil
+            }
             guard !dragged, mouseDownPoint != nil else { return }
             ShelfDragDiagnostics.record("source-click")
             openPaper?()
@@ -63,8 +69,17 @@ import Foundation
             context == .withinApplication ? [.copy, .move] : []
         }
 
+        func draggingSession(_ session: NSDraggingSession, willBeginAt screenPoint: NSPoint) {
+            ShelfDragDiagnostics.record("source-will-begin screen=\(screenPoint)")
+        }
+
+        func draggingSession(_ session: NSDraggingSession, movedTo screenPoint: NSPoint) {
+            ShelfDragDiagnostics.record("source-moved screen=\(screenPoint)")
+        }
+
         func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) {
             mouseDownPoint = nil
+            mouseDownEvent = nil
             ShelfDragDiagnostics.record(
                 "\(operation.isEmpty ? "source-ended-none" : "source-ended-drop") screen=\(screenPoint) window=\(String(describing: window?.frame))"
             )
