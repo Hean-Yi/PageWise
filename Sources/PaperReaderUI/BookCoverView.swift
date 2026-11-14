@@ -95,6 +95,7 @@ struct BookshelfItem: View {
                     )
                     .offset(y: highlighted && !reduceMotion ? -6 : 0)
                     .contentShape(Rectangle())
+                    .draggable(PaperShelfDrag(paperID: paper.id))
             }.buttonStyle(.plain).focused($focus, equals: .cover)
                 .accessibilityLabel("打开论文：\(paper.title)")
                 .accessibilityValue(progress.label).help(paper.title)
@@ -130,6 +131,20 @@ struct BookshelfItem: View {
     @ViewBuilder private var actions: some View {
         Button("打开论文") { model.select(paper.id) }
         Button(workspace.isFavorite ? "取消收藏" : "收藏") { model.toggleFavorite(paper.id) }
+        Menu("移动到书架") {
+            Button("未分类") { Task { await model.movePaper(paper.id, to: nil) } }
+            ForEach(model.state.shelves) { shelf in
+                Button {
+                    Task { await model.movePaper(paper.id, to: shelf.id) }
+                } label: {
+                    if model.state.shelfID(for: paper.id) == shelf.id {
+                        Label(shelf.name, systemImage: "checkmark")
+                    } else {
+                        Text(shelf.name)
+                    }
+                }
+            }
+        }
         Divider()
         ForEach(PaperReadingStatus.allCases, id: \.self) { value in
             Button {

@@ -33,7 +33,6 @@ public final class ReaderModel {
     let client: ModelClient
     let configurationStore: ModelConfigurationStore
     let vault: VaultService
-    let arxiv = ArxivClient()
     let outlineService = PDFOutlineService()
     let pageTextLocator: any FixedPageTextLocating
     @ObservationIgnored private var saveQueue: Task<Bool, Never>?
@@ -374,19 +373,4 @@ public final class ReaderModel {
         } catch { message = error.localizedDescription }
     }
 
-    public func search(_ query: String) async -> [PaperCandidate] {
-        do { return try await arxiv.search(query) } catch {
-            message = error.localizedDescription
-            return []
-        }
-    }
-
-    public func download(_ candidate: PaperCandidate) async {
-        do {
-            status = "正在下载 \(candidate.title)…"
-            let url = try await arxiv.download(candidate)
-            defer { try? FileManager.default.removeItem(at: url) }
-            await importURLs([url], metadata: candidate)
-        } catch { message = error.localizedDescription }
-    }
 }

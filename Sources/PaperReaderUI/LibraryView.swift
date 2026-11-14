@@ -10,7 +10,8 @@ public struct LibraryView: View {
     @State private var pendingAgentSettings = false
     @State private var showImporter = false
     @State private var showSettings = false
-    @State private var showSearch = false
+    @State private var onlineSearch: OnlinePaperSearch
+    @State private var selectedShelfID: UUID?
     @State private var dragTarget = false
     @State private var preferredColumn: NavigationSplitViewColumn = .sidebar
     @State private var toast: String?
@@ -20,9 +21,10 @@ public struct LibraryView: View {
     @Environment(\.scenePhase) private var scenePhase
     private let timer = Timer.publish(every: 60, on: .main, in: .common).autoconnect()
 
-    public init(model: ReaderModel, agent: LibraryAgent? = nil) {
+    public init(model: ReaderModel, agent: LibraryAgent? = nil, discovery: any PaperDiscovery = ArxivClient()) {
         self.model = model
         _agent = State(initialValue: agent ?? LibraryAgent(reader: model))
+        _onlineSearch = State(initialValue: OnlinePaperSearch(reader: model, discovery: discovery))
     }
 
     public var body: some View {
@@ -35,7 +37,6 @@ public struct LibraryView: View {
                 }
             }
             .sheet(isPresented: $showSettings) { SettingsView(model: model) }
-            .sheet(isPresented: $showSearch) { SearchView(model: model) }
             .alert(
                 "PaperReader",
                 isPresented: Binding(get: { model.message != nil }, set: { if !$0 { model.message = nil } })
@@ -193,8 +194,8 @@ public struct LibraryView: View {
                 ReaderView(model: model, libraryAgentPresented: $showAgent, openSettings: { showSettings = true })
             } else {
                 LibraryWorkspaceView(
-                    model: model, collection: $collection, findRequest: findRequest,
-                    searchOnline: { showSearch = true })
+                    model: model, collection: $collection, selectedShelfID: $selectedShelfID,
+                    onlineSearch: onlineSearch, findRequest: findRequest)
             }
         }
     }
@@ -223,6 +224,7 @@ public struct LibraryView: View {
                     ) {
                         model.select(nil)
                         collection = item
+                        selectedShelfID = nil
                         preferredColumn = .detail
                     }
                 }

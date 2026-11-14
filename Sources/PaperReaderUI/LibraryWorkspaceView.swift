@@ -4,14 +4,19 @@ import SwiftUI
 struct LibraryWorkspaceView: View {
     @Bindable var model: ReaderModel
     @Binding var collection: LibraryCollection
+    @Binding var selectedShelfID: UUID?
+    @Bindable var onlineSearch: OnlinePaperSearch
     let findRequest: Int
-    let searchOnline: () -> Void
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var query = ""
     @State private var sort: LibrarySort = .recent
     @FocusState private var searchFocused: Bool
 
     private var papers: [Paper] {
-        LibraryQuery.papers(in: model.state, collection: collection, query: query, sort: sort)
+        LibraryQuery.papers(in: model.state, collection: collection, query: query, sort: sort).filter {
+            collection != .all || (selectedShelfID == nil && !query.isEmpty)
+                || model.state.shelfID(for: $0.id) == selectedShelfID
+        }
     }
     private var recent: Paper? {
         LibraryQuery.papers(in: model.state, collection: .reading).first {
@@ -30,13 +35,21 @@ struct LibraryWorkspaceView: View {
                 VStack(alignment: .leading, spacing: 0) {
                     header(compact: geometry.size.width < 650)
                     Divider().padding(.top, 20).padding(.bottom, 26)
-                    if collection == .all && query.isEmpty, let recent {
+                    if collection == .all && selectedShelfID == nil && query.isEmpty, let recent {
                         continueReading(recent).padding(.bottom, 30)
+                    }
+                    if collection == .all {
+                        TopicShelvesView(model: model, selectedShelfID: $selectedShelfID).padding(.bottom, 24)
+                    }
+                    if onlineSearch.isExpanded {
+                        SearchView(search: onlineSearch, targetName: onlineTargetName)
+                            .transition(reduceMotion ? .opacity : .opacity.combined(with: .move(edge: .top)))
+                            .padding(.bottom, 26)
                     }
                     filters.padding(.bottom, 24)
                     LazyVGrid(columns: columns, alignment: .leading, spacing: 32) {
                         if collection != .reading && collection != .finished {
-                            AddPaperCover(action: searchOnline)
+                            AddPaperCover { onlineSearch.open(shelfID: collection == .all ? selectedShelfID : nil) }
                         }
                         ForEach(papers) { paper in BookshelfItem(model: model, paper: paper) }
                     }.padding(.top, 5)
@@ -56,6 +69,22 @@ struct LibraryWorkspaceView: View {
                 }.padding(.horizontal, inset).padding(.top, 28).padding(.bottom, 44)
             }
         }.onChange(of: findRequest) { _, _ in searchFocused = true }
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.22), value: onlineSearch.isExpanded)
+            .onChange(of: onlineSearch.isExpanded) { _, expanded in if expanded { searchFocused = false } }
+            .onChange(of: model.state.shelves) { _, shelves in
+                if let selectedShelfID, !shelves.contains(where: { $0.id == selectedShelfID }) {
+                    self.selectedShelfID = nil
+                }
+            }
+    }
+
+    private var selectedShelf: Shelf? {
+        collection == .all ? model.state.shelves.first { $0.id == selectedShelfID } : nil
+    }
+
+    private var onlineTargetName: String {
+        guard let id = onlineSearch.targetShelfID else { return "未分类" }
+        return model.state.shelves.first { $0.id == id }?.name ?? "原书架已删除"
     }
 
     @ViewBuilder private func header(compact: Bool) -> some View {
@@ -75,8 +104,10 @@ struct LibraryWorkspaceView: View {
 
     private var heading: some View {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
-            Text(collection.title).font(.system(size: 28, weight: .semibold))
-            Text("\(papers.count)").font(.system(size: 12)).foregroundStyle(ReaderTheme.muted)
+            Text(selectedShelf?.name ?? collection.title).font(.system(size: 28, weight: .semibold))
+            Text(
+                "\(collection == .all && selectedShelfID == nil && query.isEmpty ? model.state.papers.count : papers.count)"
+            ).font(.system(size: 12)).foregroundStyle(ReaderTheme.muted)
         }
     }
 
@@ -131,8 +162,10 @@ struct LibraryWorkspaceView: View {
 
     private var filters: some View {
         HStack {
-            Text(query.isEmpty ? "书架" : "搜索结果").font(.system(size: 12, weight: .medium))
-                .foregroundStyle(ReaderTheme.muted)
+            Text(query.isEmpty ? (selectedShelf?.name ?? (collection == .all ? "未分类论文" : "书架")) : "搜索结果").font(
+                .system(size: 12, weight: .medium)
+            )
+            .foregroundStyle(ReaderTheme.muted)
             Spacer()
             Menu {
                 Picker("排序", selection: $sort) {
