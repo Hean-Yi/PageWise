@@ -83,6 +83,7 @@ import Foundation
             ShelfDragDiagnostics.record(
                 "\(operation.isEmpty ? "source-ended-none" : "source-ended-drop") screen=\(screenPoint) window=\(String(describing: window?.frame))"
             )
+            ShelfDragDiagnostics.inspect(window: window, at: screenPoint)
         }
 
         static func pasteboardItem(_ paperID: UUID) -> NSPasteboardItem {
@@ -176,6 +177,35 @@ import Foundation
 
 /// Opt-in, content-free diagnostics for a local drag acceptance run.
 enum ShelfDragDiagnostics {
+    #if os(macOS)
+        @MainActor static func inspect(window: NSWindow?, at point: NSPoint) {
+            guard ProcessInfo.processInfo.environment["PAPERREADER_DEBUG_DRAG"] == "1", let window,
+                let content = window.contentView
+            else { return }
+            let windowPoint = window.convertPoint(fromScreen: point)
+            let hitPoint = content.superview?.convert(windowPoint, from: nil) ?? windowPoint
+            var hit = content.hitTest(hitPoint)
+            record("hit-test active=\(NSApp.isActive) key=\(window.isKeyWindow) windowPoint=\(windowPoint)")
+            for depth in 0..<10 {
+                guard let view = hit else { break }
+                record(
+                    "hit[\(depth)] type=\(String(describing: type(of: view)).prefix(120)) rect=\(view.convert(view.bounds, to: nil)) types=\(view.registeredDraggedTypes.map(\.rawValue))"
+                )
+                hit = view.superview
+            }
+            var targets = 0
+            func inspectTargets(_ view: NSView) {
+                if view is ShelfDropTargetView {
+                    targets += 1
+                    record(
+                        "native-target[\(targets)] rect=\(view.convert(view.bounds, to: nil)) hidden=\(view.isHiddenOrHasHiddenAncestor) types=\(view.registeredDraggedTypes.map(\.rawValue))"
+                    )
+                }
+                for child in view.subviews { inspectTargets(child) }
+            }
+            inspectTargets(content)
+        }
+    #endif
     static func record(_ stage: String) {
         guard ProcessInfo.processInfo.environment["PAPERREADER_DEBUG_DRAG"] == "1" else { return }
         NSLog("PaperReader shelf-drag: %@", stage)
