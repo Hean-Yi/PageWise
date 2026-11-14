@@ -70,6 +70,7 @@ struct LibraryWorkspaceView: View {
             }
         }.onChange(of: findRequest) { _, _ in searchFocused = true }
             .animation(reduceMotion ? nil : .easeInOut(duration: 0.22), value: onlineSearch.isExpanded)
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: selectedShelfID)
             .onChange(of: onlineSearch.isExpanded) { _, expanded in if expanded { searchFocused = false } }
             .onChange(of: model.state.shelves) { _, shelves in
                 if let selectedShelfID, !shelves.contains(where: { $0.id == selectedShelfID }) {
@@ -78,12 +79,8 @@ struct LibraryWorkspaceView: View {
             }
     }
 
-    private var selectedShelf: Shelf? {
-        collection == .all ? model.state.shelves.first { $0.id == selectedShelfID } : nil
-    }
-
     private var onlineTargetName: String {
-        guard let id = onlineSearch.targetShelfID else { return "未分类" }
+        guard let id = onlineSearch.targetShelfID else { return "未分类论文" }
         return model.state.shelves.first { $0.id == id }?.name ?? "原书架已删除"
     }
 
@@ -104,9 +101,9 @@ struct LibraryWorkspaceView: View {
 
     private var heading: some View {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
-            Text(selectedShelf?.name ?? collection.title).font(.system(size: 28, weight: .semibold))
+            Text(collection.title).font(.system(size: 28, weight: .semibold))
             Text(
-                "\(collection == .all && selectedShelfID == nil && query.isEmpty ? model.state.papers.count : papers.count)"
+                "\(collection == .all && query.isEmpty ? model.state.papers.count : papers.count)"
             ).font(.system(size: 12)).foregroundStyle(ReaderTheme.muted)
         }
     }
@@ -162,10 +159,9 @@ struct LibraryWorkspaceView: View {
 
     private var filters: some View {
         HStack {
-            Text(query.isEmpty ? (selectedShelf?.name ?? (collection == .all ? "未分类论文" : "书架")) : "搜索结果").font(
-                .system(size: 12, weight: .medium)
-            )
-            .foregroundStyle(ReaderTheme.muted)
+            if !query.isEmpty {
+                Text("搜索结果").font(.system(size: 12, weight: .medium)).foregroundStyle(ReaderTheme.muted)
+            }
             Spacer()
             Menu {
                 Picker("排序", selection: $sort) {
