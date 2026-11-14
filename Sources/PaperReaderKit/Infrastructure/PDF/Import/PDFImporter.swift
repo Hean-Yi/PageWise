@@ -35,23 +35,8 @@ public actor PDFImporter {
                         == true
                 })
             else { return nil }
-            // Compare ordinary words, excluding formula glyphs and short labels. A partial HTML
-            // conversion must not replace a substantially more complete PDF.
-            let htmlWords = Self.words(blocks.map(\.text).joined(separator: " "))
-            let graphicLabels = blocks.compactMap { $0.richContent?.imageTextForCoverage }.map(Self.normalized)
-            for index in 0..<document.pageCount {
-                let words = Self.words(document.page(at: index)?.string ?? "")
-                // SVG exporters may outline letters and keep data-text glyph labels. These
-                // labels can explain a PDF word without pretending to be ordered body text.
-                let covered = words.filter { word in
-                    htmlWords.contains(word) || graphicLabels.contains { $0.contains(Self.normalized(word)) }
-                }
-                if words.count >= 20, Double(covered.count) / Double(words.count) < 0.85 {
-                    return nil
-                }
-            }
             let pageTexts = (0..<document.pageCount).map { Self.normalized(document.page(at: $0)?.string ?? "") }
-            return blocks.map { block in
+            let mappedBlocks = blocks.map { block in
                 var mapped = block
                 let needle = Self.normalized(block.text)
                 let matches = pageTexts.indices.filter { !needle.isEmpty && pageTexts[$0].contains(needle) }
@@ -63,6 +48,26 @@ public actor PDFImporter {
                 }
                 return mapped
             }
+            // Compare ordinary words, excluding formula glyphs and short labels. A partial HTML
+            // conversion must not replace a substantially more complete PDF.
+            let htmlWords = Self.words(blocks.map(\.text).joined(separator: " "))
+            let graphicLabels = blocks.compactMap { $0.richContent?.imageTextForCoverage }.map(Self.normalized)
+            let retainedPages = Set(mappedBlocks.filter { $0.preservesSourcePage == true }.map(\.sourcePage))
+            for index in 0..<document.pageCount {
+                // The complete source page is already part of the reading result. Missing
+                // image labels on this page must not reject unrelated structured content.
+                if retainedPages.contains(index) { continue }
+                let words = Self.words(document.page(at: index)?.string ?? "")
+                // SVG exporters may outline letters and keep data-text glyph labels. These
+                // labels can explain a PDF word without pretending to be ordered body text.
+                let covered = words.filter { word in
+                    htmlWords.contains(word) || graphicLabels.contains { $0.contains(Self.normalized(word)) }
+                }
+                if words.count >= 20, Double(covered.count) / Double(words.count) < 0.85 {
+                    return nil
+                }
+            }
+            return mappedBlocks
         }
         let id = UUID()
         let papersDirectory = root.appendingPathComponent("Papers", isDirectory: true)

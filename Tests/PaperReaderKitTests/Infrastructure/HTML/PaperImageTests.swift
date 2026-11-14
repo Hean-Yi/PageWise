@@ -121,6 +121,16 @@ private let vectorFigure = """
                 "Helvetica" as CFString, 14, nil)
         ])
     CTLineDraw(CTLineCreateWithAttributedString(text), context)
+    let figureLabels = [
+        "alpha bravo charlie delta echo foxtrot golf hotel", "india juliet kilo lima mike november oscar papa",
+        "quebec romeo sierra tango uniform victor whiskey xray",
+    ]
+    for (index, labels) in figureLabels.enumerated() {
+        context.textPosition = CGPoint(x: 50, y: 650 - index * 30)
+        CTLineDraw(
+            CTLineCreateWithAttributedString(
+                NSAttributedString(string: labels, attributes: text.attributes(at: 0, effectiveRange: nil))), context)
+    }
     context.strokeEllipse(in: CGRect(x: 50, y: 300, width: 300, height: 200))
     context.endPDFPage()
     context.closePDF()
@@ -135,6 +145,7 @@ private let vectorFigure = """
             "<article class='ltx_document'><figure><img src='bad'><figcaption>Unique figure caption</figcaption></figure><figure><img src='bad'><figcaption>Unmatched figure caption</figcaption></figure></article>"
                 .utf8), at: imageSource)
     let paper = try await PDFImporter(root: directory).importPDF(at: source, structuredBlocks: blocks)
+    try #require(paper.blocks.count == 2)
     #expect(paper.blocks[0].sourcePage == 0)
     #expect(paper.blocks[0].preservesSourcePage == true)
     #expect(paper.blocks[0].richContent == nil)
