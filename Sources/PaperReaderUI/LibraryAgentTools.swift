@@ -101,6 +101,8 @@ extension LibraryAgent {
 
     private func candidateCard(_ candidate: PaperCandidate, id: String) -> AgentCard {
         var card = AgentCard(kind: .onlineCandidate, title: candidate.title)
+        card.authors = candidate.authors
+        card.year = candidate.year
         card.subtitle = [candidate.authors, candidate.year, "arXiv"].filter { !$0.isEmpty }.joined(separator: " · ")
         card.candidateID = id
         card.sourceURL = URL(string: candidate.id)

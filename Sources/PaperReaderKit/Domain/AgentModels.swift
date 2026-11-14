@@ -7,6 +7,8 @@ public struct AgentCard: Identifiable, Sendable {
     public var kind: Kind
     public var title: String
     public var subtitle = ""
+    public var authors: String? = nil
+    public var year: String? = nil
     public var excerpt = ""
     public var sourcePage: Int?
     public var paperID: UUID?

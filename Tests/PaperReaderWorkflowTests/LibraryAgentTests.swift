@@ -216,6 +216,8 @@ private func onlineScript(_ messages: [AgentMessage], _ count: Int) throws -> Ag
     try await eventually { !agent.isRunning }
     #expect(await discovery.downloadCount == 0)
     let card = try #require(agent.turns[0].cards.first { $0.importState == .ready })
+    #expect(card.authors == "Original Fixture")
+    #expect(card.year == "2024")
     agent.confirmImport(cardID: card.id)
     agent.confirmImport(cardID: card.id)
     try await eventually { await discovery.waiting }
@@ -346,6 +348,12 @@ private func onlineScript(_ messages: [AgentMessage], _ count: Int) throws -> Ag
     let content = try #require(requests.last?.last?.content)
     #expect(content.contains("Original Fixture"))
     #expect(content.contains("2024"))
+    let candidate = try #require(agent.turns[0].cards.first)
+    #expect(candidate.authors == "Original Fixture")
+    #expect(candidate.year == "2024")
+    let local = AgentCard(kind: .localPaper, title: "Local fixture")
+    #expect(local.authors == nil)
+    #expect(local.year == nil)
     var limits = AgentLimits()
     limits.maxResults = 0
     let noResults = LibraryAgent(
