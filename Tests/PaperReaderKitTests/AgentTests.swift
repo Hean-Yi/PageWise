@@ -192,3 +192,10 @@ private actor AgentSaveGate {
         try AgentToolArguments.parse(name: "search_library", json: #"{"query":"attention"}"#, limits: limits)
     }
 }
+
+@Test func libraryAgentSearchIgnoresTextOnMalformedNegativePageCounts() {
+    let malformed = Paper(
+        title: "Malformed fixture", digest: "invalid", originalPath: "invalid.pdf", pageCount: -1,
+        blocks: [TextBlock(sourcePage: 0, text: "Needle in an invalid page")], warnings: [], canReflow: false)
+    #expect(LibraryAgentSearch.search("Needle", papers: [malformed]).isEmpty)
+}
