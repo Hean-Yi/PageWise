@@ -59,6 +59,16 @@ public actor HTMLPaperParser {
             block.richContent = RichContent(
                 html: converted.html, translationInput: converted.input.trimmingCharacters(in: .whitespacesAndNewlines),
                 mathematics: mathematics, mathDescriptions: descriptions)
+            let captions = try element.select("figcaption")
+            if captions.count == 1, let caption = captions.first() {
+                var captionMath: [String: String] = [:]
+                var captionDescriptions: [String: String] = [:]
+                let part = try Self.convert(caption, mathematics: &captionMath, descriptions: &captionDescriptions)
+                block.richContent?.figureCaption = FigureCaption(
+                    text: part.text.trimmingCharacters(in: .whitespacesAndNewlines), html: part.html,
+                    translationInput: part.input.trimmingCharacters(in: .whitespacesAndNewlines),
+                    mathematics: captionMath, mathDescriptions: captionDescriptions)
+            }
             let images = try element.select("img")
             block.richContent?.imageSizes = try images.map {
                 PaperImageSize(width: Double(try $0.attr("width")) ?? 0, height: Double(try $0.attr("height")) ?? 0)

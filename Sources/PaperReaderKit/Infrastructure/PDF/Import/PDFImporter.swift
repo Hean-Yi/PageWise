@@ -25,7 +25,7 @@ public actor PDFImporter {
         guard !document.isLocked else { throw ReaderError.message("PDF 已加密，请先在本地解锁后再导入。") }
 
         let analysis = try PDFProcessor.extract(from: document, preservingComplexPages: preservingComplexPages)
-        let structured = structuredBlocks.flatMap { blocks -> [TextBlock]? in
+        let structured = try structuredBlocks.flatMap { blocks -> [TextBlock]? in
             guard document.allowsCopying, !blocks.isEmpty, blocks.allSatisfy({ $0.richContent != nil }),
                 (0..<document.pageCount).allSatisfy({
                     // PDFAnnotation.type is "Link"; the subtype raw value is "/Link".
@@ -36,12 +36,33 @@ public actor PDFImporter {
                 })
             else { return nil }
             let pageTexts = (0..<document.pageCount).map { Self.normalized(document.page(at: $0)?.string ?? "") }
-            let mappedBlocks = blocks.map { block in
+            var richBytes = blocks.reduce(0) { $0 + ($1.richContent?.html.utf8.count ?? 0) }
+            let mappedBlocks = try blocks.map { block in
                 var mapped = block
-                let needle = Self.normalized(block.text)
+                let needle = Self.normalized(block.richContent?.figureCaption?.text ?? block.text)
                 let matches = pageTexts.indices.filter { !needle.isEmpty && pageTexts[$0].contains(needle) }
                 mapped.sourcePage = matches.count == 1 ? matches[0] : -1
+                if matches.isEmpty, let caption = block.richContent?.figureCaption {
+                    mapped.sourcePage = try PDFFigureCropper.captionPage(caption.text, in: document) ?? -1
+                }
                 if block.hasImageFailure == true, mapped.sourcePage >= 0 {
+                    if let page = document.page(at: mapped.sourcePage) {
+                        do {
+                            if let recovered = try PDFFigureCropper.replacingFailedFigure(mapped, from: page) {
+                                let proposedBytes =
+                                    richBytes - (block.richContent?.html.utf8.count ?? 0)
+                                    + (recovered.richContent?.html.utf8.count ?? 0)
+                                if proposedBytes <= 100_000_000 {
+                                    richBytes = proposedBytes
+                                    return recovered
+                                }
+                            }
+                        } catch is CancellationError {
+                            throw CancellationError()
+                        } catch {
+                            // An undecodable crop keeps the original page below.
+                        }
+                    }
                     mapped.preservesSourcePage = true
                     mapped.richContent = nil
                     mapped.imageWarnings = (mapped.imageWarnings ?? []) + ["此图已保留对应原 PDF 整页，可能包含相邻正文。"]
@@ -50,8 +71,8 @@ public actor PDFImporter {
             }
             // Compare ordinary words, excluding formula glyphs and short labels. A partial HTML
             // conversion must not replace a substantially more complete PDF.
-            let htmlWords = Self.words(blocks.map(\.text).joined(separator: " "))
-            let graphicLabels = blocks.compactMap { $0.richContent?.imageTextForCoverage }.map(Self.normalized)
+            let htmlWords = Self.words(mappedBlocks.map(\.text).joined(separator: " "))
+            let graphicLabels = mappedBlocks.compactMap { $0.richContent?.imageTextForCoverage }.map(Self.normalized)
             let retainedPages = Set(mappedBlocks.filter { $0.preservesSourcePage == true }.map(\.sourcePage))
             for index in 0..<document.pageCount {
                 // The complete source page is already part of the reading result. Missing

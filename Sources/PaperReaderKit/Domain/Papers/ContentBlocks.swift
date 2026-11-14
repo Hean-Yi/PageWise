@@ -26,6 +26,7 @@ public struct RichContent: Codable, Sendable, Equatable {
     public var isFigure: Bool? = nil
     /// Exporter glyph labels assist coverage checks only; they are not reading-order evidence.
     public var imageTextForCoverage: String? = nil
+    public var figureCaption: FigureCaption? = nil
 
     public var requiresTranslation: Bool {
         !mathematics.keys.reduce(translationInput) { $0.replacingOccurrences(of: $1, with: "") }
@@ -47,6 +48,14 @@ public struct RichContent: Codable, Sendable, Equatable {
     public func readableTranslation(_ translation: String) -> String {
         mathDescriptions.reduce(translation) { $0.replacingOccurrences(of: $1.key, with: $1.value) }
     }
+}
+
+public struct FigureCaption: Codable, Sendable, Equatable {
+    public var text: String
+    public var html: String
+    public var translationInput: String
+    public var mathematics: [String: String]
+    public var mathDescriptions: [String: String]
 }
 
 public struct PaperImageSize: Codable, Sendable, Equatable {
