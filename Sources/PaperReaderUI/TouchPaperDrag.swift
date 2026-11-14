@@ -34,7 +34,6 @@
         }
         required init?(coder: NSCoder) { nil }
         @objc private func openPaper() { configuration?.open() }
-
     }
 
     extension TouchPaperDragView: UIDragInteractionDelegate {
@@ -62,7 +61,9 @@
             parameters.backgroundColor = .clear
             return UIDragPreview(view: UIImageView(image: image), parameters: parameters)
         }
-        func dragInteraction(_ interaction: UIDragInteraction, sessionDidEnd session: any UIDragSession) {
+        func dragInteraction(
+            _ interaction: UIDragInteraction, session: any UIDragSession, didEndWith operation: UIDropOperation
+        ) {
             configuration?.end()
         }
         func dragInteraction(
@@ -70,7 +71,6 @@
         )
             -> Bool
         { true }
-
     }
 
     extension TouchPaperDragView: UIDropInteractionDelegate {
