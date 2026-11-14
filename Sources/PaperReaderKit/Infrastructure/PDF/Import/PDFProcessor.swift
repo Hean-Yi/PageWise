@@ -54,7 +54,7 @@ public enum PDFProcessor {
             if PDFGraphicsInspector.containsUnsupportedGraphics(page) {
                 warnings.append("第 \(pageIndex + 1) 页含图像、图形或外部绘制对象；为避免丢失图表，使用原始 PDF。")
             }
-            if page.annotations.contains(where: { $0.type != PDFAnnotationSubtype.link.rawValue }) {
+            if page.annotations.contains(where: { $0.type != String(PDFAnnotationSubtype.link.rawValue.dropFirst()) }) {
                 warnings.append("第 \(pageIndex + 1) 页已有批注或交互对象，使用原始 PDF 保留这些内容。")
             }
             if source.contains("\u{FFFD}") || source.unicodeScalars.contains(where: { $0.value == 0 }) {

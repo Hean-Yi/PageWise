@@ -1,5 +1,4 @@
 import Foundation
-import ImageIO
 import SwiftSoup
 
 /// Parses only arXiv article content. No source markup is executed or passed through unchecked.
@@ -11,6 +10,7 @@ public actor HTMLPaperParser {
         guard data.count <= 8_000_000, let html = String(data: data, encoding: .utf8)
         else { throw ReaderError.message("HTML 正文结构无法确认，使用 PDF 解析。") }
         let document = try SwiftSoup.parse(html)
+        document.outputSettings().syntax(syntax: .xml).escapeMode(.xhtml).prettyPrint(pretty: false)
         for meta in try document.select("meta[name=citation_arxiv_id]") {
             let identifier = try meta.attr("content")
             guard identifier == String(source.path.dropFirst(6)) else {
@@ -20,51 +20,20 @@ public actor HTMLPaperParser {
         guard let article = try document.select("article.ltx_document").first() else {
             throw ReaderError.message("HTML 正文结构无法确认，使用 PDF 解析。")
         }
-        guard try article.select("svg,canvas,iframe,object,embed,video,audio,form,.ltx_ERROR,.ltx_listing").isEmpty()
+        guard try article.select("canvas,iframe,video,audio,form,.ltx_ERROR,.ltx_listing").isEmpty()
         else {
             throw ReaderError.message("HTML 包含尚不支持的内容，使用 PDF 保留完整原文。")
         }
+        try await HTMLImageNormalizer.normalize(article, source: source, transport: transport)
         try article.select("script,style,noscript,.ltx_page_header,.ltx_page_footer").remove()
-        var totalBytes = data.count
-        var embeddedBytes = 0
-        var resources: [String: String] = [:]
-        let images = try article.select("img")
-        guard images.count <= 100 else { throw ReaderError.message("HTML 图片数量超出本地处理范围。") }
-        for element in images {
-            try Task.checkCancellation()
-            let path = try element.attr("src")
-            guard !path.isEmpty,
-                let url = URL(string: path, relativeTo: source)?.absoluteURL,
-                url.scheme == "https", url.host == source.host, url.user == nil, url.password == nil,
-                url.port == nil || url.port == 443, url.query == nil, url.fragment == nil,
-                url.path.hasPrefix(source.path + "/")
-            else { throw ReaderError.message("HTML 图片来源无法确认，使用 PDF。") }
-            if resources[url.absoluteString] == nil {
-                guard resources.count < 100 else { throw ReaderError.message("HTML 图片数量超出本地处理范围。") }
-                let (bytes, response) = try await transport.data(for: URLRequest(url: url))
-                totalBytes += bytes.count
-                guard response.statusCode == 200, response.url == url, bytes.count <= 8_000_000,
-                    totalBytes <= 40_000_000, let image = CGImageSourceCreateWithData(bytes as CFData, nil),
-                    let type = CGImageSourceGetType(image) as String?, ["public.png", "public.jpeg"].contains(type),
-                    let properties = CGImageSourceCopyPropertiesAtIndex(image, 0, nil) as? [String: Any],
-                    let width = properties[kCGImagePropertyPixelWidth as String] as? Int,
-                    let height = properties[kCGImagePropertyPixelHeight as String] as? Int,
-                    width > 0, height > 0, width <= 12_000, height <= 12_000, width * height <= 24_000_000
-                else { throw ReaderError.message("HTML 图片缺失或无法安全读取，使用 PDF。") }
-                resources[url.absoluteString] =
-                    "data:image/\(type == "public.png" ? "png" : "jpeg");base64,\(bytes.base64EncodedString())"
-            }
-            let embedded = resources[url.absoluteString]!
-            embeddedBytes += embedded.utf8.count
-            guard embeddedBytes <= 50_000_000 else { throw ReaderError.message("HTML 图片总量超出本地处理范围。") }
-            try element.attr("src", embedded)
-        }
         var elements: [Element] = []
         func collect(_ node: Element) throws {
             let tags: Set<String> = [
                 "p", "h1", "h2", "h3", "h4", "h5", "h6", "figure", "table", "pre", "ul", "ol", "math", "blockquote",
             ]
-            if tags.contains(node.tagName()) || node.hasClass("ltx_equation") || node.hasClass("ltx_equationgroup") {
+            if tags.contains(node.tagName()) || node.hasAttr("data-pr-image") || node.hasClass("ltx_equation")
+                || node.hasClass("ltx_equationgroup")
+            {
                 elements.append(node)
             } else {
                 for child in node.getChildNodes() {
@@ -90,6 +59,16 @@ public actor HTMLPaperParser {
             block.richContent = RichContent(
                 html: converted.html, translationInput: converted.input.trimmingCharacters(in: .whitespacesAndNewlines),
                 mathematics: mathematics, mathDescriptions: descriptions)
+            let images = try element.select("img")
+            block.richContent?.imageSizes = try images.map {
+                PaperImageSize(width: Double(try $0.attr("width")) ?? 0, height: Double(try $0.attr("height")) ?? 0)
+            }
+            block.richContent?.isFigure = !images.isEmpty() || element.hasAttr("data-pr-image")
+            block.richContent?.imageTextForCoverage = try element.select("[data-pr-coverage]").map {
+                try $0.attr("data-pr-coverage")
+            }.joined(separator: " ")
+            block.imageWarnings = try element.select("[data-pr-notice]").map { try $0.text() }
+            block.hasImageFailure = try !element.select("[data-pr-failure]").isEmpty()
             return block
         }
     }
@@ -118,6 +97,10 @@ public actor HTMLPaperParser {
         }
         guard let element = node as? Element else { return Fragment(html: "", text: "", input: "") }
         let tag = element.tagName()
+        if element.hasAttr("data-pr-notice") {
+            return Fragment(
+                html: "<div class='image-notice'>" + escape(try element.text()) + "</div>", text: "", input: "")
+        }
         if ["annotation", "annotation-xml", "script", "style"].contains(tag) {
             return Fragment(html: "", text: "", input: "")
         }
@@ -134,7 +117,7 @@ public actor HTMLPaperParser {
         var attributes = ""
         let names =
             tag == "img"
-            ? ["src", "alt"]
+            ? ["src", "alt", "width", "height"]
             : (tag == "td" || tag == "th"
                 ? ["colspan", "rowspan"]
                 : (inMath || tag == "math"

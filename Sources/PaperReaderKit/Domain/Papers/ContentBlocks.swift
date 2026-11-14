@@ -8,6 +8,8 @@ public struct TextBlock: Identifiable, Codable, Sendable, Equatable {
     public var richContent: RichContent?
     /// Complex PDF pages keep their original geometry inside the single reading result.
     public var preservesSourcePage: Bool?
+    public var imageWarnings: [String]?
+    public var hasImageFailure: Bool?
     public init(id: UUID = UUID(), sourcePage: Int, text: String) {
         self.id = id
         self.sourcePage = sourcePage
@@ -20,6 +22,10 @@ public struct RichContent: Codable, Sendable, Equatable {
     public var translationInput: String
     public var mathematics: [String: String]
     public var mathDescriptions: [String: String]
+    public var imageSizes: [PaperImageSize]? = nil
+    public var isFigure: Bool? = nil
+    /// Exporter glyph labels assist coverage checks only; they are not reading-order evidence.
+    public var imageTextForCoverage: String? = nil
 
     public var requiresTranslation: Bool {
         !mathematics.keys.reduce(translationInput) { $0.replacingOccurrences(of: $1, with: "") }
@@ -40,6 +46,15 @@ public struct RichContent: Codable, Sendable, Equatable {
 
     public func readableTranslation(_ translation: String) -> String {
         mathDescriptions.reduce(translation) { $0.replacingOccurrences(of: $1.key, with: $1.value) }
+    }
+}
+
+public struct PaperImageSize: Codable, Sendable, Equatable {
+    public var width: Double
+    public var height: Double
+    public init(width: Double, height: Double) {
+        self.width = width
+        self.height = height
     }
 }
 

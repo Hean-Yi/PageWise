@@ -28,16 +28,25 @@ public actor PDFImporter {
         let structured = structuredBlocks.flatMap { blocks -> [TextBlock]? in
             guard document.allowsCopying, !blocks.isEmpty, blocks.allSatisfy({ $0.richContent != nil }),
                 (0..<document.pageCount).allSatisfy({
-                    document.page(at: $0)?.annotations.allSatisfy { $0.type == PDFAnnotationSubtype.link.rawValue }
+                    // PDFAnnotation.type is "Link"; the subtype raw value is "/Link".
+                    document.page(at: $0)?.annotations.allSatisfy {
+                        $0.type == String(PDFAnnotationSubtype.link.rawValue.dropFirst())
+                    }
                         == true
                 })
             else { return nil }
             // Compare ordinary words, excluding formula glyphs and short labels. A partial HTML
             // conversion must not replace a substantially more complete PDF.
             let htmlWords = Self.words(blocks.map(\.text).joined(separator: " "))
+            let graphicLabels = blocks.compactMap { $0.richContent?.imageTextForCoverage }.map(Self.normalized)
             for index in 0..<document.pageCount {
                 let words = Self.words(document.page(at: index)?.string ?? "")
-                if words.count >= 20, Double(words.intersection(htmlWords).count) / Double(words.count) < 0.85 {
+                // SVG exporters may outline letters and keep data-text glyph labels. These
+                // labels can explain a PDF word without pretending to be ordered body text.
+                let covered = words.filter { word in
+                    htmlWords.contains(word) || graphicLabels.contains { $0.contains(Self.normalized(word)) }
+                }
+                if words.count >= 20, Double(covered.count) / Double(words.count) < 0.85 {
                     return nil
                 }
             }
@@ -47,6 +56,11 @@ public actor PDFImporter {
                 let needle = Self.normalized(block.text)
                 let matches = pageTexts.indices.filter { !needle.isEmpty && pageTexts[$0].contains(needle) }
                 mapped.sourcePage = matches.count == 1 ? matches[0] : -1
+                if block.hasImageFailure == true, mapped.sourcePage >= 0 {
+                    mapped.preservesSourcePage = true
+                    mapped.richContent = nil
+                    mapped.imageWarnings = (mapped.imageWarnings ?? []) + ["此图已保留对应原 PDF 整页，可能包含相邻正文。"]
+                }
                 return mapped
             }
         }
@@ -74,7 +88,8 @@ public actor PDFImporter {
             blocks: structured ?? analysis.blocks,
             warnings: structured == nil
                 ? analysis.warnings
-                : (structured!.contains { $0.sourcePage < 0 } ? ["部分 HTML 内容尚未匹配原文页码；可定位重排内容，查看原版时请核对。"] : []),
+                : (structured!.contains { $0.sourcePage < 0 } ? ["部分 HTML 内容尚未匹配原文页码；可定位重排内容，查看原版时请核对。"] : [])
+                    + Array(Set(structured!.flatMap { $0.imageWarnings ?? [] })).sorted(),
             canReflow: structured != nil || analysis.canReflow
         )
     }

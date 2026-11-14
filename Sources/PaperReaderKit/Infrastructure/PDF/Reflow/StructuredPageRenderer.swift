@@ -49,7 +49,12 @@ public final class StructuredPageRenderer: NSObject, WKNavigationDelegate {
                     PageArtifact(blockIDs: [pair.block.id], sourcePage: pair.block.sourcePage, relativePath: name))
             } else if pair.block.richContent != nil {
                 try flushText()
-                pendingRich.append(pair)
+                if pair.block.richContent?.isFigure == true {
+                    try await flushRich()
+                    artifacts += try await renderHTML([pair], to: staging)
+                } else {
+                    pendingRich.append(pair)
+                }
             } else {
                 try await flushRich()
                 pendingText.append(pair)
@@ -73,6 +78,20 @@ public final class StructuredPageRenderer: NSObject, WKNavigationDelegate {
     }
 
     private func renderHTML(_ pairs: [BilingualBlock], to directory: URL) async throws -> [PageArtifact] {
+        let imageSizes = pairs.flatMap { $0.block.richContent?.imageSizes ?? [] }
+        let isFigure = pairs.count == 1 && pairs[0].block.richContent?.isFigure == true
+        let contentWidth: Double =
+            isFigure && imageSizes.contains { $0.width > 700 && $0.width / $0.height > 2 } ? 1_000 : 500
+        let imageHeight = imageSizes.reduce(0.0) { total, size in
+            total + min(3_500, size.height * min(1, contentWidth / max(1, size.width))) + 14
+        }
+        // Reserve room for both captions. Geometry is chosen once, before a page is published.
+        let captionLength = pairs.reduce(0) { $0 + $1.block.text.count + ($1.translation?.count ?? 0) }
+        let contentHeight =
+            isFigure
+            ? max(648, min(4_096, ceil(imageHeight + Double(captionLength) * 16 / contentWidth * 24 + 120))) : 648
+        let pageWidth = contentWidth + 112
+        let pageHeight = contentHeight + 144
         let content = try pairs.map { pair -> String in
             guard let rich = pair.block.richContent else { throw ReaderError.message("结构化内容缺失。") }
             var translated = ""
@@ -89,7 +108,8 @@ public final class StructuredPageRenderer: NSObject, WKNavigationDelegate {
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .nonPersistent()
         configuration.defaultWebpagePreferences.allowsContentJavaScript = false
-        let view = WKWebView(frame: CGRect(x: 0, y: 0, width: 612, height: 792), configuration: configuration)
+        let view = WKWebView(
+            frame: CGRect(x: 0, y: 0, width: pageWidth, height: pageHeight), configuration: configuration)
         webView = view
         view.navigationDelegate = self
         defer {
@@ -102,10 +122,10 @@ public final class StructuredPageRenderer: NSObject, WKNavigationDelegate {
             <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'; script-src 'none'; base-uri 'none'; form-action 'none'">
             <style>
             * { box-sizing:border-box } html,body { margin:0; padding:0; background:#fdfbf5; color:#292e2e; }
-            #flow { position:absolute; left:56px; top:72px; width:500px; height:648px; column-width:500px; column-gap:112px; column-fill:auto; font:15px/1.6 Georgia,serif; overflow-wrap:break-word; }
+            #flow { position:absolute; left:56px; top:72px; width:\(contentWidth)px; height:\(contentHeight)px; column-width:\(contentWidth)px; column-gap:112px; column-fill:auto; font:15px/1.6 Georgia,serif; overflow-wrap:break-word; }
             section { break-inside:avoid; margin-bottom:16px; }
             p,div,figure,pre,blockquote { margin:0 0 14px } h1,h2,h3,h4,h5,h6 { font:600 19px/1.4 Georgia,serif; margin:0 0 14px; }
-            img { max-width:100%; max-height:500px; object-fit:contain; } figure,table,math[display=block],pre { break-inside:avoid; }
+            img { display:block; width:auto; height:auto; max-width:100%; max-height:3500px; object-fit:contain; margin:0 auto 14px; } .image-notice { font:13px/1.5 sans-serif; padding:10px; border:1px solid #b5a27e; color:#65502d; } figure,table,math[display=block],pre { break-inside:avoid; }
             figure { margin:0 0 14px; } figcaption { font-size:13px; } table { width:100%; border-collapse:collapse; font-size:13px; } td,th { padding:4px; border:1px solid #bbb; }
             pre { white-space:pre-wrap; font:12px/1.5 monospace; } math { font-size:1em; } .translation { color:#305c5c; font-family:'PingFang SC',sans-serif; padding-left:14px; border-left:1px solid #9db5ae; }
             </style></head><body><main id="flow">\(content)</main></body></html>
@@ -137,13 +157,13 @@ public final class StructuredPageRenderer: NSObject, WKNavigationDelegate {
               let count=1;
               for(const r of rects) {
                 if(r.width===0 || r.height===0) continue;
-                const page=Math.floor((r.left-55)/612); count=Math.max(count,page+1);
-                if(page<0 || r.left<56+page*612-1 || r.right>556+page*612+1 || r.top<71 || r.bottom>721) return JSON.stringify({error:2});
+                const page=Math.floor((r.left-55)/\(pageWidth)); count=Math.max(count,page+1);
+                if(page<0 || r.left<56+page*\(pageWidth)-1 || r.right>\(56 + contentWidth)+page*\(pageWidth)+1 || r.top<71 || r.bottom>\(73 + contentHeight)) return JSON.stringify({error:2});
               }
               const pages = Array.from({length:count},()=>[]);
               for (const section of flow.children) {
                 for (const r of section.getClientRects()) {
-                  const page=Math.floor((r.left-55)/612);
+                  const page=Math.floor((r.left-55)/\(pageWidth));
                   if(page>=0 && page<count && !pages[page].includes(section.dataset.block)) pages[page].push(section.dataset.block);
                 }
               }
@@ -174,7 +194,7 @@ public final class StructuredPageRenderer: NSObject, WKNavigationDelegate {
         for index in 0..<count {
             try Task.checkCancellation()
             let pdf = WKPDFConfiguration()
-            pdf.rect = CGRect(x: index * 612, y: 0, width: 612, height: 792)
+            pdf.rect = CGRect(x: Double(index) * pageWidth, y: 0, width: pageWidth, height: pageHeight)
             let bytes = try await view.pdf(configuration: pdf)
             guard let document = PDFDocument(data: bytes), document.pageCount == 1 else {
                 throw ReaderError.message("HTML 排版导出不完整，未发布页面。")

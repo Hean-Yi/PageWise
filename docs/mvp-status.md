@@ -1,6 +1,29 @@
 # MVP 交付状态
 
-## 最新验证：结构化双语重排与单一结果保留（2026-11-14）
+## 最新验证：SVG 与统一图片呈现（2026-11-14）
+
+已替换原先 PNG/JPEG 白名单和 SVG 整篇拒绝逻辑，按文件内容识别图件。支持 `img`、`object/embed` 和内嵌 SVG；保留静态路径、变换、文字、渐变、裁剪、遮罩、内部引用和受限样式，隔离图件样式并本地化嵌套图片。SVG 图内文字保持原样，不翻译；图注随正文翻译。字形标记只用于本地覆盖核验，不成为正文证据或模型翻译输入。
+
+| Input | Fixed-page presentation | Limit / fallback |
+| --- | --- | --- |
+| SVG | Static vector image; original labels | Unsupported dependencies affect one figure |
+| PNG / JPEG / WebP / BMP / HEIF | ImageIO decode; oriented PNG; alpha retained | Device decoder; 4096 px long edge |
+| GIF / APNG / animated WebP | First frame with visible notice | Motion is not preserved |
+| TIFF / HEIF multi-image | Every decoded image, in order | Up to 16 images; bounded resources |
+| PDF figure | Every page as high-resolution PNG | Up to 16 pages; 3x / 4096 px maximum |
+| EPS / PS / corrupt / unavailable | Matched original page or visible placeholder | No author code execution |
+
+图片与图注单独生成固定页，宽图增加页宽、长图增加页高，保持比例，原图可缩放；多面板保留来源顺序。单图失败若图注能唯一匹配原 PDF 页则保留该整页，否则原位置显示提示，其他正文继续处理。未知来源页码不猜测。超出资源预算、外部字体/样式、CSS 动态效果等仍可能触发单图回退；不能承诺所有 SVG 特性或所有系统解码器均已实测。
+
+实测 `bash scripts/check.sh` 通过：严格格式、160 项测试、原创图文冒烟、Mac 签名构建和 iPad 模拟器目标构建。新增测试验证多种 SVG 嵌入方式、路径/渐变/裁剪/引用、SVG 字体保留在 PDF 文字层、宽/长页完整性、嵌套图片、方向与透明度、多页 TIFF/PDF、多面板跨页顺序、动图提示、单图失败与原页定位、覆盖检查不会混入图内文字翻译。同时修正 PDFKit 的 Link 与 /Link 类型比较，避免普通超链接触发整篇回退，仍保护真实高亮等批注。原有不可变页面、断点恢复、仅保留原版与最终页、失败发布和批注依赖检查继续通过。
+
+日志 `.local/image-validation.log`。已查看原创宽图和长图的实际固定页 PNG：`.local/smoke/996F7ADD-1662-4D53-B9DA-D8DBE39628AD/structured-{4,5}.png`；最终完整检查重新生成到 `.local/smoke/1B7B8E7D-8AA0-4D73-8283-3476A73BA7DA`。另外查看了真实论文 SVG 的单图和多面板页面，相关公开资料仅在忽略的 `.local/arxiv-image-probe`，未提交为测试素材。
+
+真实兼容性探测：`1706.03762v7` 成功解析并导入 188 个富内容块，37 个含 MathML，5 组图中包含 5 个 SVG 和 3 个 PNG，图片失败为零。按应用每批 3 块的规则生成 74 张原文固定页，全部批次完成；5 组图另行逐组输出并检查代表性页面。该探测没有译文，不能视为真实模型双语质量验收。日志 `.local/arxiv-reflow-probe.log`；其中 Coverage 行保留了修正前仅比较正文词项的诊断，最终导入结果为 188 个富内容块。
+
+本轮未调用真实翻译模型，未实测新版 GUI 操作、最低系统运行时或 iPad/Pencil 真机与峰值内存；系统格式能力与已验证格式区分记录。上传 PDF 仍采用可靠文字重排、复杂页保留原始几何；没有宣称已接入 OCR 或独立图件分割。
+
+## 前序验证：结构化双语重排与单一结果保留（2026-11-14）
 
 arXiv 导入增加明确版本对应的 HTML 解析，允许段落、标题、列表、PNG/JPEG 图片、表格和受支持的 MathML。SwiftSoup 固定为 2.14.3；论文脚本、外部样式与活动内容不进入排版模板。图片来源与体积受限；WebKit 使用非持久化存储、应用自带模板及禁止外部请求的 CSP，显式分栏导出固定 PDF。公式通过占位标记保护，缺失或重复标记的译文不发布。
 
@@ -14,7 +37,7 @@ arXiv 导入增加明确版本对应的 HTML 解析，允许段落、标题、�
 
 日志：`.local/reflow-validation.log`；视觉制品：`.local/smoke/604D5FA3-1695-4E85-8A32-E69D6116C87D/structured-{1,2}.png`。真实 HTML 结构探测确认 arXiv 图片路径需要按网页 URL 规则解析；《Attention Is All You Need》1706.03762v7 因正文含 5 个 SVG object，被安全回退，未宣称该论文已成功结构化重排。外部论文未提交入库为测试素材，未调用真实模型 API。
 
-边界：SVG、复杂代码列表和部分数学结构仍回退；自动覆盖与几何检查不证明任意论文语义无损。真实论文端到端翻译、真实 arXiv 成功转换覆盖率、新版阅读器 GUI 操作及 iPad/Pencil 真机未实测。本轮视觉验收对象是实际 PDF 制品，不是交互模拟器。
+该阶段边界（SVG 已由本轮扩展）：复杂代码列表和部分数学结构仍回退；自动覆盖与几何检查不证明任意论文语义无损。真实论文端到端翻译、真实 arXiv 成功转换覆盖率、新版阅读器 GUI 操作及 iPad/Pencil 真机未实测。本轮视觉验收对象是实际 PDF 制品，不是交互模拟器。
 
 ## 最新验证：工程目录与职责整理（2026-11-14）
 
@@ -191,7 +214,7 @@ Agent 验收宿主使用真实视图、协调器和导入流程，注入假模�
 2. 在模型设置填入真实账户的基础地址、模型名称与密钥，验证翻译、问答和讨论整理。
 3. 在 iPad 真机验证 Pencil 工具、缩放/翻页后笔迹位置、目录授权和重启恢复。
 4. 使用实际 Obsidian iCloud 子目录检查文件下载、外部编辑和冲突状态；当前测试使用本地临时目录。
-5. 在多样真实论文和最低系统上验证现有 HTML 分支，再扩展 SVG/复杂图表、OCR 及语义检索。
+5. 在多样真实论文和最低系统上验证现有 HTML 分支，继续扩展复杂图表、OCR 及语义检索。
 
 上一轮（2026-11-14）经用户授权，Computer Use 已检查 Mac 原生窗口：空书库、示例导入与重排、阅读区、按需讨论、选文与复制、设置草稿取消及地址/缺密钥错误、笔记设置关闭、月份网格切换日期、研究记忆空态和搜索输入页。测试使用原创示例及独立本地视觉验收目录；没有调用真实 GLM、下载真实论文或修改用户 Obsidian。
 

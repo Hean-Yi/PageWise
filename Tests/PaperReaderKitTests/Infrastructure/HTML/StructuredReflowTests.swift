@@ -35,7 +35,7 @@ private let sourceURL = URL(string: "https://arxiv.org/html/2401.00001v1")!
     #expect(throws: ReaderError.self) { try rich.validate("[[MATH_1]] [[MATH_1]]") }
     #expect(rich.readableTranslation("查询 [[MATH_1]]") == "查询 q_i")
     for content in [
-        "<canvas>lost drawing</canvas>", "<img src='https://example.com/private.png'>", "<img src='x1.png'>",
+        "<canvas>lost drawing</canvas>",
         "<p class='ltx_ERROR'>lost equation</p>",
     ] {
         await #expect(throws: (any Error).self) {
