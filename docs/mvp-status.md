@@ -31,6 +31,30 @@
 
 已经保留段落 ID、固定页 ID、原始页码、缓存与恢复进度。尚未实现完整 LayoutRevision 分支管理、云同步 outbox、跨设备合并、资料导出/导入包。这些属于完整设计后续阶段。
 
+## 本轮验证：封面书架与书库 Agent（2026-11-14）
+
+设计与交互见 [封面书架与书库 Agent](superpowers/specs/2026-11-14-bookshelf-agent-design.md)。本轮使用原生绘制封面，没有复制品牌资产，也没有引入新运行依赖。
+
+| Check | Result |
+| --- | --- |
+| swift-format strict | PASS |
+| Swift tests | 114 PASS |
+| ReaderSmoke | PASS |
+| macOS application build | PASS |
+| iPad simulator application build | PASS |
+| Mac ad-hoc signature | PASS |
+| Mac GUI workflow checks | PASS (scoped below) |
+| Real model / online download | NOT VERIFIED |
+| Physical iPad / Pencil | NOT VERIFIED |
+
+在 `8eeea66` 完整执行 `bash scripts/check.sh`，并验证 Mac 签名。自动化覆盖工具协议配对、参数/预算限制、真实命中与可信定位、候选验证、导入前零下载、重复导入与取消、事务提交边界、重复候选状态共享，以及网络失败/轮数耗尽后保留完整工具历史。完成度回归覆盖稳定页面映射、旧 100% 位置识别、三种排序、明确未读、末页状态落盘和回看不撤销。
+
+Computer Use 在 macOS 15.7.7 的隔离本地样例中检查了空库、单篇、多篇、长中英文标题、收藏、继续阅读、添加入口、键盘聚焦时的抬升与操作显露，以及虚线框两行提示的静止/展开状态。未量测连续鼠标悬停动画帧率。实际翻到末页后，阅读状态自动变为已读；回看前页后仍保持，正在阅读/已读计数同步，两个集合均无添加格，全部论文将已读排在未完成之后。
+
+Agent 验收宿主使用真实视图、协调器和导入流程，注入假模型及本地原创 PDF 检索服务；窗口明确标记为本地样例。实测本地证据卡定位原文第 2 页、候选作者/年份/来源展示、点击导入后显示已入库且不抢当前阅读位置，以及约 1050 pt 窗口下浮层和模型设置之间的切换。样例宿主与资料未提交，也未替代正式应用的真实网络适配器。
+
+两阶段审查修复了候选年份被挤掉、重复候选状态不一致、异常负页数检索，以及最终回答失败后丢失已展示证据的续聊上下文。最终审查无未解决问题。仍未调用真实 GLM、外网论文下载、用户 Obsidian 写入或 Pencil 真机；iPad 本轮只完成目标构建。检索仍是基础关键词检索，在线来源仍限 arXiv，书库 Agent 会话重启后不保留。
+
 ## 上一轮验证：阅读工作台（2026-11-14）
 
 本轮参考 NeoRead 的阅读工作流与 Claude 风格摘要，以原创 SwiftUI 实现，没有复制参考仓库源码或资产。设计取舍见 [阅读工作台设计](superpowers/specs/2026-11-14-reading-workspace.md)。
