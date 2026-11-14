@@ -42,6 +42,9 @@ struct AgentResultCard: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             HStack(spacing: 10) {
+                if let year = card.year, !year.isEmpty {
+                    Text(year).font(.system(size: 10)).foregroundStyle(ReaderTheme.muted).fixedSize()
+                }
                 if let source = card.sourceURL {
                     Link(destination: source) {
                         Label("arXiv", systemImage: "arrow.up.right")
@@ -61,9 +64,11 @@ struct AgentResultCard: View {
                 .background(ReaderTheme.elevated.opacity(0.6), in: RoundedRectangle(cornerRadius: 5))
             VStack(alignment: .leading, spacing: 5) {
                 Text(card.title).font(.system(size: 13, weight: .medium)).foregroundStyle(ReaderTheme.ink)
-                    .lineLimit(3).multilineTextAlignment(.leading).fixedSize(horizontal: false, vertical: true)
-                if !card.subtitle.isEmpty {
-                    Text(card.subtitle).font(.system(size: 10)).foregroundStyle(ReaderTheme.muted)
+                    .lineLimit(card.kind == .onlineCandidate ? nil : 3).multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
+                let secondary = card.kind == .onlineCandidate ? (card.authors ?? "") : card.subtitle
+                if !secondary.isEmpty {
+                    Text(secondary).font(.system(size: 10)).foregroundStyle(ReaderTheme.muted)
                         .lineLimit(2).multilineTextAlignment(.leading)
                 }
             }.frame(maxWidth: .infinity, alignment: .leading)
