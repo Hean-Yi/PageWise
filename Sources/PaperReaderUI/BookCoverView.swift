@@ -110,6 +110,15 @@ private struct CoverPalette {
 struct BookshelfItem: View {
     @Bindable var model: ReaderModel
     let paper: Paper
+    var lifted = false
+    var arrangementOffset = CGSize.zero
+    var beginDrag: () -> Void = {}
+    var endDrag: () -> Void = {}
+    var acceptsDrop: (UUID) -> Bool = { _ in false }
+    var hoverDrop: (UUID) -> Void = { _ in }
+    var receiveDrop: (UUID) -> Bool = { _ in false }
+    var moveEarlier: (() -> Void)?
+    var moveLater: (() -> Void)?
     @State private var hovered = false
     @FocusState private var focus: Control?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -130,15 +139,22 @@ struct BookshelfItem: View {
                     )
                     .offset(y: highlighted && !reduceMotion ? -6 : 0)
             }
+            .opacity(lifted ? 0.28 : 1)
+            .offset(arrangementOffset)
             .contentShape(Rectangle())
             #if os(macOS)
                 .overlay {
                     NativePaperDrag(
-                        paperID: paper.id, focus: { focus = .cover }, open: { model.select(paper.id) })
+                        paper: paper, progress: progress, reduceMotion: reduceMotion,
+                        begin: beginDrag, end: endDrag, accepts: acceptsDrop, hover: hoverDrop, receive: receiveDrop,
+                        focus: { focus = .cover }, open: { model.select(paper.id) })
                 }
             #else
-                .onTapGesture { model.select(paper.id) }
-                .onDrag { PaperShelfDrag.provider(paper.id) }
+                .overlay {
+                    TouchPaperDrag(
+                        paper: paper, progress: progress, open: { model.select(paper.id) },
+                        begin: beginDrag, end: endDrag, accepts: acceptsDrop, hover: hoverDrop, receive: receiveDrop)
+                }
             #endif
             .focusable().focused($focus, equals: .cover)
             .onKeyPress(keys: [.return, .space]) { _ in
@@ -171,7 +187,8 @@ struct BookshelfItem: View {
                 }.menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
                     .foregroundStyle(ReaderTheme.muted).focused($focus, equals: .menu)
                     .help("论文选项").accessibilityLabel("\(paper.title)的选项")
-            }.frame(height: 30).opacity(showsActions ? 1 : 0)
+            }.frame(height: 30).opacity(showsActions && !lifted ? 1 : 0)
+                .offset(arrangementOffset)
         }
         .contentShape(Rectangle())
         .onHover { hovered = $0 }
@@ -182,6 +199,8 @@ struct BookshelfItem: View {
     @ViewBuilder private var actions: some View {
         Button("打开论文") { model.select(paper.id) }
         Button(workspace.isFavorite ? "取消收藏" : "收藏") { model.toggleFavorite(paper.id) }
+        Button("向前移动") { moveEarlier?() }.disabled(moveEarlier == nil)
+        Button("向后移动") { moveLater?() }.disabled(moveLater == nil)
         Menu("移动到书架") {
             Button("未分类") { Task { await model.movePaper(paper.id, to: nil) } }
             ForEach(model.state.shelves) { shelf in

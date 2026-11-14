@@ -47,6 +47,7 @@ enum PaperShelfDrag {
 struct TopicShelvesView: View {
     @Bindable var model: ReaderModel
     @Binding var selectedShelfID: UUID?
+    var dragActive = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var editing = false
     @State private var editingID: UUID?
@@ -107,7 +108,7 @@ struct TopicShelvesView: View {
         TopicShelfItem(
             name: name, icon: icon,
             count: model.state.papers.filter { model.state.shelfID(for: $0.id) == shelfID }.count,
-            selected: selectedShelfID == shelfID,
+            selected: selectedShelfID == shelfID, dragActive: dragActive,
             select: { selectedShelfID = shelfID },
             accepts: { id in model.state.papers.contains { $0.id == id } },
             move: { PaperShelfDrag.receive($0, model: model, shelfID: shelfID) })
@@ -180,10 +181,12 @@ private struct TopicShelfItem: View {
     let icon: String
     let count: Int
     let selected: Bool
+    let dragActive: Bool
     let select: () -> Void
     let accepts: (UUID) -> Bool
     let move: ([NSItemProvider]) -> Bool
     @State private var targeted = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         Button(action: select) {
@@ -204,6 +207,11 @@ private struct TopicShelfItem: View {
                     Capsule().fill(ReaderTheme.accent).frame(width: 22, height: 2)
                 }
             }
+            .overlay {
+                RoundedRectangle(cornerRadius: 7)
+                    .strokeBorder(ReaderTheme.accent.opacity(targeted ? 0.8 : 0), lineWidth: 1.5)
+            }
+            .scaleEffect(targeted && !reduceMotion ? 1.04 : 1)
             .contentShape(RoundedRectangle(cornerRadius: 7))
         }
         .buttonStyle(.plain).help(name)
@@ -219,6 +227,8 @@ private struct TopicShelfItem: View {
         #else
             .onDrop(of: [PaperShelfDrag.typeIdentifier], isTargeted: $targeted, perform: move)
         #endif
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: targeted)
+        .onChange(of: dragActive) { _, active in if !active { targeted = false } }
         .onChange(of: targeted) { _, value in
             ShelfDragDiagnostics.record(value ? "target-enter" : "target-exit")
         }

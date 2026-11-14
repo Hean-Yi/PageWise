@@ -1,5 +1,6 @@
 #if os(macOS)
     import AppKit
+    import PaperReaderKit
     import Testing
 
     @testable import PaperReaderUI
@@ -78,5 +79,54 @@
         target.mouseDown(with: down)
         target.mouseUp(with: up)
         #expect(activations == 1)
+    }
+    @MainActor @Test func nativeCoverPreviewRendersOpaqueBookAndTransparentShadowMargin() throws {
+        let paper = Paper(
+            title: "Original Drag Preview Fixture", digest: "cover-image-test", originalPath: "fixture.pdf",
+            pageCount: 2,
+            blocks: [], warnings: [], canReflow: false)
+        let progress = ReadingProgress.resolve(paper: paper, workspace: PaperWorkspace(status: .finished))
+        let image = try #require(
+            CoverDragImage.render(paper: paper, progress: progress, size: CGSize(width: 210, height: 300)))
+        #expect(image.size == CGSize(width: 258, height: 348))
+        let data = try #require(image.tiffRepresentation)
+        let bitmap = try #require(NSBitmapImageRep(data: data))
+        let center = try #require(bitmap.colorAt(x: bitmap.pixelsWide / 2, y: bitmap.pixelsHigh / 2))
+        let corner = try #require(bitmap.colorAt(x: 0, y: 0))
+        #expect(center.alphaComponent > 0.99)
+        #expect(corner.alphaComponent < 0.1)
+        // A transparent parent snapshot or generic document icon cannot fill the book interior.
+        var opaque = 0
+        for x in stride(from: bitmap.pixelsWide / 5, to: bitmap.pixelsWide * 4 / 5, by: 12) {
+            for y in stride(from: bitmap.pixelsHigh / 5, to: bitmap.pixelsHigh * 4 / 5, by: 12) {
+                if (bitmap.colorAt(x: x, y: y)?.alphaComponent ?? 0) > 0.99 { opaque += 1 }
+            }
+        }
+        #expect(opaque > 100)
+        #expect(CoverDragImage.render(paper: paper, progress: progress, size: .zero) == nil)
+    }
+
+    @MainActor @Test func nativeCoverDestinationSharesSourceSurfaceAndEndClearsTransientState() throws {
+        let id = UUID()
+        let view = PaperDragSourceView(frame: NSRect(x: 0, y: 0, width: 180, height: 250))
+        view.accepts = { $0 == id }
+        #expect(view.registeredDraggedTypes == [.init(PaperShelfDrag.typeIdentifier)])
+        let pasteboard = NSPasteboard(name: .init("PaperReader-test-" + UUID().uuidString))
+        defer { pasteboard.releaseGlobally() }
+        pasteboard.writeObjects([PaperDragSourceView.pasteboardItem(id)])
+        #expect(view.reference(in: pasteboard) == id)
+        view.accepts = { _ in false }
+        #expect(view.reference(in: pasteboard) == nil)
+        var ended = false
+        view.end = { ended = true }
+        let down = try #require(
+            NSEvent.mouseEvent(
+                with: .leftMouseDown, location: .zero, modifierFlags: [], timestamp: 1,
+                windowNumber: 0, context: nil, eventNumber: 1, clickCount: 1, pressure: 1))
+        view.mouseDown(with: down)
+        #expect(view.mouseDownEvent != nil)
+        view.finishDrag()
+        #expect(view.mouseDownEvent == nil)
+        #expect(ended)
     }
 #endif

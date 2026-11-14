@@ -1,4 +1,5 @@
 import Foundation
+import PaperReaderKit
 
 #if os(macOS)
     import AppKit
@@ -6,14 +7,28 @@ import Foundation
 
     /// AppKit owns the mouse sequence; SwiftUI buttons and scroll gestures cannot consume it.
     struct NativePaperDrag: NSViewRepresentable {
-        let paperID: UUID
+        let paper: Paper
+        let progress: ReadingProgress
+        let reduceMotion: Bool
+        let begin: () -> Void
+        let end: () -> Void
+        let accepts: (UUID) -> Bool
+        let hover: (UUID) -> Void
+        let receive: (UUID) -> Bool
         let focus: () -> Void
         let open: () -> Void
 
         func makeNSView(context: Context) -> PaperDragSourceView { PaperDragSourceView() }
 
         func updateNSView(_ view: PaperDragSourceView, context: Context) {
-            view.paperID = paperID
+            view.paperID = paper.id
+            view.renderCover = { size in CoverDragImage.render(paper: paper, progress: progress, size: size) }
+            view.reduceMotion = reduceMotion
+            view.begin = begin
+            view.end = end
+            view.accepts = accepts
+            view.hover = hover
+            view.receive = receive
             view.focusCover = focus
             view.openPaper = open
         }
@@ -23,6 +38,20 @@ import Foundation
         var paperID: UUID?
         var focusCover: (() -> Void)?
         var openPaper: (() -> Void)?
+        var renderCover: ((CGSize) -> NSImage?)?
+        var reduceMotion = false
+        var begin: (() -> Void)?
+        var end: (() -> Void)?
+        var accepts: ((UUID) -> Bool)?
+        var hover: ((UUID) -> Void)?
+        var receive: ((UUID) -> Bool)?
+
+        override init(frame frameRect: NSRect) {
+            super.init(frame: frameRect)
+            registerForDraggedTypes([.init(PaperShelfDrag.typeIdentifier)])
+        }
+        required init?(coder: NSCoder) { nil }
+
         private var mouseDownPoint: NSPoint?
         private(set) var mouseDownEvent: NSEvent?
         private var dragged = false
@@ -42,13 +71,16 @@ import Foundation
             guard !dragged, let start = mouseDownPoint, let downEvent = mouseDownEvent, let paperID else { return }
             let point = convert(event.locationInWindow, from: nil)
             guard hypot(point.x - start.x, point.y - start.y) >= 3 else { return }
+            guard let image = renderCover?(bounds.size) else { return }
             dragged = true
             let draggingItem = NSDraggingItem(pasteboardWriter: Self.pasteboardItem(paperID))
-            draggingItem.setDraggingFrame(bounds, contents: dragImage())
+            draggingItem.setDraggingFrame(
+                bounds.insetBy(dx: -CoverDragImage.padding, dy: -CoverDragImage.padding), contents: image)
+            begin?()
             ShelfDragDiagnostics.record("source-begin start=\(start) point=\(point) window=\(event.locationInWindow)")
             // AppKit uses the initiating mouse-down location to calculate the drag image offset.
             let session = beginDraggingSession(with: [draggingItem], event: downEvent, source: self)
-            session.animatesToStartingPositionsOnCancelOrFail = true
+            session.animatesToStartingPositionsOnCancelOrFail = !reduceMotion
         }
 
         override func mouseUp(with event: NSEvent) {
@@ -79,8 +111,7 @@ import Foundation
         }
 
         func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) {
-            mouseDownPoint = nil
-            mouseDownEvent = nil
+            finishDrag()
             ShelfDragDiagnostics.record(
                 "\(operation.isEmpty ? "source-ended-none" : "source-ended-drop") screen=\(screenPoint) window=\(String(describing: window?.frame))"
             )
@@ -93,20 +124,55 @@ import Foundation
             return item
         }
 
-        private func dragImage() -> NSImage {
-            // Snapshot only the visible cover under this transparent interaction surface.
-            if let parent = superview {
-                let rect = convert(bounds, to: parent)
-                if let bitmap = parent.bitmapImageRepForCachingDisplay(in: rect) {
-                    parent.cacheDisplay(in: rect, to: bitmap)
-                    let image = NSImage(size: bounds.size)
-                    image.addRepresentation(bitmap)
-                    return image
-                }
-            }
-            return NSImage(systemSymbolName: "doc.text", accessibilityDescription: nil) ?? NSImage(size: bounds.size)
+        func finishDrag() {
+            mouseDownPoint = nil
+            mouseDownEvent = nil
+            end?()
+        }
+
+        func reference(in pasteboard: NSPasteboard) -> UUID? {
+            guard let data = pasteboard.data(forType: .init(PaperShelfDrag.typeIdentifier)),
+                let id = PaperShelfDrag.paperID(from: data), accepts?(id) == true
+            else { return nil }
+            return id
+        }
+
+        override func draggingEntered(_ sender: any NSDraggingInfo) -> NSDragOperation {
+            updateDestination(sender)
+        }
+        override func draggingUpdated(_ sender: any NSDraggingInfo) -> NSDragOperation {
+            updateDestination(sender)
+        }
+        private func updateDestination(_ sender: any NSDraggingInfo) -> NSDragOperation {
+            guard let id = reference(in: sender.draggingPasteboard) else { return [] }
+            hover?(id)
+            return .move
+        }
+        override func prepareForDragOperation(_ sender: any NSDraggingInfo) -> Bool {
+            reference(in: sender.draggingPasteboard) != nil
+        }
+        override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
+            guard let id = reference(in: sender.draggingPasteboard) else { return false }
+            hover?(id)
+            return receive?(id) ?? false
         }
     }
+
+    @MainActor enum CoverDragImage {
+        static let padding: CGFloat = 24
+
+        static func render(paper: Paper, progress: ReadingProgress, size: CGSize) -> NSImage? {
+            guard size.width > 0, size.height > 0 else { return nil }
+            let renderer = ImageRenderer(
+                content: BookCoverView(paper: paper, progress: progress)
+                    .frame(width: size.width, height: size.height)
+                    .shadow(color: .black.opacity(0.3), radius: 14, x: 0, y: 10)
+                    .padding(padding))
+            renderer.scale = NSScreen.main?.backingScaleFactor ?? 2
+            return renderer.nsImage
+        }
+    }
+
     struct NativeShelfDrop: NSViewRepresentable {
         let activate: () -> Void
         let accepts: (UUID) -> Bool

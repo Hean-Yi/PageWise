@@ -9,7 +9,8 @@ struct LibraryWorkspaceView: View {
     let findRequest: Int
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var query = ""
-    @State private var sort: LibrarySort = .recent
+    @State private var arrangement = CoverArrangement()
+    private var sort: LibrarySort { model.state.preferredSort }
     @FocusState private var searchFocused: Bool
 
     private var papers: [Paper] {
@@ -39,7 +40,9 @@ struct LibraryWorkspaceView: View {
                         continueReading(recent).padding(.bottom, 30)
                     }
                     if collection == .all {
-                        TopicShelvesView(model: model, selectedShelfID: $selectedShelfID).padding(.bottom, 24)
+                        TopicShelvesView(
+                            model: model, selectedShelfID: $selectedShelfID, dragActive: arrangement.sourceID != nil
+                        ).padding(.bottom, 24)
                     }
                     if onlineSearch.isExpanded {
                         SearchView(search: onlineSearch, targetName: onlineTargetName)
@@ -51,7 +54,11 @@ struct LibraryWorkspaceView: View {
                         if collection != .reading && collection != .finished {
                             AddPaperCover { onlineSearch.open(shelfID: collection == .all ? selectedShelfID : nil) }
                         }
-                        ForEach(papers) { paper in BookshelfItem(model: model, paper: paper) }
+                        ForEach(papers) { paper in
+                            bookshelfItem(
+                                paper, columns: count,
+                                width: min(236, (available - CGFloat(count - 1) * 36) / CGFloat(count)))
+                        }
                     }.padding(.top, 5)
                     if model.state.papers.isEmpty && collection == .all {
                         HStack(spacing: 14) {
@@ -68,7 +75,12 @@ struct LibraryWorkspaceView: View {
                     }
                 }.padding(.horizontal, inset).padding(.top, 28).padding(.bottom, 44)
             }
-        }.onChange(of: findRequest) { _, _ in searchFocused = true }
+        }.onChange(of: query) { _, _ in arrangement.end() }
+            .onChange(of: collection) { _, _ in arrangement.end() }
+            .onChange(of: selectedShelfID) { _, _ in arrangement.end() }
+            .onChange(of: sort) { _, _ in arrangement.end() }
+            .onDisappear { arrangement.end() }
+            .onChange(of: findRequest) { _, _ in searchFocused = true }
             .animation(reduceMotion ? nil : .easeInOut(duration: 0.22), value: onlineSearch.isExpanded)
             .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: selectedShelfID)
             .onChange(of: onlineSearch.isExpanded) { _, expanded in if expanded { searchFocused = false } }
@@ -77,6 +89,55 @@ struct LibraryWorkspaceView: View {
                     self.selectedShelfID = nil
                 }
             }
+    }
+
+    private func bookshelfItem(_ paper: Paper, columns: Int, width: CGFloat) -> some View {
+        let ids = papers.map(\.id)
+        let index = ids.firstIndex(of: paper.id) ?? 0
+        let destination = index + arrangement.offset(for: paper.id)
+        // Add-cover occupies the first grid cell but is never a reorder destination.
+        let leading = collection != .reading && collection != .finished ? 1 : 0
+        let from = index + leading
+        let to = destination + leading
+        let offset = CGSize(
+            width: CGFloat(to % columns - from % columns) * (width + 36),
+            height: CGFloat(to / columns - from / columns) * (width / 0.70 + 77))
+        return BookshelfItem(
+            model: model, paper: paper, lifted: arrangement.sourceID == paper.id,
+            arrangementOffset: offset,
+            beginDrag: {
+                arrangement.begin(paper.id, visible: ids, state: model.state, unfinishedFirst: collection == .all)
+            },
+            endDrag: { arrangement.end() },
+            acceptsDrop: { arrangement.accepts($0, at: paper.id) },
+            hoverDrop: { arrangement.hover($0, at: paper.id) },
+            receiveDrop: { id in
+                guard arrangement.accepts(id, at: paper.id), arrangement.reserveDrop() else { return false }
+                Task { await arrangement.commit(model: model) }
+                return true
+            },
+            moveEarlier: orderAction(paper.id, delta: -1),
+            moveLater: orderAction(paper.id, delta: 1)
+        )
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: arrangement.preview)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: arrangement.sourceID)
+    }
+
+    private func orderAction(_ id: UUID, delta: Int) -> (() -> Void)? {
+        let ids = papers.map(\.id)
+        guard !arrangement.committing, let index = ids.firstIndex(of: id), ids.indices.contains(index + delta) else {
+            return nil
+        }
+        let destination = ids[index + delta]
+        if collection == .all {
+            let finished = Set(LibraryQuery.papers(in: model.state, collection: .finished).map(\.id))
+            guard finished.contains(id) == finished.contains(destination) else { return nil }
+        }
+        return {
+            var reordered = ids
+            reordered.swapAt(index, index + delta)
+            Task { await model.arrangePapers(original: ids, reordered: reordered, unfinishedFirst: collection == .all) }
+        }
     }
 
     private var onlineTargetName: String {
@@ -164,7 +225,14 @@ struct LibraryWorkspaceView: View {
             }
             Spacer()
             Menu {
-                Picker("排序", selection: $sort) {
+                Picker(
+                    "排序",
+                    selection: Binding(
+                        get: { sort },
+                        set: { value in
+                            Task { await model.selectLibrarySort(value) }
+                        })
+                ) {
                     ForEach(LibrarySort.allCases) { item in Text(item.title).tag(item) }
                 }
             } label: {
