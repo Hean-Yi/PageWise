@@ -22,7 +22,7 @@ private actor AgentWireTransport: HTTPTransport {
 
 @Test func agentUsesRealToolProtocolAndPreservesAssistantPairing() async throws {
     let transport = AgentWireTransport([
-        #"{"choices":[{"message":{"role":"assistant","content":null,"tool_calls":[{"id":"call_1","type":"function","function":{"name":"search_library","arguments":"{\"query\":\"attention\"}"}}]},"finish_reason":"tool_calls"}]}"#,
+        #"{"choices":[{"message":{"role":"assistant","content":null,"reasoning_content":"fixture reasoning","tool_calls":[{"id":"call_1","type":"function","function":{"name":"search_library","arguments":"{\"query\":\"attention\"}"}}]},"finish_reason":"tool_calls"}]}"#,
         #"{"choices":[{"message":{"role":"assistant","content":"已检索正文"},"finish_reason":"stop"}]}"#,
     ])
     let client = AgentClient(transport: transport)
@@ -40,6 +40,7 @@ private actor AgentWireTransport: HTTPTransport {
     #expect((body["tools"] as? [[String: Any]])?.count == 5)
     let wireMessages = try #require(body["messages"] as? [[String: Any]])
     #expect(wireMessages[2]["role"] as? String == "assistant")
+    #expect(wireMessages[2]["reasoning_content"] as? String == "fixture reasoning")
     #expect((wireMessages[2]["tool_calls"] as? [[String: Any]])?.first?["id"] as? String == "call_1")
     #expect(wireMessages[3]["tool_call_id"] as? String == "call_1")
     #expect(requests[1].value(forHTTPHeaderField: "Authorization") == "Bearer test-only")
@@ -119,4 +120,75 @@ private func agentSettings() -> ModelSettings {
     settings.model = "test"
     settings.baseURL = "https://example.invalid/v4"
     return settings
+}
+
+private actor AgentSaveGate {
+    var waiting = false
+    private var continuation: CheckedContinuation<Void, Never>?
+    func wait() async {
+        waiting = true
+        await withCheckedContinuation { continuation = $0 }
+    }
+    func release() {
+        continuation?.resume()
+        continuation = nil
+    }
+}
+
+@Test(arguments: [false, true]) func cancelledAgentSaveHonorsTheExplicitCancellationPolicy(respectingCancellation: Bool)
+    async throws
+{
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let store = try LibraryStore(directory: root)
+    let old = LibraryState()
+    try await store.save(old)
+    var incoming = old
+    incoming.papers = [
+        Paper(
+            title: "Cancelled import", digest: "x", originalPath: "x.pdf", pageCount: 1, blocks: [], warnings: [],
+            canReflow: false)
+    ]
+    let snapshot = incoming
+    let gate = AgentSaveGate()
+    let write = Task {
+        await gate.wait()
+        try await store.save(snapshot, respectingCancellation: respectingCancellation)
+    }
+    for _ in 0..<500 {
+        if await gate.waiting { break }
+        try await Task.sleep(for: .milliseconds(2))
+    }
+    write.cancel()
+    await gate.release()
+    if respectingCancellation {
+        await #expect(throws: CancellationError.self) { try await write.value }
+    } else {
+        try await write.value
+    }
+    #expect(try await store.load().papers.isEmpty == respectingCancellation)
+}
+
+@Test func agentRejectsUnpairedHistoryAndOversizedArgumentsBeforeTools() async throws {
+    let transport = AgentWireTransport([
+        #"{"choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}"#
+    ])
+    let client = AgentClient(transport: transport)
+    let call = AgentToolCall(id: "pending", name: "search_library", arguments: "{}")
+    let histories: [[AgentMessage]] = [
+        [.init(role: "assistant", toolCalls: [call])],
+        [.init(role: "assistant", toolCalls: [call]), .init(role: "tool", content: "[]", toolCallID: "forged")],
+        [.init(role: "user", content: "q", toolCalls: [call])],
+    ]
+    for history in histories {
+        await #expect(throws: (any Error).self) {
+            try await client.respond(settings: agentSettings(), key: "test-only", messages: history, limits: .init())
+        }
+    }
+    #expect(await transport.requests.isEmpty)
+    var limits = AgentLimits()
+    limits.maxArgumentBytes = 8
+    #expect(throws: (any Error).self) {
+        try AgentToolArguments.parse(name: "search_library", json: #"{"query":"attention"}"#, limits: limits)
+    }
 }

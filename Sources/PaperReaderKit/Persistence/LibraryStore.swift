@@ -60,7 +60,8 @@ public actor LibraryStore {
         return state
     }
 
-    public func save(_ state: LibraryState) throws {
+    public func save(_ state: LibraryState, respectingCancellation: Bool = false) throws {
+        if respectingCancellation { try Task.checkCancellation() }
         guard state.version == LibraryState.currentVersion else {
             throw ReaderError.message("不能写入不受支持的书库版本，原有资料已保留。")
         }
@@ -86,6 +87,7 @@ public actor LibraryStore {
                 guard status == SQLITE_OK, sqlite3_step(statement) == SQLITE_DONE else {
                     throw ReaderError.message("保存失败，请检查剩余磁盘空间。")
                 }
+                if respectingCancellation { try Task.checkCancellation() }
                 try Self.execute(db, "COMMIT")
             } catch {
                 try? Self.execute(db, "ROLLBACK")

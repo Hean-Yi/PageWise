@@ -120,26 +120,44 @@ public final class ReaderModel {
         beginReading()
     }
 
-    @discardableResult func save() async -> Bool {
+    @discardableResult func save(cancellable: Bool = false, adding importedPaper: Paper? = nil) async -> Bool {
         guard loaded else { return false }
-        let snapshot = state
         let previous = saveQueue
         let store = store
         let task = Task { @MainActor [weak self] in
             _ = await previous?.value
+            guard let self else { return false }
             do {
-                try await store.save(snapshot)
+                if cancellable { try Task.checkCancellation() }
+                // Take the latest state after preceding writes. Uncommitted imports never enter
+                // public state or unrelated queued snapshots, and are published only after commit.
+                var snapshot = self.state
+                if let importedPaper { snapshot.papers.insert(importedPaper, at: 0) }
+                try await store.save(snapshot, respectingCancellation: cancellable)
+                if let importedPaper { self.state.papers.insert(importedPaper, at: 0) }
                 return true
+            } catch is CancellationError {
+                return false
             } catch {
-                self?.message = "本地保存失败：\(error.localizedDescription)"
+                self.message = "本地保存失败：\(error.localizedDescription)"
                 return false
             }
         }
         saveQueue = task
-        return await task.value
+        return await withTaskCancellationHandler {
+            await task.value
+        } onCancel: {
+            if cancellable { task.cancel() }
+        }
     }
 
-    @discardableResult public func importURLs(_ urls: [URL]) async -> [UUID] {
+    @discardableResult public func importURLs(
+        _ urls: [URL], selectAfterImport: Bool = true, metadata: PaperCandidate? = nil
+    ) async -> [UUID] {
+        if let metadata, ArxivClient.verified(metadata) == nil {
+            message = "论文来源无效，未导入。"
+            return []
+        }
         guard loaded else {
             message = "书库尚未成功打开，不能导入以免覆盖已有资料。"
             return []
@@ -155,14 +173,20 @@ public final class ReaderModel {
             do {
                 status = "正在解析 \(url.lastPathComponent)…"
                 var imported = try await importer.importPDF(at: url)
+                let importedDirectory = root.appendingPathComponent(imported.originalPath).deletingLastPathComponent()
+                var retained = false
+                defer { if !retained { try? FileManager.default.removeItem(at: importedDirectory) } }
+                try Task.checkCancellation()
                 if let existing = state.papers.first(where: { $0.digest == imported.digest }) {
-                    // The imported copy has a new ID; its unused directory can be removed safely.
-                    let extra = root.appendingPathComponent(imported.originalPath).deletingLastPathComponent()
-                    try? FileManager.default.removeItem(at: extra)
-                    select(existing.id)
+                    // The unused duplicate directory is removed by the staging cleanup above.
+                    if selectAfterImport { select(existing.id) }
                     importedIDs.append(existing.id)
                     status = "已打开书库中的相同论文"
                     continue
+                }
+                if let metadata {
+                    imported.title = metadata.title
+                    imported.sourceURL = metadata.id
                 }
                 if imported.canReflow {
                     let relative = "Papers/\(imported.id.uuidString)/preview"
@@ -180,18 +204,21 @@ public final class ReaderModel {
                         imported.warnings.append("重排未完成：\(error.localizedDescription) 已保留原始 PDF。")
                     }
                 }
+                try Task.checkCancellation()
                 pendingImportIDs.insert(imported.id)
-                state.papers.insert(imported, at: 0)
-                guard await save() else {
-                    state.papers.removeAll { $0.id == imported.id }
+                guard await save(cancellable: true, adding: imported) else {
                     pendingImportIDs.remove(imported.id)
-                    status = "导入未保存，请检查磁盘空间后重试"
+                    status = Task.isCancelled ? "已停止导入" : "导入未保存，请检查磁盘空间后重试"
                     return importedIDs
                 }
+                retained = true
                 pendingImportIDs.remove(imported.id)
                 importedIDs.append(imported.id)
-                select(imported.id)
+                if selectAfterImport, !Task.isCancelled { select(imported.id) }
                 status = imported.canReflow ? "已导入并完成原文重排 · \(imported.blocks.count) 个段落" : "已导入 · 使用原始 PDF"
+            } catch is CancellationError {
+                status = "已停止导入"
+                return importedIDs
             } catch {
                 message = "导入失败：\(error.localizedDescription)"
                 status = "导入未完成"
@@ -347,12 +374,7 @@ public final class ReaderModel {
             status = "正在下载 \(candidate.title)…"
             let url = try await arxiv.download(candidate)
             defer { try? FileManager.default.removeItem(at: url) }
-            let ids = await importURLs([url])
-            if let importedID = ids.first, let index = state.papers.firstIndex(where: { $0.id == importedID }) {
-                state.papers[index].title = candidate.title
-                state.papers[index].sourceURL = candidate.id
-                await save()
-            }
+            await importURLs([url], metadata: candidate)
         } catch { message = error.localizedDescription }
     }
 }

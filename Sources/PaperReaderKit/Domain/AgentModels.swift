@@ -87,16 +87,22 @@ public struct AgentMessage: Codable, Sendable, Equatable {
     public var content: String?
     public var toolCalls: [AgentToolCall]?
     public var toolCallID: String?
-    public init(role: String, content: String? = nil, toolCalls: [AgentToolCall]? = nil, toolCallID: String? = nil) {
+    public var reasoningContent: String?
+    public init(
+        role: String, content: String? = nil, toolCalls: [AgentToolCall]? = nil, toolCallID: String? = nil,
+        reasoningContent: String? = nil
+    ) {
         self.role = role
         self.content = content
         self.toolCalls = toolCalls
         self.toolCallID = toolCallID
+        self.reasoningContent = reasoningContent
     }
     enum CodingKeys: String, CodingKey {
         case role, content
         case toolCalls = "tool_calls"
         case toolCallID = "tool_call_id"
+        case reasoningContent = "reasoning_content"
     }
 }
 
