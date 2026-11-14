@@ -66,7 +66,8 @@ import Foundation
         {
             // SwiftUI's closure-based onDrop may propose copy; the accepted domain
             // operation still performs a single-membership move after persistence.
-            context == .withinApplication ? [.copy, .move] : []
+            ShelfDragDiagnostics.record("source-mask context=\(context.rawValue)")
+            return context == .withinApplication ? [.copy, .move] : []
         }
 
         func draggingSession(_ session: NSDraggingSession, willBeginAt screenPoint: NSPoint) {
@@ -74,7 +75,7 @@ import Foundation
         }
 
         func draggingSession(_ session: NSDraggingSession, movedTo screenPoint: NSPoint) {
-            ShelfDragDiagnostics.record("source-moved screen=\(screenPoint)")
+            ShelfDragDiagnostics.record("source-moved screen=\(screenPoint) cursor=\(NSEvent.mouseLocation)")
         }
 
         func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) {
