@@ -26,9 +26,11 @@ private actor AgentDiscoveryFixture: PaperDiscovery {
     private var continuation: CheckedContinuation<Void, Never>?
     let source: URL?
     let holdDownload: Bool
-    init(source: URL? = nil, holdDownload: Bool = false) {
+    let failDownload: Bool
+    init(source: URL? = nil, holdDownload: Bool = false, failDownload: Bool = false) {
         self.source = source
         self.holdDownload = holdDownload
+        self.failDownload = failDownload
     }
     func search(_ query: String) async throws -> [PaperCandidate] {
         searchCount += 1
@@ -40,6 +42,7 @@ private actor AgentDiscoveryFixture: PaperDiscovery {
     }
     func download(_ candidate: PaperCandidate) async throws -> URL {
         downloadCount += 1
+        if failDownload { throw ReaderError.message("下载失败（本地测试）") }
         if holdDownload {
             waiting = true
             await withCheckedContinuation { continuation = $0 }
@@ -438,4 +441,72 @@ private func onlineScript(_ messages: [AgentMessage], _ count: Int) throws -> Ag
     #expect(stored.papers[0].title == "Fixture Attention")
     #expect(stored.papers[0].sourceURL == "https://arxiv.org/abs/2401.00001v1")
     #expect(agent.turns[0].cards[0].canOpen)
+}
+
+private func repeatedOnlineScript(_ messages: [AgentMessage], _ count: Int) throws -> AgentMessage {
+    var response = try onlineScript(messages, (count - 1) % 3 + 1)
+    response.toolCalls = response.toolCalls?.map { original in
+        var call = original
+        call.id += "_\(count)"
+        return call
+    }
+    return response
+}
+
+@Test(arguments: [false, true]) @MainActor func repeatedCandidateCardsShareTheActiveImportState(cancel: Bool)
+    async throws
+{
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let reader = try await makeAgentReader(root)
+    let source = root.appendingPathComponent("fixture.pdf")
+    try DemoPaper.write(to: source)
+    let discovery = AgentDiscoveryFixture(source: source, holdDownload: true)
+    let client = ScriptedLibraryModel(repeatedOnlineScript)
+    let agent = LibraryAgent(reader: reader, client: client, discovery: discovery)
+    agent.send("查找并准备导入")
+    try await eventually { !agent.isRunning }
+    let first = try #require(agent.turns[0].cards.first)
+    agent.confirmImport(cardID: first.id)
+    try await eventually { await discovery.waiting }
+    agent.send("再次查找并准备同一候选")
+    try await eventually { !agent.isRunning }
+    let repeated = agent.turns[1].cards
+    #expect(repeated.count == 2)
+    #expect(repeated.allSatisfy { $0.candidateID == first.candidateID && $0.importState == .downloading })
+    #expect(repeated.allSatisfy { !$0.canImport })
+    let requests = await client.requests
+    #expect(requests.last?.last?.content?.contains("尚未下载") == false)
+    if cancel { agent.cancelImport(cardID: first.id) }
+    await discovery.release()
+    if cancel {
+        try await eventually { await discovery.returnedURL != nil }
+        try await Task.sleep(for: .milliseconds(30))
+        #expect(agent.turns.flatMap(\.cards).allSatisfy { $0.importState == .cancelled })
+        #expect(reader.state.papers.isEmpty)
+    } else {
+        try await eventually { agent.turns.flatMap(\.cards).allSatisfy { $0.importState == .imported } }
+        let paper = try #require(reader.state.papers.first)
+        #expect(agent.turns.flatMap(\.cards).allSatisfy { $0.paperID == paper.id && $0.canOpen })
+    }
+    #expect(await discovery.downloadCount == 1)
+}
+
+@Test @MainActor func repeatedCandidateCardsPreserveImportFailureDetails() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let reader = try await makeAgentReader(root)
+    let agent = LibraryAgent(
+        reader: reader, client: ScriptedLibraryModel(repeatedOnlineScript),
+        discovery: AgentDiscoveryFixture(failDownload: true))
+    agent.send("查找并准备导入")
+    try await eventually { !agent.isRunning }
+    let first = try #require(agent.turns[0].cards.first)
+    agent.confirmImport(cardID: first.id)
+    try await eventually { agent.turns[0].cards[0].importState == .failed }
+    let error = try #require(agent.turns[0].cards[0].importError)
+    agent.send("再次查找并准备同一候选")
+    try await eventually { !agent.isRunning }
+    #expect(agent.turns[1].cards.count == 2)
+    #expect(agent.turns[1].cards.allSatisfy { $0.importState == .failed && $0.importError == error && $0.canImport })
 }

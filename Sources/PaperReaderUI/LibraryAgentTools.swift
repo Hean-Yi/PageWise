@@ -73,12 +73,21 @@ extension LibraryAgent {
             if let paperID = importedPapers[id], reader.state.papers.contains(where: { $0.id == paperID }) {
                 card.importState = .imported
                 card.paperID = paperID
-            } else {
+            } else if card.importState == .unprepared {
                 card.importState = .ready
+            }
+            let message: String
+            switch card.importState {
+            case .downloading: message = "正在下载；已有导入任务。"
+            case .importing: message = "正在解析并保存；已有导入任务。"
+            case .imported: message = "候选已在书库，可打开已有论文。"
+            case .failed: message = "上次导入失败，等待用户点击重试。"
+            case .cancelled: message = "上次导入已停止，等待用户点击重试。"
+            case .unprepared, .ready: message = "等待用户点击确认；尚未下载。"
             }
             return try result(
                 [(ToolRecord(card: card, authors: candidate.authors, year: candidate.year), card)],
-                message: "等待用户点击确认；尚未下载。")
+                message: message)
         case .openPaper(let id, let page):
             let paper = try registeredPaper(id, page: page)
             var card = AgentCard(kind: .navigation, title: paper.title)
@@ -106,6 +115,13 @@ extension LibraryAgent {
         card.subtitle = [candidate.authors, candidate.year, "arXiv"].filter { !$0.isEmpty }.joined(separator: " · ")
         card.candidateID = id
         card.sourceURL = URL(string: candidate.id)
+        if candidates[id] != nil,
+            let previous = turns.flatMap(\.cards).last(where: { $0.candidateID == id })
+        {
+            card.importState = previous.importState
+            card.importError = previous.importError
+            card.paperID = previous.paperID
+        }
         return card
     }
 
