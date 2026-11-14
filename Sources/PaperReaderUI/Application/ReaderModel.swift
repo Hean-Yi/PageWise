@@ -182,6 +182,8 @@ public final class ReaderModel {
     }
 
     private static func applyReflow(_ publication: Paper, to paper: inout Paper) {
+        paper.canReflow = publication.canReflow
+        paper.warnings = publication.warnings
         paper.blocks = publication.blocks
         paper.translations = publication.translations
         paper.translatedPages = publication.translatedPages

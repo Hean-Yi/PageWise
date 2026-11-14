@@ -47,6 +47,7 @@ public actor HTMLReadingStore {
                 throw ReaderError.message("内容块已发布，拒绝重复追加。")
             }
             var html: String
+            var translationTag = "div"
             if pair.block.preservesSourcePage == true {
                 if sourcePDF == nil { sourcePDF = PDFDocument(url: root.appendingPathComponent(paper.originalPath)) }
                 guard let sourcePDF, (0..<sourcePDF.pageCount).contains(pair.block.sourcePage),
@@ -59,6 +60,12 @@ public actor HTMLReadingStore {
             } else {
                 html = pair.block.richContent?.html ?? "<p>\(Self.escape(pair.block.text))</p>"
                 let parsed = try SwiftSoup.parseBodyFragment(html)
+                if pair.block.richContent == nil, let body = parsed.body() { try HTMLMathNormalizer.normalize(body) }
+                if let tag = parsed.body()?.children().first()?.tagName(),
+                    ["h1", "h2", "h3", "h4", "h5", "h6"].contains(tag)
+                {
+                    translationTag = tag
+                }
                 for image in try parsed.select("img") {
                     let uri = try image.attr("src")
                     guard let comma = uri.firstIndex(of: ","), uri[..<comma].hasSuffix(";base64"),
@@ -76,7 +83,10 @@ public actor HTMLReadingStore {
                 for (marker, math) in pair.block.richContent?.mathematics ?? [:] {
                     translated = translated.replacingOccurrences(of: marker, with: math)
                 }
-                html += "<div class='translation' lang='zh-Hans'>\(translated)</div>"
+                let translatedDocument = try SwiftSoup.parseBodyFragment(translated)
+                if let body = translatedDocument.body() { try HTMLMathNormalizer.normalize(body) }
+                translated = try translatedDocument.body()?.html() ?? translated
+                html += "<\(translationTag) class='translation' lang='zh-Hans'>\(translated)</\(translationTag)>"
             }
             let id = pair.block.id
             content +=
@@ -130,11 +140,11 @@ public actor HTMLReadingStore {
         <!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
         <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src 'self' file:; style-src 'unsafe-inline'; script-src 'none'; base-uri 'none'; form-action 'none'">
         <title>\(HTMLPaperParser.escape(title))</title><style>
-        :root{color-scheme:light dark}*{box-sizing:border-box}body{margin:0;background:#fdfbf5;color:#292e2e;font:18px/1.8 Georgia,serif;overflow-wrap:break-word}
-        main{max-width:820px;margin:auto;padding:28px clamp(20px,5vw,56px) 80px}section{margin:0 0 24px}p,figure,pre,blockquote{margin:0 0 16px}
-        h1,h2,h3,h4{font:600 1.3em/1.4 Georgia,serif}img{display:block;max-width:100%;height:auto;margin:auto}table{display:block;overflow:auto;border-collapse:collapse;max-width:100%}td,th{padding:6px;border:1px solid #aaa}
-        pre{overflow:auto;font:14px/1.6 monospace}math[display=block]{overflow-x:auto;max-width:100%}figcaption,.image-notice{font:14px/1.6 system-ui;color:#71572e}.translation{color:#305c5c;font-family:system-ui;padding-left:16px;border-left:2px solid #9db5ae;margin-top:12px}
-        ::highlight(saved){background:#f2d36b;color:#292e2e}@media(prefers-color-scheme:dark){body{background:#232626;color:#e4e7e5}.translation{color:#a8cfca}figcaption,.image-notice{color:#d0b784}}
+        :root{color-scheme:light dark}*{box-sizing:border-box}body{margin:0;background:#fff;color:#202020;font:18px/1.75 -apple-system,BlinkMacSystemFont,'Helvetica Neue',Arial,sans-serif;overflow-wrap:break-word}
+        main{max-width:960px;margin:auto;padding:28px clamp(20px,5vw,56px) 80px}section{margin:0 0 24px}p,figure,pre,blockquote{margin:0 0 16px}
+        h1,h2,h3,h4,h5,h6{font:700 1.5em/1.4 system-ui;margin:0 0 14px}img{display:block;max-width:100%;height:auto;margin:auto}table{display:block;overflow:auto;border-collapse:collapse;max-width:100%}td,th{padding:6px;border:1px solid #aaa}
+        pre{overflow:auto;font:14px/1.6 monospace}math[display=block]{display:block;text-align:center;overflow-x:auto;max-width:100%;margin:24px 0}figcaption,.image-notice{font:14px/1.6 system-ui;color:#71572e}.translation{color:inherit;font-family:'Songti SC','STSong',serif;margin-top:12px}h1.translation,h2.translation,h3.translation,h4.translation,h5.translation,h6.translation{font-family:system-ui;margin-bottom:28px}
+        ::highlight(saved){background:#f2d36b;color:#292e2e}@media(prefers-color-scheme:dark){body{background:#232626;color:#e4e7e5}.translation{color:inherit}figcaption,.image-notice{color:#d0b784}}
         </style></head><body data-paper-id="\(paperID.uuidString)"><main id="reader">\(start)\(content)\(end)</main></body></html>
         """
     }

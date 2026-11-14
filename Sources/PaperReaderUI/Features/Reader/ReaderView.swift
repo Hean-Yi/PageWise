@@ -138,6 +138,16 @@ struct ReaderView: View {
 
     private func controls(width: CGFloat) -> some View {
         HStack(spacing: 14) {
+            if let paper = model.paper, paper.htmlReading == nil, paper.previewPages.isEmpty,
+                paper.translatedPages.isEmpty
+            {
+                Button {
+                    Task { await model.reparseCurrentPaper() }
+                } label: {
+                    Label(model.isImporting ? "正在解析" : "重新解析", systemImage: "arrow.clockwise")
+                }
+                .disabled(model.isImporting || model.translating.contains(paper.id))
+            }
             if model.paper?.canReflow == true {
                 Picker("阅读模式", selection: Binding(get: { model.mode }, set: { model.changeMode(to: $0) })) {
                     Text("原版").tag("original")

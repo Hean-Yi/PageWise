@@ -41,6 +41,11 @@ enum HTMLImageNormalizer {
                 throw CancellationError()
             } catch {
                 try Task.checkCancellation()
+                if element.tagName() == "svg" {
+                    // Failed SVG text may locate its source page, but never counts as
+                    // successfully displayed content during PDF coverage checks.
+                    try wrapper.attr("data-pr-coverage", element.text())
+                }
                 try appendNotice("图片未能转换，请查看原版。" + error.localizedDescription, to: wrapper, failed: true)
             }
             try element.replaceWith(wrapper)

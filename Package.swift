@@ -13,7 +13,7 @@ let package = Package(
     targets: [
         .systemLibrary(name: "CSQLite", pkgConfig: "sqlite3"),
         .target(name: "PaperReaderKit", dependencies: ["CSQLite", "SwiftSoup"],
-            resources: [.copy("Resources/ThirdPartyNotices.txt")]),
+            resources: [.copy("Resources/ThirdPartyNotices.txt"), .copy("Resources/KaTeX")]),
         .target(name: "PaperReaderUI", dependencies: ["PaperReaderKit"],
             resources: [.copy("Platform/HTML/ReaderWarmup.html")]),
         .executableTarget(name: "ReaderSmoke", dependencies: ["PaperReaderKit"]),

@@ -231,3 +231,28 @@ private func pixels(of page: PDFPage) throws -> Data {
     context.drawPDFPage(try #require(page.pageRef))
     return Data(bytes: try #require(context.data), count: 612 * 792 * 4)
 }
+
+@Test func localizedHTMLCoverageGapKeepsGoodContentAndSupplementsOriginalPage() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    let source = root.appendingPathComponent("fixture.pdf")
+    try DemoPaper.write(to: source)
+    let document = try #require(PDFDocument(url: source))
+    let firstText = try #require(document.page(at: 0)?.string)
+    var first = TextBlock(sourcePage: -1, text: firstText)
+    first.richContent = RichContent(
+        html: "<p>\(HTMLPaperParser.escape(firstText))</p>", translationInput: firstText, mathematics: [:],
+        mathDescriptions: [:])
+    let imported = try await PDFImporter(root: root).importPDF(
+        at: source, preservingComplexPages: true, structuredBlocks: [first])
+    #expect(imported.canReflow)
+    #expect(imported.blocks.count == 2)
+    #expect(imported.blocks[0].id == first.id)
+    #expect(imported.blocks[0].richContent != nil)
+    #expect(imported.blocks[1].preservesSourcePage == true)
+    #expect(imported.blocks[1].sourcePage == 1)
+    #expect(imported.blocks[1].text == document.page(at: 1)?.string)
+    #expect(imported.warnings.contains { $0.contains("HTML") })
+    #expect(try Data(contentsOf: source) == Data(contentsOf: root.appendingPathComponent(imported.originalPath)))
+}

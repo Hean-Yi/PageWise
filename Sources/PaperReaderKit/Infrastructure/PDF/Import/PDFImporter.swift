@@ -48,7 +48,7 @@ public actor PDFImporter {
             var completedBlocks = 0
             report("检查正文与补全图片", 0, blocks.count)
             var richBytes = blocks.reduce(0) { $0 + ($1.richContent?.html.utf8.count ?? 0) }
-            let mappedBlocks = try blocks.map { block in
+            var mappedBlocks = try blocks.map { block in
                 try Task.checkCancellation()
                 defer {
                     completedBlocks += 1
@@ -60,6 +60,11 @@ public actor PDFImporter {
                 mapped.sourcePage = matches.count == 1 ? matches[0] : -1
                 if matches.isEmpty, let caption = block.richContent?.figureCaption {
                     mapped.sourcePage = try PDFFigureCropper.captionPage(caption.text, in: document) ?? -1
+                }
+                if block.hasImageFailure == true, mapped.sourcePage < 0,
+                    let text = block.richContent?.imageTextForCoverage
+                {
+                    mapped.sourcePage = Self.uniqueGraphicPage(text: text, pageTexts: pageTexts) ?? -1
                 }
                 if block.hasImageFailure == true, mapped.sourcePage >= 0 {
                     if let page = document.page(at: mapped.sourcePage) {
@@ -88,9 +93,11 @@ public actor PDFImporter {
             // Compare ordinary words, excluding formula glyphs and short labels. A partial HTML
             // conversion must not replace a substantially more complete PDF.
             let htmlWords = Self.words(mappedBlocks.map(\.text).joined(separator: " "))
-            let graphicLabels = mappedBlocks.compactMap { $0.richContent?.imageTextForCoverage }.map(Self.normalized)
+            let graphicLabels = mappedBlocks.filter { $0.hasImageFailure != true }
+                .compactMap { $0.richContent?.imageTextForCoverage }.map(Self.normalized)
             let retainedPages = Set(mappedBlocks.filter { $0.preservesSourcePage == true }.map(\.sourcePage))
             report("核对原文覆盖", 0, document.pageCount)
+            var missingPages: [Int] = []
             for index in 0..<document.pageCount {
                 try Task.checkCancellation()
                 defer { report("核对原文覆盖", index + 1, document.pageCount) }
@@ -104,7 +111,23 @@ public actor PDFImporter {
                     htmlWords.contains(word) || graphicLabels.contains { $0.contains(Self.normalized(word)) }
                 }
                 if words.count >= 20, Double(covered.count) / Double(words.count) < 0.85 {
-                    return nil
+                    missingPages.append(index)
+                }
+            }
+            if !missingPages.isEmpty {
+                // A localized conversion gap must not reject the complete article. Keep
+                // every HTML block and explicitly supplement the deficient source pages.
+                // Require reliable surrounding page anchors; otherwise keep PDF fallback.
+                guard preservingComplexPages,
+                    mappedBlocks.contains(where: { $0.sourcePage >= 0 && $0.preservesSourcePage != true }),
+                    missingPages.count < document.pageCount
+                else { return nil }
+                for pageIndex in missingPages {
+                    var supplement = TextBlock(sourcePage: pageIndex, text: rawPageTexts[pageIndex])
+                    supplement.preservesSourcePage = true
+                    supplement.imageWarnings = ["第 \(pageIndex + 1) 页的 HTML 内容不完整，已补入原始页面；可能与相邻正文部分重复。"]
+                    let insertion = mappedBlocks.firstIndex { $0.sourcePage > pageIndex } ?? mappedBlocks.endIndex
+                    mappedBlocks.insert(supplement, at: insertion)
                 }
             }
             return mappedBlocks
@@ -149,6 +172,19 @@ public actor PDFImporter {
 
     private static func normalized(_ text: String) -> String {
         text.precomposedStringWithCompatibilityMapping.lowercased().filter { $0.isLetter || $0.isNumber }
+    }
+    private static func uniqueGraphicPage(text: String, pageTexts: [String]) -> Int? {
+        let characters = Array(normalized(text).prefix(20_000))
+        guard characters.count >= 160 else { return nil }
+        var hits: [Int: Int] = [:]
+        for offset in stride(from: 0, through: characters.count - 80, by: 80) {
+            let fragment = String(characters[offset..<offset + 80])
+            let matches = pageTexts.indices.filter { pageTexts[$0].contains(fragment) }
+            if matches.count == 1 { hits[matches[0], default: 0] += 1 }
+        }
+        // Two independent long matches on exactly one page; never guess across pages.
+        guard hits.count == 1, let hit = hits.first, hit.value >= 2 else { return nil }
+        return hit.key
     }
     private static func words(_ text: String) -> Set<String> {
         Set(text.lowercased().split { !$0.isLetter }.filter { $0.count >= 4 }.map(String.init))

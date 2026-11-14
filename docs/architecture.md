@@ -87,3 +87,5 @@ Swift Package 自动递归发现每个 target 目录下的 Swift 文件。当前
 `Domain/Papers/HTMLReadingArtifact` 描述唯一已提交 HTML、资源引用与稳定内容锚点；`Paper.readingPages` 为 HTML 内容段和旧 PDF 页面提供统一导航，不代表 HTML 仍然分页。`Infrastructure/HTML/Reading` 负责文件生成、资源去重与未提交文件回收；`Platform/HTML` 负责 WKWebView、隔离脚本桥、选文和滚动事件。已发布 HTML 只追加段落，文本高亮使用 UTF-16 范围和原文核验，旧 PDF 高亮继续使用矩形坐标。
 
 阅读器最多保留一个空的 WebKit 实例用于预热，网站数据存储为非持久化；它不保留论文版本或另建磁盘缓存。实际文档及资源属于用户阅读制品，随数据库提交事务发布。
+
+`Infrastructure/HTML/Mathematics` 使用随包 KaTeX 在 JavaScriptCore 中将受支持 LaTeX 编译为静态 MathML；公式库和许可证位于 `Resources/KaTeX`。`Application/Reading/ReparseActions` 负责旧导入的显式重试、原始文件身份核对与事务发布，拒绝改写已发布版式。

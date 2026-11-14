@@ -20,10 +20,24 @@ public actor HTMLPaperParser {
         guard let article = try document.select("article.ltx_document").first() else {
             throw ReaderError.message("HTML 正文结构无法确认，使用 PDF 解析。")
         }
-        guard try article.select("canvas,iframe,video,audio,form,.ltx_ERROR,.ltx_listing").isEmpty()
+        // LaTeXML can report an unknown floating-layout wrapper while preserving the
+        // complete algorithm listing. Accept only that verifiable layout-only case.
+        for error in try article.select(".ltx_ERROR") {
+            guard try error.text() == "{wrapfloat}", let parent = error.parent(),
+                parent.hasClass("ltx_para"), try !parent.select(".ltx_listing").isEmpty(),
+                let caption = try parent.select("p").first(),
+                let prefix = caption.getChildNodes().first as? TextNode,
+                prefix.getWholeText().trimmingCharacters(in: .whitespacesAndNewlines)
+                    .range(of: #"^algorithm[RLrl][0-9]+(?:\.[0-9]+)?$"#, options: .regularExpression) != nil
+            else { throw ReaderError.message("HTML 有未转换的内容，使用 PDF 保留完整原文。") }
+            try prefix.remove()
+            try error.remove()
+        }
+        guard try article.select("canvas,iframe,video,audio,form").isEmpty()
         else {
             throw ReaderError.message("HTML 包含尚不支持的内容，使用 PDF 保留完整原文。")
         }
+        try HTMLMathNormalizer.normalize(article)
         try await HTMLImageNormalizer.normalize(article, source: source, transport: transport)
         try article.select("script,style,noscript,.ltx_page_header,.ltx_page_footer").remove()
         var elements: [Element] = []
@@ -33,6 +47,7 @@ public actor HTMLPaperParser {
             ]
             if tags.contains(node.tagName()) || node.hasAttr("data-pr-image") || node.hasClass("ltx_equation")
                 || node.hasClass("ltx_equationgroup")
+                || node.hasClass("ltx_listing")
             {
                 elements.append(node)
             } else {
@@ -57,7 +72,9 @@ public actor HTMLPaperParser {
             let converted = try Self.convert(element, mathematics: &mathematics, descriptions: &descriptions)
             var block = TextBlock(sourcePage: -1, text: converted.text.trimmingCharacters(in: .whitespacesAndNewlines))
             block.richContent = RichContent(
-                html: converted.html, translationInput: converted.input.trimmingCharacters(in: .whitespacesAndNewlines),
+                html: converted.html,
+                translationInput: element.hasClass("ltx_listing")
+                    ? "" : converted.input.trimmingCharacters(in: .whitespacesAndNewlines),
                 mathematics: mathematics, mathDescriptions: descriptions)
             let captions = try element.select("figcaption")
             if captions.count == 1, let caption = captions.first() {
