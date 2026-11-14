@@ -148,28 +148,37 @@ struct BookshelfItem: View {
 struct AddPaperCover: View {
     let action: () -> Void
     @State private var hovered = false
+    @FocusState private var focused: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private var revealed: Bool { hovered || focused }
 
     var body: some View {
         VStack(spacing: 15) {
             Button(action: action) {
                 RoundedRectangle(cornerRadius: 5)
-                    .fill(ReaderTheme.ink.opacity(hovered ? 0.035 : 0.012))
+                    .fill(ReaderTheme.ink.opacity(revealed ? 0.035 : 0.012))
                     .overlay {
                         RoundedRectangle(cornerRadius: 5).strokeBorder(
-                            hovered ? ReaderTheme.accent.opacity(0.65) : ReaderTheme.ink.opacity(0.17),
+                            revealed ? ReaderTheme.accent.opacity(0.65) : ReaderTheme.ink.opacity(0.17),
                             style: StrokeStyle(lineWidth: 1.2, dash: [6, 5]))
                     }
                     .overlay {
-                        VStack(spacing: 14) {
+                        ZStack {
                             Image(systemName: "plus").font(.system(size: 30, weight: .ultraLight))
-                            Text("查找论文").font(.system(size: 12))
-                        }.foregroundStyle(hovered ? ReaderTheme.accent : ReaderTheme.muted)
+                                .offset(y: revealed ? -25 : 0)
+                            Text("拖拽 PDF 至此\n或点击在线查找")
+                                .font(.system(size: 12)).lineSpacing(7).multilineTextAlignment(.center)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .opacity(revealed ? 1 : 0)
+                                .offset(y: revealed ? 24 : 32)
+                        }.foregroundStyle(revealed ? ReaderTheme.accent : ReaderTheme.muted)
                     }.aspectRatio(0.70, contentMode: .fit)
                     .contentShape(Rectangle())
-            }.buttonStyle(.plain).onHover { hovered = $0 }
-                .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: hovered)
-                .help("在线查找并添加论文").accessibilityLabel("在线查找论文")
+            }.buttonStyle(.plain).focused($focused).onHover { hovered = $0 }
+                .animation(reduceMotion ? nil : .easeInOut(duration: 0.24), value: revealed)
+                .help("拖拽 PDF 至此，或点击在线查找").accessibilityLabel("在线查找论文")
+                .accessibilityHint("也可以拖拽 PDF 至此添加")
             Color.clear.frame(height: 30).accessibilityHidden(true)
         }
     }
