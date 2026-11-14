@@ -35,10 +35,12 @@ struct LibraryWorkspaceView: View {
                     }
                     filters.padding(.bottom, 24)
                     LazyVGrid(columns: columns, alignment: .leading, spacing: 32) {
-                        AddPaperCover(action: searchOnline)
+                        if collection != .reading && collection != .finished {
+                            AddPaperCover(action: searchOnline)
+                        }
                         ForEach(papers) { paper in BookshelfItem(model: model, paper: paper) }
                     }.padding(.top, 5)
-                    if model.state.papers.isEmpty {
+                    if model.state.papers.isEmpty && collection == .all {
                         HStack(spacing: 14) {
                             Text("也可以拖入 PDF").foregroundStyle(ReaderTheme.muted)
                             Button("试读示例") { Task { await model.addDemo() } }

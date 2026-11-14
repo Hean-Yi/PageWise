@@ -135,7 +135,7 @@ struct BookshelfItem: View {
             Button {
                 model.setReadingStatus(value, for: paper.id)
             } label: {
-                if workspace.status == value {
+                if progress.readingStatus == value {
                     Label("标记为\(value.title)", systemImage: "checkmark")
                 } else {
                     Text("标记为\(value.title)")

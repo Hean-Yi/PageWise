@@ -219,7 +219,7 @@ public struct LibraryView: View {
                     navigation(
                         item.title, icon: item.icon,
                         selected: model.selectedSection == "library" && collection == item,
-                        count: model.state.papers.filter { item.includes(model.workspace(for: $0.id)) }.count
+                        count: model.state.papers.filter { item.includes(model.workspace(for: $0.id), for: $0) }.count
                     ) {
                         model.select(nil)
                         collection = item
