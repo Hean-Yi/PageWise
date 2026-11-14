@@ -18,7 +18,12 @@ public enum LibraryAgentSearch {
             let titleScore = terms.filter { title.contains($0) }.count * 5
             var best: TextBlock?
             var bestScore = 0
-            for block in paper.blocks where block.sourcePage >= 0 && block.sourcePage < paper.pageCount {
+            let published = Set(paper.translatedPages.flatMap(\.blockIDs))
+            for block in paper.blocks
+            where paper.pageCount > 0
+                && ((block.sourcePage >= 0 && block.sourcePage < paper.pageCount)
+                    || (block.sourcePage == -1 && (block.richContent != nil || published.contains(block.id))))
+            {
                 let text = normalized(block.text)
                 let score = terms.filter { text.contains($0) }.count
                 if score > bestScore {
@@ -29,7 +34,8 @@ public enum LibraryAgentSearch {
             guard titleScore + bestScore > 0 else { return nil }
             return AgentSearchHit(
                 paperID: paper.id, title: paper.title, blockID: best?.id,
-                sourcePage: best.map { $0.sourcePage + 1 }, excerpt: String((best?.text ?? "").prefix(1_400)),
+                sourcePage: best.flatMap { $0.sourcePage >= 0 ? $0.sourcePage + 1 : nil },
+                excerpt: String((best?.text ?? "").prefix(1_400)),
                 score: titleScore + bestScore)
         }.sorted {
             if $0.score != $1.score { return $0.score > $1.score }

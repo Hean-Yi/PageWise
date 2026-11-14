@@ -60,7 +60,7 @@ import Testing
         json.removeValue(forKey: "bookmarks")
     }
     var migrated = try JSONDecoder().decode(LibraryState.self, from: JSONSerialization.data(withJSONObject: json))
-    #expect(migrated.version == 4)
+    #expect(migrated.version == LibraryState.currentVersion)
     #expect(migrated.manualPaperIDs.isEmpty)
     #expect(migrated.preferredSort == .recent)
     #expect(migrated.papers.map(\.id) == original.papers.map(\.id))

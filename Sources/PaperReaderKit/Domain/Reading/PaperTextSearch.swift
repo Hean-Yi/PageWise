@@ -29,7 +29,8 @@ public enum PaperTextSearch {
             paper.translatedPages.filter { !pending.contains($0.id) }.flatMap(\.blockIDs))
         let completed = Set(paper.blocks.prefix(max(0, paper.translatedBlockCount)).map(\.id))
         var results: [PaperSearchResult] = []
-        for block in paper.blocks where block.sourcePage >= 0 && block.sourcePage < paper.pageCount {
+        for block in paper.blocks
+        where (block.sourcePage >= 0 && block.sourcePage < paper.pageCount) || published.contains(block.id) {
             var texts = [(text: block.text, translated: false)]
             if published.contains(block.id), completed.contains(block.id),
                 let translation = paper.translations[block.id.uuidString]

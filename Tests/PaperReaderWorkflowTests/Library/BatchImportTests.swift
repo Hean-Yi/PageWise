@@ -25,20 +25,18 @@ import Testing
     for (index, id) in ids.enumerated() {
         let paper = try #require(model.state.papers.first { $0.id == id })
         #expect(paper.canReflow)
-        #expect(!paper.previewPages.isEmpty)
+        #expect(paper.previewPages.isEmpty)
         #expect(try Data(contentsOf: root.appendingPathComponent(paper.originalPath)) == originals[index])
         #expect(try Data(contentsOf: urls[index]) == originals[index])
-        for page in paper.previewPages {
-            let document = try #require(PDFDocument(url: root.appendingPathComponent(page.relativePath)))
-            #expect(document.pageCount == 1)
-            #expect(document.string?.isEmpty == false)
-        }
+        #expect(
+            !FileManager.default.fileExists(
+                atPath: root.appendingPathComponent("Papers/\(paper.id.uuidString)/preview").path))
     }
 
     let reopened = try ReaderModel(root: root)
     await reopened.load()
     #expect(Set(reopened.state.papers.map(\.id)) == Set(ids))
-    #expect(reopened.state.papers.allSatisfy { !$0.previewPages.isEmpty })
+    #expect(reopened.state.papers.allSatisfy { $0.previewPages.isEmpty })
 }
 
 @MainActor @Test func batchImportContinuesPastBrokenPDFAndDeduplicatesCopies() async throws {
@@ -58,7 +56,7 @@ import Testing
     #expect(ids.first == ids.dropFirst().first)
     #expect(Set(ids).count == 2)
     #expect(model.state.papers.count == 2)
-    #expect(model.state.papers.contains { $0.title == "Last" && !$0.previewPages.isEmpty })
+    #expect(model.state.papers.contains { $0.title == "Last" && $0.previewPages.isEmpty })
     #expect(model.message?.contains("导入失败") == true)
     #expect(!model.isImporting)
 

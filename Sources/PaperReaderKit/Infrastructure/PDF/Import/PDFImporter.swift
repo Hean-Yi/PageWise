@@ -11,7 +11,9 @@ public actor PDFImporter {
         self.root = root
     }
 
-    public func importPDF(at url: URL) throws -> Paper {
+    public func importPDF(at url: URL, preservingComplexPages: Bool = false, structuredBlocks: [TextBlock]? = nil)
+        throws -> Paper
+    {
         let scoped = url.startAccessingSecurityScopedResource()
         defer { if scoped { url.stopAccessingSecurityScopedResource() } }
         try Task.checkCancellation()
@@ -22,7 +24,32 @@ public actor PDFImporter {
         else { throw ReaderError.message("文件不是有效的 PDF，未导入。") }
         guard !document.isLocked else { throw ReaderError.message("PDF 已加密，请先在本地解锁后再导入。") }
 
-        let analysis = try PDFProcessor.extract(from: document)
+        let analysis = try PDFProcessor.extract(from: document, preservingComplexPages: preservingComplexPages)
+        let structured = structuredBlocks.flatMap { blocks -> [TextBlock]? in
+            guard document.allowsCopying, !blocks.isEmpty, blocks.allSatisfy({ $0.richContent != nil }),
+                (0..<document.pageCount).allSatisfy({
+                    document.page(at: $0)?.annotations.allSatisfy { $0.type == PDFAnnotationSubtype.link.rawValue }
+                        == true
+                })
+            else { return nil }
+            // Compare ordinary words, excluding formula glyphs and short labels. A partial HTML
+            // conversion must not replace a substantially more complete PDF.
+            let htmlWords = Self.words(blocks.map(\.text).joined(separator: " "))
+            for index in 0..<document.pageCount {
+                let words = Self.words(document.page(at: index)?.string ?? "")
+                if words.count >= 20, Double(words.intersection(htmlWords).count) / Double(words.count) < 0.85 {
+                    return nil
+                }
+            }
+            let pageTexts = (0..<document.pageCount).map { Self.normalized(document.page(at: $0)?.string ?? "") }
+            return blocks.map { block in
+                var mapped = block
+                let needle = Self.normalized(block.text)
+                let matches = pageTexts.indices.filter { !needle.isEmpty && pageTexts[$0].contains(needle) }
+                mapped.sourcePage = matches.count == 1 ? matches[0] : -1
+                return mapped
+            }
+        }
         let id = UUID()
         let papersDirectory = root.appendingPathComponent("Papers", isDirectory: true)
         let staging = papersDirectory.appendingPathComponent(".import-\(UUID().uuidString)", isDirectory: true)
@@ -44,9 +71,18 @@ public actor PDFImporter {
             digest: SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined(),
             originalPath: "Papers/\(id.uuidString)/original.pdf",
             pageCount: document.pageCount,
-            blocks: analysis.blocks,
-            warnings: analysis.warnings,
-            canReflow: analysis.canReflow
+            blocks: structured ?? analysis.blocks,
+            warnings: structured == nil
+                ? analysis.warnings
+                : (structured!.contains { $0.sourcePage < 0 } ? ["部分 HTML 内容尚未匹配原文页码；可定位重排内容，查看原版时请核对。"] : []),
+            canReflow: structured != nil || analysis.canReflow
         )
+    }
+
+    private static func normalized(_ text: String) -> String {
+        text.precomposedStringWithCompatibilityMapping.lowercased().filter { $0.isLetter || $0.isNumber }
+    }
+    private static func words(_ text: String) -> Set<String> {
+        Set(text.lowercased().split { !$0.isLetter }.filter { $0.count >= 4 }.map(String.init))
     }
 }

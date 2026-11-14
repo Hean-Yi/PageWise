@@ -128,9 +128,15 @@ public final class OnlinePaperSearch {
             do {
                 let url = try await self.discovery.download(candidate)
                 defer { try? FileManager.default.removeItem(at: url) }
+                let structured: [TextBlock]?
+                do { structured = try await self.discovery.structuredContent(candidate) } catch is CancellationError {
+                    throw CancellationError()
+                } catch { structured = nil }
+                try Task.checkCancellation()
                 try Task.checkCancellation()
                 let ids = await self.reader.importURLs(
-                    [url], selectAfterImport: false, metadata: candidate, shelfID: shelfID, moveDuplicateToShelf: true)
+                    [url], selectAfterImport: false, metadata: candidate, shelfID: shelfID, moveDuplicateToShelf: true,
+                    structuredBlocks: structured)
                 if let id = ids.first {
                     // A committed import remains successful even if cancellation arrived during commit.
                     self.imported[candidate.id] = id

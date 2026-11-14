@@ -51,6 +51,7 @@ struct ReaderSmoke {
                 }
             }
         #endif
+        try await StructuredSmoke.run(in: root)
         print(
             "PASS: local PDF import, \(imported.blocks.count) blocks, \(first.count) bilingual pages, immutable append, library restart, note generation"
         )

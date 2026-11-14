@@ -55,20 +55,21 @@ public enum PaperPageLocator {
     ) -> Int? {
         guard let exact = resolve(pageKey: position.pageKey, in: paper, excluding: pending) else { return nil }
         if exact.mode == "original" { return exact.pageIndex }
-        return artifacts(mode: exact.mode, in: paper, excluding: pending)[exact.pageIndex].sourcePage
+        let page = artifacts(mode: exact.mode, in: paper, excluding: pending)[exact.pageIndex].sourcePage
+        return page >= 0 && page < paper.pageCount ? page : nil
     }
 
     public static func position(
         sourcePage: Int, blockID: UUID? = nil, mode: String, in paper: Paper, excluding pending: Set<UUID> = []
     ) -> ReaderPosition? {
-        guard sourcePage >= 0, sourcePage < paper.pageCount else { return nil }
         if mode == "original" {
+            guard sourcePage >= 0, sourcePage < paper.pageCount else { return nil }
             return ReaderPosition(mode: mode, pageKey: "original-\(sourcePage)", pageIndex: sourcePage)
         }
         let pages = artifacts(mode: mode, in: paper, excluding: pending)
         let index: Int?
         if let blockID {
-            index = pages.firstIndex { $0.sourcePage == sourcePage && $0.blockIDs.contains(blockID) }
+            index = pages.firstIndex { $0.blockIDs.contains(blockID) }
         } else {
             index = pages.firstIndex { $0.sourcePage == sourcePage }
         }

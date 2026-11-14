@@ -30,7 +30,7 @@ extension ReaderModel {
                 throw ReaderError.message("该 PDF 没有可读取的文字。当前 MVP 不能识别扫描件或图像，请提供文字内容。")
             }
             let context = evidence.map {
-                "[\($0.id)] \($0.title) / \($0.sourcePage.map { "原文第 \($0 + 1) 页" } ?? "笔记")\n\($0.text)"
+                "[\($0.id)] \($0.title) / \($0.sourcePage.map { "原文第 \($0 + 1) 页" } ?? ($0.paperID == nil ? "笔记" : "论文结构块（原文页码未核对）"))\n\($0.text)"
             }.joined(separator: "\n\n")
             let memory = state.memories.filter { !$0.deleted }.suffix(8).map(\.text).joined(separator: "\n")
             let answer = try await client.complete(

@@ -18,11 +18,26 @@ public struct PaperCandidate: Identifiable, Sendable {
 public protocol PaperDiscovery: Sendable {
     func search(_ query: String) async throws -> [PaperCandidate]
     func download(_ candidate: PaperCandidate) async throws -> URL
+    func structuredContent(_ candidate: PaperCandidate) async throws -> [TextBlock]?
+}
+
+extension PaperDiscovery {
+    public func structuredContent(_ candidate: PaperCandidate) async throws -> [TextBlock]? { nil }
 }
 
 public actor ArxivClient: PaperDiscovery {
     private let transport: any HTTPTransport
     public init(transport: any HTTPTransport = NetworkTransport()) { self.transport = transport }
+    public func structuredContent(_ candidate: PaperCandidate) async throws -> [TextBlock]? {
+        guard let candidate = Self.verified(candidate), let source = URL(string: candidate.id),
+            source.path.range(of: #"v[1-9][0-9]*$"#, options: .regularExpression) != nil,
+            let url = URL(string: "https://arxiv.org/html/" + source.path.dropFirst(5))
+        else { return nil }
+        let (data, response) = try await transport.data(for: URLRequest(url: url))
+        try Task.checkCancellation()
+        guard response.statusCode == 200, response.url == url else { return nil }
+        return try await HTMLPaperParser(transport: transport).parse(data, at: url)
+    }
     public func search(_ query: String) async throws -> [PaperCandidate] {
         let clean = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !clean.isEmpty else { return [] }

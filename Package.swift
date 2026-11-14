@@ -9,9 +9,11 @@ let package = Package(
         .library(name: "PaperReaderUI", targets: ["PaperReaderUI"]),
         .executable(name: "ReaderSmoke", targets: ["ReaderSmoke"])
     ],
+    dependencies: [.package(url: "https://github.com/scinfu/SwiftSoup.git", exact: "2.14.3")],
     targets: [
         .systemLibrary(name: "CSQLite", pkgConfig: "sqlite3"),
-        .target(name: "PaperReaderKit", dependencies: ["CSQLite"]),
+        .target(name: "PaperReaderKit", dependencies: ["CSQLite", "SwiftSoup"],
+            resources: [.copy("Resources/ThirdPartyNotices.txt")]),
         .target(name: "PaperReaderUI", dependencies: ["PaperReaderKit"]),
         .executableTarget(name: "ReaderSmoke", dependencies: ["PaperReaderKit"]),
         .testTarget(name: "PaperReaderKitTests", dependencies: ["PaperReaderKit"]),

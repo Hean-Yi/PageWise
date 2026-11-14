@@ -72,3 +72,7 @@ Swift Package 自动递归发现每个 target 目录下的 Swift 文件。当前
 运行 `bash scripts/check.sh` 会递归检查格式，并执行测试、冒烟与 Mac/iPad 构建。搬移时还需核对公开符号和测试清单，避免仅因为编译成功而漏掉未被编译的文件。
 
 `.build/`、`.local/`、构建结果、验收样例及日志属于忽略的本地制品。用户资料不参与目录整理。已执行的规格与计划留在 `docs/superpowers/` 作为历史记录；当前导航以 README、本文和 engineering.md 为准。
+
+## 结构化重排的文件归属
+
+`Infrastructure/HTML/HTMLPaperParser.swift` 负责受限 HTML/图片解析；`Infrastructure/PDF/Reflow/StructuredPageRenderer.swift` 负责固定页生成，`ReflowArtifactCleanup.swift` 只清理未提交的本应用制品。`Application/Reading/ImportAndReflowActions.swift` 协调导入、翻译和提交，`ReflowRetentionActions.swift` 检查旧预览的用户依赖；View 不直接解析文档或调用模型。第三方许可证放在 `PaperReaderKit/Resources` 并随资源包分发。

@@ -1,6 +1,6 @@
 # 技术选型草案
 
-日期：2026-11-13。此文保留已评审的长期选型方向。MVP 实际采用原生 Core Text 排版分支和系统 SQLite，未引入 GRDB、FTS5 或 WebKit 渲染；实现与验证结果见 [MVP 状态](mvp-status.md)。下面的候选技术不能视为已经全部接入。
+日期：2026-11-13。此文保留已评审的长期选型方向。截至 2026-11-14，MVP 使用 Core Text 处理普通文字，WKWebView 处理净化后的 HTML/MathML，并使用系统 SQLite；未引入 GRDB、FTS5 或 KaTeX；实现与验证结果见 [MVP 状态](mvp-status.md)。下面的候选技术不能视为已经全部接入。
 
 ## 1. 总体方案比较
 
@@ -26,7 +26,7 @@ Apple 提供 [WebKit PDF 导出接口](https://developer.apple.com/documentation
 | Platform bridge | AppKit / UIKit | At platform boundaries |
 | PDF reader | PDFKit | Prototype required |
 | Handwriting | PencilKit + portable preview | iPad capture; Mac display |
-| Typesetting | Local HTML/CSS + WKWebView | Prototype required |
+| Typesetting | Local HTML/CSS + WKWebView; Core Text | Implemented; limited fixture validation |
 | Math | Existing MathML / bundled KaTeX / source crop | Capability-based fallback |
 | Local records | SQLite + GRDB | Preferred |
 | Search | FTS5 + bilingual tokenization + structural retrieval | Initial RAG baseline |
@@ -52,7 +52,7 @@ SwiftData + 自动 CloudKit 同步也是可选方案，通常能减少初期代�
 
 优先使用与选定论文版本对应的结构化 HTML，并下载原始 PDF。arXiv 明确说明 HTML 覆盖和转换质量尚不完整，不能假设每篇论文都存在或完全正确。[arXiv HTML 说明](https://info.arxiv.org/about/accessible_HTML.html)
 
-普通 PDF 先做本地文字与布局分析，只在阅读顺序、资源完整性和锚点可靠时重排。扫描件、复杂布局或无法确认质量的文档直接进入普通 PDF 模式。OCR 不是第一阶段必须成功的环节；不引入必须由服务器运行的 PDF 转换服务。
+普通 PDF 先做本地文字与布局分析，只在阅读顺序、资源完整性和锚点可靠时重排。当前混合文档中的复杂页完整保留原始页面，可靠文字页重排；纯扫描件与全篇复杂文档进入普通 PDF 模式。OCR 不是第一阶段必须成功的环节；不引入必须由服务器运行的 PDF 转换服务。
 
 非 arXiv 元数据来源放在独立检索适配器中扩展；首版先通过可测的来源和手动导入完成闭环，不宣称可搜索整个互联网的所有论文。
 
@@ -86,3 +86,11 @@ Obsidian 继续使用现有 iCloud Drive 笔记库，通过系统文件选择器
 - iPad 对实际 Obsidian iCloud 目录的持久授权及冲突处理。
 - 中文问句检索英文论文和中文笔记时的证据召回；不足则扩展语义检索。
 - CloudKit 自动同步与会员分发属于后续真实验证，当前不能替代为模拟通过。
+
+## 2026-11-14 已接入的 HTML 分支
+
+SwiftSoup 固定为 2.14.3（MIT，Swift 6，最低 macOS 12 / iOS 13，满足本工程目标），解析并重新构造允许的正文元素与属性。许可证随 PaperReaderKit 资源包提供。MathML 使用系统 WebKit 渲染，不执行下载的 TeX 或脚本。WebKit 使用非持久化存储与禁止外部请求的 CSP；只加载应用模板和验证后内嵌的图片。
+
+固定页通过 CSS 分栏和显式 PDF 导出生成；文字、公式和资源边界接受几何检查，内容块跨页保留稳定 ID。HTML/PDF 页码只做唯一文字匹配，另以逐页普通词项覆盖检查拦截明显缺失的转换，不能视为语义完整性的证明。正文、图表复杂性和真实 arXiv 覆盖率仍需更多样本验证。
+
+规范化富内容只在对应固定页提交前存在，提交后移除；完成时执行 SQLite 空间回收。临时制品清理不会删除已提交页面、原版或用户批注。详见 [重排设计](superpowers/specs/2026-11-14-structured-reflow-design.md)。

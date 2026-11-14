@@ -20,8 +20,8 @@ private struct FakeModelTransport: HTTPTransport {
     await model.addDemo()
     let paper = try #require(model.paper)
     #expect(paper.canReflow)
-    #expect(!paper.previewPages.isEmpty)
-    let firstURL = root.appendingPathComponent(paper.previewPages[0].relativePath)
+    #expect(paper.previewPages.isEmpty)
+    let firstURL = root.appendingPathComponent(paper.originalPath)
     let bytes = try Data(contentsOf: firstURL)
     let ids = await model.importURLs([root.appendingPathComponent(paper.originalPath)])
     #expect(ids == [paper.id])
@@ -82,4 +82,104 @@ private struct FakeModelTransport: HTTPTransport {
     await model.ask("attention")
     #expect(model.state.chats.isEmpty)
     #expect(model.message?.contains("没有可读取的文字") == true)
+}
+
+@Test @MainActor func structuredTranslationRetainsOnlyOriginalAndFinalPagesAfterRestart() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let model = try ReaderModel(
+        root: root, client: ModelClient(transport: FakeModelTransport()), credentials: WorkflowCredentials())
+    await model.load()
+    let source = root.appendingPathComponent("demo.pdf")
+    try DemoPaper.write(to: source)
+    let original = try Data(contentsOf: source)
+    let extracted = try PDFProcessor.extract(from: source)
+    let html =
+        "<article class='ltx_document'>" + extracted.blocks.map { "<p>\(HTMLPaperParser.escape($0.text))</p>" }.joined()
+        + "</article>"
+    let blocks = try await HTMLPaperParser().parse(
+        Data(html.utf8), at: URL(string: "https://arxiv.org/html/2401.00001v1")!)
+    await model.importURLs([source], structuredBlocks: blocks)
+    #expect(model.paper?.blocks.contains { $0.richContent != nil } == true)
+    #expect(model.paper?.previewPages.isEmpty == true)
+    var settings = model.modelSettings
+    settings.model = "test"
+    try model.saveSettings(settings, key: nil)
+    model.startTranslation()
+    for _ in 0..<2_000 {
+        if model.translating.isEmpty { break }
+        try await Task.sleep(for: .milliseconds(10))
+    }
+    #expect(model.translating.isEmpty)
+    let paper = try #require(model.paper)
+    #expect(paper.translatedBlockCount == blocks.count)
+    #expect(paper.blocks.allSatisfy { $0.richContent == nil })
+    #expect(paper.previewPages.isEmpty)
+    let expected = Set(
+        ["original.pdf"]
+            + paper.translatedPages.map { "translated/" + URL(fileURLWithPath: $0.relativePath).lastPathComponent })
+    let paperRoot = root.appendingPathComponent(paper.originalPath).deletingLastPathComponent()
+    let enumerator = try #require(
+        FileManager.default.enumerator(at: paperRoot, includingPropertiesForKeys: [.isRegularFileKey]))
+    var actual: Set<String> = []
+    for url in enumerator.allObjects.compactMap({ $0 as? URL })
+    where try url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile == true {
+        actual.insert(
+            String(url.resolvingSymlinksInPath().path.dropFirst(paperRoot.resolvingSymlinksInPath().path.count + 1)))
+    }
+    #expect(actual == expected)
+    #expect(try Data(contentsOf: root.appendingPathComponent(paper.originalPath)) == original)
+    let ids = paper.translatedPages.map(\.id)
+    let reopened = try ReaderModel(root: root)
+    await reopened.load()
+    #expect(reopened.state.papers[0].translatedPages.map(\.id) == ids)
+    #expect(reopened.state.papers[0].blocks.allSatisfy { $0.richContent == nil })
+}
+
+@Test(arguments: ["unused", "highlight", "ink", "bookmark"])
+@MainActor func completedLegacyPreviewCleanupPreservesUserAnchors(protection: String) async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    var paper = Paper(
+        title: "Legacy", digest: "fixture", originalPath: "original.pdf", pageCount: 1,
+        blocks: [TextBlock(sourcePage: 0, text: "Original text")], warnings: [], canReflow: true)
+    let prefix = "Papers/\(paper.id.uuidString)"
+    let preview = PageArtifact(
+        blockIDs: [paper.blocks[0].id], sourcePage: 0,
+        relativePath: prefix + "/preview/\(UUID().uuidString)-\(UUID().uuidString)-0001.pdf")
+    paper.previewPages = [preview]
+    paper.translatedPages = [
+        PageArtifact(
+            blockIDs: [paper.blocks[0].id], sourcePage: 0,
+            relativePath: prefix + "/translated/text-\(UUID().uuidString)-0001.pdf")
+    ]
+    paper.translatedBlockCount = 1
+    var state = LibraryState()
+    state.papers = [paper]
+    let previewURL = root.appendingPathComponent(preview.relativePath)
+    try FileManager.default.createDirectory(
+        at: previewURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+    try Data("original immutable bytes".utf8).write(to: previewURL)
+    if protection == "highlight" {
+        state.highlights = [
+            Highlight(
+                paperID: paper.id, pageKey: preview.id.uuidString, pageIndex: 0, text: "Original",
+                rects: [[1, 2, 3, 4]])
+        ]
+    } else if protection == "bookmark" {
+        state.bookmarks = [
+            PageBookmark(paperID: paper.id, pageKey: preview.id.uuidString, pageIndex: 0, mode: "reflow")
+        ]
+    } else if protection == "ink" {
+        let directory = root.appendingPathComponent(prefix + "/Ink")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try Data("ink bytes".utf8).write(to: directory.appendingPathComponent(preview.id.uuidString + ".drawing"))
+    }
+    try await LibraryStore(directory: root).save(state)
+    let model = try ReaderModel(root: root)
+    await model.load()
+    #expect(model.state.papers[0].previewPages.isEmpty == (protection == "unused"))
+    #expect(FileManager.default.fileExists(atPath: previewURL.path) == (protection != "unused"))
+    let stored = try await LibraryStore(directory: root).load()
+    #expect(stored.papers[0].previewPages == model.state.papers[0].previewPages)
 }

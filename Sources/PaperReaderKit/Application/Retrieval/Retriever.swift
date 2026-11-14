@@ -38,7 +38,8 @@ public enum Retriever {
         let ordered = indices.map { current.blocks[$0] }
         var result: [Evidence] = []
         var used = 0
-        for block in ordered where used < 18_000 {
+        for block in ordered where used < 18_000 && !block.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        {
             let budget = 18_000 - used
             let text: String
             if block.text.count > budget, !selection.isEmpty, let match = block.text.range(of: selection) {
@@ -52,7 +53,7 @@ public enum Retriever {
             result.append(
                 Evidence(
                     id: "", title: current.title, text: text, paperID: current.id, blockID: block.id,
-                    sourcePage: block.sourcePage))
+                    sourcePage: block.sourcePage >= 0 ? block.sourcePage : nil))
             used += text.count
         }
         var support =
@@ -60,7 +61,7 @@ public enum Retriever {
                 paper.blocks.map {
                     Evidence(
                         id: "", title: paper.title, text: $0.text, paperID: paper.id, blockID: $0.id,
-                        sourcePage: $0.sourcePage)
+                        sourcePage: $0.sourcePage >= 0 ? $0.sourcePage : nil)
                 }
             } + notes
         support = support.filter { rank($0.text) > 0 }.sorted { rank($0.text) > rank($1.text) }

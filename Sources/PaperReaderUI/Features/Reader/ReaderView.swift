@@ -45,11 +45,11 @@ struct ReaderView: View {
                     }
                 }
             }.padding(.horizontal, 22).padding(.vertical, 14).background(ReaderTheme.canvas)
-            if model.paper?.canReflow == false {
+            if model.paper?.warnings.isEmpty == false {
                 HStack(spacing: 8) {
                     Image(systemName: "doc.text").foregroundStyle(ReaderTheme.muted)
-                    Text("原始 PDF").fontWeight(.medium)
-                    Text("· 暂不支持此文档重排").foregroundStyle(ReaderTheme.muted)
+                    Text(model.paper?.canReflow == true ? "部分内容保留原版或待核对定位" : "原始 PDF · 暂不支持此文档重排").foregroundStyle(
+                        ReaderTheme.muted)
                     Spacer()
                     Button {
                         showWarnings = true
@@ -138,9 +138,9 @@ struct ReaderView: View {
         HStack(spacing: 14) {
             if model.paper?.canReflow == true {
                 Picker("阅读模式", selection: Binding(get: { model.mode }, set: { model.changeMode(to: $0) })) {
-                    Text("原文").tag("original")
-                    Text("重排").tag("reflow")
-                    Text("双语").tag("translated")
+                    Text("原版").tag("original")
+                    if model.paper?.previewPages.isEmpty == false { Text("旧重排").tag("reflow") }
+                    if model.paper?.translatedPages.isEmpty == false { Text("双语重排").tag("translated") }
                 }.pickerStyle(.segmented).labelsHidden().frame(width: 186)
             }
             if model.translating.contains(model.selectedPaperID ?? UUID()) {

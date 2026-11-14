@@ -17,7 +17,8 @@ public enum PDFProcessor {
         return try extract(from: document)
     }
 
-    static func extract(from document: PDFDocument) throws -> PDFProcessingResult {
+    static func extract(from document: PDFDocument, preservingComplexPages: Bool = false) throws -> PDFProcessingResult
+    {
         var blocks: [TextBlock] = []
         var warnings: [String] = []
         if !document.allowsCopying {
@@ -30,6 +31,18 @@ public enum PDFProcessor {
                 continue
             }
             let source = page.string ?? ""
+            let blockStart = blocks.count
+            let warningStart = warnings.count
+            defer {
+                if preservingComplexPages, warnings.count > warningStart {
+                    blocks.removeSubrange(blockStart..<blocks.count)
+                    var block = TextBlock(sourcePage: pageIndex, text: source)
+                    block.preservesSourcePage = true
+                    blocks.append(block)
+                    warnings.removeSubrange(warningStart..<warnings.count)
+                    warnings.append("第 \(pageIndex + 1) 页保留原始版面，图表与公式未拆分重排或翻译。")
+                }
+            }
             let visibleCount = source.unicodeScalars.filter { !CharacterSet.whitespacesAndNewlines.contains($0) }.count
             guard visibleCount > 0 else {
                 warnings.append("第 \(pageIndex + 1) 页没有可提取文字，可能是扫描件或图像页；当前未进行 OCR，使用原始 PDF。")
@@ -66,7 +79,12 @@ public enum PDFProcessor {
                 blocks.append(contentsOf: paragraphs(from: group, sourcePage: pageIndex))
             }
         }
-        return PDFProcessingResult(blocks: blocks, warnings: warnings, canReflow: !blocks.isEmpty && warnings.isEmpty)
+        let complete = Set(blocks.map(\.sourcePage)).count == document.pageCount
+        let hasReflowableText = blocks.contains { $0.preservesSourcePage != true }
+        return PDFProcessingResult(
+            blocks: blocks, warnings: warnings,
+            canReflow: !blocks.isEmpty
+                && (warnings.isEmpty || (preservingComplexPages && complete && hasReflowableText)))
     }
 
     private struct TextLine {

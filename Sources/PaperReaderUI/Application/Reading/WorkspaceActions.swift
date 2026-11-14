@@ -79,11 +79,29 @@ extension ReaderModel {
 
     public func changeMode(to requestedMode: String) {
         guard ["original", "reflow", "translated"].contains(requestedMode), requestedMode != mode,
-            let paper, let current = currentPosition,
-            let sourcePage = PaperPageLocator.sourcePage(for: current, in: paper, excluding: pendingArtifactIDs)
+            let paper, let current = currentPosition
         else { return }
+        let sourcePage = PaperPageLocator.sourcePage(for: current, in: paper, excluding: pendingArtifactIDs)
+        if sourcePage == nil {
+            if requestedMode == "original",
+                let position = PaperPageLocator.position(sourcePage: 0, mode: "original", in: paper)
+            {
+                applyPosition(position)
+                status = "此处尚未匹配原文页码，已打开原版首页，请核对位置。"
+            }
+            return
+        }
         let blockID = mode == "original" ? nil : activePages[safe: visiblePage]?.blockIDs.first
-        navigateToSourcePage(sourcePage, blockID: blockID, preferredMode: requestedMode)
+        if requestedMode == "translated",
+            PaperPageLocator.position(sourcePage: sourcePage!, blockID: blockID, mode: requestedMode, in: paper) == nil,
+            let first = paper.translatedPages.first,
+            let position = PaperPageLocator.resolve(pageKey: first.id.uuidString, in: paper)
+        {
+            applyPosition(position)
+            status = "此处尚无对应重排页，已打开已完成的双语首页。"
+        } else {
+            navigateToSourcePage(sourcePage!, blockID: blockID, preferredMode: requestedMode)
+        }
     }
 
     public func navigateToSourcePage(_ sourcePage: Int) {
@@ -98,17 +116,17 @@ extension ReaderModel {
     public func navigate(to result: PaperSearchResult) {
         guard result.paperID == selectedPaperID, let paper else { return }
         invalidateSearchNavigation()
-        let targetMode = result.isTranslation ? "translated" : mode
+        let targetMode = result.isTranslation || result.sourcePage < 0 ? "translated" : mode
         let pages = targetMode == "translated" ? paper.translatedPages : paper.previewPages
         let candidates = pages.filter { page in
-            !pendingArtifactIDs.contains(page.id) && page.sourcePage == result.sourcePage
-                && (result.blockID.map { page.blockIDs.contains($0) } ?? true)
+            !pendingArtifactIDs.contains(page.id)
+                && (result.blockID.map { page.blockIDs.contains($0) } ?? (page.sourcePage == result.sourcePage))
         }
         guard targetMode != "original", candidates.count > 1 else {
             navigateToSourcePage(result.sourcePage, blockID: result.blockID, preferredMode: targetMode)
             return
         }
-        if result.hasAmbiguousTranslationContext {
+        if result.hasAmbiguousTranslationContext && result.sourcePage >= 0 {
             navigateToSourcePage(result.sourcePage, blockID: nil, preferredMode: "original")
             status = "原文与译文的定位上下文相同，无法区分匹配位置，已打开原文第 \(result.sourcePage + 1) 页。"
             return
@@ -281,6 +299,8 @@ extension ReaderModel {
             applyPosition(original)
             let reason = failed ? "固定页面暂无法读取" : "未能在固定页中定位匹配文字"
             status = "\(reason)，已打开原文第 \(result.sourcePage + 1) 页。"
+        } else {
+            status = "无法精确定位此处；原文页码尚未核对，请查看原版。"
         }
     }
 

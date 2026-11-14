@@ -1,7 +1,7 @@
 import Foundation
 
 public struct LibraryState: Codable, Sendable {
-    public static let currentVersion = 4
+    public static let currentVersion = 5
     public var version = currentVersion
     public var papers: [Paper] = []
     public var highlights: [Highlight] = []
@@ -51,6 +51,8 @@ public struct LibraryState: Codable, Sendable {
             manualPaperIDs = try values.decode([UUID].self, forKey: .manualPaperIDs)
             preferredSort = try values.decode(LibrarySort.self, forKey: .preferredSort)
         }
+        // v5 introduces optional structured blocks and retained source pages. Missing v1-v4
+        // fields decode to nil; all published page IDs, annotations and preview records survive.
         try validateOrdering()
         try validateShelves()
         version = Self.currentVersion

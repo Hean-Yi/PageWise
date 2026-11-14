@@ -141,7 +141,9 @@ struct ReaderNavigator: View {
                             } label: {
                                 VStack(alignment: .leading, spacing: 8) {
                                     HStack {
-                                        Text("原文第 \(result.sourcePage + 1) 页")
+                                        Text(
+                                            result.sourcePage >= 0 ? "原文第 \(result.sourcePage + 1) 页" : "重排内容 · 原文页码未核对"
+                                        )
                                         Spacer()
                                         Text(result.isTranslation ? "译文" : "原文")
                                     }.font(.system(size: 10)).foregroundStyle(ReaderTheme.accent)

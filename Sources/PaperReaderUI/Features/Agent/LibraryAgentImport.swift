@@ -33,10 +33,16 @@ extension LibraryAgent {
             do {
                 let url = try await self.discovery.download(candidate)
                 defer { try? FileManager.default.removeItem(at: url) }
+                let structured: [TextBlock]?
+                do { structured = try await self.discovery.structuredContent(candidate) } catch is CancellationError {
+                    throw CancellationError()
+                } catch { structured = nil }
+                try Task.checkCancellation()
                 try self.checkImport(id, token: token, epoch: currentEpoch)
                 guard !self.reader.isImporting else { throw ReaderError.message("已有论文正在导入，请稍后重试。") }
                 self.updateCandidateCards(id, state: .importing)
-                let paperIDs = await self.reader.importURLs([url], selectAfterImport: false, metadata: candidate)
+                let paperIDs = await self.reader.importURLs(
+                    [url], selectAfterImport: false, metadata: candidate, structuredBlocks: structured)
                 if let paperID = paperIDs.first {
                     // Once SQLite commits, cancellation cannot truthfully turn success into failure.
                     guard self.sessionID == currentSession else { return }

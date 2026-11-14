@@ -98,6 +98,14 @@ public actor LibraryStore {
         }
     }
 
+    /// Reclaims the normalized HTML/image payload after the last fixed page has committed.
+    public func compact() throws {
+        try Self.database(at: databaseURL) { db in
+            try Self.execute(db, "VACUUM")
+            try Self.execute(db, "PRAGMA wal_checkpoint(TRUNCATE)")
+        }
+    }
+
     private struct SnapshotHeader: Decodable {
         let version: Int
     }

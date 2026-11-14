@@ -11,6 +11,15 @@ public enum ReadingProgress: Equatable, Sendable {
         case .unread: return .notStarted
         case .finished: return .finished
         case .reading:
+            if paper.pageCount > 0, !paper.blocks.isEmpty, let position = workspace.position,
+                let resolved = PaperPageLocator.resolve(pageKey: position.pageKey, in: paper),
+                resolved.mode == "translated", paper.translatedBlockCount == paper.blocks.count,
+                !paper.translatedPages.isEmpty, resolved.pageIndex == paper.translatedPages.count - 1,
+                paper.translatedPages[resolved.pageIndex].sourcePage == -1,
+                paper.translatedPages[resolved.pageIndex].blockIDs.contains(paper.blocks.last!.id)
+            {
+                return .finished
+            }
             guard paper.pageCount > 0, let position = workspace.position,
                 let page = PaperPageLocator.sourcePage(for: position, in: paper),
                 page >= 0, page < paper.pageCount
