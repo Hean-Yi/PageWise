@@ -216,7 +216,7 @@ public struct LibraryView: View {
                 Text("PaperReader").font(.system(size: 19, weight: .medium, design: .serif))
             }.padding(.horizontal, 20).padding(.top, 24).padding(.bottom, 28)
             VStack(spacing: 3) {
-                ForEach(LibraryCollection.allCases) { item in
+                ForEach([LibraryCollection.all, .finished, .favorites]) { item in
                     navigation(
                         item.title, icon: item.icon,
                         selected: model.selectedSection == "library" && collection == item,

@@ -4,6 +4,7 @@ import SwiftUI
 /// A stable, typographic cover; no network image or published PDF page is modified.
 struct BookCoverView: View {
     let paper: Paper
+    var progress: ReadingProgress? = nil
 
     private var palette: CoverPalette { CoverPalette.forDigest(paper.digest) }
 
@@ -47,7 +48,43 @@ struct BookCoverView: View {
             .overlay(alignment: .trailing) {
                 Rectangle().fill(.white.opacity(0.35)).frame(width: 1).padding(.vertical, 3).padding(.trailing, 2)
             }
+            .overlay(alignment: .topTrailing) {
+                if let progress {
+                    CoverProgressRing(progress: progress, ink: palette.ink)
+                        .frame(width: 26 * scale, height: 26 * scale)
+                        .padding(16 * scale)
+                }
+            }
         }.aspectRatio(0.70, contentMode: .fit).accessibilityHidden(true)
+    }
+}
+
+private struct CoverProgressRing: View {
+    let progress: ReadingProgress
+    let ink: Color
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        GeometryReader { geometry in
+            let lineWidth = geometry.size.width / 13
+            ZStack {
+                Circle().stroke(
+                    ink.opacity(0.22),
+                    style: StrokeStyle(lineWidth: lineWidth, dash: progress.fraction == nil ? [2, 3] : []))
+                if let fraction = progress.fraction {
+                    Circle().trim(from: 0, to: fraction)
+                        .stroke(ink.opacity(0.85), style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
+                        .rotationEffect(.degrees(-90))
+                    if fraction == 1 {
+                        Image(systemName: "checkmark")
+                            .font(.system(size: geometry.size.width * 0.4, weight: .medium))
+                            .foregroundStyle(ink.opacity(0.85))
+                    }
+                }
+            }.padding(lineWidth / 2)
+        }
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.25), value: progress)
+        .allowsHitTesting(false)
     }
 }
 
@@ -86,7 +123,7 @@ struct BookshelfItem: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 15) {
             ZStack {
-                BookCoverView(paper: paper)
+                BookCoverView(paper: paper, progress: progress)
                     .shadow(
                         color: .black.opacity(highlighted ? 0.22 : 0.14), radius: highlighted ? 16 : 10, x: 0,
                         y: highlighted ? 14 : 9
@@ -113,9 +150,8 @@ struct BookshelfItem: View {
             .accessibilityValue(progress.label)
             .accessibilityAddTraits(.isButton)
             .accessibilityAction { model.select(paper.id) }
-            .help(paper.title)
+            .help("\(paper.title) · \(progress.label)")
             HStack(spacing: 7) {
-                Text(progress.label).font(.system(size: 11)).foregroundStyle(ReaderTheme.muted)
                 Spacer(minLength: 0)
                 Button {
                     model.toggleFavorite(paper.id)
