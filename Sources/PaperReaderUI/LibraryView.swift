@@ -107,7 +107,7 @@ public struct LibraryView: View {
             } else {
                 LibraryWorkspaceView(
                     model: model, collection: $collection, findRequest: findRequest,
-                    importPDF: { showImporter = true }, searchOnline: { showSearch = true })
+                    searchOnline: { showSearch = true })
             }
         }
         .background(ReaderTheme.canvas)
