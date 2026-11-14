@@ -95,7 +95,6 @@ struct BookshelfItem: View {
                     )
                     .offset(y: highlighted && !reduceMotion ? -6 : 0)
                     .contentShape(Rectangle())
-                    .draggable(PaperShelfDrag(paperID: paper.id))
             }.buttonStyle(.plain).focused($focus, equals: .cover)
                 .accessibilityLabel("打开论文：\(paper.title)")
                 .accessibilityValue(progress.label).help(paper.title)
@@ -126,6 +125,7 @@ struct BookshelfItem: View {
         .onHover { hovered = $0 }
         .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: highlighted)
         .contextMenu { actions }
+        .onDrag { PaperShelfDrag.provider(paper.id) }
     }
 
     @ViewBuilder private var actions: some View {

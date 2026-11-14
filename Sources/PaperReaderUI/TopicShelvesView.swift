@@ -3,10 +3,39 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 /// Uses a dedicated type so internal moves never compete with Finder PDF URLs.
-struct PaperShelfDrag: Codable, Transferable {
-    let paperID: UUID
-    static var transferRepresentation: some TransferRepresentation {
-        CodableRepresentation(contentType: UTType(exportedAs: "dev.paperreader.paper-reference", conformingTo: .data))
+enum PaperShelfDrag {
+    static let typeIdentifier = "dev.paperreader.paper-reference"
+
+    static func provider(_ paperID: UUID) -> NSItemProvider {
+        let provider = NSItemProvider()
+        let data = Data(paperID.uuidString.utf8)
+        provider.registerDataRepresentation(forTypeIdentifier: typeIdentifier, visibility: .ownProcess) { completion in
+            completion(data, nil)
+            return nil
+        }
+        return provider
+    }
+
+    static func paperID(from data: Data) -> UUID? {
+        guard data.count == 36, let value = String(data: data, encoding: .utf8) else { return nil }
+        return UUID(uuidString: value)
+    }
+
+    @MainActor static func receive(
+        _ providers: [NSItemProvider], model: ReaderModel, shelfID: UUID?
+    ) -> Bool {
+        let matching = providers.filter { $0.hasItemConformingToTypeIdentifier(typeIdentifier) }
+        guard !matching.isEmpty else { return false }
+        for provider in matching {
+            provider.loadDataRepresentation(forTypeIdentifier: typeIdentifier) { data, _ in
+                guard let data, let id = paperID(from: data) else { return }
+                Task { @MainActor in
+                    guard model.state.papers.contains(where: { $0.id == id }) else { return }
+                    await model.movePaper(id, to: shelfID)
+                }
+            }
+        }
+        return true
     }
 }
 
@@ -53,7 +82,7 @@ struct TopicShelvesView: View {
                                 },
                                 selected: selectedShelfID == shelf.id,
                                 select: { selectedShelfID = shelf.id },
-                                move: { receive($0, shelfID: shelf.id) }
+                                move: { PaperShelfDrag.receive($0, model: model, shelfID: shelf.id) }
                             )
                             .contextMenu {
                                 Button("打开书架") { selectedShelfID = shelf.id }
@@ -88,7 +117,9 @@ struct TopicShelvesView: View {
             }
             .font(.system(size: 12)).padding(12)
             .background(ReaderTheme.ink.opacity(0.035), in: RoundedRectangle(cornerRadius: 8))
-            .dropDestination(for: PaperShelfDrag.self) { values, _ in receive(values, shelfID: nil) }
+            .onDrop(of: [PaperShelfDrag.typeIdentifier], isTargeted: nil) { providers in
+                PaperShelfDrag.receive(providers, model: model, shelfID: nil)
+            }
         }
     }
 
@@ -107,14 +138,6 @@ struct TopicShelvesView: View {
         }
     }
 
-    private func receive(_ values: [PaperShelfDrag], shelfID: UUID?) -> Bool {
-        let ids = Set(values.map(\.paperID)).filter { id in
-            model.state.papers.contains { $0.id == id }
-        }
-        guard !ids.isEmpty else { return false }
-        Task { for id in ids { await model.movePaper(id, to: shelfID) } }
-        return true
-    }
 }
 
 private struct TopicShelfCard: View {
@@ -122,7 +145,7 @@ private struct TopicShelfCard: View {
     let papers: [Paper]
     let selected: Bool
     let select: () -> Void
-    let move: ([PaperShelfDrag]) -> Bool
+    let move: ([NSItemProvider]) -> Bool
     @State private var targeted = false
 
     var body: some View {
@@ -154,10 +177,6 @@ private struct TopicShelfCard: View {
                 )
                 .contentShape(RoundedRectangle(cornerRadius: 10))
         }.buttonStyle(.plain).accessibilityLabel("\(shelf.name)，\(papers.count) 篇论文")
-            .dropDestination(for: PaperShelfDrag.self) { values, _ in
-                move(values)
-            } isTargeted: {
-                targeted = $0
-            }
+            .onDrop(of: [PaperShelfDrag.typeIdentifier], isTargeted: $targeted, perform: move)
     }
 }
