@@ -173,7 +173,7 @@ public final class LibraryAgent {
                 }
                 updateTurn(turnID) { $0.answer = text }
                 current.append(response)
-                history = Array((prior + [current]).suffix(max(0, limits.maxHistoryTurns)))
+                try retainCompletedHistory(current, after: prior, system: system, epoch: epoch)
                 return
             }
             guard callCount + calls.count <= limits.maxToolCalls else {
@@ -221,8 +221,34 @@ public final class LibraryAgent {
                 messages.append(result)
                 current.append(result)
             }
+            // Checkpoint only after every tool reply matches this assistant message. Later
+            // request failures must not discard the evidence already shown in result cards.
+            try retainCompletedHistory(current, after: prior, system: system, epoch: epoch)
         }
         throw ReaderError.message("本次工具执行轮数达到上限；已有结果已保留，可继续提问。")
+    }
+
+    private func retainCompletedHistory(
+        _ current: [AgentMessage], after prior: [[AgentMessage]], system: AgentMessage, epoch: UUID
+    ) throws {
+        try check(epoch)
+        let maxTurns = max(0, limits.maxHistoryTurns)
+        guard maxTurns > 0 else {
+            history.removeAll()
+            return
+        }
+        // Use this turn's original prior, replacing its checkpoint instead of appending it again.
+        var retained = Array((prior + [current]).suffix(maxTurns))
+        while retained.count > 1,
+            try JSONEncoder().encode([system] + retained.flatMap { $0 }).count > limits.maxContextBytes
+        {
+            retained.removeFirst()
+        }
+        // An oversized extension must not erase this turn's earlier, complete usable prefix.
+        guard try JSONEncoder().encode([system] + retained.flatMap { $0 }).count <= limits.maxContextBytes else {
+            return
+        }
+        history = retained
     }
 
     private static let instructions = """

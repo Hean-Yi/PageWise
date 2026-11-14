@@ -510,3 +510,184 @@ private func repeatedOnlineScript(_ messages: [AgentMessage], _ count: Int) thro
     #expect(agent.turns[1].cards.count == 2)
     #expect(agent.turns[1].cards.allSatisfy { $0.importState == .failed && $0.importError == error && $0.canImport })
 }
+
+@Test(arguments: [false, true]) @MainActor func completedToolHistorySurvivesAnUnfinishedAnswer(roundLimited: Bool)
+    async throws
+{
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let reader = try await makeAgentReader(root)
+    let block = TextBlock(sourcePage: 1, text: "Attention fixture evidence on page two.")
+    let paper = Paper(
+        title: "Attention fixture", digest: "fixture", originalPath: "fixture.pdf", pageCount: 2,
+        blocks: [block], warnings: [], canReflow: false)
+    reader.state.papers = [paper]
+    let question = "查找 attention 并读取原文"
+    let followup = "打开刚找到的第一篇"
+    let client = ScriptedLibraryModel { messages, count in
+        if messages.last?.content == followup {
+            #expect(messages.filter { $0.role == "user" && $0.content == question }.count == 1)
+            #expect(messages.compactMap(\.toolCalls).flatMap { $0 }.map(\.id) == ["saved_search", "saved_read"])
+            #expect(messages.filter { $0.role == "tool" }.compactMap(\.toolCallID) == ["saved_search", "saved_read"])
+            let search = try #require(messages.first { $0.toolCallID == "saved_search" }?.content)
+            let payload = try #require(try JSONSerialization.jsonObject(with: Data(search.utf8)) as? [String: Any])
+            let records = try #require(payload["results"] as? [[String: Any]])
+            let id = try #require(records.first?["paper_id"] as? String)
+            #expect(id == paper.id.uuidString)
+            #expect(messages.first { $0.toolCallID == "saved_read" }?.content?.contains(block.id.uuidString) == true)
+            return tool("open_paper", "{\"paper_id\":\"\(id)\",\"source_page\":2}", id: "followup_open")
+        }
+        if messages.last?.toolCallID == "followup_open" { return .init(role: "assistant", content: "点击导航卡打开。") }
+        if count == 1 { return tool("search_library", #"{"query":"attention"}"#, id: "saved_search") }
+        if count == 2 {
+            return tool("read_paper", "{\"paper_id\":\"\(paper.id)\",\"source_page\":2}", id: "saved_read")
+        }
+        throw URLError(.networkConnectionLost)
+    }
+    var limits = AgentLimits()
+    limits.maxRounds = roundLimited ? 2 : 4
+    let agent = LibraryAgent(reader: reader, client: client, discovery: AgentDiscoveryFixture(), limits: limits)
+    agent.send(question)
+    try await eventually { !agent.isRunning }
+    #expect(agent.turns[0].error != nil)
+    #expect(agent.turns[0].cards.count == 2)
+    agent.send(followup)
+    try await eventually { !agent.isRunning }
+    #expect(agent.turns[1].error == nil)
+    let card = try #require(agent.turns[1].cards.first { $0.kind == .navigation })
+    #expect(agent.open(cardID: card.id))
+    #expect(reader.selectedPaperID == paper.id)
+    #expect(reader.visiblePage == 1)
+}
+
+@Test(arguments: [0, 1]) @MainActor func completedToolHistoryHonorsTheTurnBudget(maxHistoryTurns: Int) async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let reader = try await makeAgentReader(root)
+    let client = ScriptedLibraryModel { messages, count in
+        if messages.last?.content == "inspect" {
+            let questions = messages.filter { $0.role == "user" }.compactMap(\.content)
+            #expect(questions == (maxHistoryTurns == 0 ? ["inspect"] : ["second", "inspect"]))
+            #expect(messages.filter { $0.role == "tool" }.count == maxHistoryTurns)
+            return .init(role: "assistant", content: "已检查")
+        }
+        if messages.last?.role == "user" {
+            return tool("search_library", #"{"query":"attention"}"#, id: "search_\(count)")
+        }
+        throw URLError(.networkConnectionLost)
+    }
+    var limits = AgentLimits()
+    limits.maxHistoryTurns = maxHistoryTurns
+    let agent = LibraryAgent(reader: reader, client: client, discovery: AgentDiscoveryFixture(), limits: limits)
+    for question in ["first", "second", "inspect"] {
+        agent.send(question)
+        try await eventually { !agent.isRunning }
+    }
+    #expect(agent.turns.last?.error == nil)
+}
+
+@Test @MainActor func oversizedToolHistoryRetainsTheLastCompletePrefixWithinBudget() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let reader = try await makeAgentReader(root)
+    let paper = Paper(
+        title: "Attention", digest: "fixture", originalPath: "fixture.pdf", pageCount: 1,
+        blocks: [TextBlock(sourcePage: 0, text: String(repeating: "attention fixture ", count: 40))],
+        warnings: [], canReflow: false)
+    reader.state.papers = [paper]
+    let initialQuestion = "find"
+    let followup = "continue"
+    let probe = ScriptedLibraryModel { _, count in
+        count == 1
+            ? tool("search_library", #"{"query":"attention"}"#, id: "budget_search")
+            : .init(role: "assistant", content: "fixture")
+    }
+    let probeAgent = LibraryAgent(reader: reader, client: probe, discovery: AgentDiscoveryFixture())
+    probeAgent.send(initialQuestion)
+    try await eventually { !probeAgent.isRunning }
+    let firstCompleteGroup = try #require(await probe.requests.last)
+    var limits = AgentLimits()
+    limits.maxContextBytes =
+        try JSONEncoder().encode(firstCompleteGroup + [.init(role: "user", content: followup)]).count + 32
+    let client = ScriptedLibraryModel { messages, count in
+        if messages.last?.content == followup {
+            #expect(messages.compactMap(\.toolCalls).flatMap { $0 }.map(\.id) == ["budget_search"])
+            #expect(messages.filter { $0.role == "tool" }.compactMap(\.toolCallID) == ["budget_search"])
+            #expect(messages.filter { $0.role == "user" }.compactMap(\.content) == [initialQuestion, followup])
+            return .init(role: "assistant", content: "可继续使用已保留的检索结果")
+        }
+        if count == 1 { return tool("search_library", #"{"query":"attention"}"#, id: "budget_search") }
+        return tool("read_paper", "{\"paper_id\":\"\(paper.id)\",\"source_page\":1}", id: "oversized_read")
+    }
+    let agent = LibraryAgent(reader: reader, client: client, discovery: AgentDiscoveryFixture(), limits: limits)
+    agent.send(initialQuestion)
+    try await eventually { !agent.isRunning }
+    #expect(agent.turns[0].error != nil)
+    #expect(agent.turns[0].cards.count == 2)
+    #expect(await client.requests.count == 2)
+    agent.send(followup)
+    try await eventually { !agent.isRunning }
+    #expect(agent.turns[1].error == nil)
+    for request in await client.requests { #expect(try JSONEncoder().encode(request).count <= limits.maxContextBytes) }
+}
+
+private actor DelayedHistorySearch: PaperDiscovery {
+    var waiting = false
+    var finished = false
+    private var continuation: CheckedContinuation<Void, Never>?
+    func search(_ query: String) async throws -> [PaperCandidate] {
+        waiting = true
+        await withCheckedContinuation { continuation = $0 }
+        finished = true
+        return []
+    }
+    func download(_ candidate: PaperCandidate) async throws -> URL { throw ReaderError.message("此测试不下载") }
+    func release() {
+        continuation?.resume()
+        continuation = nil
+    }
+}
+
+@Test(arguments: [false, true]) @MainActor func cancelledOrResetToolHistoryNeverIncludesAnUnpairedGroup(reset: Bool)
+    async throws
+{
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let reader = try await makeAgentReader(root)
+    let paper = Paper(
+        title: "Attention", digest: "fixture", originalPath: "fixture.pdf", pageCount: 1,
+        blocks: [TextBlock(sourcePage: 0, text: "attention fixture")], warnings: [], canReflow: false)
+    reader.state.papers = [paper]
+    let discovery = DelayedHistorySearch()
+    let client = ScriptedLibraryModel { messages, count in
+        if count == 1 { return tool("search_library", #"{"query":"attention"}"#, id: "complete_search") }
+        if count == 2 {
+            return .init(
+                role: "assistant",
+                toolCalls: [
+                    .init(
+                        id: "incomplete_read", name: "read_paper",
+                        arguments: "{\"paper_id\":\"\(paper.id)\",\"source_page\":1}"),
+                    .init(id: "incomplete_online", name: "search_online", arguments: #"{"query":"attention"}"#),
+                ])
+        }
+        let expected = reset ? [] : ["complete_search"]
+        #expect(messages.compactMap(\.toolCalls).flatMap { $0 }.map(\.id) == expected)
+        #expect(messages.filter { $0.role == "tool" }.compactMap(\.toolCallID) == expected)
+        #expect(messages.filter { $0.role == "user" && $0.content == "old question" }.count == (reset ? 0 : 1))
+        return .init(role: "assistant", content: "当前会话回答")
+    }
+    let agent = LibraryAgent(reader: reader, client: client, discovery: discovery)
+    agent.send("old question")
+    try await eventually { await discovery.waiting }
+    if reset { agent.reset() } else { agent.cancel() }
+    agent.send("new question")
+    try await eventually { !agent.isRunning }
+    await discovery.release()
+    try await eventually { await discovery.finished }
+    try await Task.sleep(for: .milliseconds(30))
+    agent.send("after late result")
+    try await eventually { !agent.isRunning }
+    #expect(agent.turns.last?.answer == "当前会话回答")
+    #expect(agent.turns.last?.error == nil)
+}
