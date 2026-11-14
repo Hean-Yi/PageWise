@@ -37,6 +37,9 @@ struct SearchView: View {
                 }
                 if search.closing { Text("正在停止导入…").font(.caption) }
             }
+            if let notice = search.contextNotice {
+                Text(notice).font(.caption).foregroundStyle(ReaderTheme.muted)
+            }
             if let error = search.error {
                 HStack {
                     Text(error).font(.caption).foregroundStyle(ReaderTheme.accent)
@@ -50,7 +53,7 @@ struct SearchView: View {
         .padding(22).frame(maxWidth: .infinity, alignment: .leading)
         .background(ReaderTheme.elevated.opacity(0.7), in: RoundedRectangle(cornerRadius: 14))
         .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(ReaderTheme.line))
-        .task {
+        .task(id: search.targetShelfID) {
             // Focus after the insertion transition has installed the native text field.
             do { try await Task.sleep(for: .milliseconds(260)) } catch { return }
             searchFocused = true

@@ -162,7 +162,8 @@ public final class ReaderModel {
     }
 
     @discardableResult public func importURLs(
-        _ urls: [URL], selectAfterImport: Bool = true, metadata: PaperCandidate? = nil, shelfID: UUID? = nil
+        _ urls: [URL], selectAfterImport: Bool = true, metadata: PaperCandidate? = nil, shelfID: UUID? = nil,
+        moveDuplicateToShelf: Bool = false
     ) async -> [UUID] {
         if let metadata, ArxivClient.verified(metadata) == nil {
             message = "论文来源无效，未导入。"
@@ -188,7 +189,9 @@ public final class ReaderModel {
                 defer { if !retained { try? FileManager.default.removeItem(at: importedDirectory) } }
                 try Task.checkCancellation()
                 if let existing = state.papers.first(where: { $0.digest == imported.digest }) {
-                    if let shelfID, !(await movePaper(existing.id, to: shelfID)) { return importedIDs }
+                    if shelfID != nil || moveDuplicateToShelf {
+                        guard await movePaper(existing.id, to: shelfID) else { return importedIDs }
+                    }
                     // The unused duplicate directory is removed by the staging cleanup above.
                     if selectAfterImport { select(existing.id) }
                     importedIDs.append(existing.id)

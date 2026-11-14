@@ -112,6 +112,8 @@ private actor InlineDiscoveryFixture: PaperDiscovery {
     search.confirmImport(onlineFixtureCandidate())
     while await discovery.pendingDownload == nil { await Task.yield() }
     search.open(shelfID: second)
+    #expect(search.targetShelfID == first)
+    #expect(search.contextNotice != nil)
     await discovery.releaseDownload()
     await search.importTask?.value
     let id = try #require(search.imported[onlineFixtureCandidate().id])
@@ -184,4 +186,63 @@ private actor InlineDiscoveryFixture: PaperDiscovery {
     await search.importTask?.value
     #expect(search.imported[onlineFixtureCandidate().id] != nil)
     #expect(search.importErrors[onlineFixtureCandidate().id] == nil)
+}
+
+@MainActor @Test func onlineExplicitTargetSwitchCancelsOldQueryAndKeepsNewResults() async throws {
+    let model = try await onlineModel()
+    defer { try? FileManager.default.removeItem(at: model.root) }
+    let first = try #require(await model.createShelf(name: "First"))
+    let second = try #require(await model.createShelf(name: "Second"))
+    let discovery = InlineDiscoveryFixture(holdSearch: true)
+    let search = OnlinePaperSearch(reader: model, discovery: discovery)
+    search.open(shelfID: first)
+    search.query = "first"
+    search.search()
+    let firstTask = search.searchTask
+    while await discovery.pendingSearch["first"] == nil { await Task.yield() }
+    search.open(shelfID: second)
+    #expect(search.isExpanded)
+    #expect(search.targetShelfID == second)
+    #expect(search.results.isEmpty)
+    #expect(!search.isSearching)
+    search.query = "second"
+    search.search()
+    while await discovery.pendingSearch["second"] == nil { await Task.yield() }
+    await discovery.releaseSearch("second", number: 2)
+    await search.searchTask?.value
+    await discovery.releaseSearch("first", number: 1)
+    await firstTask?.value
+    #expect(search.results.map(\.id) == [onlineFixtureCandidate(2).id])
+    #expect(search.targetShelfID == second)
+}
+
+@MainActor @Test func onlinePreviouslyImportedCandidateCanMoveToNewTargetWithoutDuplicating() async throws {
+    let model = try await onlineModel()
+    defer { try? FileManager.default.removeItem(at: model.root) }
+    let first = try #require(await model.createShelf(name: "First"))
+    let second = try #require(await model.createShelf(name: "Second"))
+    let source = model.root.appendingPathComponent("fixture.pdf")
+    try DemoPaper.write(to: source)
+    let discovery = InlineDiscoveryFixture(source: source)
+    let search = OnlinePaperSearch(reader: model, discovery: discovery)
+    var originalID: UUID?
+    for target: UUID? in [first, second, nil] {
+        search.open(shelfID: target)
+        #expect(search.imported.isEmpty)
+        #expect(search.results.isEmpty)
+        search.query = "fixture"
+        search.search()
+        await search.searchTask?.value
+        search.confirmImport(onlineFixtureCandidate())
+        await search.importTask?.value
+        let id = try #require(search.imported[onlineFixtureCandidate().id])
+        if let originalID { #expect(id == originalID) } else { originalID = id }
+        #expect(model.state.papers.count == 1)
+        #expect(model.state.shelfID(for: id) == target)
+        #expect(search.targetShelfID == target)
+    }
+    let restarted = try ReaderModel(root: model.root)
+    await restarted.load()
+    #expect(restarted.state.papers.count == 1)
+    #expect(restarted.state.paperShelfIDs.isEmpty)
 }

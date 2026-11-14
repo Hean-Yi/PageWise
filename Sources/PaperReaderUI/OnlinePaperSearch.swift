@@ -11,6 +11,7 @@ public final class OnlinePaperSearch {
     public private(set) var isSearching = false
     public private(set) var searched = false
     public private(set) var error: String?
+    public private(set) var contextNotice: String?
     public private(set) var importingID: String?
     public private(set) var imported: [String: UUID] = [:]
     public private(set) var importErrors: [String: String] = [:]
@@ -29,7 +30,24 @@ public final class OnlinePaperSearch {
 
     public func open(shelfID: UUID?) {
         guard !closing else { return }
-        if !isExpanded { targetShelfID = shelfID }
+        if targetShelfID != shelfID {
+            guard importTask == nil else {
+                contextNotice = "正在导入到原书架；完成后再次点击目标书架的加号。"
+                return
+            }
+            cancelSearch()
+            targetShelfID = shelfID
+            results = []
+            searched = false
+            error = nil
+            imported = [:]
+            importErrors = [:]
+        }
+        // A paper may have been moved through the cover menu since the last query.
+        imported = imported.filter { _, id in
+            reader.state.papers.contains(where: { $0.id == id }) && reader.state.shelfID(for: id) == shelfID
+        }
+        contextNotice = nil
         isExpanded = true
     }
 
@@ -84,7 +102,11 @@ public final class OnlinePaperSearch {
         guard results.contains(where: { $0.id == candidate.id }), ArxivClient.verified(candidate) != nil,
             importTask == nil, !closing
         else { return }
-        if let id = imported[candidate.id], reader.state.papers.contains(where: { $0.id == id }) { return }
+        if let id = imported[candidate.id], reader.state.papers.contains(where: { $0.id == id }),
+            reader.state.shelfID(for: id) == targetShelfID
+        {
+            return
+        }
         let shelfID = targetShelfID
         guard shelfID == nil || reader.state.shelves.contains(where: { $0.id == shelfID }) else {
             importErrors[candidate.id] = "目标书架已删除，请关闭查找后从其他书架重试。"
@@ -97,6 +119,7 @@ public final class OnlinePaperSearch {
             defer {
                 self.importTask = nil
                 self.importingID = nil
+                self.contextNotice = nil
                 if self.closing {
                     self.isExpanded = false
                     self.closing = false
@@ -107,7 +130,7 @@ public final class OnlinePaperSearch {
                 defer { try? FileManager.default.removeItem(at: url) }
                 try Task.checkCancellation()
                 let ids = await self.reader.importURLs(
-                    [url], selectAfterImport: false, metadata: candidate, shelfID: shelfID)
+                    [url], selectAfterImport: false, metadata: candidate, shelfID: shelfID, moveDuplicateToShelf: true)
                 if let id = ids.first {
                     // A committed import remains successful even if cancellation arrived during commit.
                     self.imported[candidate.id] = id
