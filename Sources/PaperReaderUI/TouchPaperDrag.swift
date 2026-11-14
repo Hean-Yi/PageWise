@@ -20,7 +20,7 @@
         }
     }
 
-    final class TouchPaperDragView: UIView, UIDragInteractionDelegate, UIDropInteractionDelegate {
+    final class TouchPaperDragView: UIView {
         var configuration: TouchPaperDrag?
 
         override init(frame: CGRect) {
@@ -35,6 +35,9 @@
         required init?(coder: NSCoder) { nil }
         @objc private func openPaper() { configuration?.open() }
 
+    }
+
+    extension TouchPaperDragView: UIDragInteractionDelegate {
         func dragInteraction(_ interaction: UIDragInteraction, itemsForBeginning session: any UIDragSession)
             -> [UIDragItem]
         {
@@ -68,6 +71,9 @@
             -> Bool
         { true }
 
+    }
+
+    extension TouchPaperDragView: UIDropInteractionDelegate {
         private func reference(_ session: any UIDropSession) -> UUID? {
             guard let id = session.localDragSession?.items.first?.localObject as? UUID,
                 configuration?.accepts(id) == true
