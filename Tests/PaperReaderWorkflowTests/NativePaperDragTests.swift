@@ -37,4 +37,42 @@
         #expect(item.string(forType: .fileURL) == nil)
         #expect(item.string(forType: .string) == nil)
     }
+
+    @MainActor @Test func nativeDropTargetRejectsForeignOrUnknownReferences() throws {
+        let knownID = UUID()
+        let target = ShelfDropTargetView(frame: NSRect(x: 0, y: 0, width: 180, height: 160))
+        target.accepts = { $0 == knownID }
+        #expect(target.registeredDraggedTypes == [.init(PaperShelfDrag.typeIdentifier)])
+        let pasteboard = NSPasteboard(name: .init("PaperReader-test-" + UUID().uuidString))
+        defer { pasteboard.releaseGlobally() }
+        pasteboard.writeObjects([PaperDragSourceView.pasteboardItem(knownID)])
+        #expect(target.reference(in: pasteboard) == knownID)
+        pasteboard.clearContents()
+        pasteboard.writeObjects([PaperDragSourceView.pasteboardItem(UUID())])
+        #expect(target.reference(in: pasteboard) == nil)
+        pasteboard.clearContents()
+        pasteboard.setString("unrelated", forType: .string)
+        #expect(target.reference(in: pasteboard) == nil)
+        pasteboard.setData(Data("malformed".utf8), forType: .init(PaperShelfDrag.typeIdentifier))
+        #expect(target.reference(in: pasteboard) == nil)
+    }
+
+    @MainActor @Test func nativeDropSurfacePreservesShelfActivation() throws {
+        let target = ShelfDropTargetView(frame: NSRect(x: 0, y: 0, width: 180, height: 160))
+        var activations = 0
+        target.activate = { activations += 1 }
+        let down = try #require(
+            NSEvent.mouseEvent(
+                with: .leftMouseDown, location: NSPoint(x: 10, y: 10), modifierFlags: [], timestamp: 1,
+                windowNumber: 0, context: nil, eventNumber: 1, clickCount: 1, pressure: 1))
+        let up = try #require(
+            NSEvent.mouseEvent(
+                with: .leftMouseUp, location: NSPoint(x: 10, y: 10), modifierFlags: [], timestamp: 2,
+                windowNumber: 0, context: nil, eventNumber: 2, clickCount: 1, pressure: 0))
+        target.mouseUp(with: up)
+        #expect(activations == 0)
+        target.mouseDown(with: down)
+        target.mouseUp(with: up)
+        #expect(activations == 1)
+    }
 #endif

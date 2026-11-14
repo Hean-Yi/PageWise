@@ -43,7 +43,7 @@ import Foundation
             dragged = true
             let draggingItem = NSDraggingItem(pasteboardWriter: Self.pasteboardItem(paperID))
             draggingItem.setDraggingFrame(bounds, contents: dragImage())
-            ShelfDragDiagnostics.record("source-begin")
+            ShelfDragDiagnostics.record("source-begin start=\(start) point=\(point) window=\(event.locationInWindow)")
             let session = beginDraggingSession(with: [draggingItem], event: event, source: self)
             session.animatesToStartingPositionsOnCancelOrFail = true
         }
@@ -65,7 +65,9 @@ import Foundation
 
         func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) {
             mouseDownPoint = nil
-            ShelfDragDiagnostics.record(operation.isEmpty ? "source-ended-none" : "source-ended-drop")
+            ShelfDragDiagnostics.record(
+                "\(operation.isEmpty ? "source-ended-none" : "source-ended-drop") screen=\(screenPoint) window=\(String(describing: window?.frame))"
+            )
         }
 
         static func pasteboardItem(_ paperID: UUID) -> NSPasteboardItem {
@@ -88,6 +90,73 @@ import Foundation
             return NSImage(systemSymbolName: "doc.text", accessibilityDescription: nil) ?? NSImage(size: bounds.size)
         }
     }
+    struct NativeShelfDrop: NSViewRepresentable {
+        let activate: () -> Void
+        let accepts: (UUID) -> Bool
+        let receive: (UUID) -> Bool
+        let highlight: (Bool) -> Void
+
+        func makeNSView(context: Context) -> ShelfDropTargetView { ShelfDropTargetView() }
+        func updateNSView(_ view: ShelfDropTargetView, context: Context) {
+            view.activate = activate
+            view.accepts = accepts
+            view.receive = receive
+            view.highlight = highlight
+        }
+    }
+
+    final class ShelfDropTargetView: NSView {
+        var activate: (() -> Void)?
+        var accepts: ((UUID) -> Bool)?
+        var receive: ((UUID) -> Bool)?
+        var highlight: ((Bool) -> Void)?
+        private var pressed = false
+
+        override init(frame frameRect: NSRect) {
+            super.init(frame: frameRect)
+            registerForDraggedTypes([.init(PaperShelfDrag.typeIdentifier)])
+        }
+        required init?(coder: NSCoder) { nil }
+        override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+        override func mouseDown(with event: NSEvent) { pressed = true }
+        override func mouseUp(with event: NSEvent) {
+            guard pressed else { return }
+            pressed = false
+            activate?()
+        }
+
+        override func draggingEntered(_ sender: any NSDraggingInfo) -> NSDragOperation {
+            let allowed = reference(in: sender.draggingPasteboard) != nil
+            ShelfDragDiagnostics.record("native-target-enter accepted=\(allowed) window=\(sender.draggingLocation)")
+            highlight?(allowed)
+            return allowed ? .move : []
+        }
+        override func draggingUpdated(_ sender: any NSDraggingInfo) -> NSDragOperation {
+            reference(in: sender.draggingPasteboard) != nil ? .move : []
+        }
+        override func draggingExited(_ sender: (any NSDraggingInfo)?) {
+            highlight?(false)
+            ShelfDragDiagnostics.record("native-target-exit")
+        }
+        override func prepareForDragOperation(_ sender: any NSDraggingInfo) -> Bool {
+            reference(in: sender.draggingPasteboard) != nil
+        }
+        override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
+            defer { highlight?(false) }
+            guard let id = reference(in: sender.draggingPasteboard) else { return false }
+            ShelfDragDiagnostics.record("native-target-perform")
+            return receive?(id) ?? false
+        }
+        override func concludeDragOperation(_ sender: (any NSDraggingInfo)?) { highlight?(false) }
+
+        func reference(in pasteboard: NSPasteboard) -> UUID? {
+            guard let data = pasteboard.data(forType: .init(PaperShelfDrag.typeIdentifier)),
+                let id = PaperShelfDrag.paperID(from: data), accepts?(id) == true
+            else { return nil }
+            return id
+        }
+    }
+
 #endif
 
 /// Opt-in, content-free diagnostics for a local drag acceptance run.

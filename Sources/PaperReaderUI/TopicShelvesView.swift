@@ -51,6 +51,7 @@ struct TopicShelvesView: View {
     @State private var editingID: UUID?
     @State private var name = ""
     @State private var saving = false
+    @State private var unclassifiedTargeted = false
     @FocusState private var nameFocused: Bool
 
     var body: some View {
@@ -87,6 +88,7 @@ struct TopicShelvesView: View {
                                 },
                                 selected: selectedShelfID == shelf.id,
                                 select: { selectedShelfID = shelf.id },
+                                accepts: { id in model.state.papers.contains { $0.id == id } },
                                 move: { PaperShelfDrag.receive($0, model: model, shelfID: shelf.id) }
                             )
                             .contextMenu {
@@ -123,10 +125,25 @@ struct TopicShelvesView: View {
             .font(.system(size: 12)).padding(12)
             .frame(maxWidth: .infinity, minHeight: 44)
             .contentShape(Rectangle())
-            .background(ReaderTheme.ink.opacity(0.035), in: RoundedRectangle(cornerRadius: 8))
-            .onDrop(of: [PaperShelfDrag.typeIdentifier], isTargeted: nil) { providers in
-                PaperShelfDrag.receive(providers, model: model, shelfID: nil)
-            }
+            .background(
+                unclassifiedTargeted ? ReaderTheme.accent.opacity(0.16) : ReaderTheme.ink.opacity(0.035),
+                in: RoundedRectangle(cornerRadius: 8)
+            )
+            #if os(macOS)
+                .overlay {
+                    NativeShelfDrop(
+                        activate: { selectedShelfID = nil },
+                        accepts: { id in model.state.papers.contains { $0.id == id } },
+                        receive: { id in
+                            PaperShelfDrag.receive([PaperShelfDrag.provider(id)], model: model, shelfID: nil)
+                        },
+                        highlight: { unclassifiedTargeted = $0 })
+                }
+            #else
+                .onDrop(of: [PaperShelfDrag.typeIdentifier], isTargeted: $unclassifiedTargeted) { providers in
+                    PaperShelfDrag.receive(providers, model: model, shelfID: nil)
+                }
+            #endif
         }
     }
 
@@ -152,6 +169,7 @@ private struct TopicShelfCard: View {
     let papers: [Paper]
     let selected: Bool
     let select: () -> Void
+    let accepts: (UUID) -> Bool
     let move: ([NSItemProvider]) -> Bool
     @State private var targeted = false
 
@@ -184,7 +202,16 @@ private struct TopicShelfCard: View {
                 )
                 .contentShape(RoundedRectangle(cornerRadius: 10))
         }.buttonStyle(.plain).accessibilityLabel("\(shelf.name)，\(papers.count) 篇论文")
-            .onDrop(of: [PaperShelfDrag.typeIdentifier], isTargeted: $targeted, perform: move)
+            #if os(macOS)
+                .overlay {
+                    NativeShelfDrop(
+                        activate: select, accepts: accepts,
+                        receive: { id in move([PaperShelfDrag.provider(id)]) },
+                        highlight: { targeted = $0 })
+                }
+            #else
+                .onDrop(of: [PaperShelfDrag.typeIdentifier], isTargeted: $targeted, perform: move)
+            #endif
             .onChange(of: targeted) { _, value in
                 ShelfDragDiagnostics.record(value ? "target-enter" : "target-exit")
             }
