@@ -85,7 +85,7 @@ struct TopicShelvesView: View {
                         .buttonStyle(.plain).foregroundStyle(ReaderTheme.muted)
                         .help("新建书架").accessibilityLabel("新建书架").disabled(saving)
                     }
-                }.scrollIndicators(.hidden)
+                }
                 if editing {
                     nameEditor
                         .transition(reduceMotion ? .opacity : .opacity.combined(with: .move(edge: .top)))
@@ -93,8 +93,8 @@ struct TopicShelvesView: View {
             }
             .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: editing)
             .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: selectedShelfID)
-            .onChange(of: selectedShelfID) { _, id in
-                withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) {
+            .onChange(of: selectedShelfID, initial: true) { previousID, id in
+                withAnimation(reduceMotion || previousID == id ? nil : .easeInOut(duration: 0.18)) {
                     if let id {
                         scroll.scrollTo(id, anchor: .center)
                     } else {
