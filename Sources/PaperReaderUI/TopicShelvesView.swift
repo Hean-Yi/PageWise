@@ -26,12 +26,17 @@ enum PaperShelfDrag {
     ) -> Bool {
         let matching = providers.filter { $0.hasItemConformingToTypeIdentifier(typeIdentifier) }
         guard !matching.isEmpty else { return false }
+        ShelfDragDiagnostics.record("target-receive")
         for provider in matching {
             provider.loadDataRepresentation(forTypeIdentifier: typeIdentifier) { data, _ in
-                guard let data, let id = paperID(from: data) else { return }
+                guard let data, let id = paperID(from: data) else {
+                    ShelfDragDiagnostics.record("target-invalid-data")
+                    return
+                }
                 Task { @MainActor in
                     guard model.state.papers.contains(where: { $0.id == id }) else { return }
-                    await model.movePaper(id, to: shelfID)
+                    let saved = await model.movePaper(id, to: shelfID)
+                    ShelfDragDiagnostics.record(saved ? "target-saved" : "target-save-failed")
                 }
             }
         }
@@ -180,5 +185,8 @@ private struct TopicShelfCard: View {
                 .contentShape(RoundedRectangle(cornerRadius: 10))
         }.buttonStyle(.plain).accessibilityLabel("\(shelf.name)，\(papers.count) 篇论文")
             .onDrop(of: [PaperShelfDrag.typeIdentifier], isTargeted: $targeted, perform: move)
+            .onChange(of: targeted) { _, value in
+                ShelfDragDiagnostics.record(value ? "target-enter" : "target-exit")
+            }
     }
 }

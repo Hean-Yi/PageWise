@@ -94,8 +94,15 @@ struct BookshelfItem: View {
                     .offset(y: highlighted && !reduceMotion ? -6 : 0)
             }
             .contentShape(Rectangle())
-            .onTapGesture { model.select(paper.id) }
-            .onDrag { PaperShelfDrag.provider(paper.id) }
+            #if os(macOS)
+                .overlay {
+                    NativePaperDrag(
+                        paperID: paper.id, focus: { focus = .cover }, open: { model.select(paper.id) })
+                }
+            #else
+                .onTapGesture { model.select(paper.id) }
+                .onDrag { PaperShelfDrag.provider(paper.id) }
+            #endif
             .focusable().focused($focus, equals: .cover)
             .onKeyPress(keys: [.return, .space]) { _ in
                 model.select(paper.id)
