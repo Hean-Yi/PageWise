@@ -1,6 +1,6 @@
 import Foundation
 
-/// Non-streaming Chat Completions tool calling. Text-only ModelClient remains independent.
+/// Streaming Chat Completions; tool calls execute only after a complete validated response.
 public struct AgentClient: AgentCompleting {
     private let transport: any HTTPTransport
     public init(transport: any HTTPTransport = NetworkTransport()) { self.transport = transport }
@@ -8,6 +8,18 @@ public struct AgentClient: AgentCompleting {
     public func respond(settings: ModelSettings, key: String, messages: [AgentMessage], limits: AgentLimits)
         async throws -> AgentMessage
     {
+        try await perform(settings: settings, key: key, messages: messages, limits: limits, onPartial: nil)
+    }
+    public func respondStreaming(
+        settings: ModelSettings, key: String, messages: [AgentMessage], limits: AgentLimits,
+        onPartial: @escaping @Sendable (String) async throws -> Void
+    ) async throws -> AgentMessage {
+        try await perform(settings: settings, key: key, messages: messages, limits: limits, onPartial: onPartial)
+    }
+    private func perform(
+        settings: ModelSettings, key: String, messages: [AgentMessage], limits: AgentLimits,
+        onPartial: (@Sendable (String) async throws -> Void)?
+    ) async throws -> AgentMessage {
         try Task.checkCancellation()
         let settings = try settings.normalized()
         let key = key.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -23,10 +35,24 @@ public struct AgentClient: AgentCompleting {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
         request.httpBody = try JSONEncoder().encode(
-            Request(model: settings.model, messages: messages, temperature: settings.temperature))
+            Request(
+                model: settings.model, messages: messages, temperature: settings.temperature, stream: onPartial != nil))
         let data: Data
         let response: HTTPURLResponse
-        do { (data, response) = try await transport.data(for: request) } catch is CancellationError {
+        do {
+            if let onPartial {
+                let decoder = ChatCompletionStreamDecoder(allowTools: true, onPartial: onPartial)
+                response = try await transport.stream(for: request) { chunk in try await decoder.consume(chunk) }
+                if (200...299).contains(response.statusCode) {
+                    let (message, reason) = try await decoder.finishMessage()
+                    data = try JSONEncoder().encode(Response(choices: [.init(message: message, finishReason: reason)]))
+                } else {
+                    data = Data()
+                }
+            } else {
+                (data, response) = try await transport.data(for: request)
+            }
+        } catch is CancellationError {
             throw CancellationError()
         } catch {
             try Task.checkCancellation()
@@ -98,7 +124,7 @@ public struct AgentClient: AgentCompleting {
         var model: String
         var messages: [AgentMessage]
         var temperature: Double
-        let stream = false
+        var stream = false
         let maxTokens = 4_096
         let toolChoice = "auto"
         let tools = Tool.definitions
@@ -108,8 +134,8 @@ public struct AgentClient: AgentCompleting {
             case toolChoice = "tool_choice"
         }
     }
-    private struct Response: Decodable {
-        struct Choice: Decodable {
+    private struct Response: Codable {
+        struct Choice: Codable {
             var message: AgentMessage
             var finishReason: String
             enum CodingKeys: String, CodingKey {

@@ -27,6 +27,8 @@ public struct RichContent: Codable, Sendable, Equatable {
     /// Exporter glyph labels assist coverage checks only; they are not reading-order evidence.
     public var imageTextForCoverage: String? = nil
     public var figureCaption: FigureCaption? = nil
+    /// Temporary during an explicit layout upgrade; released after this block publishes.
+    public var restoredTranslationHTML: String? = nil
 
     public var requiresTranslation: Bool {
         !mathematics.keys.reduce(translationInput) { $0.replacingOccurrences(of: $1, with: "") }

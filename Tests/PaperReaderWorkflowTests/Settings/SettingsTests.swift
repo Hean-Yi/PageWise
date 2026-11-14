@@ -59,7 +59,7 @@ private actor ConnectionTransport: HTTPTransport {
     #expect(credentials.values == ["model-key": "test-only"])
 }
 
-@Test @MainActor func successfulSettingsSaveRestoresAfterRestartWithoutPlaintextKey() throws {
+@Test @MainActor func successfulSettingsSaveRestoresAfterRestartWithoutPlaintextKey() async throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: root) }
     let credentials = WorkflowCredentials()
@@ -71,7 +71,7 @@ private actor ConnectionTransport: HTTPTransport {
     let reopened = try ReaderModel(root: root, credentials: credentials)
     #expect(reopened.modelSettings.model == "new-model")
     #expect(reopened.modelSettings.baseURL == "https://example.invalid/v1")
-    #expect(try reopened.hasSavedAPIKey())
+    #expect(try await reopened.hasSavedAPIKey())
     let json = try String(contentsOf: root.appendingPathComponent("model-settings.json"), encoding: .utf8)
     #expect(!json.contains("new-key"))
 }

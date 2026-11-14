@@ -34,14 +34,74 @@ enum HTMLReaderScript {
             send({kind:'selection',key:first.dataset.key,text,start,end:start+text.length});
           });
           document.addEventListener('error', event => { if(event.target.tagName === 'IMG') send({kind:'imageError'}); }, true);
+          document.addEventListener('click', event => {
+            const image = event.target.closest?.('#reader img');
+            if(image) {
+              const dialog=document.createElement('dialog'), close=document.createElement('button');
+              close.textContent='关闭'; close.setAttribute('aria-label','关闭放大图片');
+              close.onclick=()=>dialog.close();
+              const large=document.createElement('img');large.src=image.src;large.alt=image.alt;
+              dialog.append(close,large);document.body.append(dialog);
+              dialog.addEventListener('close',()=>dialog.remove(),{once:true});dialog.showModal();return;
+            }
+            const link = event.target.closest?.('a[href]');
+            if(!link) return;
+            event.preventDefault();
+            const href = link.getAttribute('href');
+            if(href.startsWith('#')) {
+              const target = document.getElementById(href.slice(1));
+              if(target) target.scrollIntoView({block:'center',behavior:'instant'});
+              else send({kind:'missingLink'});
+            } else send({kind:'externalLink',url:href});
+          });
           window.paperReader = {
             append(html, expectedPaperID) {
           if (document.body.dataset.paperId !== expectedPaperID) return;
               const parsed = new DOMParser().parseFromString(html,'text/html');
               for (const element of parsed.body.children) {
-                if (element.tagName === 'SECTION' && element.dataset.key && !document.getElementById(element.id)) root.appendChild(document.importNode(element,true));
+                if (element.tagName !== 'SECTION' || !element.dataset.key) continue;
+                const existing = document.getElementById(element.id);
+                if(existing?.dataset.pending === 'true' && element.dataset.pending === 'false') {
+                  existing.querySelector(':scope > .translation.pending')?.remove();
+                  const translated = element.querySelector(':scope > .translation');
+                  if(translated) existing.appendChild(document.importNode(translated,true));
+                  existing.dataset.pending = 'false';
+                }
+                if (!existing) {
+                  root.insertBefore(document.importNode(element,true), document.getElementById('translation-draft'));
+                  const draft = document.getElementById('translation-draft');
+                  if(draft?.firstElementChild?.dataset.draftKey === element.dataset.key) draft.remove();
+                }
               }
               observe();
+            },
+            draft(html, expectedPaperID) {
+              if(document.body.dataset.paperId !== expectedPaperID) return;
+              let draft = document.getElementById('translation-draft');
+              if(!html) {
+                draft?.remove();
+                for(const pending of root.querySelectorAll('.translation.pending.streaming')) {
+                  pending.textContent='译文待加载…';pending.classList.remove('streaming');
+                }
+                return;
+              }
+              const parsed = new DOMParser().parseFromString(html,'text/html');
+              const key = parsed.body.firstElementChild?.dataset.draftKey;
+              if(!key) return;
+              const existing = document.getElementById('block-'+key);
+              if(existing) {
+                draft?.remove();
+                if(existing.dataset.pending !== 'true') return;
+                const pending = existing.querySelector(':scope > .translation.pending');
+                const translation = parsed.body.firstElementChild?.querySelector('.translation');
+                if(pending && translation) {
+                  pending.classList.add('streaming');
+                  pending.replaceChildren(...[...translation.childNodes].map(e=>document.importNode(e,true)));
+                }
+                return;
+              }
+              if(!draft) { draft = document.createElement('div'); draft.id='translation-draft'; root.appendChild(draft); }
+              draft.replaceChildren(...[...parsed.body.children].map(e=>document.importNode(e,true)));
             },
             jump(key) { document.getElementById('block-'+key)?.scrollIntoView({block:'start',behavior:'instant'}); },
             highlights(marks) {

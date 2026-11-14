@@ -32,10 +32,13 @@ final class HTMLCoordinator: NSObject, WKNavigationDelegate, WKScriptMessageHand
     private var loadedPath: String?
     private var requestedURL: URL?
     private var keys: [String] = []
+    private var publishedCount = 0
     private var ready = false
     private var stopped = false
     private var appendTask: Task<Void, Never>?
     private var highlightIDs: [UUID] = []
+    private var draftHTML = ""
+    private var leasedURL: URL?
 
     init(model: ReaderModel) { self.model = model }
 
@@ -57,6 +60,7 @@ final class HTMLCoordinator: NSObject, WKNavigationDelegate, WKScriptMessageHand
         ready = false
         appendTask?.cancel()
         view.stopLoading()
+        releaseDocument()
         view.navigationDelegate = nil
         view.configuration.userContentController.removeScriptMessageHandler(
             forName: "reader", contentWorld: .defaultClient)
@@ -65,22 +69,32 @@ final class HTMLCoordinator: NSObject, WKNavigationDelegate, WKScriptMessageHand
 
     func update(_ view: WKWebView) {
         guard !stopped, model.usesHTMLReading, let paper = model.paper, let artifact = paper.htmlReading else { return }
-        if paperID != paper.id || loadedPath == nil {
+        if paperID != paper.id || loadedPath == nil || !artifact.sections.map({ $0.id.uuidString }).starts(with: keys) {
             appendTask?.cancel()
+            view.stopLoading()
+            releaseDocument()
             paperID = paper.id
             loadedPath = artifact.relativePath
             keys = artifact.sections.map { $0.id.uuidString }
+            publishedCount = paper.translatedBlockCount
             highlightIDs = []
+            draftHTML = ""
             ready = false
             view.isHidden = true
             let url = model.root.appendingPathComponent(artifact.relativePath).standardizedFileURL
             requestedURL = url
+            HTMLReadingStore.retainOpenDocument(url)
+            leasedURL = url
             view.loadFileURL(url, allowingReadAccessTo: url.deletingLastPathComponent())
             return
         }
         guard ready else { return }
         if loadedPath != artifact.relativePath, appendTask == nil {
-            let oldKeys = Set(keys)
+            let changed = Set(
+                paper.blocks.dropFirst(publishedCount).prefix(max(0, paper.translatedBlockCount - publishedCount)).map {
+                    $0.id.uuidString
+                })
+            let oldKeys = Set(keys).subtracting(changed)
             let expectedID = paper.id
             let url = model.root.appendingPathComponent(artifact.relativePath).standardizedFileURL
             appendTask = Task { [weak self, weak view] in
@@ -100,6 +114,7 @@ final class HTMLCoordinator: NSObject, WKNavigationDelegate, WKScriptMessageHand
                     guard self.paperID == expectedID, !Task.isCancelled else { return }
                     self.loadedPath = artifact.relativePath
                     self.keys = artifact.sections.map { $0.id.uuidString }
+                    self.publishedCount = paper.translatedBlockCount
                     self.highlightIDs = []
                     self.updateState(view)
                 } catch is CancellationError {} catch {
@@ -112,8 +127,25 @@ final class HTMLCoordinator: NSObject, WKNavigationDelegate, WKScriptMessageHand
         updateState(view)
     }
 
+    private func releaseDocument() {
+        if let leasedURL {
+            HTMLReadingStore.releaseOpenDocument(leasedURL)
+            if let paper = model.state.papers.first(where: { $0.id == paperID }) {
+                try? HTMLReadingStore.cleanup(root: model.root, paper: paper)
+            }
+            self.leasedURL = nil
+        }
+    }
+
     private func updateState(_ view: WKWebView) {
         guard ready, model.selectedPaperID == paperID else { return }
+        let draft = model.translationDraft.flatMap { $0.paperID == paperID ? $0.html : nil } ?? ""
+        if draftHTML != draft {
+            draftHTML = draft
+            view.callAsyncJavaScript(
+                "window.paperReader.draft(html, paperID)", arguments: ["html": draft, "paperID": paperID!.uuidString],
+                in: nil, in: .defaultClient, completionHandler: nil)
+        }
         let marks = model.currentHighlights.filter { $0.textRange != nil }
         if highlightIDs != marks.map(\.id) {
             highlightIDs = marks.map(\.id)
@@ -198,6 +230,16 @@ final class HTMLCoordinator: NSObject, WKNavigationDelegate, WKScriptMessageHand
             model.captureSelection(text: "", rects: [], page: model.visiblePage)
             model.status = "跨段文字可以复制；高亮或解释请在一个内容段内选择，以保留准确来源。"
         case "imageError": model.message = "部分图片未能显示，请切换原版查看完整内容。"
+        case "missingLink": model.message = "引用目标尚未生成，完成对应段落后即可跳转；也可以切换原版查看。"
+        case "externalLink":
+            guard let value = value["url"] as? String, let url = URL(string: value),
+                ["http", "https"].contains(url.scheme ?? ""), url.host != nil, url.user == nil, url.password == nil
+            else { return }
+            #if os(macOS)
+                NSWorkspace.shared.open(url)
+            #else
+                UIApplication.shared.open(url)
+            #endif
         default: break
         }
     }

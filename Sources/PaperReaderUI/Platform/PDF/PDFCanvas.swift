@@ -95,7 +95,7 @@ private final class PDFCoordinator: NSObject, @preconcurrency PDFPageOverlayView
         self.penEnabled = penEnabled
         view.isInMarkupMode = penEnabled
         // SwiftUI may update the old representable once after the reader is dismissed.
-        guard model.paper != nil else {
+        guard model.paper != nil, !model.usesHTMLReading else {
             view.document = nil
             displayedDocument = nil
             identity = ""
@@ -131,7 +131,12 @@ private final class PDFCoordinator: NSObject, @preconcurrency PDFPageOverlayView
                 displayedDocument = nil
                 highlightIDs = []
                 let message = error.localizedDescription
-                Task { @MainActor [weak model] in model?.message = message }
+                Task { @MainActor [weak model] in
+                    guard let model, !model.usesHTMLReading,
+                        model.pageURLs.map(\.path).joined(separator: "|") == newIdentity
+                    else { return }
+                    model.message = message
+                }
                 return
             }
             view.document = document

@@ -226,7 +226,9 @@ struct SettingsView: View {
     }
 
     private func refreshKeyStatus() {
-        do { hasSavedKey = try model.hasSavedAPIKey() } catch { showError(error) }
+        Task {
+            do { hasSavedKey = try await model.hasSavedAPIKey() } catch { showError(error) }
+        }
     }
 
     private func showError(_ error: Error) {

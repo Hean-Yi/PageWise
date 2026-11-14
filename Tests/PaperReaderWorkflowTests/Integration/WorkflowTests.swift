@@ -4,6 +4,18 @@ import PaperReaderUI
 import Testing
 
 private struct FakeModelTransport: HTTPTransport {
+    func stream(for request: URLRequest, onData: @Sendable (Data) async throws -> Void) async throws -> HTTPURLResponse
+    {
+        let body = try JSONSerialization.jsonObject(with: request.httpBody!) as! [String: Any]
+        let messages = body["messages"] as! [[String: String]]
+        let input = messages.last!["content"]!
+        let count = input.components(separatedBy: "<BEGIN_").count - 1
+        let text = count > 0 ? (0..<count).map { "<BEGIN_\($0)>原创测试译文<END_\($0)>" }.joined() : "这是原创测试回答。"
+        let event: [String: Any] = ["choices": [["delta": ["content": text], "finish_reason": "stop"]]]
+        let json = String(data: try JSONSerialization.data(withJSONObject: event), encoding: .utf8)!
+        try await onData(Data(("data: " + json + "\n\ndata: [DONE]\n\n").utf8))
+        return HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+    }
     func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) {
         let data = Data(
             #"{"choices":[{"message":{"content":"这是供自动化验证使用的完整中文译文，不是实际模型结果。"},"finish_reason":"stop"}]}"#.utf8)

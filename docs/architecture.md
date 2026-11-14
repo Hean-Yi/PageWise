@@ -84,8 +84,14 @@ Swift Package 自动递归发现每个 target 目录下的 Swift 文件。当前
 
 ## HTML 连续阅读
 
-`Domain/Papers/HTMLReadingArtifact` 描述唯一已提交 HTML、资源引用与稳定内容锚点；`Paper.readingPages` 为 HTML 内容段和旧 PDF 页面提供统一导航，不代表 HTML 仍然分页。`Infrastructure/HTML/Reading` 负责文件生成、资源去重与未提交文件回收；`Platform/HTML` 负责 WKWebView、隔离脚本桥、选文和滚动事件。已发布 HTML 只追加段落，文本高亮使用 UTF-16 范围和原文核验，旧 PDF 高亮继续使用矩形坐标。
+`Domain/Papers/HTMLReadingArtifact` 描述唯一已提交 HTML、资源引用与稳定内容锚点；`Paper.readingPages` 为 HTML 内容段和旧 PDF 页面提供统一导航，不代表 HTML 仍然分页。`Infrastructure/HTML/Reading` 负责文件生成、资源去重与未提交文件回收；`Platform/HTML` 负责 WKWebView、隔离脚本桥、选文和滚动事件。HTML 先保存完整原文，只填充待译位置，已完成段落不改写；文本高亮使用 UTF-16 范围和原文核验，旧 PDF 高亮继续使用矩形坐标。
 
 阅读器最多保留一个空的 WebKit 实例用于预热，网站数据存储为非持久化；它不保留论文版本或另建磁盘缓存。实际文档及资源属于用户阅读制品，随数据库提交事务发布。
 
 `Infrastructure/HTML/Mathematics` 使用随包 KaTeX 在 JavaScriptCore 中将受支持 LaTeX 编译为静态 MathML；公式库和许可证位于 `Resources/KaTeX`。`Application/Reading/ReparseActions` 负责旧导入的显式重试、原始文件身份核对与事务发布，拒绝改写已发布版式。
+
+`Infrastructure/Models/ChatCompletionStream` 解码 SSE 文本与工具参数增量，`ParagraphTranslationStream` 验证顺序段落边界并逐段提交。`NetworkTransport` 复用 URLSession，连接能否保持由系统与服务器协商；不承诺整个长文只使用一次 HTTP 请求。UI 临时草稿不进入数据库，已完成段落提交后替换对应草稿。
+
+HTML 文件使用进程内引用计数保护 WebKit 当前载入的文件：清理跳过正在使用的文档，阅读器关闭时释放并清理；重启后无占用的旧文件正常回收。此机制不复制图片，也不累计历史版本。显式重排仅允许无 HTML 批注依赖的内容，保留原始 PDF、论文 ID、可复用块 ID 与已保存译文中的 MathML。
+
+模型请求通过凭据适配器的异步读取入口访问 Keychain；设备适配器把可能等待系统授权的 SecItemCopyMatching 放到后台任务，完成后检查取消。View 的配置判断不读取密钥；仅状态检测与明确模型操作才读取，密钥不落盘。

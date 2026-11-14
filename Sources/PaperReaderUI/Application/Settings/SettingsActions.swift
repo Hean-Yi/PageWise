@@ -2,14 +2,23 @@ import Foundation
 import PaperReaderKit
 
 extension ReaderModel {
-    func modelKey(for settings: ModelSettings) throws -> String { try configurationStore.key(for: settings) }
+    func modelKey(for settings: ModelSettings) async throws -> String {
+        try await configurationStore.keyForRequest(settings)
+    }
 
-    public func hasSavedAPIKey() throws -> Bool { try !modelKey(for: modelSettings).isEmpty }
+    public func hasSavedAPIKey() async throws -> Bool { try await !modelKey(for: modelSettings).isEmpty }
 
     public func testModelConnection(_ draft: ModelSettings, key: String, removeKey: Bool = false) async throws {
         let settings = try draft.normalized()
         let enteredKey = key.trimmingCharacters(in: .whitespacesAndNewlines)
-        let testKey = removeKey ? "" : (enteredKey.isEmpty ? try configurationStore.keyForDraft(settings) : enteredKey)
+        let testKey: String
+        if removeKey {
+            testKey = ""
+        } else if enteredKey.isEmpty {
+            testKey = try await configurationStore.keyForDraftRequest(settings)
+        } else {
+            testKey = enteredKey
+        }
         guard !testKey.isEmpty else { throw ReaderError.message("请填写当前 API 地址对应的密钥，再测试连接。") }
         try Task.checkCancellation()
         _ = try await client.complete(

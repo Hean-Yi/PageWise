@@ -40,14 +40,29 @@ public actor HTMLPaperParser {
         try HTMLMathNormalizer.normalize(article)
         try await HTMLImageNormalizer.normalize(article, source: source, transport: transport)
         try article.select("script,style,noscript,.ltx_page_header,.ltx_page_footer").remove()
+        for authors in try article.select(".ltx_authors") {
+            let names = try authors.select(".ltx_personname").map { try $0.text() }
+            guard !names.isEmpty else { continue }
+            let details = try authors.select(".ltx_creator").map { "<p>" + Self.escape(try $0.text()) + "</p>" }
+                .joined()
+            try authors.html(
+                "<p>" + Self.escape(names.joined(separator: " · "))
+                    + "</p><details><summary>作者与机构</summary>" + details + "</details>")
+        }
         var elements: [Element] = []
         func collect(_ node: Element) throws {
+            if node.tagName() == "figure", try node.select("figure").contains(where: { $0 !== node }) {
+                for child in node.children() { try collect(child) }
+                return
+            }
             let tags: Set<String> = [
-                "p", "h1", "h2", "h3", "h4", "h5", "h6", "figure", "table", "pre", "ul", "ol", "math", "blockquote",
+                "p", "h1", "h2", "h3", "h4", "h5", "h6", "figure", "figcaption", "table", "pre", "ul", "ol", "math",
+                "blockquote",
             ]
             if tags.contains(node.tagName()) || node.hasAttr("data-pr-image") || node.hasClass("ltx_equation")
                 || node.hasClass("ltx_equationgroup")
                 || node.hasClass("ltx_listing")
+                || node.hasClass("ltx_authors")
             {
                 elements.append(node)
             } else {
@@ -66,14 +81,24 @@ public actor HTMLPaperParser {
         }
         try collect(article)
         guard !elements.isEmpty, elements.count <= 5_000 else { throw ReaderError.message("HTML 正文为空或过大。") }
+        var emittedAnchors = Set<String>()
         return try elements.map { element in
             var mathematics: [String: String] = [:]
             var descriptions: [String: String] = [:]
             let converted = try Self.convert(element, mathematics: &mathematics, descriptions: &descriptions)
+            let aliases = element.parents().reversed().compactMap { Self.referenceID((try? $0.attr("id")) ?? "") }
+                .filter { emittedAnchors.insert($0).inserted }
+                .map { "<span id=\"\($0)\"></span>" }.joined()
             var block = TextBlock(sourcePage: -1, text: converted.text.trimmingCharacters(in: .whitespacesAndNewlines))
+            let containsTable = try !element.select("table").isEmpty()
             block.richContent = RichContent(
-                html: converted.html,
-                translationInput: element.hasClass("ltx_listing")
+                html: aliases + converted.html,
+                translationInput: element.hasClass("ltx_listing") || element.hasClass("ltx_authors")
+                    || element.hasClass("ltx_biblist") || element.hasClass("ltx_equation")
+                    || element.hasClass("ltx_equationgroup") || element.tagName() == "math"
+                    || element.tagName() == "pre" || element.tagName() == "code"
+                    || element.tagName() == "table" || element.hasClass("ltx_table")
+                    || containsTable
                     ? "" : converted.input.trimmingCharacters(in: .whitespacesAndNewlines),
                 mathematics: mathematics, mathDescriptions: descriptions)
             let captions = try element.select("figcaption")
@@ -113,6 +138,8 @@ public actor HTMLPaperParser {
         "mover", "munder", "munderover",
         "mtable", "mtr", "mtd", "mspace", "menclose", "mstyle", "mpadded", "mphantom", "mmultiscripts", "mprescripts",
         "none", "semantics",
+        "details", "summary",
+        "a",
     ]
 
     private static func convert(
@@ -142,6 +169,23 @@ public actor HTMLPaperParser {
         }
         guard tags.contains(tag) else { return children }
         var attributes = ""
+        if let anchor = Self.referenceID(try element.attr("id")) { attributes += " id=\"\(anchor)\"" }
+        if tag == "a" {
+            let href = try element.attr("href")
+            if href.hasPrefix("#"),
+                let anchor = Self.referenceID(String(href.dropFirst()).removingPercentEncoding ?? "")
+            {
+                attributes += " href=\"#\(anchor)\""
+            } else if let url = URL(string: href), ["https", "http"].contains(url.scheme ?? ""),
+                url.host != nil, url.user == nil, url.password == nil
+            {
+                attributes += " href=\"\(Self.escape(url.absoluteString))\" rel=\"noreferrer\""
+            }
+        }
+        if element.hasClass("ltx_authors") { attributes += " class=\"paper-authors\"" }
+        if element.hasClass("ltx_equation") || element.hasClass("ltx_equationgroup") {
+            attributes += " class=\"paper-equation\""
+        }
         let names =
             tag == "img"
             ? ["src", "alt", "width", "height"]
@@ -176,5 +220,11 @@ public actor HTMLPaperParser {
     public static func escape(_ value: String) -> String {
         value.replacingOccurrences(of: "&", with: "&amp;").replacingOccurrences(of: "<", with: "&lt;")
             .replacingOccurrences(of: ">", with: "&gt;").replacingOccurrences(of: "\"", with: "&quot;")
+    }
+    private static func referenceID(_ value: String) -> String? {
+        guard value.range(of: #"^[A-Za-z][A-Za-z0-9_.:-]{0,180}$"#, options: .regularExpression) != nil else {
+            return nil
+        }
+        return "ref-" + value
     }
 }

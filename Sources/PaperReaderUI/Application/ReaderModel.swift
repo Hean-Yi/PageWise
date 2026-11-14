@@ -15,6 +15,9 @@ public final class ReaderModel {
     public var selectionHTMLRange: [Int]?
     public var usesHTMLReading: Bool { mode == "translated" && paper?.htmlReading != nil }
     var importProgressToken: UUID?
+    public var translationDraft: TranslationDraft?
+    public var translationPauseReason: String?
+    public var assistantDraft: ChatTurn?
     public var busyAI = false
     public var translating: Set<UUID> = []
     public private(set) var pendingArtifactIDs: Set<UUID> = []

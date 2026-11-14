@@ -11,7 +11,7 @@ struct LibraryAgentView: View {
     @FocusState private var composerFocused: Bool
 
     private var isConfigured: Bool {
-        (try? model.modelSettings.normalized()) != nil && (try? model.hasSavedAPIKey()) == true
+        (try? model.modelSettings.normalized()) != nil
     }
 
     var body: some View {

@@ -67,7 +67,19 @@ struct ReaderView: View {
             HStack(spacing: 0) {
                 VStack(spacing: 0) {
                     Group {
-                        if model.mode == "translated" && model.activePages.isEmpty && model.paper?.canReflow == true {
+                        if model.paper?.htmlReading == nil, let draft = model.translationDraft,
+                            draft.paperID == model.selectedPaperID
+                        {
+                            ScrollView {
+                                VStack(alignment: .leading, spacing: 20) {
+                                    Text(draft.block.text).font(.title3)
+                                    Text(draft.text).font(.title3).textSelection(.enabled)
+                                    ProgressView("正在流式翻译").controlSize(.small)
+                                }.padding(32).frame(maxWidth: 860, alignment: .leading)
+                            }
+                        } else if model.mode == "translated" && model.activePages.isEmpty
+                            && model.paper?.canReflow == true
+                        {
                             VStack(spacing: 20) {
                                 Image(systemName: "character.book.closed").font(.system(size: 42, weight: .ultraLight))
                                     .foregroundStyle(ReaderTheme.accent)
@@ -111,6 +123,10 @@ struct ReaderView: View {
         }
     }
 
+    private var displayedChats: [ChatTurn] {
+        model.currentChats + (model.assistantDraft.flatMap { $0.paperID == model.selectedPaperID ? [$0] : nil } ?? [])
+    }
+
     private var title: some View {
         HStack(spacing: 14) {
             Button {
@@ -138,13 +154,15 @@ struct ReaderView: View {
 
     private func controls(width: CGFloat) -> some View {
         HStack(spacing: 14) {
-            if let paper = model.paper, paper.htmlReading == nil, paper.previewPages.isEmpty,
+            if let paper = model.paper, paper.previewPages.isEmpty,
                 paper.translatedPages.isEmpty
             {
                 Button {
-                    Task { await model.reparseCurrentPaper() }
+                    Task { await model.reparseCurrentPaper(replacingUnannotatedHTML: paper.htmlReading != nil) }
                 } label: {
-                    Label(model.isImporting ? "正在解析" : "重新解析", systemImage: "arrow.clockwise")
+                    Label(
+                        model.isImporting ? "正在解析" : (paper.htmlReading == nil ? "重新解析" : "重新排版"),
+                        systemImage: "arrow.clockwise")
                 }
                 .disabled(model.isImporting || model.translating.contains(paper.id))
             }
@@ -213,6 +231,9 @@ struct ReaderView: View {
                 .accessibilityLabel(model.isCurrentPageBookmarked ? "移除当前页书签" : "添加当前页书签")
                 .keyboardShortcut("d")
             Spacer()
+            if let reason = model.translationPauseReason {
+                Text(reason).font(.caption).foregroundStyle(ReaderTheme.muted).lineLimit(2)
+            }
             if !model.selectionText.isEmpty {
                 Button(action: model.highlightSelection) { Label("高亮", systemImage: "highlighter") }
                 Button {
@@ -271,7 +292,7 @@ struct ReaderView: View {
             } else {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 24) {
-                        if model.currentChats.isEmpty {
+                        if displayedChats.isEmpty {
                             VStack(alignment: .leading, spacing: 20) {
                                 Image(systemName: "sparkles").font(.system(size: 26, weight: .light)).foregroundStyle(
                                     ReaderTheme.accent
@@ -287,7 +308,7 @@ struct ReaderView: View {
                                 }
                             }
                         }
-                        ForEach(model.currentChats) { turn in
+                        ForEach(displayedChats) { turn in
                             VStack(alignment: .leading, spacing: 14) {
                                 Text(turn.question).font(.callout.weight(.medium)).padding(12).frame(
                                     maxWidth: .infinity, alignment: .leading
@@ -364,7 +385,7 @@ struct ReaderView: View {
     }
 
     private var configured: Bool {
-        (try? model.modelSettings.normalized()) != nil && (try? model.hasSavedAPIKey()) == true
+        (try? model.modelSettings.normalized()) != nil
     }
     private func translate() { if configured { model.startTranslation() } else { requestSettings() } }
     private func send() {

@@ -111,4 +111,19 @@ public struct AgentMessage: Codable, Sendable, Equatable {
 public protocol AgentCompleting: Sendable {
     func respond(settings: ModelSettings, key: String, messages: [AgentMessage], limits: AgentLimits) async throws
         -> AgentMessage
+    func respondStreaming(
+        settings: ModelSettings, key: String, messages: [AgentMessage], limits: AgentLimits,
+        onPartial: @escaping @Sendable (String) async throws -> Void
+    ) async throws -> AgentMessage
+}
+
+extension AgentCompleting {
+    public func respondStreaming(
+        settings: ModelSettings, key: String, messages: [AgentMessage], limits: AgentLimits,
+        onPartial: @escaping @Sendable (String) async throws -> Void
+    ) async throws -> AgentMessage {
+        let result = try await respond(settings: settings, key: key, messages: messages, limits: limits)
+        if let text = result.content { try await onPartial(text) }
+        return result
+    }
 }

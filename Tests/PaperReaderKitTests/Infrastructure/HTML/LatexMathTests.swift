@@ -63,3 +63,45 @@ func invalidOrUnsupportedLatexNeverPublishesAnIncorrectFormula(latex: String) th
                     .utf8), at: URL(string: "https://arxiv.org/html/2401.00001v1")!)
     }
 }
+
+@Test func authorMetadataBecomesCompactHTMLInsteadOfManyTranslationRequests() async throws {
+    let html =
+        "<article class='ltx_document'><h1>Title</h1><div class='ltx_authors'><span class='ltx_creator'><span class='ltx_personname'>First Author</span><span class='ltx_contact'>Original Institute</span></span><span class='ltx_creator'><span class='ltx_personname'>Second Author</span><span class='ltx_note'>Equal contribution</span></span></div><p>Actual paragraph.</p></article>"
+    let blocks = try await HTMLPaperParser().parse(
+        Data(html.utf8), at: URL(string: "https://arxiv.org/html/2401.00001v1")!)
+    #expect(blocks.count == 3)
+    let authors = try #require(blocks[1].richContent)
+    #expect(!authors.requiresTranslation)
+    #expect(authors.html.contains("paper-authors"))
+    #expect(authors.html.contains("<details>"))
+    #expect(authors.html.contains("Original Institute"))
+    #expect(authors.html.contains("Equal contribution"))
+}
+
+@Test func referencesKeepLocalTargetsAndStandaloneEquationsSkipTranslation() async throws {
+    let html =
+        #"<article class='ltx_document'><section id='S1'><h2>Setup</h2><p>See <a href='#bib.item'>citation</a> and <a href='https://example.com/paper'>source</a>. <a href='javascript:bad()'>Unsafe</a></p><table class='ltx_equation' id='Eq1'><tr><td><math display='block'><mi>x</mi></math></td><td>(1)</td></tr></table></section><ul><li id='bib.item'>Original reference</li></ul></article>"#
+    let blocks = try await HTMLPaperParser().parse(
+        Data(html.utf8), at: URL(string: "https://arxiv.org/html/2401.00001v1")!)
+    let rendered = blocks.compactMap(\.richContent?.html).joined()
+    #expect(rendered.contains("id=\"ref-S1\""))
+    #expect(rendered.contains("href=\"#ref-bib.item\""))
+    #expect(rendered.contains("id=\"ref-bib.item\""))
+    #expect(rendered.contains("https://example.com/paper"))
+    #expect(!rendered.contains("javascript:"))
+    #expect(blocks[2].richContent?.requiresTranslation == false)
+}
+
+@Test func tablesStayOriginalAndEachFigurePanelKeepsItsOwnCaption() async throws {
+    let source =
+        "<article class='ltx_document'><figure class='ltx_table'><figcaption>Table 1: Results</figcaption><table><tr><th>Model</th><td><math><mn>99</mn></math></td></tr></table></figure><table><tr><td>Standalone table</td></tr></table><figure id='F1'><figure><figcaption>Panel A</figcaption></figure><figure><figcaption>Panel B</figcaption></figure><figcaption>Figure 1: Comparison</figcaption></figure><p>After figures.</p></article>"
+    let blocks = try await HTMLPaperParser().parse(
+        Data(source.utf8), at: URL(string: "https://arxiv.org/html/2401.00001v1")!)
+    #expect(blocks.count == 6)
+    #expect(blocks[0].richContent?.requiresTranslation == false)
+    #expect(blocks[1].richContent?.requiresTranslation == false)
+    #expect(blocks[0].richContent?.html.contains("<table>") == true)
+    #expect(blocks[2].richContent?.translationInput == "Panel A")
+    #expect(blocks[3].richContent?.translationInput == "Panel B")
+    #expect(blocks[4].richContent?.translationInput == "Figure 1: Comparison")
+}

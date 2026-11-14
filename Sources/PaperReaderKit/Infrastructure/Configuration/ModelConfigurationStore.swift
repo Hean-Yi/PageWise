@@ -2,13 +2,24 @@ import Foundation
 
 @MainActor public protocol ModelCredentialStore {
     func load(account: String) throws -> String
+    func loadForRequest(account: String) async throws -> String
     /// An empty value removes the account.
     func save(_ value: String, account: String) throws
+}
+
+extension ModelCredentialStore {
+    public func loadForRequest(account: String) async throws -> String { try load(account: account) }
 }
 
 public struct DeviceModelCredentials: ModelCredentialStore {
     public init() {}
     public func load(account: String) throws -> String { try KeychainStore.load(account: account) }
+    public func loadForRequest(account: String) async throws -> String {
+        // A system Keychain authorization prompt must not block the UI actor.
+        let key = try await Task.detached(priority: .userInitiated) { try KeychainStore.load(account: account) }.value
+        try Task.checkCancellation()
+        return key
+    }
     public func save(_ value: String, account: String) throws { try KeychainStore.save(value, account: account) }
 }
 
@@ -32,6 +43,16 @@ public struct DeviceModelCredentials: ModelCredentialStore {
 
     public func key(for settings: ModelSettings) throws -> String {
         try credentials.load(account: settings.credentialID ?? "model-key")
+    }
+
+    public func keyForRequest(_ settings: ModelSettings) async throws -> String {
+        try await credentials.loadForRequest(account: settings.credentialID ?? "model-key")
+    }
+
+    public func keyForDraftRequest(_ draft: ModelSettings) async throws -> String {
+        let saved = try load()
+        guard try saved.endpointURL() == draft.endpointURL() else { return "" }
+        return try await keyForRequest(saved)
     }
 
     public func keyForDraft(_ draft: ModelSettings) throws -> String {

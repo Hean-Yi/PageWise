@@ -2,6 +2,7 @@ import CoreGraphics
 import Foundation
 import ImageIO
 import PDFKit
+import SwiftSoup
 import Testing
 
 @testable import PaperReaderKit
@@ -179,4 +180,60 @@ func htmlRetainedPageHonorsCropAndRotation(rotation: Int) async throws {
     }
     for color in ["red", "green", "blue", "magenta"] { #expect((counts[color] ?? 0) >= 6_300) }
     #expect((counts["annotation"] ?? 0) > 400)
+}
+
+@Test func rebuildingSourceLinksReusesPublishedTranslationMathWithoutAPICalls() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    var block = TextBlock(sourcePage: 0, text: "Source x")
+    block.richContent = RichContent(
+        html: "<p>Source <math><mi>x</mi></math></p>", translationInput: "Source [[MATH_1]]",
+        mathematics: ["[[MATH_1]]": "<math><mi>x</mi></math>"], mathDescriptions: ["[[MATH_1]]": "x"])
+    let paper = Paper(
+        title: "Fixture", digest: "fixture", originalPath: "unused.pdf", pageCount: 1, blocks: [block], warnings: [],
+        canReflow: true)
+    let store = HTMLReadingStore()
+    let old = try await store.append(
+        [BilingualBlock(block: block, translation: "原文 [[MATH_1]]")], to: nil, paper: paper, root: root)
+    block.richContent?.html = "<p id='ref-new'>Source <math><mi>x</mi></math><a href='#ref-new'>reference</a></p>"
+    let new = try await store.append(
+        [BilingualBlock(block: block, translation: nil)], to: nil, paper: paper, root: root,
+        restoringTranslationsFrom: old)
+    let html = try String(contentsOf: root.appendingPathComponent(new.relativePath), encoding: .utf8)
+    #expect(html.contains("ref-new"))
+    #expect(try SwiftSoup.parse(html).select(".translation math").count == 1)
+    #expect(html.contains("原文"))
+    #expect(new.sections.map(\.id) == old.sections.map(\.id))
+}
+
+@Test func allOriginalsAreReadableAndOnlyPendingTranslationChanges() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let blocks = [TextBlock(sourcePage: 0, text: "First original"), TextBlock(sourcePage: 1, text: "Last original")]
+    var paper = Paper(
+        title: "Fixture", digest: "fixture", originalPath: "unused.pdf", pageCount: 2, blocks: blocks, warnings: [],
+        canReflow: true)
+    let store = HTMLReadingStore()
+    let original = try await store.prepareOriginal(paper: paper, root: root)
+    paper.htmlReading = original
+    #expect(original.fullSource == true)
+    let first = try await store.append(
+        [BilingualBlock(block: blocks[0], translation: "第一段")], to: original, paper: paper, root: root)
+    let firstContent = try await store.appendedContent(
+        at: root.appendingPathComponent(first.relativePath), excluding: [blocks[1].id.uuidString])
+    let second = try await store.append(
+        [BilingualBlock(block: blocks[1], translation: "最后一段")], to: first, paper: paper, root: root)
+    #expect(
+        try await store.appendedContent(
+            at: root.appendingPathComponent(second.relativePath), excluding: [blocks[1].id.uuidString]) == firstContent)
+    let html = try String(contentsOf: root.appendingPathComponent(first.relativePath), encoding: .utf8)
+    #expect(html.contains("Last original"))
+    #expect(html.contains("译文待加载"))
+    #expect(try await store.translations(in: first, root: root).count == 1)
+    let ignored = try await store.append(
+        [BilingualBlock(block: blocks[0], translation: "Must not replace")], to: second, paper: paper, root: root)
+    let final = try String(contentsOf: root.appendingPathComponent(ignored.relativePath), encoding: .utf8)
+    #expect(!final.contains("Must not replace"))
+    #expect(try SwiftSoup.parse(final).select("section").count == 2)
+    #expect(try SwiftSoup.parse(final).select(".pending").count == 0)
 }

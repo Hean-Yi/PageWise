@@ -141,7 +141,7 @@ public final class LibraryAgent {
         guard reader.loaded else { throw ReaderError.message("书库尚未成功打开。") }
         guard limits.maxRounds > 0 else { throw ReaderError.message("工具执行轮数已达上限。") }
         let settings = reader.modelSettings
-        let key = try reader.modelKey(for: settings)
+        let key = try await reader.modelKey(for: settings)
         guard !key.isEmpty, !settings.model.isEmpty else { throw ReaderError.message("请先在设置中填写模型名称并保存 API Key。") }
         let system = AgentMessage(role: "system", content: Self.instructions)
         let user = AgentMessage(role: "user", content: question)
@@ -160,7 +160,13 @@ public final class LibraryAgent {
             guard try JSONEncoder().encode(messages).count <= limits.maxContextBytes else {
                 throw ReaderError.message("上下文达到上限，请缩小范围或新建对话。")
             }
-            let response = try await client.respond(settings: settings, key: key, messages: messages, limits: limits)
+            updateTurn(turnID) { $0.answer = "" }
+            let response = try await client.respondStreaming(
+                settings: settings, key: key, messages: messages, limits: limits
+            ) { [weak self] text in
+                guard let self else { throw CancellationError() }
+                try await self.receiveDraft(text, turnID: turnID, epoch: epoch)
+            }
             try check(epoch)
             guard response.role == "assistant", try JSONEncoder().encode(response).count <= limits.maxResponseBytes
             else {
@@ -226,6 +232,11 @@ public final class LibraryAgent {
             try retainCompletedHistory(current, after: prior, system: system, epoch: epoch)
         }
         throw ReaderError.message("本次工具执行轮数达到上限；已有结果已保留，可继续提问。")
+    }
+
+    private func receiveDraft(_ text: String, turnID: UUID, epoch: UUID) throws {
+        try check(epoch)
+        updateTurn(turnID) { $0.answer = text }
     }
 
     private func retainCompletedHistory(

@@ -2,6 +2,17 @@ import Foundation
 
 public protocol HTTPTransport: Sendable {
     func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse)
+    func stream(for request: URLRequest, onData: @Sendable (Data) async throws -> Void) async throws -> HTTPURLResponse
+}
+
+extension HTTPTransport {
+    public func stream(for request: URLRequest, onData: @Sendable (Data) async throws -> Void) async throws
+        -> HTTPURLResponse
+    {
+        let (data, response) = try await data(for: request)
+        if (200...299).contains(response.statusCode) { try await onData(data) }
+        return response
+    }
 }
 
 private final class NoRedirects: NSObject, URLSessionTaskDelegate {
@@ -14,21 +25,35 @@ private final class NoRedirects: NSObject, URLSessionTaskDelegate {
 }
 
 public struct NetworkTransport: HTTPTransport {
-    public init() {}
-    public func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+    private let session: URLSession
+    public init() {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForRequest = 90
-        configuration.timeoutIntervalForResource = 180
-        let session = URLSession(configuration: configuration, delegate: NoRedirects(), delegateQueue: nil)
-        defer { session.invalidateAndCancel() }
+        configuration.timeoutIntervalForResource = 300
+        session = URLSession(configuration: configuration, delegate: NoRedirects(), delegateQueue: nil)
+    }
+    public func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) {
         let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse else { throw ReaderError.message("服务器返回了无效响应。") }
         return (data, http)
     }
+
+    public func stream(for request: URLRequest, onData: @Sendable (Data) async throws -> Void) async throws
+        -> HTTPURLResponse
+    {
+        let (bytes, response) = try await session.bytes(for: request)
+        guard let http = response as? HTTPURLResponse else { throw ReaderError.message("服务器返回了无效响应。") }
+        guard (200...299).contains(http.statusCode) else { return http }
+        for try await line in bytes.lines {
+            try Task.checkCancellation()
+            try await onData(Data((line + "\n").utf8))
+        }
+        return http
+    }
 }
 
 public struct ModelClient: Sendable {
-    private let transport: any HTTPTransport
+    let transport: any HTTPTransport
     public init(transport: any HTTPTransport = NetworkTransport()) { self.transport = transport }
 
     public func complete(settings: ModelSettings, key: String, system: String, user: String) async throws -> String {
@@ -73,7 +98,7 @@ public struct ModelClient: Sendable {
         var model: String
         var messages: [Message]
         var temperature: Double
-        let stream = false
+        var stream = false
         let maxTokens = 4096
         enum CodingKeys: String, CodingKey {
             case model, messages, temperature, stream

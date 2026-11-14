@@ -57,7 +57,13 @@ public struct LibraryView: View {
                 } catch {}
             }
             .onChange(of: model.selectedPaperID) { _, id in if id != nil { preferredColumn = .detail } }
-            .onChange(of: scenePhase) { _, phase in model.setActive(phase == .active) }
+            .onChange(of: scenePhase) { _, phase in
+                #if os(macOS)
+                    model.setActive(phase == .active, suspendTranslation: false)
+                #else
+                    model.setActive(phase == .active, suspendTranslation: phase == .background)
+                #endif
+            }
             .onReceive(timer) { _ in model.tick() }
     }
 

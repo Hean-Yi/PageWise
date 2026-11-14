@@ -4,19 +4,37 @@ import Foundation
 import ImageIO
 import PDFKit
 import SwiftSoup
+import Synchronization
 import UniformTypeIdentifiers
 
 /// Produces final reading files, not a cache. Callers publish references before removing old versions.
 public actor HTMLReadingStore {
+    private static let openDocuments = Mutex<[URL: Int]>([:])
     public init() {}
 
-    public func append(_ pairs: [BilingualBlock], to previous: HTMLReadingArtifact?, paper: Paper, root: URL) throws
+    public static func retainOpenDocument(_ url: URL) {
+        openDocuments.withLock { $0[url.standardizedFileURL, default: 0] += 1 }
+    }
+
+    public static func releaseOpenDocument(_ url: URL) {
+        openDocuments.withLock { references in
+            let key = url.standardizedFileURL
+            let count = (references[key] ?? 1) - 1
+            references[key] = count > 0 ? count : nil
+        }
+    }
+
+    public func append(
+        _ pairs: [BilingualBlock], to previous: HTMLReadingArtifact?, paper: Paper, root: URL,
+        restoringTranslationsFrom saved: HTMLReadingArtifact? = nil, preparingOriginal: Bool = false
+    ) throws
         -> HTMLReadingArtifact
     {
         let prefix = "Papers/\(paper.id.uuidString)/reading/"
         let folder = root.appendingPathComponent(prefix)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         var content = ""
+        let savedTranslations = try saved.map { try translations(in: $0, root: root) } ?? [:]
         if let previous {
             let old = try String(contentsOf: root.appendingPathComponent(previous.relativePath), encoding: .utf8)
             guard let start = old.range(of: Self.start), let end = old.range(of: Self.end, options: .backwards),
@@ -43,12 +61,37 @@ public actor HTMLReadingStore {
         var sourcePDF: PDFDocument?
         for pair in pairs {
             try Task.checkCancellation()
-            guard !sections.contains(where: { $0.blockIDs.contains(pair.block.id) }) else {
-                throw ReaderError.message("内容块已发布，拒绝重复追加。")
+            let existing = sections.contains(where: { $0.blockIDs.contains(pair.block.id) })
+            let marker = "<section id='block-\(pair.block.id.uuidString)'"
+            var existingRange: Range<String.Index>?
+            var existingBody: String?
+            if existing {
+                guard previous?.fullSource == true,
+                    let start = content.range(of: marker),
+                    let end = content.range(of: "</section>", range: start.upperBound..<content.endIndex)
+                else { throw ReaderError.message("内容块已发布，拒绝重复追加。") }
+                let range = start.lowerBound..<end.upperBound
+                let section = String(content[range])
+                // Completed sections are immutable; only their pending siblings can be filled.
+                guard section.contains("data-pending='true'") else { continue }
+                guard let body = section.firstIndex(of: ">"),
+                    let placeholder = section.range(of: "<div class='translation pending'")
+                else { throw ReaderError.message("待译内容结构不完整，未覆盖原文。") }
+                existingRange = range
+                existingBody = String(section[section.index(after: body)..<placeholder.lowerBound])
             }
             var html: String
             var translationTag = "div"
-            if pair.block.preservesSourcePage == true {
+            if let existingBody {
+                html = existingBody
+                let parsed = try SwiftSoup.parseBodyFragment(html)
+                if let tag = parsed.body()?.children().first(where: { $0.tagName() != "span" || !$0.hasAttr("id") })?
+                    .tagName(),
+                    ["h1", "h2", "h3", "h4", "h5", "h6"].contains(tag)
+                {
+                    translationTag = tag
+                }
+            } else if pair.block.preservesSourcePage == true {
                 if sourcePDF == nil { sourcePDF = PDFDocument(url: root.appendingPathComponent(paper.originalPath)) }
                 guard let sourcePDF, (0..<sourcePDF.pageCount).contains(pair.block.sourcePage),
                     let page = sourcePDF.page(at: pair.block.sourcePage)
@@ -56,12 +99,13 @@ public actor HTMLReadingStore {
                 let (bytes, width, height) = try Self.raster(page)
                 let name = try saveAsset(bytes, ext: "png")
                 html =
-                    "<figure><img src='\(name)' width='\(width)' height='\(height)' loading='lazy' alt='保留的原始页面'><figcaption>此页保留原版图表与公式；可切换原版查看和批注。</figcaption></figure>"
+                    "<figure class='source-page'><img src='\(name)' width='\(width)' height='\(height)' loading='lazy' alt='保留的原始页面'><figcaption>此页保留原版图表与公式；可切换原版查看和批注。</figcaption></figure>"
             } else {
                 html = pair.block.richContent?.html ?? "<p>\(Self.escape(pair.block.text))</p>"
                 let parsed = try SwiftSoup.parseBodyFragment(html)
                 if pair.block.richContent == nil, let body = parsed.body() { try HTMLMathNormalizer.normalize(body) }
-                if let tag = parsed.body()?.children().first()?.tagName(),
+                if let tag = parsed.body()?.children().first(where: { $0.tagName() != "span" || !$0.hasAttr("id") })?
+                    .tagName(),
                     ["h1", "h2", "h3", "h4", "h5", "h6"].contains(tag)
                 {
                     translationTag = tag
@@ -77,6 +121,7 @@ public actor HTMLReadingStore {
                 }
                 html = try parsed.body()?.html() ?? ""
             }
+            var pending = false
             if let translation = pair.translation {
                 try pair.block.richContent?.validate(translation)
                 var translated = Self.escape(translation)
@@ -87,11 +132,27 @@ public actor HTMLReadingStore {
                 if let body = translatedDocument.body() { try HTMLMathNormalizer.normalize(body) }
                 translated = try translatedDocument.body()?.html() ?? translated
                 html += "<\(translationTag) class='translation' lang='zh-Hans'>\(translated)</\(translationTag)>"
+            } else if pair.block.richContent?.requiresTranslation != false,
+                let restored = pair.block.richContent?.restoredTranslationHTML
+                    ?? savedTranslations[pair.block.id.uuidString]
+            {
+                html += restored
+            } else if preparingOriginal && pair.block.preservesSourcePage != true
+                && pair.block.richContent?.requiresTranslation != false
+            {
+                pending = true
+                html += "<div class='translation pending' aria-label='译文待加载'>译文待加载…</div>"
             }
             let id = pair.block.id
-            content +=
-                "<section id='block-\(id.uuidString)' data-key='\(id.uuidString)' data-source='\(pair.block.sourcePage)'>\(html)</section>"
-            sections.append(PageArtifact(id: id, blockIDs: [id], sourcePage: pair.block.sourcePage, relativePath: ""))
+            let section =
+                "<section id='block-\(id.uuidString)' data-key='\(id.uuidString)' data-source='\(pair.block.sourcePage)' data-pending='\(pending)'>\(html)</section>"
+            if let existingRange {
+                content.replaceSubrange(existingRange, with: section)
+            } else {
+                content += section
+                sections.append(
+                    PageArtifact(id: id, blockIDs: [id], sourcePage: pair.block.sourcePage, relativePath: ""))
+            }
         }
         let path = prefix + "document-\(UUID().uuidString).html"
         let destination = root.appendingPathComponent(path)
@@ -101,7 +162,31 @@ public actor HTMLReadingStore {
         try Task.checkCancellation()
         for index in sections.indices { sections[index].relativePath = path }
         retained = true
-        return HTMLReadingArtifact(relativePath: path, sections: sections, assets: assets.sorted())
+        var artifact = HTMLReadingArtifact(relativePath: path, sections: sections, assets: assets.sorted())
+        artifact.fullSource = preparingOriginal || previous?.fullSource == true
+        return artifact
+    }
+
+    public func prepareOriginal(paper: Paper, root: URL) throws -> HTMLReadingArtifact {
+        if let artifact = paper.htmlReading, artifact.fullSource == true { return artifact }
+        let remaining = paper.blocks.dropFirst(paper.htmlReading?.sections.count ?? 0)
+        return try append(
+            remaining.map { BilingualBlock(block: $0, translation: nil) },
+            to: paper.htmlReading, paper: paper, root: root, preparingOriginal: true)
+    }
+
+    public func translations(in artifact: HTMLReadingArtifact, root: URL) throws -> [String: String] {
+        let document = try SwiftSoup.parse(
+            String(contentsOf: root.appendingPathComponent(artifact.relativePath), encoding: .utf8))
+        var translations: [String: String] = [:]
+        for section in try document.select("#reader > section[data-key]") {
+            if let translation = section.children().first(where: {
+                $0.hasClass("translation") && !$0.hasClass("pending")
+            }) {
+                translations[try section.attr("data-key")] = try translation.outerHtml()
+            }
+        }
+        return translations
     }
 
     /// Removes only application-owned unreferenced files. Safe at startup or after a commit.
@@ -114,6 +199,7 @@ public actor HTMLReadingStore {
             at: directory, includingPropertiesForKeys: [.isSymbolicLinkKey])
         {
             guard try url.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink != true,
+                !openDocuments.withLock({ $0[url.standardizedFileURL] != nil }),
                 !kept.contains(prefix + url.lastPathComponent),
                 url.lastPathComponent.range(
                     of: #"^(document-[0-9A-Fa-f-]{36}\.html|asset-[0-9a-f]{64}\.(png|svg))$"#,
@@ -140,11 +226,11 @@ public actor HTMLReadingStore {
         <!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
         <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src 'self' file:; style-src 'unsafe-inline'; script-src 'none'; base-uri 'none'; form-action 'none'">
         <title>\(HTMLPaperParser.escape(title))</title><style>
-        :root{color-scheme:light dark}*{box-sizing:border-box}body{margin:0;background:#fff;color:#202020;font:18px/1.75 -apple-system,BlinkMacSystemFont,'Helvetica Neue',Arial,sans-serif;overflow-wrap:break-word}
-        main{max-width:960px;margin:auto;padding:28px clamp(20px,5vw,56px) 80px}section{margin:0 0 24px}p,figure,pre,blockquote{margin:0 0 16px}
-        h1,h2,h3,h4,h5,h6{font:700 1.5em/1.4 system-ui;margin:0 0 14px}img{display:block;max-width:100%;height:auto;margin:auto}table{display:block;overflow:auto;border-collapse:collapse;max-width:100%}td,th{padding:6px;border:1px solid #aaa}
-        pre{overflow:auto;font:14px/1.6 monospace}math[display=block]{display:block;text-align:center;overflow-x:auto;max-width:100%;margin:24px 0}figcaption,.image-notice{font:14px/1.6 system-ui;color:#71572e}.translation{color:inherit;font-family:'Songti SC','STSong',serif;margin-top:12px}h1.translation,h2.translation,h3.translation,h4.translation,h5.translation,h6.translation{font-family:system-ui;margin-bottom:28px}
-        ::highlight(saved){background:#f2d36b;color:#292e2e}@media(prefers-color-scheme:dark){body{background:#232626;color:#e4e7e5}.translation{color:inherit}figcaption,.image-notice{color:#d0b784}}
+        :root{color-scheme:light dark}*{box-sizing:border-box}body{margin:0;background:#faf9f5;color:#252320;font:17px/1.8 -apple-system,BlinkMacSystemFont,'Helvetica Neue',Arial,sans-serif;overflow-wrap:break-word}
+        main{max-width:860px;margin:auto;padding:32px clamp(20px,4vw,48px) 80px}section{margin:0 0 24px}p,figure,pre,blockquote{margin:0 0 16px}
+        h1,h2,h3,h4,h5,h6{font:650 1.25em/1.45 system-ui;margin:24px 0 12px}h1{font-size:1.8em;line-height:1.3;margin-top:0}h2{font-size:1.45em}.paper-authors{font:14px/1.7 system-ui;color:#706b62;margin:12px 0 28px}.paper-authors details{margin-top:8px}.paper-authors summary{cursor:pointer;color:#a34c33}.paper-authors details p{margin:8px 0}.paper-equation,.paper-equation td{border:0;padding:4px}.paper-equation{margin:24px auto;width:max-content;max-width:100%}#translation-draft{margin-top:24px}img{display:block;max-width:100%;max-height:min(45vh,320px);width:auto;height:auto;object-fit:contain;margin:auto;cursor:zoom-in}.source-page img{max-height:none;width:100%}dialog{border:0;background:#faf9f5;padding:20px;max-width:96vw;max-height:96vh}dialog::backdrop{background:#0009}dialog img{max-width:90vw;max-height:82vh}dialog button{float:right;font:16px system-ui;border:0;background:transparent;cursor:pointer}a{color:#a34c33;text-decoration:underline;text-underline-offset:3px}table{display:block;overflow:auto;border-collapse:collapse;max-width:100%}td,th{padding:6px;border:1px solid #aaa}
+        pre{overflow:auto;font:14px/1.6 monospace}math[display=block]{display:block;text-align:center;overflow-x:auto;max-width:100%;margin:24px 0}figcaption,.image-notice{font:14px/1.6 system-ui;color:#71572e}.translation{color:inherit;font-family:'Songti SC','STSong',serif;margin-top:12px;border-top:1px solid #d9d4ca;border-left:1px solid #b9ac98;padding:12px 0 0 14px}.translation.pending{font:14px/1.8 system-ui;color:#8b8275;min-height:42px}.translation.pending.streaming{font:inherit;color:inherit;font-family:'Songti SC','STSong',serif}h1.translation,h2.translation,h3.translation,h4.translation,h5.translation,h6.translation{font-family:system-ui;margin-bottom:28px}
+        ::highlight(saved){background:#f2d36b;color:#292e2e}@media(prefers-color-scheme:dark){body{background:#24221f;color:#e4e1da}.translation{color:inherit}figcaption,.image-notice{color:#d0b784}}
         </style></head><body data-paper-id="\(paperID.uuidString)"><main id="reader">\(start)\(content)\(end)</main></body></html>
         """
     }

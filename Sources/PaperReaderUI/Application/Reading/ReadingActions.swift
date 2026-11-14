@@ -24,14 +24,17 @@ extension ReaderModel {
             Task { await save() }
         }
     }
-    public func setActive(_ active: Bool) {
+    public func setActive(_ active: Bool, suspendTranslation: Bool = true) {
         isActive = active
         if active {
             beginReading()
         } else {
             invalidateSearchNavigation()
             endReading()
-            for task in translationTasks.values { task.cancel() }
+            if suspendTranslation, !translationTasks.isEmpty {
+                translationPauseReason = "应用进入后台，翻译已暂停"
+                for task in translationTasks.values { task.cancel() }
+            }
         }
     }
     public func tick() {
