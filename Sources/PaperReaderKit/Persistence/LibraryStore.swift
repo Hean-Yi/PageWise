@@ -66,6 +66,7 @@ public actor LibraryStore {
             throw ReaderError.message("不能写入不受支持的书库版本，原有资料已保留。")
         }
         try state.validateShelves()
+        try state.validateOrdering()
         let data = try JSONEncoder().encode(state)
         try Self.database(at: databaseURL) { db in
             try Self.execute(db, "BEGIN IMMEDIATE")

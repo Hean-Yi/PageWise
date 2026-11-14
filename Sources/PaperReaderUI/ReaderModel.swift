@@ -121,7 +121,8 @@ public final class ReaderModel {
 
     @discardableResult func save(
         cancellable: Bool = false, adding importedPaper: Paper? = nil,
-        shelfChange: ShelfChange? = nil, importShelfID: UUID? = nil
+        shelfChange: ShelfChange? = nil, importShelfID: UUID? = nil,
+        orderChange: LibraryOrderChange? = nil
     ) async -> Bool {
         guard loaded else { return false }
         let previous = saveQueue
@@ -141,10 +142,13 @@ public final class ReaderModel {
                     }
                 }
                 if let shelfChange { try snapshot.apply(shelfChange) }
+                if let orderChange { try snapshot.apply(orderChange) }
                 try await store.save(snapshot, respectingCancellation: cancellable)
                 if let importedPaper { self.state.papers.insert(importedPaper, at: 0) }
                 self.state.shelves = snapshot.shelves
                 self.state.paperShelfIDs = snapshot.paperShelfIDs
+                self.state.manualPaperIDs = snapshot.manualPaperIDs
+                self.state.preferredSort = snapshot.preferredSort
                 return true
             } catch is CancellationError {
                 return false

@@ -151,7 +151,7 @@ public struct ReadingEntry: Identifiable, Codable, Sendable {
 }
 
 public struct LibraryState: Codable, Sendable {
-    public static let currentVersion = 3
+    public static let currentVersion = 4
     public var version = currentVersion
     public var papers: [Paper] = []
     public var highlights: [Highlight] = []
@@ -162,10 +162,13 @@ public struct LibraryState: Codable, Sendable {
     public var bookmarks: [PageBookmark] = []
     public var shelves: [Shelf] = []
     public var paperShelfIDs: [String: UUID] = [:]
+    public var manualPaperIDs: [UUID] = []
+    public var preferredSort: LibrarySort = .recent
     public init() {}
 
     private enum CodingKeys: String, CodingKey {
         case version, papers, highlights, chats, memories, reading, workspace, bookmarks, shelves, paperShelfIDs
+        case manualPaperIDs, preferredSort
     }
 
     public init(from decoder: any Decoder) throws {
@@ -193,6 +196,12 @@ public struct LibraryState: Codable, Sendable {
             shelves = try values.decode([Shelf].self, forKey: .shelves)
             paperShelfIDs = try values.decode([String: UUID].self, forKey: .paperShelfIDs)
         }
+        // v4 adds custom ordering without changing paper, page or shelf identities.
+        if storedVersion >= 4 {
+            manualPaperIDs = try values.decode([UUID].self, forKey: .manualPaperIDs)
+            preferredSort = try values.decode(LibrarySort.self, forKey: .preferredSort)
+        }
+        try validateOrdering()
         try validateShelves()
         version = Self.currentVersion
     }

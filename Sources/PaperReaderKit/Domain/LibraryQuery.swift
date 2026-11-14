@@ -29,14 +29,15 @@ public enum LibraryCollection: String, CaseIterable, Identifiable, Sendable {
     }
 }
 
-public enum LibrarySort: String, CaseIterable, Identifiable, Sendable {
-    case recent, added, title
+public enum LibrarySort: String, CaseIterable, Identifiable, Codable, Sendable {
+    case recent, added, title, manual
     public var id: String { rawValue }
     public var title: String {
         switch self {
         case .recent: "最近打开"
         case .added: "添加时间"
         case .title: "标题"
+        case .manual: "自定义顺序"
         }
     }
 }
@@ -52,6 +53,7 @@ public enum LibraryQuery {
                     && LibraryCollection.finished.includes(
                         state.workspace[$0.id.uuidString] ?? PaperWorkspace(), for: $0)
             }.map(\.id))
+        let ranks = Dictionary(uniqueKeysWithValues: state.manualPaperIDs.enumerated().map { ($1, $0) })
         return state.papers.filter { paper in
             let preferences = state.workspace[paper.id.uuidString] ?? PaperWorkspace()
             return collection.includes(preferences, for: paper)
@@ -68,6 +70,10 @@ public enum LibraryQuery {
             case .title:
                 let order = lhs.title.localizedStandardCompare(rhs.title)
                 if order != .orderedSame { return order == .orderedAscending }
+            case .manual:
+                let a = ranks[lhs.id] ?? Int.max
+                let b = ranks[rhs.id] ?? Int.max
+                if a != b { return a < b }
             case .added: break
             }
             if lhs.addedAt != rhs.addedAt { return lhs.addedAt > rhs.addedAt }

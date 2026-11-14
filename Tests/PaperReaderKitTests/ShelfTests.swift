@@ -41,7 +41,7 @@ import Testing
     json.removeValue(forKey: "shelves")
     json.removeValue(forKey: "paperShelfIDs")
     var migrated = try JSONDecoder().decode(LibraryState.self, from: JSONSerialization.data(withJSONObject: json))
-    #expect(migrated.version == 3)
+    #expect(migrated.version == LibraryState.currentVersion)
     #expect(migrated.workspace == original.workspace)
     #expect(migrated.shelves.isEmpty)
     #expect(migrated.paperShelfIDs.isEmpty)

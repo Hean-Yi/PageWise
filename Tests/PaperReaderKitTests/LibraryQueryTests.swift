@@ -61,7 +61,7 @@ func allLibrarySortsKeepUnfinishedFirstAndPreserveOrderWithinEachGroup(sort: Lib
     let expected: [Int]
     switch sort {
     case .recent: expected = [0, 1, 2, 3, 5, 4]
-    case .added, .title: expected = [1, 2, 0, 3, 5, 4]
+    case .added, .title, .manual: expected = [1, 2, 0, 3, 5, 4]
     }
     let papers = state.papers
     state.papers.reverse()
