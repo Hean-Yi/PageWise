@@ -105,3 +105,19 @@ private func progressPaper() -> Paper {
         title: "A local example", digest: "fixture", originalPath: "original.pdf", pageCount: 10,
         blocks: [], warnings: [], canReflow: true)
 }
+
+@Test(arguments: [-1, 9])
+func streamingPrefixDoesNotMarkAnUnfinishedReflowRead(sourcePage: Int) {
+    var paper = progressPaper()
+    let block = TextBlock(sourcePage: sourcePage, text: "Current prefix.")
+    let page = PageArtifact(blockIDs: [block.id], sourcePage: sourcePage, relativePath: "part.html")
+    paper.blocks = [block]
+    paper.translatedPages = [page]
+    paper.translatedBlockCount = 1
+    paper.reflowJob = ReflowJob(sources: [block])
+    let workspace = PaperWorkspace(
+        status: .reading, position: ReaderPosition(mode: "translated", pageKey: page.id.uuidString, pageIndex: 0))
+    #expect(ReadingProgress.resolve(paper: paper, workspace: workspace).readingStatus == .reading)
+    paper.reflowJob?.finished = true
+    #expect(ReadingProgress.resolve(paper: paper, workspace: workspace) == .finished)
+}

@@ -17,7 +17,7 @@ struct ReflowLoadingView: View {
                         .font(.system(size: 35, weight: .light)).foregroundStyle(ReaderTheme.accent)
                 }
                 VStack(spacing: 10) {
-                    Text(running ? "正在准备双语阅读" : "重排已暂停")
+                    Text(running ? "正在准备双语阅读" : (model.paper?.reflowJob?.finished == true ? "未找到可翻译正文" : "重排已暂停"))
                         .font(.system(size: 25, weight: .medium, design: .serif))
                     Text(model.paper?.title ?? "").font(.callout).foregroundStyle(ReaderTheme.muted)
                         .multilineTextAlignment(.center).lineLimit(3).frame(maxWidth: 440)
@@ -35,7 +35,7 @@ struct ReflowLoadingView: View {
                     Button("查看原版", action: model.readOriginal).buttonStyle(.bordered)
                     if running {
                         Button("暂停", action: model.pauseTranslation).buttonStyle(.bordered)
-                    } else {
+                    } else if model.paper?.reflowJob?.finished != true {
                         Button("继续重排") { model.startAIReflow() }.buttonStyle(.borderedProminent)
                     }
                 }.controlSize(.large)

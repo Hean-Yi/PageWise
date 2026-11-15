@@ -177,6 +177,40 @@
         model.select(nil)
     }
 
+    @Test @MainActor func completedJointReflowLeavesColdLoaderUsingRenderedBody() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let model = try ReaderModel(root: root)
+        await model.load()
+        let block = TextBlock(
+            sourcePage: 0, text: "An original paragraph becomes readable after its translation is committed.")
+        var paper = Paper(
+            title: "Cold start", digest: "fixture", originalPath: "unused.pdf", pageCount: 1,
+            blocks: [block], warnings: [], canReflow: true)
+        paper.htmlReading = try await HTMLReadingStore().append(
+            [BilingualBlock(block: block, translation: "正文和译文已完成。")], to: nil, paper: paper, root: root)
+        paper.translatedBlockCount = 1
+        paper.reflowJob = ReflowJob(sources: [block])
+        paper.reflowJob?.finished = true
+        model.state.papers = [paper]
+        #expect(await model.save())
+        model.select(paper.id)
+        #expect(model.showingReflowLoading)
+        let coordinator = HTMLCoordinator(model: model)
+        let web = coordinator.makeView()
+        web.frame = CGRect(x: 0, y: 0, width: 800, height: 600)
+        defer { coordinator.stop(web) }
+        coordinator.update(web)
+        try await waitForHTML(web, count: 1)
+        for _ in 0..<300 {
+            if !model.showingReflowLoading { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(model.reflowBodyCount == 1)
+        #expect(!model.showingReflowLoading)
+        #expect(model.paper?.reflowJob?.hasPresentedContent == true)
+    }
+
     @MainActor private func waitForHTML(_ web: WKWebView, count: Int) async throws {
         for _ in 0..<300 {
             let value = try? await web.callAsyncJavaScript(

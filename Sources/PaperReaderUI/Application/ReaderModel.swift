@@ -172,7 +172,8 @@ public final class ReaderModel {
         cancellable: Bool = false, adding importedPaper: Paper? = nil,
         shelfChange: ShelfChange? = nil, importShelfID: UUID? = nil,
         orderChange: LibraryOrderChange? = nil, publishingReflow publication: Paper? = nil,
-        repairBase: Paper? = nil, changedReadingKeys: Set<String> = []
+        repairBase: Paper? = nil, changedReadingKeys: Set<String> = [],
+        presentingReflow: (paperID: UUID, jobID: UUID)? = nil
     ) async -> Bool {
         guard loaded else { return false }
         let previous = saveQueue
@@ -205,10 +206,22 @@ public final class ReaderModel {
                     }
                     Self.applyReflow(publication, to: &snapshot.papers[index])
                 }
+                if let presentingReflow {
+                    guard let index = snapshot.papers.firstIndex(where: { $0.id == presentingReflow.paperID }),
+                        snapshot.papers[index].reflowJob?.id == presentingReflow.jobID
+                    else { throw CancellationError() }
+                    snapshot.papers[index].reflowJob?.hasPresentedContent = true
+                }
                 try await store.save(snapshot, respectingCancellation: cancellable)
                 if let importedPaper { self.state.papers.insert(importedPaper, at: 0) }
                 if let publication, let index = self.state.papers.firstIndex(where: { $0.id == publication.id }) {
                     Self.applyReflow(publication, to: &self.state.papers[index])
+                }
+                if let presentingReflow,
+                    let index = self.state.papers.firstIndex(where: { $0.id == presentingReflow.paperID }),
+                    self.state.papers[index].reflowJob?.id == presentingReflow.jobID
+                {
+                    self.state.papers[index].reflowJob?.hasPresentedContent = true
                 }
                 self.state.shelves = snapshot.shelves
                 self.state.paperShelfIDs = snapshot.paperShelfIDs
@@ -231,7 +244,10 @@ public final class ReaderModel {
     }
 
     private static func applyReflow(_ publication: Paper, to paper: inout Paper) {
+        let alreadyPresented =
+            paper.reflowJob?.id == publication.reflowJob?.id && paper.reflowJob?.hasPresentedContent == true
         paper.reflowJob = publication.reflowJob
+        if alreadyPresented { paper.reflowJob?.hasPresentedContent = true }
         paper.retainedReadings = publication.retainedReadings
         paper.deferredReflow = publication.deferredReflow
         paper.canReflow = publication.canReflow

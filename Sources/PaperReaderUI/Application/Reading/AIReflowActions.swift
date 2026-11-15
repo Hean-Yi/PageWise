@@ -96,7 +96,7 @@ extension ReaderModel {
                     if pending.isEmpty {
                         var publication = current
                         job.finished = true
-                        job.failure = nil
+                        job.failure = current.translations.isEmpty ? "未识别到可翻译正文，请查看原版；已识别的图表和公式保留原文。" : nil
                         job.acceptedPlan = nil
                         job.committedBlockIDs = []
                         for index in job.sources.indices { job.sources[index].richContent = nil }
@@ -104,7 +104,7 @@ extension ReaderModel {
                         guard await self.save(publishingReflow: publication) else {
                             throw ReaderError.message("完成状态未能保存。")
                         }
-                        self.reflowStages[id] = "双语重排已完成"
+                        self.reflowStages[id] = job.failure ?? "双语重排已完成"
                         self.status = publication.warnings.isEmpty ? "双语重排完成" : "双语重排完成 · 部分区域保留原文"
                         break
                     }
@@ -227,11 +227,8 @@ extension ReaderModel {
         Task { [weak self] in
             guard let self else { return }
             defer { self.reflowPresenting.remove(id) }
-            guard var publication = self.state.papers.first(where: { $0.id == id }), publication.reflowJob != nil else {
-                return
-            }
-            publication.reflowJob?.hasPresentedContent = true
-            guard await self.save(publishingReflow: publication) else { return }
+            guard let jobID = self.state.papers.first(where: { $0.id == id })?.reflowJob?.id else { return }
+            guard await self.save(presentingReflow: (paperID: id, jobID: jobID)) else { return }
             if self.selectedPaperID == id { self.beginReading() }
         }
     }

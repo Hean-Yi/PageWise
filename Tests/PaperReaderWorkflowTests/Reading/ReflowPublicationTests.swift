@@ -47,3 +47,34 @@ import Testing
     #expect(stored.papers[0].translatedBlockCount == 1)
     #expect(model.paper?.translatedPages == published.translatedPages)
 }
+
+@Test @MainActor func readinessAndBlockPublicationPreserveLatestPrefixInEitherQueueOrder() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let model = try ReaderModel(root: root)
+    await model.load()
+    let first = TextBlock(sourcePage: 0, text: "First source.")
+    let second = TextBlock(sourcePage: 0, text: "Second source.")
+    var paper = Paper(
+        title: "Ready", digest: "fixture", originalPath: "unused.pdf", pageCount: 1,
+        blocks: [first], warnings: [], canReflow: true)
+    paper.reflowJob = ReflowJob(sources: [first, second])
+    let jobID = try #require(paper.reflowJob?.id)
+    model.state.papers = [paper]
+    #expect(await model.save())
+    var publication = paper
+    publication.blocks.append(second)
+    publication.reflowJob?.completedSourceIDs = [first.id, second.id]
+    let stalePublication = publication
+    async let publish = model.save(publishingReflow: stalePublication)
+    async let present = model.save(presentingReflow: (paperID: paper.id, jobID: jobID))
+    #expect(await publish)
+    #expect(await present)
+    // An in-flight publisher may have captured a false flag before presentation was queued.
+    #expect(await model.save(publishingReflow: stalePublication))
+    let saved = try await LibraryStore(directory: root).load().papers[0]
+    #expect(saved.blocks == [first, second])
+    #expect(saved.reflowJob?.completedSourceIDs == [first.id, second.id])
+    #expect(saved.reflowJob?.hasPresentedContent == true)
+    #expect(model.state.papers[0].reflowJob?.hasPresentedContent == true)
+}

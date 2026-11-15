@@ -212,11 +212,11 @@ final class HTMLCoordinator: NSObject, WKNavigationDelegate, WKScriptMessageHand
             """
             await document.fonts.ready;
             const sections = [...document.querySelectorAll('#reader > section')].filter(s =>
-                s.querySelector('p.translation:not(.pending)') && s.querySelector('p:not(.translation),li') &&
+                s.querySelector('.translation:not(.pending)') && s.querySelector('p:not(.translation),li') &&
                 !s.querySelector('figure,.paper-authors,.source-page,.pdf-region'));
             const images = [...document.images].filter(i => i.getBoundingClientRect().top < innerHeight * 2);
             const decoded = await Promise.all(images.map(i => i.decode().then(() => true).catch(() => false)));
-            const height = sections.reduce((n,s) => n + [...s.querySelectorAll('p,li')].reduce((h,e) => h+e.getBoundingClientRect().height,0),0);
+            const height = sections.reduce((n,s) => n + [...s.querySelectorAll('p,li,.translation')].reduce((h,e) => h+e.getBoundingClientRect().height,0),0);
             return {count:sections.length,height:height,viewport:innerHeight,ready:decoded.every(Boolean)};
             """, arguments: [:], in: nil, in: .defaultClient
         ) { [weak self] result in
