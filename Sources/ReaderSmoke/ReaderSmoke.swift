@@ -9,6 +9,18 @@ import PaperReaderKit
 @main
 struct ReaderSmoke {
     @MainActor static func main() async throws {
+        if CommandLine.arguments.count == 4, CommandLine.arguments[1] == "--audit-library" {
+            try await PDFReflowAudit.run(
+                root: URL(fileURLWithPath: CommandLine.arguments[2]),
+                report: URL(fileURLWithPath: CommandLine.arguments[3]))
+            return
+        }
+        if CommandLine.arguments.count == 4, CommandLine.arguments[1] == "--audit-published-library" {
+            try await PublishedReflowAudit.run(
+                root: URL(fileURLWithPath: CommandLine.arguments[2]),
+                report: URL(fileURLWithPath: CommandLine.arguments[3]))
+            return
+        }
         let argument = CommandLine.arguments.dropFirst().first ?? ".local/smoke"
         let root = URL(fileURLWithPath: argument, isDirectory: true).appendingPathComponent(
             UUID().uuidString, isDirectory: true)

@@ -13,9 +13,10 @@ public actor PDFImporter {
 
     public func importPDF(
         at url: URL, preservingComplexPages: Bool = false, structuredBlocks: [TextBlock]? = nil,
+        discovery: (any PaperDiscovery)? = nil,
         onProgress: @Sendable (PDFImportProgress) -> Void = { _ in }
     )
-        throws -> Paper
+        async throws -> Paper
     {
         let scoped = url.startAccessingSecurityScopedResource()
         defer { if scoped { url.stopAccessingSecurityScopedResource() } }
@@ -33,7 +34,21 @@ public actor PDFImporter {
         else { throw ReaderError.message("文件不是有效的 PDF，未导入。") }
         guard !document.isLocked else { throw ReaderError.message("PDF 已加密，请先在本地解锁后再导入。") }
 
-        let structured = try structuredBlocks.flatMap { blocks -> [TextBlock]? in
+        let metadataTitle = (document.documentAttributes?[PDFDocumentAttribute.titleAttribute] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let title = metadataTitle.flatMap { $0.isEmpty ? nil : $0 } ?? url.deletingPathExtension().lastPathComponent
+        var sourceBlocks = structuredBlocks
+        var candidate: PaperCandidate?
+        if sourceBlocks == nil, let discovery,
+            let identified = PDFSourceIdentity.arxivCandidate(document: document, title: title)
+        {
+            candidate = identified
+            report("读取同版本 arXiv HTML")
+            do { sourceBlocks = try await discovery.structuredContent(identified) } catch is CancellationError {
+                throw CancellationError()
+            } catch { sourceBlocks = nil }
+        }
+        let structured = try sourceBlocks.flatMap { blocks -> [TextBlock]? in
             guard document.allowsCopying, !blocks.isEmpty, blocks.allSatisfy({ $0.richContent != nil }),
                 (0..<document.pageCount).allSatisfy({
                     // PDFAnnotation.type is "Link"; the subtype raw value is "/Link".
@@ -43,12 +58,13 @@ public actor PDFImporter {
                         == true
                 })
             else { return nil }
+            let blocks = try PDFBibliographyRecovery.restore(in: blocks, document: document)
             let rawPageTexts = (0..<document.pageCount).map { document.page(at: $0)?.string ?? "" }
             let pageTexts = rawPageTexts.map(Self.normalized)
             var completedBlocks = 0
             report("检查正文与补全图片", 0, blocks.count)
             var richBytes = blocks.reduce(0) { $0 + ($1.richContent?.html.utf8.count ?? 0) }
-            var mappedBlocks = try blocks.map { block in
+            let mappedBlocks = try blocks.map { block in
                 try Task.checkCancellation()
                 defer {
                     completedBlocks += 1
@@ -114,21 +130,12 @@ public actor PDFImporter {
                     missingPages.append(index)
                 }
             }
-            if !missingPages.isEmpty {
-                // A localized conversion gap must not reject the complete article. Keep
-                // every HTML block and explicitly supplement the deficient source pages.
-                // Require reliable surrounding page anchors; otherwise keep PDF fallback.
-                guard preservingComplexPages,
-                    mappedBlocks.contains(where: { $0.sourcePage >= 0 && $0.preservesSourcePage != true }),
-                    missingPages.count < document.pageCount
-                else { return nil }
-                for pageIndex in missingPages {
-                    var supplement = TextBlock(sourcePage: pageIndex, text: rawPageTexts[pageIndex])
-                    supplement.preservesSourcePage = true
-                    supplement.imageWarnings = ["第 \(pageIndex + 1) 页的 HTML 内容不完整，已补入原始页面；可能与相邻正文部分重复。"]
-                    let insertion = mappedBlocks.firstIndex { $0.sourcePage > pageIndex } ?? mappedBlocks.endIndex
-                    mappedBlocks.insert(supplement, at: insertion)
-                }
+            // Never append a full PDF page alongside overlapping HTML. If coverage still
+            // cannot be established, build one complete regional PDF reading result instead.
+            if !missingPages.isEmpty || !retainedPages.isEmpty
+                || mappedBlocks.contains(where: { $0.hasImageFailure == true })
+            {
+                return nil
             }
             return mappedBlocks
         }
@@ -152,10 +159,7 @@ public actor PDFImporter {
         // Moving the complete directory makes the original visible as one file-system operation.
         try FileManager.default.moveItem(at: staging, to: destination)
 
-        let metadataTitle = (document.documentAttributes?[PDFDocumentAttribute.titleAttribute] as? String)?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        let title = metadataTitle.flatMap { $0.isEmpty ? nil : $0 } ?? url.deletingPathExtension().lastPathComponent
-        return Paper(
+        var paper = Paper(
             id: id,
             title: title,
             digest: SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined(),
@@ -168,6 +172,8 @@ public actor PDFImporter {
                     + Array(Set(structured!.flatMap { $0.imageWarnings ?? [] })).sorted(),
             canReflow: structured != nil || analysis.canReflow
         )
+        if structured != nil { paper.sourceURL = candidate?.id }
+        return paper
     }
 
     private static func normalized(_ text: String) -> String {

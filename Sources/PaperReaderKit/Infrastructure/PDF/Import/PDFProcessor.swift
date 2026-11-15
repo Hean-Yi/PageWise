@@ -10,11 +10,11 @@ public struct PDFProcessingResult: Sendable {
 
 /// A deliberately conservative text-only PDF adapter. No OCR or equation reconstruction is implied.
 public enum PDFProcessor {
-    public static func extract(from url: URL) throws -> PDFProcessingResult {
+    public static func extract(from url: URL, preservingComplexPages: Bool = false) throws -> PDFProcessingResult {
         guard let document = PDFDocument(url: url), !document.isLocked, document.pageCount > 0 else {
             throw ReaderError.message("无法读取 PDF。")
         }
-        return try extract(from: document)
+        return try extract(from: document, preservingComplexPages: preservingComplexPages)
     }
 
     static func extract(
@@ -68,9 +68,19 @@ public enum PDFProcessor {
                 warnings.append("第 \(pageIndex + 1) 页含尚未验证的数学结构，使用原始 PDF 保留公式。")
             }
             // This page is already retained intact; no column/character analysis can change that decision.
-            if preservingComplexPages, warnings.count > warningStart { continue }
+            if preservingComplexPages, warnings.count > warningStart {
+                if let recovered = try PDFRegionalReflow.recover(page, sourcePage: pageIndex) {
+                    warnings.removeSubrange(warningStart..<warnings.count)
+                    blocks.append(contentsOf: recovered)
+                }
+                continue
+            }
             let extraction = positionedLines(on: page)
             guard extraction.reliable else {
+                if preservingComplexPages, let recovered = try PDFRegionalReflow.recover(page, sourcePage: pageIndex) {
+                    blocks.append(contentsOf: recovered)
+                    continue
+                }
                 warnings.append("第 \(pageIndex + 1) 页文字坐标不完整或重叠，无法保证阅读顺序，使用原始 PDF。")
                 // A fallback block remains useful for local search, but is never presented as safe reflow.
                 blocks.append(
@@ -79,6 +89,10 @@ public enum PDFProcessor {
             }
             let layout = orderedColumns(extraction.rows, pageBounds: page.bounds(for: .cropBox))
             if !layout.reliable {
+                if preservingComplexPages, let recovered = try PDFRegionalReflow.recover(page, sourcePage: pageIndex) {
+                    blocks.append(contentsOf: recovered)
+                    continue
+                }
                 warnings.append("第 \(pageIndex + 1) 页存在复杂分栏或表格，无法可靠重排，使用原始 PDF。")
             }
             for group in layout.groups {
@@ -93,15 +107,16 @@ public enum PDFProcessor {
                 && (warnings.isEmpty || (preservingComplexPages && complete && hasReflowableText)))
     }
 
-    private struct TextLine {
+    struct TextLine {
         let text: String
         let bounds: CGRect
     }
 
-    private static func positionedLines(on page: PDFPage) -> (rows: [[TextLine]], reliable: Bool) {
+    static func positionedLines(on page: PDFPage) -> (rows: [[TextLine]], reliable: Bool) {
         // PDFKit inserts synthetic line breaks in page.string. Those offsets do not always match
         // characterBounds(at:), so text and geometry must come from the same line selection.
-        let selections = page.selection(for: page.bounds(for: .cropBox))?.selectionsByLine() ?? []
+        let selections =
+            page.selection(for: NSRange(location: 0, length: page.numberOfCharacters))?.selectionsByLine() ?? []
         let pageBounds = page.bounds(for: .cropBox).insetBy(dx: -2, dy: -2)
         var reliable = !selections.isEmpty
         var lines: [TextLine] = []
@@ -151,7 +166,7 @@ public enum PDFProcessor {
         return (rows, reliable)
     }
 
-    private static func orderedColumns(_ rows: [[TextLine]], pageBounds: CGRect) -> (
+    static func orderedColumns(_ rows: [[TextLine]], pageBounds: CGRect) -> (
         groups: [[TextLine]], reliable: Bool
     ) {
         let paired = rows.filter { $0.count == 2 }
@@ -211,7 +226,7 @@ public enum PDFProcessor {
         return (groups, true)
     }
 
-    private static func paragraphs(from lines: [TextLine], sourcePage: Int) -> [TextBlock] {
+    static func paragraphs(from lines: [TextLine], sourcePage: Int) -> [TextBlock] {
         var result: [TextBlock] = []
         var paragraph = ""
         var previous: TextLine?

@@ -22,9 +22,18 @@ enum PDFFigureCropper {
 
     static func recover(caption: String, from page: PDFPage, diagnostic: ((String) -> Void)? = nil) throws -> Recovery?
     {
+        guard let bounds = try region(caption: caption, from: page, diagnostic: diagnostic) else { return nil }
+        let image = try rasterize(page, bounds: bounds)
+        return Recovery(bounds: bounds, image: image, coverageText: page.selection(for: bounds)?.string ?? "")
+    }
+
+    static func region(
+        caption: String, from page: PDFPage, pixels supplied: PDFFigurePixels? = nil,
+        diagnostic: ((String) -> Void)? = nil
+    ) throws -> CGRect? {
         try Task.checkCancellation()
         guard normalized(caption).count >= 12, caption.count <= 8_000,
-            let pixels = PDFFigurePixels(page: page)
+            let pixels = supplied ?? PDFFigurePixels(page: page)
         else {
             diagnostic?("unsupported page or caption")
             return nil
@@ -134,8 +143,7 @@ enum PDFFigureCropper {
             )
             return nil
         }
-        let image = try rasterize(page, bounds: bounds)
-        return Recovery(bounds: bounds, image: image, coverageText: page.selection(for: bounds)?.string ?? "")
+        return bounds
     }
 
     static func replacingFailedFigure(_ block: TextBlock, from page: PDFPage) throws -> TextBlock? {
@@ -248,7 +256,7 @@ enum PDFFigureCropper {
         max(0, min(lhs.maxX, rhs.maxX) - max(lhs.minX, rhs.minX))
     }
 
-    private static func rasterize(_ page: PDFPage, bounds: CGRect) throws -> PaperImage {
+    static func rasterize(_ page: PDFPage, bounds: CGRect) throws -> PaperImage {
         try Task.checkCancellation()
         guard let reference = page.pageRef else { throw ReaderError.message("原始图件无法读取。") }
         let scale = min(3, 4_096 / max(bounds.width, bounds.height))

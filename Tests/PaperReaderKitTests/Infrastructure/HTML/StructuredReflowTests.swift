@@ -104,6 +104,11 @@ private let sourceURL = URL(string: "https://arxiv.org/html/2401.00001v1")!
         context.endPDFPage()
     }
     context.closePDF()
+    let annotated = try #require(PDFDocument(url: source))
+    annotated.page(at: 1)?.addAnnotation(
+        PDFAnnotation(
+            bounds: CGRect(x: 70, y: 400, width: 30, height: 30), forType: .text, withProperties: nil))
+    #expect(annotated.write(to: source))
     let originalBytes = try Data(contentsOf: source)
     let root = directory.appendingPathComponent("library")
     let paper = try await PDFImporter(root: root).importPDF(at: source, preservingComplexPages: true)
@@ -232,7 +237,7 @@ private func pixels(of page: PDFPage) throws -> Data {
     return Data(bytes: try #require(context.data), count: 612 * 792 * 4)
 }
 
-@Test func localizedHTMLCoverageGapKeepsGoodContentAndSupplementsOriginalPage() async throws {
+@Test func localizedHTMLCoverageGapUsesOneCompleteTextReadingWithoutDuplicatedPages() async throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: root) }
     try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -247,12 +252,44 @@ private func pixels(of page: PDFPage) throws -> Data {
     let imported = try await PDFImporter(root: root).importPDF(
         at: source, preservingComplexPages: true, structuredBlocks: [first])
     #expect(imported.canReflow)
-    #expect(imported.blocks.count == 2)
-    #expect(imported.blocks[0].id == first.id)
-    #expect(imported.blocks[0].richContent != nil)
-    #expect(imported.blocks[1].preservesSourcePage == true)
-    #expect(imported.blocks[1].sourcePage == 1)
-    #expect(imported.blocks[1].text == document.page(at: 1)?.string)
-    #expect(imported.warnings.contains { $0.contains("HTML") })
+    #expect(imported.blocks.count > 2)
+    #expect(!imported.blocks.contains { $0.preservesSourcePage == true })
+    for index in 0..<document.pageCount {
+        let actual = imported.blocks.filter { $0.sourcePage == index }.map(\.text).joined()
+        #expect(
+            PDFRegionalReflow.characters(actual) == PDFRegionalReflow.characters(document.page(at: index)?.string ?? "")
+        )
+    }
     #expect(try Data(contentsOf: source) == Data(contentsOf: root.appendingPathComponent(imported.originalPath)))
+}
+
+@Test(arguments: [true, false]) func frontMatterSemanticsStayOutOfTranslationWithoutRemovingBody(tagged: Bool)
+    async throws
+{
+    let authors = tagged ? "class='ltx_authors'" : ""
+    let metadata = tagged ? "class='ltx_note ltx_role_correspondence'" : ""
+    let html = """
+        <article class='ltx_document'><h1>Original metadata fixture</h1>
+        <div \(authors)><span class='ltx_personname'>Alex Researcher</span></div>
+        <div class='ltx_abstract'><h2>Abstract</h2><p>Dates in experimental evidence remain ordinary prose.</p></div>
+        <span \(metadata)><sup class='ltx_note_mark'>†</sup><span>correspondence: </span><a href='mailto:alex@example.org'>alex@example.org</a></span>
+        <p>Date: </p><p>August 24, 2026</p>
+        <section><h2>Introduction</h2><p>Date: the time of measurement affects the outcome.</p>
+        <p>Contact: alex@example.org is an example in our dataset.</p>
+        <p class='ltx_note'>This footnote explains the method and must remain.</p></section></article>
+        """
+    let blocks = try await HTMLPaperParser(transport: NoHTMLNetwork()).parse(Data(html.utf8), at: sourceURL)
+    let metadataBlocks = blocks.filter { $0.richContent?.html.contains("<details>") == true }
+    let front = try #require(metadataBlocks.first)
+    #expect(metadataBlocks.count == 1)
+    #expect(front.richContent?.requiresTranslation == false)
+    #expect(front.text.contains("alex@example.org"))
+    #expect(front.text.contains("August 24, 2026"))
+    #expect(!front.text.contains("†"))
+    let translated = blocks.filter { $0.richContent?.requiresTranslation == true }.map(\.text).joined(separator: "\n")
+    #expect(!translated.contains("August 24, 2026"))
+    #expect(translated.contains("Dates in experimental evidence"))
+    #expect(translated.contains("Date: the time of measurement"))
+    #expect(translated.contains("Contact: alex@example.org is an example"))
+    #expect(translated.contains("This footnote explains the method"))
 }

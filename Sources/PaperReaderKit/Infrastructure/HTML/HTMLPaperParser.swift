@@ -40,15 +40,7 @@ public actor HTMLPaperParser {
         try HTMLMathNormalizer.normalize(article)
         try await HTMLImageNormalizer.normalize(article, source: source, transport: transport)
         try article.select("script,style,noscript,.ltx_page_header,.ltx_page_footer").remove()
-        for authors in try article.select(".ltx_authors") {
-            let names = try authors.select(".ltx_personname").map { try $0.text() }
-            guard !names.isEmpty else { continue }
-            let details = try authors.select(".ltx_creator").map { "<p>" + Self.escape(try $0.text()) + "</p>" }
-                .joined()
-            try authors.html(
-                "<p>" + Self.escape(names.joined(separator: " · "))
-                    + "</p><details><summary>作者与机构</summary>" + details + "</details>")
-        }
+        try HTMLFrontMatterNormalizer.normalize(article)
         var elements: [Element] = []
         func collect(_ node: Element) throws {
             if node.tagName() == "figure", try node.select("figure").contains(where: { $0 !== node }) {

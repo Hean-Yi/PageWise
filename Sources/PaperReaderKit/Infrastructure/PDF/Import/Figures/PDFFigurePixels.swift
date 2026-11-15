@@ -73,7 +73,9 @@ struct PDFFigurePixels {
         return pageRect(x: minX, y: minY, width: maxX - minX + 1, height: maxY - minY + 1)
     }
 
-    func graphicComponents(excluding text: [CGRect]) throws -> [CGRect] {
+    func graphicComponents(excluding text: [CGRect], minimumCells: Int = 3, minimumExtent: CGFloat = 16) throws
+        -> [CGRect]
+    {
         var masked = pixels
         for rect in text {
             let p = pixelRect(rect.insetBy(dx: -1.5, dy: -1.5))
@@ -123,10 +125,10 @@ struct PDFFigurePixels {
                     }
                 }
             }
-            guard queue.count >= 3 else { continue }
+            guard queue.count >= minimumCells else { continue }
             let rect = pageRect(
                 x: minX * cell, y: minY * cell, width: (maxX - minX + 1) * cell, height: (maxY - minY + 1) * cell)
-            if max(rect.width, rect.height) >= 16 { result.append(rect.intersection(pageBounds)) }
+            if max(rect.width, rect.height) >= minimumExtent { result.append(rect.intersection(pageBounds)) }
         }
         return result
     }

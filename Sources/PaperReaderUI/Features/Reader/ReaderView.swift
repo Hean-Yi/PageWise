@@ -160,14 +160,20 @@ struct ReaderView: View {
             if let paper = model.paper, paper.previewPages.isEmpty,
                 paper.translatedPages.isEmpty
             {
-                Button {
-                    Task { await model.reparseCurrentPaper(replacingUnannotatedHTML: paper.htmlReading != nil) }
+                Menu {
+                    Button("修复当前重排") { model.startReflowRepair(paperIDs: [paper.id]) }
+                    Button("重新解析当前论文") {
+                        Task { await model.reparseCurrentPaper(replacingUnannotatedHTML: paper.htmlReading != nil) }
+                    }
+                    Button("修复书库重排") { model.startReflowRepair() }
                 } label: {
-                    Label(
-                        model.isImporting ? "正在解析" : (paper.htmlReading == nil ? "重新解析" : "重新排版"),
-                        systemImage: "arrow.clockwise")
+                    Label(model.isImporting ? "正在解析" : "重新排版", systemImage: "arrow.clockwise")
                 }
                 .disabled(model.isImporting || model.translating.contains(paper.id))
+                if model.isRepairingReflow {
+                    Text(model.importProgress?.stage ?? "正在修复").font(.caption).foregroundStyle(ReaderTheme.muted)
+                    Button("停止") { model.cancelReflowRepair() }
+                }
             }
             if model.paper?.canReflow == true {
                 Picker("阅读模式", selection: Binding(get: { model.mode }, set: { model.changeMode(to: $0) })) {

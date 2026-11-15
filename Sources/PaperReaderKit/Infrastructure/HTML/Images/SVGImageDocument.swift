@@ -17,9 +17,12 @@ struct SVGImageDocument: Sendable {
             switch node {
             case .text(let value): return inText ? value : ""
             case .element(let name, let attrs, let children):
-                if ["defs", "style", "title", "desc"].contains(name) { return "" }
+                if ["defs", "style", "title", "desc", "annotation", "annotation-xml"].contains(name) { return "" }
                 let glyph = ["use", "path"].contains(name) ? attrs["data-text"] ?? "" : ""
-                return glyph + children.map { labels($0, inText: inText || name == "text" || name == "tspan") }.joined()
+                return glyph
+                    + children.map {
+                        labels($0, inText: inText || name == "text" || name == "tspan" || name == "foreignObject")
+                    }.joined()
             }
         }
         return labels(root)
@@ -61,8 +64,9 @@ struct SVGImageDocument: Sendable {
             switch node {
             case .text(let text): return HTMLPaperParser.escape(text)
             case .element(let name, var attrs, let children):
+                if name == "svg" { attrs["xmlns"] = "http://www.w3.org/2000/svg" }
+                if name == "math" { attrs["xmlns"] = "http://www.w3.org/1998/Math/MathML" }
                 if isRoot {
-                    attrs["xmlns"] = "http://www.w3.org/2000/svg"
                     attrs["xmlns:xlink"] = "http://www.w3.org/1999/xlink"
                     attrs["width"] = String(width)
                     attrs["height"] = String(height)
@@ -120,8 +124,11 @@ private final class SVGTreeParser: NSObject, XMLParserDelegate {
         "feDistantLight", "feDropShadow", "feFlood", "feFuncA", "feFuncB", "feFuncG", "feFuncR", "feGaussianBlur",
         "feImage", "feMerge", "feMergeNode", "feMorphology", "feOffset", "fePointLight", "feSpecularLighting",
         "feSpotLight", "feTile", "feTurbulence", "foreignObject",
-        "div", "span", "p", "br", "b", "strong", "i", "em", "sub", "sup", "table", "tbody", "tr", "td", "th", "img",
-        "a",
+        "div", "span", "p", "pre", "code", "br", "b", "strong", "i", "em", "sub", "sup", "table", "tbody", "tr", "td",
+        "th", "img",
+        "a", "math", "mi", "mn", "mo", "mtext", "mrow", "msup", "msub", "msubsup", "mfrac", "msqrt", "mroot",
+        "mfenced", "mover", "munder", "munderover", "mtable", "mtr", "mtd", "mspace", "mpadded", "mphantom",
+        "menclose", "mmultiscripts", "mprescripts", "none", "semantics",
     ]
 
     func parser(
@@ -134,7 +141,10 @@ private final class SVGTreeParser: NSObject, XMLParserDelegate {
             skipped += 1
             return
         }
-        if ["script", "metadata", "animate", "animatemotion", "animatetransform", "set", "discard"].contains(
+        if [
+            "script", "metadata", "annotation", "annotation-xml", "animate", "animatemotion", "animatetransform", "set",
+            "discard",
+        ].contains(
             name.lowercased())
             || elementName.hasPrefix("sodipodi:") || elementName.hasPrefix("inkscape:")
         {
@@ -190,7 +200,8 @@ private final class SVGTreeParser: NSObject, XMLParserDelegate {
         }
         if stack.contains(where: { $0.name == "foreignObject" }),
             [
-                "div", "span", "p", "br", "b", "strong", "i", "em", "sub", "sup", "table", "tbody", "tr", "td", "th",
+                "div", "span", "p", "pre", "code", "br", "b", "strong", "i", "em", "sub", "sup", "table", "tbody", "tr",
+                "td", "th",
                 "img", "a",
             ].contains(name)
         {

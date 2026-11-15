@@ -75,6 +75,10 @@ Swift Package 自动递归发现每个 target 目录下的 Swift 文件。当前
 
 ## 结构化重排的文件归属
 
+`Infrastructure/PDF/Import/PDFRegionalReflow` 负责 PDFKit 行碎片合并、阅读顺序和局部复杂区域，复用 `Figures` 像素与裁剪组件。`PDFSourceIdentity` 只接受页边明确版本身份；`PDFBibliographyRecovery` 处理唯一匹配的引用补全；`PDFTextCoverage` 检查旧整页补充是否已被逐行覆盖。字符计数是完整性门槛，不代表公式结构或视觉质量已经验收。
+
+`Infrastructure/HTML/HTMLFrontMatterNormalizer` 结合前部上下文、语义规则及结构提示合并元信息，不遍历正文做关键词删除。`HTMLRepairAlignment` 通过唯一相邻文本锚点匹配失败图件；`HTMLReflowRepair` 在新文件中更新可安全修改的内容。`Application/Reading/RepairReflowActions` 协调可取消的当前论文/书库修复；ReaderModel 串行保存时再次验证基线文件和最新批注依赖。审计入口放在 ReaderSmoke，报告和真实论文留在本地忽略目录。
+
 `Infrastructure/HTML/HTMLPaperParser.swift` 负责受限 HTML/图片解析；`Infrastructure/PDF/Reflow/StructuredPageRenderer.swift` 负责固定页生成，`ReflowArtifactCleanup.swift` 只清理未提交的本应用制品。`Application/Reading/ImportAndReflowActions.swift` 协调导入、翻译和提交，`ReflowRetentionActions.swift` 检查旧预览的用户依赖；View 不直接解析文档或调用模型。第三方许可证放在 `PaperReaderKit/Resources` 并随资源包分发。
 
 `Infrastructure/HTML/Images` 分离图片来源本地化、ImageIO/CoreGraphics 解码、SVG 静态文档规范化和 HTML 图件替换。领域层只保存尺寸、局部失败提示和短期覆盖核验数据，不依赖图片或 WebKit 类型。

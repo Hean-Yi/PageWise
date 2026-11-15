@@ -11,6 +11,8 @@ public final class ReaderModel {
     public var message: String?
     public var status = "仅保存在此设备"
     public var isImporting = false
+    public var isRepairingReflow = false
+    @ObservationIgnored var reflowRepairTask: Task<Void, Never>?
     public var importProgress: PDFImportProgress?
     public var selectionHTMLRange: [Int]?
     public var requestedReadingNote: UUID?
@@ -142,7 +144,8 @@ public final class ReaderModel {
     @discardableResult func save(
         cancellable: Bool = false, adding importedPaper: Paper? = nil,
         shelfChange: ShelfChange? = nil, importShelfID: UUID? = nil,
-        orderChange: LibraryOrderChange? = nil, publishingReflow publication: Paper? = nil
+        orderChange: LibraryOrderChange? = nil, publishingReflow publication: Paper? = nil,
+        repairBase: Paper? = nil, changedReadingKeys: Set<String> = []
     ) async -> Bool {
         guard loaded else { return false }
         let previous = saveQueue
@@ -166,6 +169,12 @@ public final class ReaderModel {
                 if let publication {
                     guard let index = snapshot.papers.firstIndex(where: { $0.id == publication.id }) else {
                         throw ReaderError.message("论文已不在书库中，未发布页面。")
+                    }
+                    if let repairBase {
+                        guard snapshot.papers[index].htmlReading == repairBase.htmlReading,
+                            Self.protectedReadingKeys(in: snapshot, paperID: publication.id).isDisjoint(
+                                with: changedReadingKeys)
+                        else { throw ReaderError.message("修复期间论文或批注已变化，保留原版式。") }
                     }
                     Self.applyReflow(publication, to: &snapshot.papers[index])
                 }

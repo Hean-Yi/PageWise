@@ -105,7 +105,7 @@ private let vectorFigure = """
     #expect(!String(decoding: staticBytes, as: UTF8.self).contains("<animate"))
 }
 
-@Test func failedFigureUsesOnlyUniquelyMatchedOriginalPage() async throws {
+@Test func unresolvedHTMLFigureUsesOneCompletePDFReadingWithoutDuplicatePages() async throws {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: directory) }
@@ -145,14 +145,16 @@ private let vectorFigure = """
             "<article class='ltx_document'><figure><img src='bad'><figcaption>Unique figure caption</figcaption></figure><figure><img src='bad'><figcaption>Unmatched figure caption</figcaption></figure></article>"
                 .utf8), at: imageSource)
     let paper = try await PDFImporter(root: directory).importPDF(at: source, structuredBlocks: blocks)
-    try #require(paper.blocks.count == 2)
-    #expect(paper.blocks[0].sourcePage == 0)
-    #expect(paper.blocks[0].preservesSourcePage == true)
-    #expect(paper.blocks[0].richContent == nil)
-    #expect(paper.blocks[1].sourcePage == -1)
-    #expect(paper.blocks[1].preservesSourcePage != true)
-    #expect(paper.blocks[1].richContent?.html.contains("图片未能转换") == true)
-    #expect(paper.warnings.contains { $0.contains("整页") })
+    // One unmapped figure makes this partial HTML unsuitable. Use a single PDF-derived
+    // reading result instead of mixing an overlapping full page with incomplete HTML.
+    #expect(!paper.blocks.isEmpty)
+    #expect(paper.blocks.allSatisfy { $0.sourcePage == 0 })
+    #expect(!paper.blocks.contains { $0.hasImageFailure == true })
+    #expect(!paper.blocks.contains { $0.text.contains("Unmatched figure caption") })
+    let extracted = paper.blocks.map(\.text).joined(separator: " ")
+    #expect(extracted.components(separatedBy: "Unique figure caption").count == 2)
+    for labels in figureLabels { #expect(extracted.contains(labels)) }
+
 }
 
 @Test func svgLabelsExplainPDFCoverageWithoutBecomingTranslationOrEvidence() async throws {
@@ -304,4 +306,47 @@ private func rasterFixture(type: String, pages: Int = 1, orientation: Int = 1) t
     }
     #expect(CGImageDestinationFinalize(destination))
     return bytes as Data
+}
+
+@Test func svgForeignObjectPreservesCodeMathAndNestedSVGNamespaces() throws {
+    let source = """
+        <svg xmlns="http://www.w3.org/2000/svg" width="320" height="160">
+        <foreignObject width="320" height="160"><div><pre>value = memory * mask</pre>
+        <math><semantics><mfrac><mi>x</mi><mn>2</mn></mfrac><annotation encoding="application/x-tex">DO_NOT_DUPLICATE</annotation></semantics></math>
+        <svg width="10" height="10"><path d="M0 0L10 10"/></svg></div></foreignObject></svg>
+        """
+    let image = try SVGImageDocument.parse(Data(source.utf8))
+    let uri = try image.dataURI(replacing: [:])
+    let payload = try #require(uri.split(separator: ",", maxSplits: 1).last)
+    let data = try #require(Data(base64Encoded: String(payload)))
+    let output = try #require(String(data: data, encoding: .utf8))
+    #expect(output.contains("<pre xmlns=\"http://www.w3.org/1999/xhtml\">"))
+    #expect(output.contains("<math xmlns=\"http://www.w3.org/1998/Math/MathML\">"))
+    #expect(output.components(separatedBy: "xmlns=\"http://www.w3.org/2000/svg\"").count == 3)
+    #expect(image.coverageText.contains("value = memory * mask"))
+    #expect(!output.contains("DO_NOT_DUPLICATE"))
+    #expect(!image.coverageText.contains("DO_NOT_DUPLICATE"))
+}
+
+@Test func recoveredImagesRequireUnambiguousBracketingText() {
+    let before = TextBlock(sourcePage: 0, text: "Unique paragraph before these diagrams.")
+    let after = TextBlock(sourcePage: 1, text: "Unique paragraph after these diagrams.")
+    var missing = TextBlock(sourcePage: 1, text: "")
+    missing.hasImageFailure = true
+    missing.preservesSourcePage = true
+    var image = TextBlock(sourcePage: -1, text: "")
+    image.richContent = RichContent(
+        html: "<figure>verified image</figure>", translationInput: "", mathematics: [:], mathDescriptions: [:],
+        isFigure: true)
+    let result = HTMLRepairAlignment.images(previous: [before, missing, after], recovered: [before, image, after])
+    #expect(result[missing.id]?.id == missing.id)
+    #expect(result[missing.id]?.sourcePage == missing.sourcePage)
+    #expect(result[missing.id]?.preservesSourcePage != true)
+    #expect(
+        HTMLRepairAlignment.images(previous: [before, missing, after], recovered: [before, image, image, after]).isEmpty
+    )
+    #expect(
+        HTMLRepairAlignment.images(previous: [before, missing, after], recovered: [before, image, after, before])
+            .isEmpty)
+    #expect(HTMLRepairAlignment.images(previous: [before, missing, after], recovered: [before, after]).isEmpty)
 }

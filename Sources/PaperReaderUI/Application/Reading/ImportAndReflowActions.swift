@@ -32,7 +32,7 @@ extension ReaderModel {
                 importProgressToken = token
                 importProgress = PDFImportProgress(sequence: 0, stage: "准备导入")
                 var imported = try await importer.importPDF(
-                    at: url, preservingComplexPages: true, structuredBlocks: structuredBlocks
+                    at: url, preservingComplexPages: true, structuredBlocks: structuredBlocks, discovery: ArxivClient()
                 ) { [weak self] progress in
                     Task { @MainActor [weak self] in
                         guard let self, self.importProgressToken == token,

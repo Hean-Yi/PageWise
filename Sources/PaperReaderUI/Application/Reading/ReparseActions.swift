@@ -48,7 +48,7 @@ extension ReaderModel {
             }
             let parsed = try await importer.importPDF(
                 at: root.appendingPathComponent(original.originalPath), preservingComplexPages: true,
-                structuredBlocks: structured
+                structuredBlocks: structured, discovery: discovery
             ) { [weak self] progress in
                 Task { @MainActor [weak self] in
                     guard let self, self.importProgressToken == token,
@@ -99,11 +99,13 @@ extension ReaderModel {
                 }
             }
             if original.htmlReading != nil {
-                guard publication.canReflow, !ready.isEmpty else {
+                guard publication.canReflow else {
                     throw ReaderError.message("新解析尚不能替代已保存的阅读内容，原版式保留。")
                 }
-                publication.htmlReading = try await HTMLReadingStore().append(
-                    ready, to: nil, paper: publication, root: root, restoringTranslationsFrom: original.htmlReading)
+                if !ready.isEmpty {
+                    publication.htmlReading = try await HTMLReadingStore().append(
+                        ready, to: nil, paper: publication, root: root, restoringTranslationsFrom: original.htmlReading)
+                }
                 publication.translatedBlockCount = ready.count
                 for index in 0..<ready.count { publication.blocks[index].richContent = nil }
             }
