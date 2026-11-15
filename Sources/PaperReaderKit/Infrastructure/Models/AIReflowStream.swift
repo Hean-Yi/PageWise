@@ -128,6 +128,9 @@ actor AIReflowStream {
                 guard !result.isEmpty, usedObjects == Set(current.markers.keys) else {
                     throw AIReflowEvidence.invalid()
                 }
+                guard !Self.isUntranslatedProse(result, source: current.block) else {
+                    throw AIReflowEvidence.invalid()
+                }
                 try current.block.richContent?.validate(result)
             } else if !result.isEmpty {
                 throw AIReflowEvidence.invalid()
@@ -252,6 +255,30 @@ actor AIReflowStream {
         guard translation.utf8.count + appended.utf8.count <= 64_000 else { throw AIReflowEvidence.invalid() }
         translation += appended
         try await onDraft(current.block, translation)
+    }
+
+    /// A narrow guard against copying English into the Chinese slot, not a general
+    /// fidelity score. Protected formulas, acronyms and identifier-shaped tokens do not
+    /// establish the three-word prose threshold on their own.
+    private static func isUntranslatedProse(_ translation: String, source: TextBlock) -> Bool {
+        var original = source.richContent?.translationInput ?? source.text
+        var translated = translation
+        for marker in source.richContent?.mathematics.keys.map({ $0 }) ?? [] {
+            original = original.replacingOccurrences(of: marker, with: " ")
+            translated = translated.replacingOccurrences(of: marker, with: " ")
+        }
+        guard original.range(of: "\\p{Han}", options: .regularExpression) == nil else { return false }
+        let words = original.components(separatedBy: .whitespacesAndNewlines).filter { raw in
+            let word = raw.trimmingCharacters(in: .punctuationCharacters)
+            return word.range(of: "^(?:[A-Z]?[a-z]{2,}|[AaIi])(?:['’][a-z]+)?$", options: .regularExpression) != nil
+        }
+        guard words.count >= 3 else { return false }
+        func normalized(_ text: String) -> String {
+            text.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: Locale(identifier: "en_US_POSIX"))
+                .components(separatedBy: CharacterSet.alphanumerics.inverted)
+                .filter { !$0.isEmpty }.joined(separator: " ")
+        }
+        return normalized(original) == normalized(translated)
     }
 
     private static func keys(_ value: [String: Any], _ expected: Set<String>) throws {

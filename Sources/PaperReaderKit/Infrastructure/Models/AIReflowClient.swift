@@ -90,7 +90,7 @@ extension ModelClient {
         有 accepted_plan 时 blocks 必须逐字段完全相同，绝不重排；跳过 committed_block_indices，仅输出剩余连续后缀。
         每块依次输出 {type:"block_start",block_index:N}，若 translate=true，输出多条 {type:"translation_delta",block_index:N,parts:[...]}，最后 {type:"block_end",block_index:N}。以上省略的公共字段每个事件对象都必须包含。translate=false 的块只有 start/end，不输出译文；原始对象、表格、代码、参考文献保持原样，由本地渲染。
         parts 是有类型增量：文字严格为 {"type":"text","text":"中文"}，每项最多128个Unicode标量，及时在 events 数组中追加短事件；行内公式严格为 {"type":"object_ref","object_id":"输入ID"}，在该块译文恰好一次。shared_original 只出现在计划，不得出现在译文；它由本地共享渲染。文字不得输出公式占位符或HTML，引用编号作为文字保留。不得把行内公式描述翻译成新公式。
-        译文忠实保留限定、否定、数值、单位、引用、术语和逻辑，不添加结论。必须完成整段才输出 block_end，不能提前结束。最后输出 type=window_end、block_count=计划总块数（包括此前已提交），然后关闭 events 数组和顶层对象（]}）并停止，不增加其他顶层字段。
+        译文忠实保留限定、否定、数值、单位、引用、术语和逻辑，不添加结论。标题和正文都必须翻译为简体中文，不得用整段英文原文充当译文；必要的缩写、标识符和技术术语可保留。必须完成整段才输出 block_end，不能提前结束。最后输出 type=window_end、block_count=计划总块数（包括此前已提交），然后关闭 events 数组和顶层对象（]}）并停止，不增加其他顶层字段。
         window_end 的完整 JSON 格式示例：{"v":1,"request_id":"输入的request_id","window_id":"输入的window_id","seq":17,"type":"window_end","block_count":4}。示例里的 ID 必须替换为输入 ID，seq 替换为本次下一个序号，block_count 替换为真实计划总块数；不要照抄示例数值。
         """
 }
