@@ -305,8 +305,14 @@ import Testing
     let beforeDebounce = try await store.load()
     #expect(beforeDebounce.workspace[paper.id.uuidString]?.position?.pageIndex == 0)
     #expect(beforeDebounce.workspace[paper.id.uuidString]?.status == .reading)
-    try await Task.sleep(for: .milliseconds(700))
-    let afterDebounce = try await store.load()
+    // Concurrent WebKit fixtures can delay the main actor beyond the debounce timer.
+    // Verify eventual persistence without manually flushing the operation under test.
+    let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+    var afterDebounce = try await store.load()
+    while afterDebounce.workspace[paper.id.uuidString]?.position?.pageIndex != 2 && ContinuousClock.now < deadline {
+        try await Task.sleep(for: .milliseconds(50))
+        afterDebounce = try await store.load()
+    }
     #expect(afterDebounce.workspace[paper.id.uuidString]?.position?.pageIndex == 2)
     #expect(afterDebounce.workspace[paper.id.uuidString]?.status == .finished)
     model.select(nil)

@@ -29,3 +29,8 @@ Artifacts/
 
 # Local SwiftPM IDE metadata
 .swiftpm/
+
+# Reproducible local Markdown editor bundle (override global npm metadata ignores).
+!scripts/note-editor/package.json
+!scripts/note-editor/package-lock.json
+scripts/note-editor/node_modules/

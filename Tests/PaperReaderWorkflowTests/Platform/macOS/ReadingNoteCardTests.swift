@@ -39,9 +39,14 @@
         var source =
             "# My note\n\n**Evidence** $x^2$\n\n" + String(repeating: "Long content stays accessible.\n\n", count: 20)
         _ = try await web.callAsyncJavaScript(
-            "window.editor=document.querySelector('.reader-note-card textarea');editor.value=source;editor.dispatchEvent(new Event('input',{bubbles:true}));editor.setSelectionRange(3,6)",
+            "window.editor=document.querySelector('.reader-note-card .note-editor');editor.value=source;editor.dispatchEvent(new Event('input',{bubbles:true}));editor.setSelectionRange(3,6)",
             arguments: ["source": source], in: nil, contentWorld: .defaultClient)
         try await noteWait { model.currentReadingNotes.count == 1 }
+        #expect(
+            try await noteJS(
+                web,
+                "const pos=editor.value.indexOf('Evidence')+2;editor.setSelectionRange(pos,pos);editor.querySelector('.cm-content').dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowRight',code:'ArrowRight',bubbles:true}));const moved=editor.selectionStart===pos+1;editor.setSelectionRange(3,6);return moved"
+            ) as? Bool == true)
         #expect(model.currentReadingNotes[0].anchors[0].text == "lpha be")
         #expect(model.currentHighlights.isEmpty)
         coordinator.update(web, sidebarOpen: false)
@@ -83,13 +88,25 @@
         #expect(
             try await noteJS(
                 web,
-                "return getComputedStyle(document.querySelector('.note-content')).display!=='none' && getComputedStyle(editor).display!=='none'"
+                "return getComputedStyle(document.querySelector('.note-content')).display==='none' && getComputedStyle(editor).display!=='none' && !!editor.querySelector('.cm-content') && !document.querySelector('.reader-note-card textarea')"
             ) as? Bool == true)
         #expect(
             try await noteJS(
                 web,
                 "return document.querySelector('.reader-note-card').getBoundingClientRect().height<=420 && p.outerHTML===original && p.getBoundingClientRect().height===height"
             ) as? Bool == true)
+        try await noteWait {
+            (try? await noteJS(web, "return editor.querySelectorAll('math').length===2")) as? Bool == true
+        }
+        _ = try await noteJS(
+            web,
+            "window.mathPosition=editor.value.indexOf('$z_1$');editor.setSelectionRange(mathPosition+2,mathPosition+2)")
+        #expect(try await noteJS(web, "return editor.querySelectorAll('math').length===1") as? Bool == true)
+        _ = try await noteJS(web, "editor.noteEditor.view.dispatch({changes:{from:mathPosition+4,insert:'^2'}})")
+        try await noteWait { model.currentReadingNotes.first?.markdown.contains("$z_1^2$") == true }
+        _ = try await noteJS(web, "editor.noteEditor.undo()")
+        try await noteWait { model.currentReadingNotes.first?.markdown == source }
+        _ = try await noteJS(web, "editor.setSelectionRange(editor.value.length,editor.value.length)")
         _ = try await noteJS(web, "window.paperNotes.finish()")
         await model.flushReadingNotes()
         #expect(model.savedNoteRevision == model.noteRevision)
@@ -100,10 +117,13 @@
                 "return !document.querySelector('.reader-note-card').hidden && !document.querySelector('.reader-note-card').classList.contains('active')"
             )) as? Bool == true
         }
+        // WebKit pauses visual animation clocks in the offscreen fixture. Settle before checking final geometry.
+        _ = try await noteJS(
+            web, "for(const a of document.querySelector('.reader-note-card').getAnimations())a.finish()")
         #expect(
             try await noteJS(
                 web,
-                "return document.querySelector('.reader-note-card').getBoundingClientRect().height<=112 && document.querySelectorAll('.note-wave').length>0 && !document.querySelector('.note-link')"
+                "return document.querySelector('.reader-note-card').getBoundingClientRect().height<=168.5 && document.querySelectorAll('.note-wave').length>0 && !document.querySelector('.note-link')"
             ) as? Bool == true)
         // Scrolling must use native document coordinates, without rebuilding decorations or relocating cards.
         _ = try await noteJS(
@@ -137,6 +157,25 @@
             (try? await noteJS(web, "return document.querySelector('.note-link')?.getAttribute('d')!==forward"))
                 as? Bool == true
         }
+        #expect(
+            try await noteJS(
+                web,
+                "return document.querySelectorAll('.note-link-start,.note-link-end').length===2 && document.querySelector('.note-wave').getAttribute('d').includes(' C ')"
+            ) as? Bool == true)
+        _ = try await noteJS(
+            web,
+            "document.dispatchEvent(new PointerEvent('pointermove',{clientX:0,clientY:0}));await new Promise(resolve=>setTimeout(resolve,60))"
+        )
+        #expect(
+            try await noteJS(web, "return !document.querySelector('.reader-note-card').classList.contains('active')")
+                as? Bool == true)
+        _ = try await noteJS(
+            web,
+            "for(let i=0;i<8;i++)p.dispatchEvent(new PointerEvent('pointermove',{bubbles:true,clientX:anchor.left+2+i,clientY:anchor.top+2}));await new Promise(resolve=>setTimeout(resolve,60))"
+        )
+        #expect(
+            try await noteJS(web, "return document.querySelector('.reader-note-card').classList.contains('active')")
+                as? Bool == true)
         let saved = try #require(model.currentReadingNotes.first)
         let reopened = try ReaderModel(root: directory)
         await reopened.load()
@@ -159,6 +198,57 @@
                 "const e=new ClipboardEvent('copy',{clipboardData:new DataTransfer(),cancelable:true});document.dispatchEvent(e);return !e.defaultPrevented"
             ) as? Bool == true)
         _ = try await noteJS(web, "window.paperNotes.finish()")
+        model.select(nil)
+    }
+
+    @Test @MainActor func clickingChineseAnnotationUsesExactHitAndDoesNotPaintCollapsedWhitespace() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let model = try ReaderModel(root: directory)
+        await model.load()
+        let block = TextBlock(sourcePage: 0, text: "Original evidence.")
+        var paper = Paper(
+            title: "Chinese note fixture", digest: "chinese-note", originalPath: "unused.pdf", pageCount: 1,
+            blocks: [block], warnings: [], canReflow: true)
+        paper.htmlReading = try await HTMLReadingStore().append(
+            [BilingualBlock(block: block, translation: String(repeating: "中文跨行证据包含不同文字与标点。", count: 10))],
+            to: nil, paper: paper, root: directory)
+        model.state.papers = [paper]
+        #expect(await model.save())
+        model.select(paper.id)
+        let coordinator = HTMLCoordinator(model: model)
+        let web = coordinator.makeView()
+        web.frame = CGRect(x: 0, y: 0, width: 900, height: 900)
+        defer { coordinator.stop(web) }
+        coordinator.update(web)
+        try await noteWait { (try? await noteJS(web, "return !!window.paperNotes")) as? Bool == true }
+        _ = try await noteJS(
+            web,
+            #"""
+            window.section=document.querySelector('section');window.cn=section.querySelector('.translation');
+            cn.firstChild.data='\n  '+cn.textContent+'\n';window.before=section.innerHTML;
+            paperSelection.highlights([{key:section.dataset.key,text:'Original evidence.',range:[0,18],sourceOnly:true}]);
+            window.r=document.createRange();r.setStart(cn.firstChild,3);r.setEnd(cn.firstChild,5);window.box=r.getBoundingClientRect();
+            window.clickAt=(x,y)=>{cn.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,clientX:x,clientY:y}));cn.dispatchEvent(new MouseEvent('click',{bubbles:true,clientX:x,clientY:y}));};
+            clickAt(box.left-2,(box.top+box.bottom)/2);
+            """#)
+        #expect(try await noteJS(web, "return paperNotes.editing()") as? Bool == false)
+        _ = try await noteJS(web, "clickAt(box.left+2,(box.top+box.bottom)/2)")
+        try await noteWait {
+            (try? await noteJS(web, "return document.querySelectorAll('#reader-note-lift span').length>0")) as? Bool
+                == true
+        }
+        #expect(
+            try await noteJS(web, "return paperSelection.parts().every(p=>p.target==='translation')") as? Bool == true)
+        #expect(
+            try await noteJS(
+                web,
+                #"""
+                const spans=[...document.querySelectorAll('#reader-note-lift span')];
+                return section.innerHTML===before && spans.every(s=>!s.textContent.includes('\n') && getComputedStyle(s).fontFamily===getComputedStyle(cn).fontFamily && parseFloat(s.style.lineHeight)<parseFloat(getComputedStyle(cn).lineHeight))
+                    && Math.abs(parseFloat(spans[0].style.top)-box.top-scrollY)<1;
+                """#) as? Bool == true)
+        _ = try await noteJS(web, "paperNotes.finish()")
         model.select(nil)
     }
 

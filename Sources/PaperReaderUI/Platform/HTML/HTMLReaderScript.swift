@@ -3,7 +3,8 @@ import Foundation
 /// Runs only in WKContentWorld.defaultClient; paper HTML cannot invoke or replace this bridge.
 enum HTMLReaderScript {
     static let source =
-        HTMLSelectionScript.source + HTMLAnnotationMenuScript.source + HTMLNoteStyle.source
+        HTMLNativeNoteEditorScript.source + HTMLSelectionScript.source + HTMLAnnotationMenuScript.source
+        + HTMLNoteStyle.source
         + HTMLNoteLayoutScript.source + HTMLNotesScript.source + #"""
             (() => {
               const send = value => window.webkit.messageHandlers.reader.postMessage(value);

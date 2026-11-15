@@ -7,7 +7,9 @@ enum HTMLNoteLayoutScript {
           const ns='http://www.w3.org/2000/svg';
           const svg=document.createElementNS(ns,'svg');svg.id='reader-note-decoration';svg.setAttribute('width','100%');svg.setAttribute('height','100%');svg.setAttribute('aria-hidden','true');document.body.append(svg);
           const lift=document.createElement('div');lift.id='reader-note-lift';lift.setAttribute('aria-hidden','true');document.body.append(lift);
-          const rects=anchors=>anchors.flatMap(a=>selection.rangesFor(a).flatMap(r=>a.target.startsWith('object:') ? [r.getBoundingClientRect()] : [...r.getClientRects()])).filter(r=>r.width>0&&r.height>0);
+          const hitCache=new WeakMap();
+          const rects=anchors=>{const result=anchors.flatMap(a=>selection.rangesFor(a).flatMap(r=>a.target.startsWith('object:') ? [r.getBoundingClientRect()] : [...r.getClientRects()])).filter(r=>r.width>0&&r.height>0);hitCache.set(anchors,result.map(r=>({left:r.left,right:r.right,top:r.top+scrollY,bottom:r.bottom+scrollY})));return result;};
+          const hitRects=anchors=>{if(!hitCache.has(anchors))rects(anchors);return hitCache.get(anchors).map(r=>({...r,top:r.top-scrollY,bottom:r.bottom-scrollY}));};
           const visible=r=>r.bottom>8&&r.top<innerHeight-8;
           const intersects=(a,b)=>a.left<b.right+12&&a.right+12>b.left&&a.top<b.bottom+12&&a.bottom+12>b.top;
           const place=(anchors,height,sidebar,occupied,offscreen=false)=>{
@@ -44,12 +46,13 @@ enum HTMLNoteLayoutScript {
           let connection=null,liftTimer=null;
           const updateConnection=()=>{
             if(!connection)return;
-            const {a,b,from,edge,reverse,line,mask,reveal}=connection;
-            line.style.visibility=(a.bottom-scrollY>8&&a.top-scrollY<innerHeight-8)?'visible':'hidden';
+            const {a,b,from,edge,reverse,line,mask,reveal,startDot,endDot}=connection;
+            const visibility=(a.bottom-scrollY>8&&a.top-scrollY<innerHeight-8)?'visible':'hidden';line.style.visibility=visibility;startDot.style.visibility=visibility;endDot.style.visibility=visibility;
             const cardTop=b.top+(b.fixed?scrollY:0),to={x:b.side==='right'?b.left:b.left+b.width,y:Math.max(cardTop+16,Math.min(cardTop+b.height-16,from.y))},mid=(edge.x+to.x)/2;
             const forward='M '+from.x+' '+from.y+' L '+edge.x+' '+edge.y+' C '+mid+' '+edge.y+', '+mid+' '+to.y+', '+to.x+' '+to.y;
             const backward='M '+to.x+' '+to.y+' C '+mid+' '+to.y+', '+mid+' '+edge.y+', '+edge.x+' '+edge.y+' L '+from.x+' '+from.y;
             const d=reverse?backward:forward;line.setAttribute('d',d);reveal.setAttribute('d',d);
+            startDot.setAttribute('cx',from.x);startDot.setAttribute('cy',from.y);endDot.setAttribute('cx',to.x);endDot.setAttribute('cy',to.y);
             mask.setAttribute('x',Math.min(from.x,to.x)-5);mask.setAttribute('y',Math.min(from.y,to.y)-5);mask.setAttribute('width',Math.abs(to.x-from.x)+10);mask.setAttribute('height',Math.abs(to.y-from.y)+10);
           };
           const decorate=(notes,active,card,reverse)=>{
@@ -61,7 +64,13 @@ enum HTMLNoteLayoutScript {
             const seen=new Set();
             for(const note of notes){if(!note.markdown.trim())continue;for(const rect of rects(note.anchors)){const r={left:rect.left,right:rect.right,width:rect.width,top:rect.top+scrollY,bottom:rect.bottom+scrollY};
               const key=[r.left,r.top,r.width].join(':');if(seen.has(key))continue;seen.add(key);
-              let d='M '+r.left+' '+(r.bottom+3);for(let x=r.left;x<r.right;x+=8){const end=Math.min(x+8,r.right);d+=' Q '+(x+2)+' '+(r.bottom+1)+' '+(x+4)+' '+(r.bottom+3)+' Q '+(x+6)+' '+(r.bottom+5)+' '+end+' '+(r.bottom+3);}path(d,'note-wave');
+              let seed=2166136261;for(const c of note.id+':'+key.split(':').slice(2).join(':'))seed=Math.imul(seed^c.charCodeAt(0),16777619);
+              const random=()=>{seed^=seed<<13;seed^=seed>>>17;seed^=seed<<5;return (seed>>>0)/4294967296;};
+              const pts=[{x:r.left,y:r.bottom+4}];let x=r.left,sign=1;
+              while(x<r.right){x=Math.min(r.right,x+4+random()*3);const taper=Math.min(1,(r.right-x)/8,(x-r.left)/8);pts.push({x,y:r.bottom+4+sign*(.8+random()*1.4)*taper+(random()-.5)*.5});sign*=-1;}
+              let d='M '+pts[0].x+' '+pts[0].y;
+              for(let i=0;i<pts.length-1;i++){const a=pts[Math.max(0,i-1)],b=pts[i],c=pts[i+1],e=pts[Math.min(pts.length-1,i+2)];d+=' C '+(b.x+(c.x-a.x)/6)+' '+(b.y+(c.y-a.y)/6)+', '+(c.x-(e.x-b.x)/6)+' '+(c.y-(e.y-b.y)/6)+', '+c.x+' '+c.y;}
+              path(d,'note-wave');
             }}
             if(!active)return;
             const ranges=active.anchors.filter(a=>!a.target.startsWith('object:')).flatMap(a=>selection.rangesFor(a));
@@ -70,10 +79,15 @@ enum HTMLNoteLayoutScript {
             for(const range of ranges){
               if(range.startContainer!==range.endContainer||range.startContainer.nodeType!==3||range.toString().length>remaining)continue;remaining-=range.toString().length;
               const node=range.startContainer,css=getComputedStyle(node.parentElement);let offset=range.startOffset,run=null;
-              const flush=()=>{if(!run)return;const span=document.createElement('span');span.textContent=run.text;span.style.cssText='left:'+run.left+'px;top:'+run.top+'px;font:'+css.font+';line-height:'+run.height+'px;color:'+css.color+';letter-spacing:'+css.letterSpacing;lift.append(span);run=null;};
+              const flush=()=>{if(!run)return;const span=document.createElement('span');span.textContent=run.text;Object.assign(span.style,{left:run.left+'px',top:run.top+'px',fontFamily:css.fontFamily,fontSize:css.fontSize,fontWeight:css.fontWeight,fontStyle:css.fontStyle,fontVariant:css.fontVariant,lineHeight:run.height+'px',color:css.color,letterSpacing:css.letterSpacing,wordSpacing:css.wordSpacing});lift.append(span);run=null;};
               for(const char of range.toString()){
-                const r=document.createRange();r.setStart(node,offset);offset+=char.length;r.setEnd(node,offset);const box=r.getBoundingClientRect();
-                if(!run||Math.abs(run.top-(box.top+scrollY))>2){flush();run={left:box.left,top:box.top+scrollY,height:box.height,text:''};}run.text+=char;
+                const r=document.createRange();r.setStart(node,offset);offset+=char.length;r.setEnd(node,offset);const box=[...r.getClientRects()].filter(b=>b.width>.01&&b.height>0).at(-1);
+                // A wrap boundary may expose a zero-width rectangle on the preceding line. Never union both lines.
+                if(!box)continue;
+                // Collapsed indentation/newlines have no painted glyph. Copying them with white-space:pre creates phantom lines.
+                if(box.width<=.01||box.height<=0)continue;
+                if(!run||Math.abs(run.top-(box.top+scrollY))>2||Math.abs(run.right-box.left)>1){flush();run={left:box.left,right:box.left,top:box.top+scrollY,height:box.height,text:''};}
+                run.text+=/\s/.test(char)?' ':char;run.right=box.right;
               }flush();hidden.push(range);
             }
             if(CSS.highlights){const h=new Highlight(...hidden);h.priority=200;CSS.highlights.set('note-lift',h);}
@@ -85,9 +99,18 @@ enum HTMLNoteLayoutScript {
             const mask=document.createElementNS(ns,'mask');mask.id='note-link-mask';mask.setAttribute('maskUnits','userSpaceOnUse');
             const reveal=document.createElementNS(ns,'path');reveal.setAttribute('class','note-link-reveal');reveal.setAttribute('pathLength','1');mask.append(reveal);svg.append(mask);
             const line=path('','note-link');line.setAttribute('mask','url(#note-link-mask)');
-            connection={a,b,from,edge,reverse,line,mask,reveal};updateConnection();
+            const dot=(kind,r)=>{const c=document.createElementNS(ns,'circle');c.setAttribute('class',kind);c.setAttribute('r',r);svg.append(c);return c;};
+            connection={a,b,from,edge,reverse,line,mask,reveal,startDot:dot('note-link-start',2),endDot:dot('note-link-end',3)};updateConnection();
           };
-          window.paperNoteLayout={rects,visible,place,decorate,scrolled:updateConnection,hit(anchors,x,y){return rects(anchors).some(r=>x>=r.left-2&&x<=r.right+2&&y>=r.top-3&&y<=r.bottom+6);}};
+          const inBridge=(anchors,card,x,y,previous)=>{
+            if(!previous||card.hidden)return false;const box=card.getBoundingClientRect(),rs=hitRects(anchors).filter(visible);if(!rs.length)return false;
+            const a=rs[0],right=box.left>a.right,start=right?a.right:a.left,end=right?box.left:box.right;
+            const t=(x-start)/(end-start);if(t<0||t>1)return false;
+            const low=(a.top-8)*(1-t)+(box.top-8)*t,high=(a.bottom+8)*(1-t)+(box.bottom+8)*t;
+            const towardCard=Math.abs(x-end)<Math.abs(previous.x-end),towardText=Math.abs(x-start)<Math.abs(previous.x-start);
+            return y>=low&&y<=high&&(towardCard||towardText);
+          };
+          window.paperNoteLayout={rects,visible,place,decorate,inBridge,scrolled:updateConnection,hit(anchors,x,y,precise=false){const margin=precise?0:3,bottom=precise?0:8;return hitRects(anchors).some(r=>x>=r.left-margin&&x<=r.right+margin&&y>=r.top-margin&&y<=r.bottom+bottom);}};
         })();
         """#
 }

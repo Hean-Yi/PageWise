@@ -15,7 +15,8 @@ let package = Package(
         .target(name: "PaperReaderKit", dependencies: ["CSQLite", "SwiftSoup"],
             resources: [.copy("Resources/ThirdPartyNotices.txt"), .copy("Resources/KaTeX"), .copy("Resources/Marked")]),
         .target(name: "PaperReaderUI", dependencies: ["PaperReaderKit"],
-            resources: [.copy("Platform/HTML/ReaderWarmup.html")]),
+            exclude: ["Platform/HTML/NoteEditor/Editor.js"],
+            resources: [.copy("Platform/HTML/ReaderWarmup.html"), .copy("Platform/HTML/NoteEditor/NoteEditor.bundle")]),
         .executableTarget(name: "ReaderSmoke", dependencies: ["PaperReaderKit"]),
         .testTarget(name: "PaperReaderKitTests", dependencies: ["PaperReaderKit"]),
         .testTarget(name: "PaperReaderWorkflowTests", dependencies: ["PaperReaderKit", "PaperReaderUI"])

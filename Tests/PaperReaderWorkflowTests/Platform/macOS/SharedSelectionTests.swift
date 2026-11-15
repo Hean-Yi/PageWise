@@ -81,7 +81,7 @@
                 ) as? String == model.selectionText)
             _ = try await sharedJS(
                 web,
-                "paperNotes.begin();const e=document.querySelector('#annotation-menu').closest('.reader-note-card').querySelector('textarea');e.value='跨段图表笔记';e.dispatchEvent(new Event('input',{bubbles:true}))"
+                "paperNotes.begin();const e=document.querySelector('#annotation-menu').closest('.reader-note-card').querySelector('.note-editor');e.value='跨段图表笔记';e.dispatchEvent(new Event('input',{bubbles:true}))"
             )
             expectedNotes += 1
             for _ in 0..<100 {
@@ -127,8 +127,16 @@
         reopened.select(paper.id)
         let restoredCoordinator = HTMLCoordinator(model: reopened)
         let restoredWeb = restoredCoordinator.makeView()
+        restoredWeb.frame = CGRect(x: 0, y: 0, width: 700, height: 600)
         restoredCoordinator.update(restoredWeb)
         defer { restoredCoordinator.stop(restoredWeb) }
+        // A restored WebView can share the process with all concurrently running fixtures.
+        // Await navigation before judging annotation restoration, not just an arbitrary script-injection delay.
+        for _ in 0..<500 {
+            if !restoredWeb.isHidden { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(!restoredWeb.isHidden, "Restored document did not finish loading: \(reopened.message ?? "")")
         for _ in 0..<200 {
             if (try? await sharedJS(restoredWeb, "return document.querySelectorAll('[data-reader-saved]').length"))
                 as? Int == 4
@@ -137,9 +145,16 @@
             }
             try await Task.sleep(for: .milliseconds(10))
         }
-        #expect(
+        let restoredObjects =
             try await sharedJS(restoredWeb, "return document.querySelectorAll('[data-reader-saved]').length") as? Int
-                == 4)
+        let restoredDiagnostics =
+            try await sharedJS(
+                restoredWeb,
+                "return JSON.stringify({url:location.href,ready:!!window.paperReader,objects:[...document.querySelectorAll('img,svg,table,math')].map(e=>[e.tagName,e.getAttribute('data-reader-saved'),e.textContent]),marks:window.paperSelection?.projectedMarks()})"
+            ) as? String
+        #expect(
+            restoredObjects == 4,
+            "Restoration: \(restoredDiagnostics ?? "") / marks: \(reopened.currentHighlights.count)")
         #expect(
             try await sharedJS(
                 restoredWeb,
