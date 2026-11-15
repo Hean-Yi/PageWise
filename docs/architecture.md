@@ -95,3 +95,5 @@ Swift Package 自动递归发现每个 target 目录下的 Swift 文件。当前
 HTML 文件使用进程内引用计数保护 WebKit 当前载入的文件：清理跳过正在使用的文档，阅读器关闭时释放并清理；重启后无占用的旧文件正常回收。此机制不复制图片，也不累计历史版本。显式重排仅允许无 HTML 批注依赖的内容，保留原始 PDF、论文 ID、可复用块 ID 与已保存译文中的 MathML。
 
 模型请求通过凭据适配器的异步读取入口访问 Keychain；设备适配器把可能等待系统授权的 SecItemCopyMatching 放到后台任务，完成后检查取消。View 的配置判断不读取密钥；仅状态检测与明确模型操作才读取，密钥不落盘。
+
+`Platform/HTML/HTMLSelectionScript` 负责源文本范围、跨段归一化、文字范围选区绘制与英中关联高亮；`Application/Reading/HTMLTextSelection` 保存本次选文的有序块范围，问答固定全部选中块为优先证据。持久化 Highlight 的可选 linksTranslation 标识源文本坐标与段落译文关联；缺省继续解释旧整段 DOM 坐标，不迁移旧记录或改变已发布节点。

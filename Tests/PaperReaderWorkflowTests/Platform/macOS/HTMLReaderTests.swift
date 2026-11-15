@@ -86,7 +86,8 @@
             try await web.callAsyncJavaScript(
                 "return CSS.highlights.get('saved').size", arguments: [:], in: nil, contentWorld: .defaultClient)
             as? Int
-        #expect(highlighted == 1)
+        #expect(highlighted == 2)
+        #expect(model.state.highlights.first?.linksTranslation == true)
         model.navigateToPage(1)
         coordinator.update(web)
         model.toggleBookmark()

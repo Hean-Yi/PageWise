@@ -12,7 +12,10 @@ extension ReaderModel {
         let selection = selectionText
         let config = modelSettings
         let pinnedIDs: Set<UUID>
-        if !selection.isEmpty, mode != "original", paper.canReflow, activePages.indices.contains(selectionPage) {
+        if !selection.isEmpty, usesHTMLReading, !htmlSelection.isEmpty {
+            let selectedKeys = Set(htmlSelection.map(\.pageKey))
+            pinnedIDs = Set(activePages.filter { selectedKeys.contains($0.id.uuidString) }.flatMap(\.blockIDs))
+        } else if !selection.isEmpty, mode != "original", paper.canReflow, activePages.indices.contains(selectionPage) {
             pinnedIDs = Set(activePages[selectionPage].blockIDs)
         } else if !selection.isEmpty {
             pinnedIDs = Set(paper.blocks.filter { $0.sourcePage == selectionPage }.map(\.id))

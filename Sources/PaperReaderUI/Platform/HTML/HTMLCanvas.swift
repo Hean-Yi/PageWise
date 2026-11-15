@@ -39,6 +39,7 @@ final class HTMLCoordinator: NSObject, WKNavigationDelegate, WKScriptMessageHand
     private var highlightIDs: [UUID] = []
     private var draftHTML = ""
     private var leasedURL: URL?
+    private var hasSelection = false
 
     init(model: ReaderModel) { self.model = model }
 
@@ -139,6 +140,12 @@ final class HTMLCoordinator: NSObject, WKNavigationDelegate, WKScriptMessageHand
 
     private func updateState(_ view: WKWebView) {
         guard ready, model.selectedPaperID == paperID else { return }
+        if hasSelection && model.selectionText.isEmpty {
+            hasSelection = false
+            view.callAsyncJavaScript(
+                "window.paperReader.clearSelection()", arguments: [:], in: nil,
+                in: .defaultClient, completionHandler: nil)
+        }
         let draft = model.translationDraft.flatMap { $0.paperID == paperID ? $0.html : nil } ?? ""
         if draftHTML != draft {
             draftHTML = draft
@@ -150,7 +157,10 @@ final class HTMLCoordinator: NSObject, WKNavigationDelegate, WKScriptMessageHand
         if highlightIDs != marks.map(\.id) {
             highlightIDs = marks.map(\.id)
             let values: [[String: Any]] = marks.map {
-                ["key": $0.pageKey, "text": $0.text, "range": $0.textRange ?? []]
+                [
+                    "key": $0.pageKey, "text": $0.text, "range": $0.textRange ?? [],
+                    "sourceOnly": $0.linksTranslation == true,
+                ]
             }
             view.callAsyncJavaScript(
                 "window.paperReader.highlights(marks)", arguments: ["marks": values], in: nil,
@@ -218,17 +228,27 @@ final class HTMLCoordinator: NSObject, WKNavigationDelegate, WKScriptMessageHand
         case "position":
             if ready, let index { model.recordVisiblePage(index) }
         case "selection":
-            guard let text = value["text"] as? String, !text.isEmpty, let index,
-                let start = value["start"] as? Int, let end = value["end"] as? Int, start >= 0, end > start
-            else {
-                model.captureSelection(text: "", rects: [], page: model.visiblePage)
-                return
+            guard let values = value["parts"] as? [[String: Any]], values.count <= keys.count else { return }
+            var parts: [HTMLTextSelection] = []
+            var lastIndex = -1
+            var total = 0
+            for item in values {
+                guard let key = item["key"] as? String, let index = keys.firstIndex(of: key), index > lastIndex,
+                    let text = item["text"] as? String, !text.isEmpty,
+                    let start = item["start"] as? Int, let end = item["end"] as? Int,
+                    start >= 0, end > start, end <= 2_000_000, end - start == text.utf16.count
+                else { return }
+                total += text.utf16.count
+                guard total <= 200_000 else {
+                    model.captureHTMLSelection([])
+                    model.status = "所选内容过长，请缩小选择范围。"
+                    return
+                }
+                parts.append(HTMLTextSelection(pageKey: key, text: text, start: start, end: end))
+                lastIndex = index
             }
-            model.captureSelection(text: text, rects: [], page: index)
-            model.selectionHTMLRange = [start, end]
-        case "crossSelection":
-            model.captureSelection(text: "", rects: [], page: model.visiblePage)
-            model.status = "跨段文字可以复制；高亮或解释请在一个内容段内选择，以保留准确来源。"
+            hasSelection = !parts.isEmpty
+            model.captureHTMLSelection(parts)
         case "imageError": model.message = "部分图片未能显示，请切换原版查看完整内容。"
         case "missingLink": model.message = "引用目标尚未生成，完成对应段落后即可跳转；也可以切换原版查看。"
         case "externalLink":

@@ -13,6 +13,7 @@ public final class ReaderModel {
     public var isImporting = false
     public var importProgress: PDFImportProgress?
     public var selectionHTMLRange: [Int]?
+    public var htmlSelection: [HTMLTextSelection] = []
     public var usesHTMLReading: Bool { mode == "translated" && paper?.htmlReading != nil }
     var importProgressToken: UUID?
     public var translationDraft: TranslationDraft?
@@ -196,6 +197,7 @@ public final class ReaderModel {
 
     public func captureSelection(text: String, rects: [[Double]], page: Int) {
         selectionHTMLRange = nil
+        htmlSelection = []
         selectionText = text
         selectionRects = rects
         selectionPage = page
@@ -204,11 +206,22 @@ public final class ReaderModel {
 
     public func highlightSelection() {
         guard let id = selectedPaperID, !selectionText.isEmpty, pageKeys.indices.contains(selectionPage) else { return }
-        var highlight = Highlight(
-            paperID: id, pageKey: pageKeys[selectionPage], pageIndex: selectionPage, text: selectionText,
-            rects: selectionRects)
-        highlight.textRange = selectionHTMLRange
-        state.highlights.append(highlight)
+        if usesHTMLReading, !htmlSelection.isEmpty {
+            for part in htmlSelection {
+                guard let index = pageKeys.firstIndex(of: part.pageKey) else { continue }
+                var highlight = Highlight(
+                    paperID: id, pageKey: part.pageKey, pageIndex: index, text: part.text, rects: [])
+                highlight.textRange = [part.start, part.end]
+                highlight.linksTranslation = true
+                state.highlights.append(highlight)
+            }
+        } else {
+            var highlight = Highlight(
+                paperID: id, pageKey: pageKeys[selectionPage], pageIndex: selectionPage, text: selectionText,
+                rects: selectionRects)
+            highlight.textRange = selectionHTMLRange
+            state.highlights.append(highlight)
+        }
         Task { await save() }
     }
 
