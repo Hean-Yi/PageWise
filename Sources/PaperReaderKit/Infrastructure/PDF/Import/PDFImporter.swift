@@ -5,7 +5,7 @@ import PDFKit
 /// Copies a local PDF into the library before exposing any references to it.
 /// Duplicate detection belongs to the library, using the returned SHA-256 digest.
 public actor PDFImporter {
-    private let root: URL
+    let root: URL
 
     public init(root: URL) {
         self.root = root

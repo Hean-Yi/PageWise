@@ -72,9 +72,16 @@ extension ReaderModel {
     }
 
     public func openReadingNote(_ note: ReadingNote) {
-        guard note.paperID == selectedPaperID, let first = note.anchors.first,
-            let paper, let position = PaperPageLocator.resolve(pageKey: first.key, in: paper)
-        else { return }
+        guard note.paperID == selectedPaperID, let first = note.anchors.first else { return }
+        if let current = state.papers.first(where: { $0.id == note.paperID }) {
+            retainedReadingID =
+                current.readingPages.contains(where: { $0.id.uuidString == first.key })
+                ? nil
+                : current.retainedReadings?.first(where: { $0.readingPages.contains { $0.id.uuidString == first.key } }
+                )?.id
+        }
+        guard let paper, let position = PaperPageLocator.resolve(pageKey: first.key, in: paper) else { return }
+        readingChoicePresented = false
         mode = position.mode
         navigateToPage(position.pageIndex)
         requestedReadingNote = note.id

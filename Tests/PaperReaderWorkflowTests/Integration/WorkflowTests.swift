@@ -111,7 +111,7 @@ private struct FakeModelTransport: HTTPTransport {
         + "</article>"
     let blocks = try await HTMLPaperParser().parse(
         Data(html.utf8), at: URL(string: "https://arxiv.org/html/2401.00001v1")!)
-    await model.importURLs([source], structuredBlocks: blocks)
+    await model.importURLs([source], structuredBlocks: blocks, prepareSample: true)
     #expect(model.paper?.blocks.contains { $0.richContent != nil } == true)
     #expect(model.paper?.previewPages.isEmpty == true)
     var settings = model.modelSettings

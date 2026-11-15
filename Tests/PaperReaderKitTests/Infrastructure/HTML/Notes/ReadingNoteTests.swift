@@ -21,7 +21,7 @@ import Testing
     legacy["version"] = 6
     legacy.removeValue(forKey: "readingNotes")
     let migrated = try JSONDecoder().decode(LibraryState.self, from: JSONSerialization.data(withJSONObject: legacy))
-    #expect(migrated.version == 7)
+    #expect(migrated.version == LibraryState.currentVersion)
     #expect(migrated.readingNotes.isEmpty)
     #expect(migrated.highlights == state.highlights)
 }

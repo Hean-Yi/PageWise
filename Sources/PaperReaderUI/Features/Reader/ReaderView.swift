@@ -66,34 +66,19 @@ struct ReaderView: View {
             Divider()
             HStack(spacing: 0) {
                 VStack(spacing: 0) {
-                    Group {
-                        if model.paper?.htmlReading == nil, let draft = model.translationDraft,
-                            draft.paperID == model.selectedPaperID
-                        {
-                            ScrollView {
-                                VStack(alignment: .leading, spacing: 20) {
-                                    Text(draft.block.text).font(.title3)
-                                    Text(draft.text).font(.title3).textSelection(.enabled)
-                                    ProgressView("正在流式翻译").controlSize(.small)
-                                }.padding(32).frame(maxWidth: 860, alignment: .leading)
-                            }
-                        } else if model.mode == "translated" && model.activePages.isEmpty
-                            && model.paper?.canReflow == true
-                        {
-                            VStack(spacing: 20) {
-                                Image(systemName: "character.book.closed").font(.system(size: 42, weight: .ultraLight))
-                                    .foregroundStyle(ReaderTheme.accent)
-                                Text("用熟悉的语言阅读").font(.system(.title2, design: .serif))
-                                Button("开始翻译", action: translate).buttonStyle(.borderedProminent).controlSize(.large)
-                                    .disabled(model.translating.contains(model.selectedPaperID ?? UUID()))
-                            }.frame(maxWidth: .infinity, maxHeight: .infinity)
-                        } else if model.usesHTMLReading {
+                    ZStack {
+                        if model.usesHTMLReading {
                             HTMLCanvas(
                                 model: model,
                                 sidebarOpen: (showAssistant && !libraryAgentPresented && width >= 900)
                                     || showAssistantSheet)
-                        } else {
+                        } else if !model.showingReflowLoading && !model.readingChoicePresented {
                             PDFCanvas(model: model, penEnabled: penEnabled).frame(maxWidth: 820)
+                        }
+                        if model.readingChoicePresented {
+                            ReadingModeChoiceView(model: model, reflow: translate)
+                        } else if model.showingReflowLoading {
+                            ReflowLoadingView(model: model)
                         }
                     }.frame(maxWidth: .infinity, maxHeight: .infinity)
                     readingBar(width: width)
@@ -157,40 +142,54 @@ struct ReaderView: View {
 
     private func controls(width: CGFloat) -> some View {
         HStack(spacing: 14) {
-            if let paper = model.paper, paper.previewPages.isEmpty,
-                paper.translatedPages.isEmpty
-            {
-                Menu {
-                    Button("修复当前重排") { model.startReflowRepair(paperIDs: [paper.id]) }
-                    Button("重新解析当前论文") {
-                        Task { await model.reparseCurrentPaper(replacingUnannotatedHTML: paper.htmlReading != nil) }
-                    }
-                    Button("修复书库重排") { model.startReflowRepair() }
-                } label: {
-                    Label(model.isImporting ? "正在解析" : "重新排版", systemImage: "arrow.clockwise")
-                }
-                .disabled(model.isImporting || model.translating.contains(paper.id))
-                if model.isRepairingReflow {
-                    Text(model.importProgress?.stage ?? "正在修复").font(.caption).foregroundStyle(ReaderTheme.muted)
-                    Button("停止") { model.cancelReflowRepair() }
-                }
-            }
-            if model.paper?.canReflow == true {
-                Picker("阅读模式", selection: Binding(get: { model.mode }, set: { model.changeMode(to: $0) })) {
-                    Text("原版").tag("original")
-                    if model.paper?.previewPages.isEmpty == false { Text("旧重排").tag("reflow") }
-                    if model.paper?.readingPages.isEmpty == false {
-                        Text(model.paper?.htmlReading != nil ? "连续阅读" : "双语重排").tag("translated")
-                    }
-                }.pickerStyle(.segmented).labelsHidden().frame(width: 186)
-            }
+            Picker(
+                "阅读模式",
+                selection: Binding(
+                    get: { model.mode },
+                    set: { value in
+                        if value == "original" {
+                            model.readOriginal()
+                        } else if value == "reflow" {
+                            model.readingChoicePresented = false
+                            model.mode = "reflow"
+                        } else if model.paper?.htmlReading != nil {
+                            model.openRetainedReading(model.retainedReadingID)
+                        } else {
+                            translate()
+                        }
+                    })
+            ) {
+                Text("原版").tag("original")
+                if model.paper?.previewPages.isEmpty == false { Text("旧重排").tag("reflow") }
+                Text("双语重排").tag("translated")
+            }.pickerStyle(.segmented).labelsHidden().frame(
+                width: model.paper?.previewPages.isEmpty == false ? 240 : 174)
             if model.translating.contains(model.selectedPaperID ?? UUID()) {
                 Button(action: model.pauseTranslation) { Image(systemName: "pause.circle") }
-                    .help("暂停翻译").accessibilityLabel("暂停翻译")
-            } else if model.paper?.canReflow == true {
-                Button(action: translate) { Label("翻译", systemImage: "translate") }
-                    .help("翻译 / 继续")
+                    .help("暂停重排").accessibilityLabel("暂停重排")
+            } else if model.paper?.reflowJob?.finished != true {
+                Button(action: translate) {
+                    Label(model.paper?.reflowJob == nil ? "AI 重排" : "继续", systemImage: "sparkles")
+                }
+                .help("AI 双语重排 / 继续")
             }
+            Menu {
+                Button("重新生成双语版") {
+                    if configured { model.startAIReflow(regenerate: true) } else { requestSettings() }
+                }
+                if let versions = model.state.papers.first(where: { $0.id == model.selectedPaperID })?.retainedReadings,
+                    !versions.isEmpty
+                {
+                    Button("当前版本") { model.openRetainedReading(nil) }
+                    ForEach(Array(versions.enumerated()), id: \.element.id) { index, version in
+                        Button("保留版本 \(index + 1)") { model.openRetainedReading(version.id) }
+                    }
+                }
+            } label: {
+                Image(systemName: "ellipsis.circle")
+            }
+            .disabled(model.translating.contains(model.selectedPaperID ?? UUID()))
+            .help("阅读版本")
             Spacer(minLength: 0).frame(maxWidth: width < 760 ? .infinity : 0)
             Button {
                 requestNoteSave()
@@ -240,6 +239,10 @@ struct ReaderView: View {
                 .accessibilityLabel(model.isCurrentPageBookmarked ? "移除当前页书签" : "添加当前页书签")
                 .keyboardShortcut("d")
             Spacer()
+            if model.translating.contains(model.selectedPaperID ?? UUID()), !model.showingReflowLoading {
+                ProgressView().controlSize(.small)
+                Text("继续生成中").font(.caption).foregroundStyle(ReaderTheme.muted)
+            }
             if let reason = model.translationPauseReason {
                 Text(reason).font(.caption).foregroundStyle(ReaderTheme.muted).lineLimit(2)
             }
@@ -398,7 +401,7 @@ struct ReaderView: View {
     private var configured: Bool {
         (try? model.modelSettings.normalized()) != nil
     }
-    private func translate() { if configured { model.startTranslation() } else { requestSettings() } }
+    private func translate() { if configured { model.startAIReflow() } else { requestSettings() } }
     private func send() {
         guard configured else {
             requestSettings()

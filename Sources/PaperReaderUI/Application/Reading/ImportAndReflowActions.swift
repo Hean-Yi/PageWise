@@ -4,7 +4,7 @@ import PaperReaderKit
 extension ReaderModel {
     @discardableResult public func importURLs(
         _ urls: [URL], selectAfterImport: Bool = true, metadata: PaperCandidate? = nil, shelfID: UUID? = nil,
-        moveDuplicateToShelf: Bool = false, structuredBlocks: [TextBlock]? = nil
+        moveDuplicateToShelf: Bool = false, structuredBlocks: [TextBlock]? = nil, prepareSample: Bool = false
     ) async -> [UUID] {
         if let metadata, ArxivClient.verified(metadata) == nil {
             message = "论文来源无效，未导入。"
@@ -27,19 +27,16 @@ extension ReaderModel {
         }
         for url in urls {
             do {
-                status = "正在解析 \(url.lastPathComponent)…"
+                status = "正在保存 \(url.lastPathComponent)…"
                 let token = UUID()
                 importProgressToken = token
                 importProgress = PDFImportProgress(sequence: 0, stage: "准备导入")
-                var imported = try await importer.importPDF(
-                    at: url, preservingComplexPages: true, structuredBlocks: structuredBlocks, discovery: ArxivClient()
-                ) { [weak self] progress in
-                    Task { @MainActor [weak self] in
-                        guard let self, self.importProgressToken == token,
-                            progress.sequence > (self.importProgress?.sequence ?? -1)
-                        else { return }
-                        self.importProgress = progress
-                    }
+                var imported: Paper
+                if prepareSample {
+                    imported = try await importer.importPDF(
+                        at: url, preservingComplexPages: true, structuredBlocks: structuredBlocks)
+                } else {
+                    imported = try await importer.storeOriginal(at: url)
                 }
                 importProgress = PDFImportProgress(sequence: Int.max, stage: "提交书库")
                 let importedDirectory = root.appendingPathComponent(imported.originalPath).deletingLastPathComponent()
@@ -60,7 +57,7 @@ extension ReaderModel {
                     imported.title = metadata.title
                     imported.sourceURL = metadata.id
                 }
-                if imported.canReflow {
+                if prepareSample, imported.canReflow {
                     imported.htmlReading = try await HTMLReadingStore().prepareOriginal(paper: imported, root: root)
                     for index in imported.blocks.indices { imported.blocks[index].richContent?.html = "" }
                 }
@@ -75,7 +72,7 @@ extension ReaderModel {
                 pendingImportIDs.remove(imported.id)
                 importedIDs.append(imported.id)
                 if selectAfterImport, !Task.isCancelled { select(imported.id) }
-                status = imported.canReflow ? "已导入，可生成双语重排 · \(imported.blocks.count) 个段落" : "已导入 · 使用原始 PDF"
+                status = "已入库 · 阅读时可选择原版或 AI 双语重排"
             } catch is CancellationError {
                 status = "已停止导入"
                 return importedIDs
@@ -95,7 +92,7 @@ extension ReaderModel {
             defer { try? FileManager.default.removeItem(at: folder) }
             let file = folder.appendingPathComponent("Understanding Attention.pdf")
             try DemoPaper.write(to: file)
-            await importURLs([file])
+            await importURLs([file], prepareSample: true)
         } catch { message = error.localizedDescription }
     }
 

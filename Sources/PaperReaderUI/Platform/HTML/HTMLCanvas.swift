@@ -47,6 +47,7 @@ final class HTMLCoordinator: NSObject, WKNavigationDelegate, WKScriptMessageHand
     private var appendTask: Task<Void, Never>?
     private var highlightSnapshot: [Highlight] = []
     private var draftHTML = ""
+    private var readinessStamp: String?
     private var leasedURL: URL?
     private var hasSelection = false
     private weak var webView: WKWebView?
@@ -164,6 +165,7 @@ final class HTMLCoordinator: NSObject, WKNavigationDelegate, WKScriptMessageHand
                 "window.paperReader.clearSelection()", arguments: [:], in: nil,
                 in: .defaultClient, completionHandler: nil)
         }
+        reportReadiness(view)
         let draft = model.translationDraft.flatMap { $0.paperID == paperID ? $0.html : nil } ?? ""
         if draftHTML != draft {
             draftHTML = draft
@@ -195,6 +197,36 @@ final class HTMLCoordinator: NSObject, WKNavigationDelegate, WKScriptMessageHand
                 self.model.recordVisiblePage(index)
                 self.model.jumpPage = nil
             }
+        }
+    }
+
+    private func reportReadiness(_ view: WKWebView) {
+        guard let paper = model.paper, let job = paper.reflowJob, !job.hasPresentedContent,
+            let path = loadedPath
+        else { return }
+        let stamp = path + String(job.finished)
+        guard readinessStamp != stamp else { return }
+        readinessStamp = stamp
+        let expectedID = paper.id
+        view.callAsyncJavaScript(
+            """
+            await document.fonts.ready;
+            const sections = [...document.querySelectorAll('#reader > section')].filter(s =>
+                s.querySelector('p.translation:not(.pending)') && s.querySelector('p:not(.translation),li') &&
+                !s.querySelector('figure,.paper-authors,.source-page,.pdf-region'));
+            const images = [...document.images].filter(i => i.getBoundingClientRect().top < innerHeight * 2);
+            const decoded = await Promise.all(images.map(i => i.decode().then(() => true).catch(() => false)));
+            const height = sections.reduce((n,s) => n + [...s.querySelectorAll('p,li')].reduce((h,e) => h+e.getBoundingClientRect().height,0),0);
+            return {count:sections.length,height:height,viewport:innerHeight,ready:decoded.every(Boolean)};
+            """, arguments: [:], in: nil, in: .defaultClient
+        ) { [weak self] result in
+            guard let self, self.model.selectedPaperID == expectedID,
+                case .success(let value) = result, let values = value as? [String: Any]
+            else { return }
+            self.model.reportReflowReadiness(
+                paperID: expectedID, bodyCount: values["count"] as? Int ?? 0,
+                bodyHeight: values["height"] as? Double ?? 0, viewportHeight: values["viewport"] as? Double ?? 0,
+                resourcesReady: values["ready"] as? Bool ?? false)
         }
     }
 

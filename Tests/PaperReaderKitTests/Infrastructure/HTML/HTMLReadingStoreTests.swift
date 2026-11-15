@@ -94,7 +94,7 @@ import Testing
     var object = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(state)) as? [String: Any])
     object["version"] = 5
     let migrated = try JSONDecoder().decode(LibraryState.self, from: JSONSerialization.data(withJSONObject: object))
-    #expect(migrated.version == 7)
+    #expect(migrated.version == LibraryState.currentVersion)
     #expect(migrated.papers[0].id == paper.id)
     #expect(migrated.papers[0].htmlReading == nil)
 }

@@ -7,7 +7,9 @@ extension ReaderModel {
         if readingStart == nil && isActive { beginReading() }
     }
     public func beginReading() {
-        guard isActive, selectedSection == "library", let id = selectedPaperID, readingStart == nil else { return }
+        guard isActive, !readingChoicePresented, !showingReflowLoading, selectedSection == "library",
+            let id = selectedPaperID, readingStart == nil
+        else { return }
         readingPaper = id
         readingStart = Date()
         lastInteraction = Date()

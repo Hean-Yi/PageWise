@@ -27,6 +27,12 @@ public final class ReaderModel {
     var importProgressToken: UUID?
     public var translationDraft: TranslationDraft?
     public var translationPauseReason: String?
+    public var readingChoicePresented = false
+    public var retainedReadingID: UUID?
+    public var reflowStages: [UUID: String] = [:]
+    public var reflowStartedAt: [UUID: Date] = [:]
+    public var reflowBodyCount = 0
+    @ObservationIgnored var reflowPresenting: Set<UUID> = []
     public var assistantDraft: ChatTurn?
     public var busyAI = false
     public var translating: Set<UUID> = []
@@ -83,7 +89,17 @@ public final class ReaderModel {
         modelSettings = try configurationStore.load()
     }
 
-    public var paper: Paper? { state.papers.first { $0.id == selectedPaperID } }
+    public var paper: Paper? {
+        guard let current = state.papers.first(where: { $0.id == selectedPaperID }) else { return nil }
+        if let version = current.retainedReadings?.first(where: { $0.id == retainedReadingID }) {
+            return version.projecting(current)
+        }
+        return current
+    }
+    public var showingReflowLoading: Bool {
+        mode == "translated" && retainedReadingID == nil && paper?.reflowJob != nil
+            && paper?.reflowJob?.hasPresentedContent != true
+    }
     public var activePages: [PageArtifact] {
         guard let paper else { return [] }
         let pages = mode == "translated" ? paper.readingPages : paper.previewPages
@@ -127,6 +143,17 @@ public final class ReaderModel {
         invalidateSearchNavigation()
         endReading()
         selectedPaperID = id
+        retainedReadingID = nil
+        reflowBodyCount = 0
+        readingChoicePresented = false
+        if let current = state.papers.first(where: { $0.id == id }) {
+            let position = workspace(for: current.id).position
+            if let key = position?.pageKey, !current.readingPages.contains(where: { $0.id.uuidString == key }) {
+                retainedReadingID =
+                    current.retainedReadings?.first(where: { $0.readingPages.contains { $0.id.uuidString == key } })?.id
+            }
+            readingChoicePresented = current.deferredReflow == true && current.reflowJob == nil && position == nil
+        }
         selectionText = ""
         selectionRects = []
         visiblePage = 0
@@ -204,6 +231,9 @@ public final class ReaderModel {
     }
 
     private static func applyReflow(_ publication: Paper, to paper: inout Paper) {
+        paper.reflowJob = publication.reflowJob
+        paper.retainedReadings = publication.retainedReadings
+        paper.deferredReflow = publication.deferredReflow
         paper.canReflow = publication.canReflow
         paper.warnings = publication.warnings
         paper.blocks = publication.blocks

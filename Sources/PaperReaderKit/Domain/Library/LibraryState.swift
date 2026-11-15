@@ -1,7 +1,7 @@
 import Foundation
 
 public struct LibraryState: Codable, Sendable {
-    public static let currentVersion = 7
+    public static let currentVersion = 8
     public var version = currentVersion
     public var papers: [Paper] = []
     public var readingNotes: [ReadingNote] = []
@@ -57,6 +57,8 @@ public struct LibraryState: Codable, Sendable {
         // v6 adds optional HTML reading artifacts and text-range highlights. Old PDF IDs remain unchanged.
         // v7 adds independent reading notes; all existing annotation coordinates are preserved.
         readingNotes = storedVersion >= 7 ? try values.decode([ReadingNote].self, forKey: .readingNotes) : []
+        // v8 adds optional on-demand reflow checkpoints and retained reading versions.
+        // Legacy papers decode these fields as nil without changing their artifacts or annotations.
         try validateOrdering()
         try validateShelves()
         version = Self.currentVersion

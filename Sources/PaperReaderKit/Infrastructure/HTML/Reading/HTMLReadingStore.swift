@@ -194,7 +194,10 @@ public actor HTMLReadingStore {
         let prefix = "Papers/\(paper.id.uuidString)/reading/"
         let directory = root.appendingPathComponent(prefix)
         guard FileManager.default.fileExists(atPath: directory.path) else { return }
-        let kept = Set((paper.htmlReading?.assets ?? []) + [paper.htmlReading?.relativePath ?? ""])
+        let retained = (paper.retainedReadings ?? []).compactMap(\.html)
+        let kept = Set(
+            (paper.htmlReading?.assets ?? []) + [paper.htmlReading?.relativePath ?? ""]
+                + retained.flatMap { $0.assets + [$0.relativePath] })
         for url in try FileManager.default.contentsOfDirectory(
             at: directory, includingPropertiesForKeys: [.isSymbolicLinkKey])
         {

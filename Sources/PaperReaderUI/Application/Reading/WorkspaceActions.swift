@@ -308,6 +308,14 @@ extension ReaderModel {
     private func navigateToStablePage(_ pageKey: String, paperID: UUID) {
         guard state.papers.contains(where: { $0.id == paperID }) else { return }
         if selectedPaperID != paperID { select(paperID) }
+        if let current = state.papers.first(where: { $0.id == paperID }) {
+            retainedReadingID =
+                current.readingPages.contains(where: { $0.id.uuidString == pageKey })
+                ? nil
+                : current.retainedReadings?.first(where: { $0.readingPages.contains { $0.id.uuidString == pageKey } })?
+                    .id
+        }
+        readingChoicePresented = false
         guard let paper,
             let position = PaperPageLocator.resolve(pageKey: pageKey, in: paper, excluding: pendingArtifactIDs)
         else {
