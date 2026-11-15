@@ -53,6 +53,13 @@ enum PDFOCREvidence {
             bands.append(native.bounds)
         }
         bands = mergeBands(bands, lines: lines, bounds: bounds)
+        if !bands.isEmpty {
+            // Full-width crops cut both columns. Ordering each resulting strip independently
+            // would emit right-column text before the remaining left column. Only a verified
+            // single-column page can be divided this way; retain ambiguous/multicolumn pages.
+            let wholePageLayout = PDFProcessor.orderedColumns(textRows(lines), pageBounds: bounds)
+            guard wholePageLayout.reliable, wholePageLayout.groups.count == 1 else { return nil }
+        }
         var blocks: [TextBlock] = []
         var proseCount = 0
         var top = bounds.maxY

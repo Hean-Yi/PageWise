@@ -149,8 +149,48 @@ import Testing
     #expect(try PDFOCREvidence.recover(page, sourcePage: 0, candidates: [matching]) == nil)
 }
 
+@Test func twoColumnOCRWithMiddleEquationKeepsSourceInsteadOfInterleavingColumns() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    let left: [(String, CGFloat)] = [
+        ("The first left sentence comes before the equation.", 710),
+        ("Another left sentence continues this first paragraph.", 685),
+        ("x = y + 2", 600),
+        ("The next left sentence follows the retained equation.", 490),
+        ("The last left sentence completes the entire left column.", 465),
+    ]
+    let right: [(String, CGFloat)] = [
+        ("The first right sentence follows the whole left column.", 710),
+        ("Another right sentence continues this separate column.", 685),
+        ("The next right sentence continues its original argument.", 490),
+        ("The last right sentence ends this original scanned page.", 465),
+    ]
+    let url = try scannedFixture(root: root, pages: [left], rightColumn: right, fontSize: 8)
+    let original = try Data(contentsOf: url)
+    let document = try #require(PDFDocument(url: url))
+    let page = try #require(document.page(at: 0))
+    #expect((page.string ?? "").isEmpty)
+    // Known original geometry isolates the ordering policy from changes in Vision recognition.
+    let candidates = [(left, CGFloat(54)), (right, CGFloat(330))].flatMap { lines, x in
+        lines.map { text, y in
+            PDFOCRLine(text: text, bounds: CGRect(x: x, y: y - 2, width: 220, height: 12), confidence: 1)
+        }
+    }
+    #expect(try PDFOCREvidence.recover(page, sourcePage: 0, candidates: candidates) == nil)
+    let paper = try await PDFImporter(root: root).storeOriginal(at: url)
+    let evidence = try await ReflowEvidenceExtractor().extract(paper: paper, root: root)
+    #expect(evidence.blocks.count == 1)
+    #expect(evidence.blocks.first?.preservesSourcePage == true)
+    #expect(evidence.blocks.first?.sourcePage == 0)
+    #expect(try Data(contentsOf: root.appendingPathComponent(paper.originalPath)) == original)
+}
+
 /// An original, generated bitmap embedded in PDF: there is intentionally no searchable text layer.
-private func scannedFixture(root: URL, pages: [[(String, CGFloat)]], graphic: Bool = false) throws -> URL {
+private func scannedFixture(
+    root: URL, pages: [[(String, CGFloat)]], graphic: Bool = false,
+    rightColumn: [(String, CGFloat)] = [], fontSize: CGFloat = 12
+) throws -> URL {
     let url = root.appendingPathComponent("original-scanned-fixture.pdf")
     var bounds = CGRect(x: 0, y: 0, width: 612, height: 792)
     let pdf = try #require(CGContext(url as CFURL, mediaBox: &bounds, nil))
@@ -164,13 +204,15 @@ private func scannedFixture(root: URL, pages: [[(String, CGFloat)]], graphic: Bo
         raster.fill(bounds)
         raster.setFillColor(CGColor(gray: 0, alpha: 1))
         raster.textMatrix = .identity
-        for (text, y) in lines {
-            let font = CTFontCreateWithName("Helvetica" as CFString, 12, nil)
-            raster.textPosition = CGPoint(x: 54, y: y)
-            CTLineDraw(
-                CTLineCreateWithAttributedString(
-                    NSAttributedString(
-                        string: text, attributes: [.init(kCTFontAttributeName as String): font])), raster)
+        for (column, x) in [(lines, CGFloat(54)), (rightColumn, CGFloat(330))] {
+            for (text, y) in column {
+                let font = CTFontCreateWithName("Helvetica" as CFString, fontSize, nil)
+                raster.textPosition = CGPoint(x: x, y: y)
+                CTLineDraw(
+                    CTLineCreateWithAttributedString(
+                        NSAttributedString(
+                            string: text, attributes: [.init(kCTFontAttributeName as String): font])), raster)
+            }
         }
         if graphic {
             raster.setStrokeColor(CGColor(gray: 0, alpha: 1))
