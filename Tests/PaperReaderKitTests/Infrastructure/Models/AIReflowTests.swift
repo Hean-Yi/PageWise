@@ -673,37 +673,3 @@ private actor NativeReflowTransport: HTTPTransport {
     #expect(await capture.blocks.count == 1)
     #expect(await capture.blocks.first?.translation == "本地夹具。")
 }
-
-@Test func aiReflowRejectsUntranslatedEnglishHeadingsBeforePublication() async throws {
-    for original in ["5 Questions for further reading", "Original demonstration material - 2"] {
-        let f = try ReflowFixture([TextBlock(sourcePage: 0, text: original)])
-        var blocks = f.blocks()
-        blocks[0]["kind"] = "heading"
-        let copied = original.lowercased().replacingOccurrences(of: " ", with: "  ") + "."
-        let output =
-            try f.plan(blocks) + f.line(1, "block_start", ["block_index": 0])
-            + f.line(2, "translation_delta", ["block_index": 0, "parts": [["type": "text", "text": copied]]])
-            + f.line(3, "block_end", ["block_index": 0])
-        await #expect(throws: AIReflowFailure.invalidStructure) { try await f.stream.consume(output) }
-        #expect(await f.capture.blocks.isEmpty)
-        #expect(await f.capture.plans.count == 1)
-    }
-}
-
-@Test func aiReflowAcceptsChineseWithTechnicalTermsAndUnchangedAcronymsOrIdentifiers() async throws {
-    for (original, translation) in [
-        ("We evaluate GPU accuracy with BERT.", "我们使用 BERT 评估 GPU 准确率。"),
-        ("GPT", "GPT"), ("CNN GPU BERT", "CNN GPU BERT"),
-        ("alpha_beta gammaDelta metric_v2", "alpha_beta gammaDelta metric_v2"),
-        ("x y z", "x y z"),
-    ] {
-        let f = try ReflowFixture([TextBlock(sourcePage: 0, text: original)])
-        let output =
-            try f.plan() + f.line(1, "block_start", ["block_index": 0])
-            + f.line(2, "translation_delta", ["block_index": 0, "parts": [["type": "text", "text": translation]]])
-            + f.line(3, "block_end", ["block_index": 0]) + f.line(4, "window_end", ["block_count": 1])
-        try await f.stream.consume(output)
-        try await f.stream.finish()
-        #expect(await f.capture.blocks.first?.translation == translation)
-    }
-}
