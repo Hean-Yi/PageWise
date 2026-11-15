@@ -19,6 +19,7 @@ actor PaperImageLoader {
     private var loading: Set<URL> = []
     private var downloadedBytes = 0
     private var resourceCount = 0
+    private var unavailableConnection: URLError?
 
     init(source: URL, transport: any HTTPTransport) {
         self.source = source
@@ -46,11 +47,26 @@ actor PaperImageLoader {
             url.path.hasPrefix(source.path + "/"), !url.path.split(separator: "/").contains("..")
         else { throw ReaderError.message("图片来源无法确认，请查看原版。") }
         if let found = cache[url] { return found }
+        if let unavailableConnection { throw unavailableConnection }
         guard !loading.contains(url), resourceCount < 150 else { throw ReaderError.message("图片依赖循环或数量过多。") }
         loading.insert(url)
         resourceCount += 1
         defer { loading.remove(url) }
-        let (data, response) = try await transport.data(for: URLRequest(url: url))
+        let data: Data
+        let response: HTTPURLResponse
+        do {
+            (data, response) = try await transport.data(for: URLRequest(url: url))
+        } catch let error as URLError {
+            // All accepted resources share one origin. A broken TLS/DNS/offline connection
+            // must not incur the same network wait for every figure in this import.
+            let connectionFailures: Set<URLError.Code> = [
+                .notConnectedToInternet, .cannotFindHost, .cannotConnectToHost, .dnsLookupFailed,
+                .secureConnectionFailed, .serverCertificateHasBadDate, .serverCertificateUntrusted,
+                .serverCertificateHasUnknownRoot, .serverCertificateNotYetValid,
+            ]
+            if connectionFailures.contains(error.code) { unavailableConnection = error }
+            throw error
+        }
         try Task.checkCancellation()
         downloadedBytes += data.count
         guard response.statusCode == 200, response.url == url, data.count <= 12_000_000, downloadedBytes <= 60_000_000

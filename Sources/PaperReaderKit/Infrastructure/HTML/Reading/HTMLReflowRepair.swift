@@ -18,6 +18,16 @@ extension HTMLReadingStore {
             let document = PDFDocument(url: root.appendingPathComponent(paper.originalPath))
         else { return HTMLReflowRepairResult(paper: paper, changedKeys: [], repairedPages: 0) }
         if protectedKeys.isEmpty, paper.translations.isEmpty, let discovery {
+            let existingStructuredHTML: Bool
+            if let artifact = paper.htmlReading,
+                paper.blocks.allSatisfy({ $0.richContent != nil && $0.preservesSourcePage != true })
+            {
+                let existing = try SwiftSoup.parse(
+                    String(contentsOf: root.appendingPathComponent(artifact.relativePath), encoding: .utf8))
+                existingStructuredHTML = try existing.select("figure.source-page,figure.pdf-region").isEmpty()
+            } else {
+                existingStructuredHTML = false
+            }
             let parsed = try await PDFImporter(root: root).importPDF(
                 at: root.appendingPathComponent(paper.originalPath), preservingComplexPages: true, discovery: discovery)
             defer {
@@ -25,6 +35,11 @@ extension HTMLReadingStore {
                     at: root.appendingPathComponent(parsed.originalPath).deletingLastPathComponent())
             }
             guard parsed.digest == paper.digest, parsed.canReflow else {
+                return HTMLReflowRepairResult(paper: paper, changedKeys: [], repairedPages: 0)
+            }
+            // A missing/rejected online source must not replace a working semantic HTML
+            // document with PDF heuristics. The next retry can upgrade it when available.
+            guard !existingStructuredHTML || parsed.sourceURL != nil else {
                 return HTMLReflowRepairResult(paper: paper, changedKeys: [], repairedPages: 0)
             }
             var updated = paper

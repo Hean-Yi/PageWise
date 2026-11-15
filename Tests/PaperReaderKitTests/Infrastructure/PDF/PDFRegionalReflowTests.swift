@@ -248,3 +248,32 @@ private struct OfflineRepairDiscovery: PaperDiscovery {
     #expect(repaired.paper.blocks.contains { $0.text.contains("original-only") && $0.richContent?.isFigure != true })
     #expect(try Data(contentsOf: root.appendingPathComponent(paper.originalPath)) == original)
 }
+
+@Test func unavailableOnlineSourceCannotDowngradePublishedSemanticHTML() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    let file = root.appendingPathComponent("source.pdf")
+    var bounds = CGRect(x: 0, y: 0, width: 612, height: 792)
+    let context = try #require(CGContext(file as CFURL, mediaBox: &bounds, nil))
+    context.beginPDFPage(nil)
+    regionalText(
+        "Reliable semantic prose stays readable even when the network source is unavailable.", y: 700, context: context)
+    context.strokeEllipse(in: CGRect(x: 100, y: 400, width: 200, height: 100))
+    context.endPDFPage()
+    context.closePDF()
+    var paper = try await PDFImporter(root: root).importPDF(at: file)
+    var block = TextBlock(sourcePage: 0, text: "Reliable semantic prose stays readable.")
+    block.richContent = RichContent(
+        html: "<p>Reliable semantic prose stays readable.</p>", translationInput: block.text, mathematics: [:],
+        mathDescriptions: [:])
+    paper.blocks = [block]
+    paper.htmlReading = try await HTMLReadingStore().prepareOriginal(paper: paper, root: root)
+    let artifact = try #require(paper.htmlReading)
+    let bytes = try Data(contentsOf: root.appendingPathComponent(artifact.relativePath))
+    let repaired = try await HTMLReadingStore().repairPDFRegions(
+        paper: paper, root: root, protectedKeys: [], discovery: OfflineRepairDiscovery())
+    #expect(repaired.changedKeys.isEmpty)
+    #expect(repaired.paper.htmlReading == paper.htmlReading)
+    #expect(try Data(contentsOf: root.appendingPathComponent(artifact.relativePath)) == bytes)
+}

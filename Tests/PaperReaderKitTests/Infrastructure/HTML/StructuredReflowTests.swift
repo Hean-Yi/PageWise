@@ -293,3 +293,39 @@ private func pixels(of page: PDFPage) throws -> Data {
     #expect(translated.contains("Contact: alex@example.org is an example"))
     #expect(translated.contains("This footnote explains the method"))
 }
+
+@Test func frontMatterConversionErrorsDoNotRejectVerifiedBody() async throws {
+    let html = #"""
+        <article class='ltx_document'>
+        <div><p>1] Example University <span class='ltx_ERROR'>\customPublisherMetadata</span></p></div>
+        <h1><span class='ltx_ERROR'>\titlefont</span>Original fixture</h1>
+        <div class='ltx_authors'><span class='ltx_personname'>Alex</span><span class='ltx_ERROR'>\anotherAuthorMacro</span><img src='unavailable-logo.png'></div>
+        <div class='ltx_abstract'><p>Real abstract remains readable.</p></div>
+        <section><h2>Method</h2><p>Real body remains readable.</p>
+        <div><span class='ltx_ERROR'>\nobibliography</span><p>*</p></div></section>
+        <section class='ltx_bibliography'><ul class='ltx_biblist'><li>Original citation.</li></ul></section>
+        <div><span class='ltx_ERROR'>\beginappendix</span></div>
+        <section><h2>Additional results</h2><p>Appendix body stays present.</p></section>
+        </article>
+        """#
+    let parser = HTMLPaperParser(transport: NoHTMLNetwork())
+    let blocks = try await parser.parse(Data(html.utf8), at: sourceURL)
+    let front = try #require(blocks.first { $0.richContent?.html.contains("<details>") == true })
+    #expect(front.text.contains("Example University"))
+    #expect(front.text.contains("customPublisherMetadata"))
+    #expect(front.richContent?.requiresTranslation == false)
+    #expect(blocks.allSatisfy { $0.hasImageFailure != true })
+    let body = blocks.filter { $0.richContent?.requiresTranslation == true }.map(\.text).joined()
+    #expect(body.contains("Real abstract remains readable"))
+    #expect(body.contains("Real body remains readable"))
+    #expect(body.contains("Appendix body stays present"))
+    #expect(!body.contains("nobibliography"))
+    #expect(!body.contains("customPublisherMetadata"))
+    await #expect(throws: (any Error).self) {
+        try await parser.parse(
+            Data(
+                html.replacingOccurrences(
+                    of: "Real body remains readable.", with: #"<span class='ltx_ERROR'>\unknownBodyMacro</span>"#
+                ).utf8), at: sourceURL)
+    }
+}

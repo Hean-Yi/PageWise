@@ -20,9 +20,35 @@ public actor HTMLPaperParser {
         guard let article = try document.select("article.ltx_document").first() else {
             throw ReaderError.message("HTML 正文结构无法确认，使用 PDF 解析。")
         }
+        try HTMLFrontMatterNormalizer.normalize(article)
         // LaTeXML can report an unknown floating-layout wrapper while preserving the
         // complete algorithm listing. Accept only that verifiable layout-only case.
         for error in try article.select(".ltx_ERROR") {
+            // Unknown author macros remain inspectable inside collapsed metadata. They
+            // cannot turn unrelated, intact body text into a whole-document PDF fallback.
+            if error.parents().contains(where: { $0.hasClass("ltx_authors") }) { continue }
+            let command = try error.text()
+            if command == "\\titlefont", error.parents().contains(where: { $0.tagName() == "h1" }) {
+                try error.remove()
+                continue
+            }
+            if ["\\beginappendix", "\\appendix"].contains(command),
+                let parent = error.parent(), try parent.text() == command,
+                parent.parent() === article
+            {
+                try error.before("<h2>Appendix</h2>")
+                try error.remove()
+                continue
+            }
+            if command == "\\nobibliography",
+                let parent = error.parent(),
+                [command, command + " *"].contains(try parent.text()),
+                try !article.select(".ltx_biblist li").isEmpty()
+            {
+                try error.remove()
+                for marker in try parent.select("p") where try marker.text() == "*" { try marker.remove() }
+                continue
+            }
             guard try error.text() == "{wrapfloat}", let parent = error.parent(),
                 parent.hasClass("ltx_para"), try !parent.select(".ltx_listing").isEmpty(),
                 let caption = try parent.select("p").first(),
@@ -40,7 +66,6 @@ public actor HTMLPaperParser {
         try HTMLMathNormalizer.normalize(article)
         try await HTMLImageNormalizer.normalize(article, source: source, transport: transport)
         try article.select("script,style,noscript,.ltx_page_header,.ltx_page_footer").remove()
-        try HTMLFrontMatterNormalizer.normalize(article)
         var elements: [Element] = []
         func collect(_ node: Element) throws {
             if node.tagName() == "figure", try node.select("figure").contains(where: { $0 !== node }) {

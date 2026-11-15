@@ -350,3 +350,26 @@ private func rasterFixture(type: String, pages: Int = 1, orientation: Int = 1) t
             .isEmpty)
     #expect(HTMLRepairAlignment.images(previous: [before, missing, after], recovered: [before, after]).isEmpty)
 }
+
+private actor UnavailableImageConnection: HTTPTransport {
+    var requests = 0
+    func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        requests += 1
+        throw URLError(.secureConnectionFailed)
+    }
+}
+
+@Test func brokenImageConnectionIsNotRetriedForEveryFigure() async throws {
+    let transport = UnavailableImageConnection()
+    let loader = PaperImageLoader(source: imageSource, transport: transport)
+    for name in ["one.svg", "two.svg", "three.svg"] {
+        await #expect(throws: URLError.self) {
+            try await loader.load("2401.00001v1/" + name)
+        }
+    }
+    #expect(await transport.requests == 1)
+    // The failure is scoped to this import; a later retry gets a fresh connection attempt.
+    let retry = PaperImageLoader(source: imageSource, transport: transport)
+    await #expect(throws: URLError.self) { try await retry.load("2401.00001v1/one.svg") }
+    #expect(await transport.requests == 2)
+}
