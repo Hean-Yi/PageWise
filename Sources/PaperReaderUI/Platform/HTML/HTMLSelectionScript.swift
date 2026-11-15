@@ -79,38 +79,66 @@ enum HTMLSelectionScript {
             while(end>start && /\s/.test(text[end-1])) end--;
             return start<end ? [start,end] : [originalStart,originalStart];
           };
-          let parts=[],savedMarks=[];
+          let parts=[],savedMarks=[],emphasized=true;
+          const colors={yellow:'#ead078',red:'#e69a96',green:'#a9c995',blue:'#9dbfe2',purple:'#bda7d7',pink:'#dba7c3',orange:'#e6b184',gray:'#bdc0c4'};
           const style=document.createElement('style');
           style.textContent='#reader::selection,#reader ::selection{background:transparent;color:inherit}::highlight(reader-selection){background:#b5d5f8;color:inherit}[data-reader-selected]{outline:2px solid #83b3ed;outline-offset:2px}[data-reader-saved]{outline:2px solid #c9a331;outline-offset:2px}';
+          for(const [color,hex] of Object.entries(colors)) for(const kind of ['highlight','underline']) {
+            const name=color==='yellow' && kind==='highlight' ? 'saved' : 'saved-'+color+'-'+kind;
+            style.textContent+='::highlight('+name+'){'+(kind==='highlight' ? 'background:'+hex+';color:#292e2e' : 'background:transparent')+'}';
+            style.textContent+='[data-reader-saved="'+color+'-'+kind+'"]{'+(kind==='highlight' ? 'outline:2px solid '+hex : 'outline:none;box-shadow:0 3px 0 '+hex)+'}';
+          }
           if(CSS.highlights) document.head.append(style);
+          const underlineLayer=document.createElement('div');underlineLayer.id='reader-annotation-lines';
+          underlineLayer.setAttribute('aria-hidden','true');
+          underlineLayer.style.cssText='position:absolute;left:0;top:0;width:100%;height:0;pointer-events:none;z-index:1';
+          document.body.append(underlineLayer);
+          const underline=(ranges,color)=>{
+            for(const range of ranges) for(const rect of range.getClientRects()) {
+              if(!rect.width || !rect.height)continue;
+              const line=document.createElement('span');line.style.cssText='position:absolute;pointer-events:none;border-bottom:2px solid '+colors[color]+';left:'+(rect.left+scrollX)+'px;top:'+(rect.bottom+scrollY-2)+'px;width:'+rect.width+'px';
+              underlineLayer.append(line);
+            }
+          };
           const render = (marks,name,attribute) => {
+            if(name==='saved')underlineLayer.replaceChildren();
             root.querySelectorAll('['+attribute+']').forEach(e=>e.removeAttribute(attribute));
             if(!CSS.highlights) return;
-            const ranges=[];
+            const groups=new Map();
             for(const mark of marks) {
               const block=document.getElementById('block-'+mark.key);
               if(!block) continue;
+              const color=colors[mark.color] ? mark.color : 'yellow',kind=mark.style==='underline' ? 'underline' : 'highlight';
+              const group=name==='saved' && !(color==='yellow' && kind==='highlight') ? 'saved-'+color+'-'+kind : name;
+              if(!groups.has(group)) groups.set(group,[]);
+              const ranges=groups.get(group);
               if(mark.target?.startsWith('object:')) {
                 const index=Number(mark.target.slice(7)),element=objects(block)[index];
-                if(element && label(element,index)===mark.text) element.setAttribute(attribute,'');
+                if(element && label(element,index)===mark.text) element.setAttribute(attribute,color+'-'+kind);
                 continue;
               }
               const target=mark.target || (mark.sourceOnly ? 'legacy-source' : 'legacy');
               const source=nodes(block,target),text=source.map(n=>n.data).join('');
               const [start,end]=mark.range || [mark.start,mark.end];
               if(text.slice(start,end)!==mark.text) continue;
-              ranges.push(...slices(source,start,end));
+              const selected=slices(source,start,end);
+              ranges.push(...selected);
+              if(name==='saved' && kind==='underline')underline(selected,color);
               if(!mark.target && mark.sourceOnly) {
                 const translated=block.querySelector(':scope > .translation:not(.pending)');
-                if(translated) ranges.push(...slices(nodes(translated),0,translated.textContent.length));
+                if(translated) {const linked=slices(nodes(translated),0,translated.textContent.length);ranges.push(...linked);if(kind==='underline')underline(linked,color);}
               }
             }
-            CSS.highlights.set(name,new Highlight(...ranges));
+            if(name==='saved') for(const key of [...CSS.highlights.keys()]) if(key==='saved' || key.startsWith('saved-')) CSS.highlights.delete(key);
+            if(!groups.has(name)) groups.set(name,[]);
+            for(const [group,ranges] of groups) CSS.highlights.set(group,new Highlight(...ranges));
           };
-          const paint = () => render(parts,'reader-selection','data-reader-selected');
-          const publish = () => {paint();send({kind:'selection',parts});};
+          const paint = () => render(emphasized ? parts : [],'reader-selection','data-reader-selected');
+          const publish = () => {paint();send({kind:'selection',parts});window.paperAnnotationMenu?.selectionChanged();};
           const update = () => {
-            const selection=getSelection();parts=[];
+            const selection=getSelection();
+            if(selection?.isCollapsed && window.paperAnnotationMenu?.preservingSelection())return;
+            parts=[];emphasized=true;
             if(selection && !selection.isCollapsed && selection.rangeCount) {
               const range=selection.getRangeAt(0);
               const chosen=language(selection.anchorNode) || language(selection.focusNode) || 'source';
@@ -170,12 +198,52 @@ enum HTMLSelectionScript {
             if(!parts.length || !event.clipboardData) return;
             event.clipboardData.setData('text/plain',copyText());event.preventDefault();
           });
+          const projected = mark => {
+            if(mark.target) return [{target:mark.target,range:mark.range,text:mark.text}];
+            const block=document.getElementById('block-'+mark.key);
+            if(!block) return [];
+            const legacy=nodes(block,mark.sourceOnly ? 'legacy-source' : 'legacy');
+            if(legacy.map(n=>n.data).join('').slice(...mark.range)!==mark.text) return [];
+            const ranges=slices(legacy,...mark.range);
+            if(mark.sourceOnly) {
+              const translation=block.querySelector(':scope > .translation:not(.pending)');
+              if(translation) {const range=document.createRange();range.selectNodeContents(translation);ranges.push(range);}
+            }
+            const result=[];
+            for(const target of ['source','translation']) {
+              let offset=0;
+              for(const node of nodes(block,target)) {
+                for(const range of ranges) {
+                  const clipped=intersection(range,node);
+                  if(!clipped || !clipped.toString().trim()) continue;
+                  const start=offset+(clipped.startContainer===node ? clipped.startOffset : 0);
+                  const end=offset+(clipped.endContainer===node ? clipped.endOffset : node.length);
+                  const last=result[result.length-1];
+                  if(last && last.target===target && last.range[1]===start) {last.range[1]=end;last.text+=clipped.toString();}
+                  else result.push({target,range:[start,end],text:clipped.toString()});
+                }
+                offset+=node.length;
+              }
+            }
+            objects(block).forEach((element,index)=>{
+              if(ranges.some(r=>r.intersectsNode(element))) {const text=label(element,index);result.push({target:'object:'+index,range:[0,text.length],text});}
+            });
+            return result;
+          };
+          window.addEventListener('resize',()=>render(savedMarks,'saved','data-reader-saved'));
+          const layoutObserver=new ResizeObserver(()=>render(savedMarks,'saved','data-reader-saved'));
+          layoutObserver.observe(root);
+          document.fonts?.ready.then(()=>render(savedMarks,'saved','data-reader-saved'));
           window.paperSelection={
-            highlights(marks){savedMarks=marks;render(marks,'saved','data-reader-saved');},
+            highlights(marks){savedMarks=marks;render(marks,'saved','data-reader-saved');window.paperAnnotationMenu?.refresh();},
             refresh(){render(savedMarks,'saved','data-reader-saved');paint();},
-            clear(){getSelection()?.removeAllRanges();parts=[];paint();},
+            clear(){getSelection()?.removeAllRanges();parts=[];paint();window.paperAnnotationMenu?.hide();},
             selectObject(element){const range=document.createRange();range.selectNode(element);const s=getSelection();s.removeAllRanges();s.addRange(range);update();},
-            copyText
+            copyText,
+            parts:()=>parts,
+            projectedMarks:()=>savedMarks.map(mark=>({...mark,parts:projected(mark)})),
+            selectionBounds(){const rectangles=[];for(const part of parts){const block=document.getElementById('block-'+part.key);if(!block)continue;if(part.target.startsWith('object:')){const e=objects(block)[Number(part.target.slice(7))];if(e)rectangles.push(e.getBoundingClientRect());}else for(const r of slices(nodes(block,part.target),part.start,part.end))rectangles.push(...r.getClientRects());}return rectangles.filter(r=>r.bottom>0 && r.top<innerHeight);},
+            revealAnnotation(){emphasized=false;paint();}
           };
         })();
         """#

@@ -1,6 +1,6 @@
 import Foundation
 
-public struct Highlight: Identifiable, Codable, Sendable {
+public struct Highlight: Identifiable, Codable, Sendable, Equatable {
     public var id = UUID()
     public var paperID: UUID
     public var pageKey: String
@@ -14,6 +14,8 @@ public struct Highlight: Identifiable, Codable, Sendable {
     public var linksTranslation: Bool?
     /// Language-specific text coordinates or a stable shared-object index; nil retains legacy semantics.
     public var htmlTarget: String?
+    public var color: AnnotationColor?
+    public var style: AnnotationStyle?
     public var createdAt = Date()
     public init(paperID: UUID, pageKey: String, pageIndex: Int, text: String, rects: [[Double]]) {
         self.paperID = paperID

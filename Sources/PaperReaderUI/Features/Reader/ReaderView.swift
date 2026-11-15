@@ -235,7 +235,9 @@ struct ReaderView: View {
                 Text(reason).font(.caption).foregroundStyle(ReaderTheme.muted).lineLimit(2)
             }
             if !model.selectionText.isEmpty {
-                Button(action: model.highlightSelection) { Label("高亮", systemImage: "highlighter") }
+                if !model.usesHTMLReading {
+                    Button(action: model.highlightSelection) { Label("高亮", systemImage: "highlighter") }
+                }
                 Button {
                     libraryAgentPresented = false
                     assistantTab = "chat"

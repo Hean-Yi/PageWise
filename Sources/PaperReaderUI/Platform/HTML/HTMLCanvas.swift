@@ -36,7 +36,7 @@ final class HTMLCoordinator: NSObject, WKNavigationDelegate, WKScriptMessageHand
     private var ready = false
     private var stopped = false
     private var appendTask: Task<Void, Never>?
-    private var highlightIDs: [UUID] = []
+    private var highlightSnapshot: [Highlight] = []
     private var draftHTML = ""
     private var leasedURL: URL?
     private var hasSelection = false
@@ -78,7 +78,7 @@ final class HTMLCoordinator: NSObject, WKNavigationDelegate, WKScriptMessageHand
             loadedPath = artifact.relativePath
             keys = artifact.sections.map { $0.id.uuidString }
             publishedCount = paper.translatedBlockCount
-            highlightIDs = []
+            highlightSnapshot = []
             draftHTML = ""
             ready = false
             view.isHidden = true
@@ -116,7 +116,7 @@ final class HTMLCoordinator: NSObject, WKNavigationDelegate, WKScriptMessageHand
                     self.loadedPath = artifact.relativePath
                     self.keys = artifact.sections.map { $0.id.uuidString }
                     self.publishedCount = paper.translatedBlockCount
-                    self.highlightIDs = []
+                    self.highlightSnapshot = []
                     self.updateState(view)
                 } catch is CancellationError {} catch {
                     if self.model.paper?.htmlReading?.relativePath == artifact.relativePath {
@@ -154,11 +154,12 @@ final class HTMLCoordinator: NSObject, WKNavigationDelegate, WKScriptMessageHand
                 in: nil, in: .defaultClient, completionHandler: nil)
         }
         let marks = model.currentHighlights.filter { $0.textRange != nil }
-        if highlightIDs != marks.map(\.id) {
-            highlightIDs = marks.map(\.id)
+        if highlightSnapshot != marks {
+            highlightSnapshot = marks
             let values: [[String: Any]] = marks.map {
                 [
-                    "key": $0.pageKey, "text": $0.text, "range": $0.textRange ?? [],
+                    "id": $0.id.uuidString, "key": $0.pageKey, "text": $0.text, "range": $0.textRange ?? [],
+                    "color": ($0.color ?? .yellow).rawValue, "style": ($0.style ?? .highlight).rawValue,
                     "sourceOnly": $0.linksTranslation == true, "target": $0.htmlTarget ?? "",
                 ]
             }
@@ -258,6 +259,12 @@ final class HTMLCoordinator: NSObject, WKNavigationDelegate, WKScriptMessageHand
             }
             hasSelection = !parts.isEmpty
             model.captureHTMLSelection(parts)
+        case "annotationError":
+            model.message = "旧批注位置未能核对，未修改该批注。"
+        case "annotationAction":
+            model.performHTMLAnnotation(value)
+        case "selectionBookmark":
+            model.bookmarkHTMLSelection()
         case "imageError": model.message = "部分图片未能显示，请切换原版查看完整内容。"
         case "missingLink": model.message = "引用目标尚未生成，完成对应段落后即可跳转；也可以切换原版查看。"
         case "externalLink":
