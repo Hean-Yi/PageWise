@@ -224,11 +224,13 @@ actor AIReflowStream {
             case "text":
                 try Self.keys(part, ["type", "text"])
                 guard let text = part["text"] as? String, !text.isEmpty, text.unicodeScalars.count <= 128,
-                    !text.contains("[["), !text.contains("<"), !text.contains(">"),
+                    !text.contains("[["),
                     !text.unicodeScalars.contains(where: {
                         $0.properties.generalCategory == .control && $0 != "\n" && $0 != "\t"
                     })
                 else { throw AIReflowEvidence.invalid() }
+                // Typed text stays literal. The draft and persisted HTML renderers escape
+                // angle brackets, including tag-shaped text split across delta events.
                 appended += text
             case "object_ref":
                 try Self.keys(part, ["type", "object_id"])

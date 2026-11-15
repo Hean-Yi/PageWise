@@ -1,4 +1,5 @@
 import Foundation
+import SwiftSoup
 import Testing
 
 @testable import PaperReaderKit
@@ -411,4 +412,34 @@ private actor ReflowRequestTransport: HTTPTransport {
     let legacy = try JSONDecoder().decode(TextBlock.self, from: legacyData)
     #expect(legacy.reflowProvenance == nil)
     #expect(legacy.sourcePage == 3)
+}
+
+@Test func aiReflowPreservesComparisonsAndRendersTagShapedTextLiterally() async throws {
+    let source = TextBlock(sourcePage: 0, text: "Accuracy > 95%, error < 1%; a literal markup example.")
+    let f = try ReflowFixture([source])
+    var output = try f.plan() + f.line(1, "block_start", ["block_index": 0])
+    let fragments = ["准确率 > 95%，误差 < 1%。示例 <im", "g src=x onerror=alert(1)>"]
+    for (offset, fragment) in fragments.enumerated() {
+        output += try f.line(
+            offset + 2, "translation_delta", ["block_index": 0, "parts": [["type": "text", "text": fragment]]])
+        try await f.stream.consume(output)
+    }
+    #expect(await f.capture.drafts.first == fragments[0])
+    output += try f.line(4, "block_end", ["block_index": 0])
+    output += try f.line(5, "window_end", ["block_count": 1])
+    try await f.stream.consume(output)
+    try await f.stream.finish()
+    let pair = try #require(await f.capture.blocks.first)
+    #expect(pair.translation == fragments.joined())
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let paper = Paper(
+        title: "Comparison fixture", digest: "fixture", originalPath: "unused.pdf", pageCount: 1,
+        blocks: [pair.block], warnings: [], canReflow: true)
+    let artifact = try await HTMLReadingStore().append([pair], to: nil, paper: paper, root: root)
+    let html = try String(contentsOf: root.appendingPathComponent(artifact.relativePath), encoding: .utf8)
+    let translated = try #require(SwiftSoup.parse(html).select(".translation").first())
+    #expect(try translated.text() == fragments.joined())
+    #expect(try translated.select("img,script").isEmpty())
+    #expect(try translated.html().contains("&lt;img"))
 }
