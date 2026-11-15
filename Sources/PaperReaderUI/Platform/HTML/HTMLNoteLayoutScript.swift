@@ -48,7 +48,7 @@ enum HTMLNoteLayoutScript {
             const {a,b,from,reverse,line,mask,reveal,startDot,endDot}=connection;
             const visibility=(a.bottom-scrollY>8&&a.top-scrollY<innerHeight-8)?'visible':'hidden';line.style.visibility=visibility;startDot.style.visibility=visibility;endDot.style.visibility=visibility;
             const cardTop=b.top+(b.fixed?scrollY:0),floating=b.side==='floating';
-            const to=floating?{x:Math.max(b.left+16,Math.min(b.left+b.width-16,from.x)),y:connection.below?cardTop:cardTop+b.height}:{x:b.side==='right'?b.left:b.left+b.width,y:Math.max(cardTop+16,Math.min(cardTop+b.height-16,from.y))},mid=(from.x+to.x)/2;
+            const to=floating?{x:Math.max(b.left+16,Math.min(b.left+b.width-16,from.x)),y:connection.below?cardTop:cardTop+b.height}:{x:b.side==='right'?b.left:b.left+b.width,y:cardTop+b.height/2-b.liftOffset},mid=(from.x+to.x)/2;
             connection.end={x:to.x,y:to.y-scrollY};
             const forward='M '+from.x+' '+from.y+' C '+mid+' '+from.y+', '+mid+' '+to.y+', '+to.x+' '+to.y;
             const backward='M '+to.x+' '+to.y+' C '+mid+' '+to.y+', '+mid+' '+from.y+', '+from.x+' '+from.y;
@@ -72,7 +72,7 @@ enum HTMLNoteLayoutScript {
             window.paperNoteLift.update(active,svg);
             if(!active)return;
             const rs=rects(active.anchors).filter(visible);if(!rs.length||!card||(card.side==='floating'&&!entrance))return;
-            const rect=rs[0],a={left:rect.left,right:rect.right,top:rect.top+scrollY,bottom:rect.bottom+scrollY},b={...card,top:card.top+(card.fixed?0:scrollY)};
+            const rect=rs[0],a={left:rect.left,right:rect.right,top:rect.top+scrollY,bottom:rect.bottom+scrollY},b={...card,top:card.top+(card.fixed?0:scrollY),liftOffset:matchMedia('(prefers-reduced-motion:reduce)').matches?0:2};
             // Geometry is cached on activation. Native scrolling moves cards and glyph overlays together.
             const below=card.top>=rect.bottom;
             const from=b.side==='floating'?{x:Math.max(a.left,Math.min(a.right,card.left+card.width/2)),y:below?a.bottom+4:a.top-4}:{x:b.side==='right'?a.right+2:a.left-2,y:(a.top+a.bottom)/2};

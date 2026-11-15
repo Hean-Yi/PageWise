@@ -165,8 +165,12 @@
                 web,
                 #"""
                 window.forward=document.querySelector('.note-link').getAttribute('d');
+                for(const animation of card.getAnimations())animation.finish();
+                const cardBox=card.getBoundingClientRect(),endpoint=document.querySelector('.note-link-end');
                 const decoration=getComputedStyle(document.querySelector('#reader-note-decoration')),lift=getComputedStyle(document.querySelector('#reader-note-lift'));
                 return Math.abs(Number(forward.split(' ')[2])-(anchor.top+anchor.bottom)/2)<.5
+                  && Math.abs(Number(endpoint.getAttribute('cy'))-scrollY-(cardBox.top+cardBox.bottom)/2)<.5
+                  && Math.abs(Number(endpoint.getAttribute('cx'))-cardBox.left)<.5
                   && !forward.includes(' L ') && forward.includes(' C ')
                   && Number(decoration.zIndex)>Number(lift.zIndex) && decoration.pointerEvents==='none'
                   && document.querySelectorAll('#reader-note-lift span').length>0;
