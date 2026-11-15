@@ -123,6 +123,15 @@ private struct ReflowFixture {
     try await f.stream.finish()
     let result = try #require(await f.capture.blocks.first)
     #expect(result.block.text == "We use x and y to estimate.")
+    #expect(result.block.sourcePage == -1)
+    let provenance = try #require(result.block.reflowProvenance)
+    #expect(provenance.map(\.sourceID) == [first.id, second.id])
+    #expect(provenance.map(\.sourcePage) == [0, 1])
+    #expect(provenance.map(\.startUTF16) == [0, 0])
+    #expect(provenance.map(\.endUTF16) == [first.text.utf16.count, second.text.utf16.count])
+    let restored = try JSONDecoder().decode(TextBlock.self, from: JSONEncoder().encode(result.block))
+    #expect(restored == result.block)
+    #expect(restored.reflowProvenance == provenance)
     #expect(result.translation == "使用[[MATH_1]]与[[MATH_2]]估计。")
     #expect(result.block.richContent?.mathematics == ["[[MATH_1]]": formulaA, "[[MATH_2]]": formulaB])
     #expect(result.block.richContent?.html == first.richContent!.html + "\n" + second.richContent!.html)
@@ -384,4 +393,22 @@ private actor ReflowRequestTransport: HTTPTransport {
         try await f.stream.consume(prefix + recordPrefix + "e\u{0301}")
     }
     #expect(await f.capture.blocks.isEmpty)
+}
+
+@Test func aiReflowRetainsSamePageProvenanceAndDecodesLegacyBlocks() async throws {
+    let sources = [TextBlock(sourcePage: 3, text: "First 😀"), TextBlock(sourcePage: 3, text: "continuation.")]
+    let f = try ReflowFixture(sources)
+    try await f.stream.consume(f.plan(f.blocks(merge: true)))
+    let plan = try #require(await f.capture.plans.first)
+    let block = try f.evidence.assemble(plan.blocks[0]).0
+    #expect(block.sourcePage == 3)
+    #expect(block.reflowProvenance?.map(\.sourcePage) == [3, 3])
+    #expect(block.reflowProvenance?.map(\.sourceID) == sources.map(\.id))
+    #expect(block.reflowProvenance?.first?.endUTF16 == sources[0].text.utf16.count)
+    let legacyData = try JSONSerialization.data(withJSONObject: [
+        "id": sources[0].id.uuidString, "sourcePage": 3, "text": sources[0].text,
+    ])
+    let legacy = try JSONDecoder().decode(TextBlock.self, from: legacyData)
+    #expect(legacy.reflowProvenance == nil)
+    #expect(legacy.sourcePage == 3)
 }

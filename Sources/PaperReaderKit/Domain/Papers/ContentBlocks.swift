@@ -4,6 +4,8 @@ public struct TextBlock: Identifiable, Codable, Sendable, Equatable {
     public var id: UUID
     public var sourcePage: Int
     public var text: String
+    /// Ordered extraction spans survive window-plan cleanup and retain every source page.
+    public var reflowProvenance: [AIReflowSourceSpan]?
     /// Present only until the corresponding fixed pages have been committed.
     public var richContent: RichContent?
     /// Complex PDF pages keep their original geometry inside the single reading result.
