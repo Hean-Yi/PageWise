@@ -97,7 +97,8 @@ public final class ReaderModel {
         return current
     }
     public var showingReflowLoading: Bool {
-        mode == "translated" && retainedReadingID == nil && paper?.reflowJob != nil
+        mode == "translated" && retainedReadingID == nil
+            && (paper?.reflowJob != nil || selectedPaperID.map { translating.contains($0) } == true)
             && paper?.reflowJob?.hasPresentedContent != true
     }
     public var activePages: [PageArtifact] {
@@ -316,7 +317,11 @@ public final class ReaderModel {
     @discardableResult
     public func saveSettings(_ draft: ModelSettings, key: String?, removeKey: Bool = false) throws -> String? {
         let result = try configurationStore.save(draft, key: key, removeKey: removeKey)
+        let changed = modelSettings != result.settings || removeKey || key?.isEmpty == false
         modelSettings = result.settings
+        if changed {
+            for task in translationTasks.values { task.cancel() }
+        }
         status = result.warning ?? "模型设置已保存，下次模型请求将使用新配置"
         return result.warning
     }

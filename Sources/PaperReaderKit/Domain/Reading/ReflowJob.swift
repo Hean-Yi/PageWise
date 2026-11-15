@@ -5,6 +5,7 @@ public struct ReflowJob: Codable, Sendable, Equatable {
     public var id = UUID()
     public var sources: [TextBlock]
     public var completedSourceIDs: Set<UUID> = []
+    public var modelSettings: ModelSettings?
     public var acceptedPlan: AIReflowPlan?
     public var committedBlockIDs: Set<UUID> = []
     public var hasPresentedContent = false

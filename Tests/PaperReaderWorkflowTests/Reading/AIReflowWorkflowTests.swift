@@ -7,12 +7,35 @@ import Testing
 private actor JointReflowTransport: HTTPTransport {
     var calls = 0
     var interruptOnce: Bool
-    init(interruptOnce: Bool = false) { self.interruptOnce = interruptOnce }
+    var models: [String] = []
+    var holdOnce: Bool
+    var malformedOnce: Bool
+    let alwaysMalformed: Bool
+    var waiting = false
+    var continuation: CheckedContinuation<Void, Never>?
+    init(
+        interruptOnce: Bool = false, holdOnce: Bool = false, malformedOnce: Bool = false, alwaysMalformed: Bool = false
+    ) {
+        self.interruptOnce = interruptOnce
+        self.holdOnce = holdOnce
+        self.malformedOnce = malformedOnce
+        self.alwaysMalformed = alwaysMalformed
+    }
+    func release() {
+        continuation?.resume()
+        continuation = nil
+        waiting = false
+    }
     func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) { throw URLError(.unsupportedURL) }
     func stream(for request: URLRequest, onData: @Sendable (Data) async throws -> Void) async throws -> HTTPURLResponse
     {
         calls += 1
+        if alwaysMalformed {
+            try await onData(Data("data: {\"choices\":[{\"delta\":{\"content\":\"invalid JSON\"}}]}\n\n".utf8))
+            throw AIReflowFailure.invalidStructure
+        }
         let body = try JSONSerialization.jsonObject(with: request.httpBody!) as! [String: Any]
+        models.append(body["model"] as! String)
         let messages = body["messages"] as! [[String: Any]]
         let input =
             try JSONSerialization.jsonObject(with: Data((messages[1]["content"] as! String).utf8)) as! [String: Any]
@@ -46,9 +69,22 @@ private actor JointReflowTransport: HTTPTransport {
             event["v"] = 1
             event["request_id"] = input["request_id"]!
             event["window_id"] = input["window_id"]!
-            let content = String(data: try JSONSerialization.data(withJSONObject: event), encoding: .utf8)! + "\n"
+            let prefix = seq == 0 ? "{\"events\":[" : ","
+            let suffix = seq == events.count - 1 ? "]}" : ""
+            let content =
+                prefix + String(data: try JSONSerialization.data(withJSONObject: event), encoding: .utf8)! + suffix
             let packet = try JSONSerialization.data(withJSONObject: ["choices": [["delta": ["content": content]]]])
             try await onData(Data("data: ".utf8) + packet + Data("\n\n".utf8))
+            if malformedOnce && event["type"] as? String == "block_end" {
+                malformedOnce = false
+                try await onData(Data("data: {\"choices\":[{\"delta\":{\"content\":\",invalid JSON\"}}]}\n\n".utf8))
+                throw AIReflowFailure.invalidStructure
+            }
+            if holdOnce && event["type"] as? String == "block_end" {
+                holdOnce = false
+                waiting = true
+                await withCheckedContinuation { continuation = $0 }
+            }
             if interruptOnce && event["type"] as? String == "block_end" {
                 interruptOnce = false
                 throw URLError(.networkConnectionLost)
@@ -81,6 +117,26 @@ private actor JointReflowTransport: HTTPTransport {
     #expect(!model.readingChoicePresented && model.mode == "original")
     #expect(await transport.calls == 0)
     #expect(try Data(contentsOf: root.appendingPathComponent(paper.originalPath)) == original)
+}
+
+@Test @MainActor func coldLoaderAppearsBeforeCredentialReadOrCheckpointCreation() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let model = try ReaderModel(root: root, credentials: WorkflowCredentials())
+    await model.load()
+    var settings = model.modelSettings
+    settings.model = "test"
+    try model.saveSettings(settings, key: nil)
+    let paper = Paper(
+        title: "Loading", digest: "fixture", originalPath: "unused.pdf", pageCount: 1,
+        blocks: [], warnings: [], canReflow: true)
+    model.state.papers = [paper]
+    model.select(paper.id)
+    model.startAIReflow()
+    #expect(model.paper?.reflowJob == nil)
+    #expect(model.showingReflowLoading)
+    model.pauseTranslation()
+    for _ in 0..<100 where !model.translating.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
 }
 
 @Test @MainActor func jointReflowResumesCommittedPrefixWithoutDuplicatingOrChangingIt() async throws {
@@ -144,4 +200,74 @@ private actor JointReflowTransport: HTTPTransport {
         try await Task.sleep(for: .milliseconds(10))
     }
     Issue.record("Reflow task did not terminate")
+}
+
+@Test @MainActor func changingModelStopsOldGenerationAndResumesOnlyUnpublishedSources() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let transport = JointReflowTransport(holdOnce: true)
+    let model = try ReaderModel(
+        root: root, client: ModelClient(transport: transport), credentials: WorkflowCredentials())
+    await model.load()
+    var settings = model.modelSettings
+    settings.model = "first-model"
+    try model.saveSettings(settings, key: nil)
+    let sources = [
+        TextBlock(sourcePage: 0, text: "First original paragraph."),
+        TextBlock(sourcePage: 1, text: "Second original paragraph."),
+    ]
+    var paper = Paper(
+        title: "Switch", digest: "fixture", originalPath: "unused.pdf", pageCount: 2, blocks: [], warnings: [],
+        canReflow: true)
+    paper.reflowJob = ReflowJob(sources: sources)
+    model.state.papers = [paper]
+    model.select(paper.id)
+    model.startAIReflow()
+    for _ in 0..<300 {
+        if await transport.waiting { break }
+        try await Task.sleep(for: .milliseconds(10))
+    }
+    #expect(await transport.waiting)
+    let committed = try #require(model.paper?.blocks.first)
+    settings.model = "second-model"
+    try model.saveSettings(settings, key: nil)
+    await transport.release()
+    for _ in 0..<300 where !model.translating.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
+    #expect(model.paper?.blocks.count == 1)
+    #expect(await transport.calls == 1)
+    model.startAIReflow()
+    for _ in 0..<300 where !model.translating.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
+    #expect(model.paper?.reflowJob?.finished == true)
+    #expect(model.paper?.blocks.first?.id == committed.id)
+    #expect(model.paper?.blocks.count == 2)
+    #expect(await transport.models == ["first-model", "second-model"])
+}
+
+@Test(arguments: [false, true]) @MainActor
+func structuralRecoveryRetainsPrefixAndHasABoundedRequestCount(alwaysMalformed: Bool) async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let transport = JointReflowTransport(malformedOnce: !alwaysMalformed, alwaysMalformed: alwaysMalformed)
+    let model = try ReaderModel(
+        root: root, client: ModelClient(transport: transport), credentials: WorkflowCredentials())
+    await model.load()
+    var settings = model.modelSettings
+    settings.model = "fixture"
+    try model.saveSettings(settings, key: nil)
+    let sources = [
+        TextBlock(sourcePage: 0, text: "First original paragraph."),
+        TextBlock(sourcePage: 1, text: "Second original paragraph."),
+    ]
+    var paper = Paper(
+        title: "Recovery", digest: "fixture", originalPath: "unused.pdf", pageCount: 2, blocks: [], warnings: [],
+        canReflow: true)
+    paper.reflowJob = ReflowJob(sources: sources)
+    model.state.papers = [paper]
+    model.select(paper.id)
+    model.startAIReflow()
+    for _ in 0..<300 where !model.translating.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
+    #expect(await transport.calls == (alwaysMalformed ? 3 : 2))
+    #expect(model.paper?.reflowJob?.finished == !alwaysMalformed)
+    #expect(model.paper?.blocks.count == (alwaysMalformed ? 0 : 2))
+    #expect(model.paper?.reflowJob?.completedSourceIDs.count == (alwaysMalformed ? 0 : 2))
 }
