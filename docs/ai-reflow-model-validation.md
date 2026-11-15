@@ -60,3 +60,18 @@ v3 在 v2 基础上加入由该原创单栏样例的页码和 y 坐标确定的�
 共执行 9 个真实请求，其中 1 个主动中断；8 个完整请求返回的 total_tokens 合计 30050。中断请求未返回最终 usage，不计为零，也不估算未取得的费用。
 
 本轮文档检查涵盖 JSON 示例、链接、差异格式与报告数值对照。未实现或验收应用加载界面、按需导入改造、完整新重排流水线、LaTeX 解析、真实论文复杂版式、iPad 内存/触摸表现。未运行 Mac 应用视觉验收，不将接口测试替代产品验收。
+
+
+## App 正式请求与原生 JSON 模式补测（2026-11-15）
+
+接入应用后发现此前 NDJSON 只是提示词约定，没有发送 API `response_format`，不能称为 API 原生结构化输出。正式 ModelClient 在原创三段 fixture 上曾通过，首个译文增量 11.51 秒，全部三块 19.34 秒；实际 Mac 应用的两页原创示例曾在提交八块后遇到模型事件格式错误，手动继续后共十九块完成，前缀保留。此记录是旧 NDJSON 路径的实测，不能作为新格式结果。
+
+已查阅 [GLM 结构化输出](https://docs.bigmodel.cn/cn/guide/capabilities/struct-output) 和 [对话补全 API](https://docs.bigmodel.cn/api-reference/模型-api/对话补全)：官方文档提供 `response_format: {"type":"json_object"}`，没有列出可依赖的严格 `json_schema`。新的传输格式改为单一 `{"events":[...]}`，流式解码完整数组元素；不等待整个 JSON 完成才显示。JSON Mode 约束 JSON 格式，原文覆盖、来源 ID、公式/对象和事件顺序仍由本地校验。
+
+已对配置的官方 `glm-5.3-flash` 做最小两句原创输入实测：`stream:true`、`response_format:json_object`、`thinking:disabled` 组合成功，输出合法 JSON，首内容 0.97 秒，共 130 tokens。该极小请求用于验证参数组合，不代表论文冷启动性能。测试日志/响应仅在本地忽略目录 `.local/native-json-probe*`；密钥只从 Keychain 读入内存。
+
+
+原生 JSON 封套接入正式 `ModelClient.reflowAndTranslate` 后，使用同一原创三段 fixture 再测一次：3 块全部通过结构与提交校验，首译文增量 5.79 秒，整批 13.89 秒。与前一 NDJSON 请求不是受控重复基准，缓存与服务负载可能不同，因此只记录本次观察，不将差值归因于 JSON Mode。本轮明确保留了 `thinking:disabled` 请求参数及其“不保证实际零思考”的边界。
+
+
+新版 JSON Mode 在独立验收 Mac App 中再次生成两页原创示例，十九块完成，加载页自动进入正文，观察时仍处首段。该轮观察未见结构错误暂停；不以单次成功承诺协议永不失败。发现末尾两个英文标题被模型原样复制到译文。用户明确要求只约束模型提示，不增加专用校验；最终只增加“需要翻译的标题和正文不得原样填入译文，专有名词、缩写和公式可保留”的提示。常规 JSON/来源/公式校验保留，不增加内容复制检查。没有将单个示例视为完整忠实度评测。

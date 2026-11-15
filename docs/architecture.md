@@ -119,3 +119,12 @@ HTML 文件使用进程内引用计数保护 WebKit 当前载入的文件：清�
 笔记页边卡片、波浪线和文字覆盖层采用文档坐标，滚动由 WebKit 原生合成处理；只有激活、窗口/正文几何变化才计算布局。编辑卡片固定于当前视口，滚动只使用缓存锚点更新一条连接路径，不读取逐字几何、不重建装饰 DOM。上浮覆盖限制最多 2000 个字符，超长选区保留原文字体与完整锚点，不为动画产生无界逐字测量。编辑器在同一区域装饰 Markdown 源文，数学合并 60 ms 输入后异步编译，落盘仍为 350 ms。悬停通过缓存文档坐标命中，文字与卡片之间使用方向性通道；显式数值高度与位移共用一次短动画，避免 auto 高度和 CSS 动画竞争。点击进入编辑时独立使用一次可取消的 transform/opacity 入场动画，缩放原点来自连接终点；浮卡入场临时连线结束后移除，不产生定时器重排或持久数据。
 
 `Platform/HTML/NoteEditor/Editor.js` 使用 CodeMirror 6 的状态、Markdown 语法树和装饰层，保持 Markdown 字符串为唯一正文，撤销与输入法由编辑器处理。公式及表格复用 Swift 净化后的渲染结果，点击回到对应源码；装饰替换范围为原子范围，普通加粗文字仍按字符移动光标。`HTMLNativeNoteEditorScript` 加载随应用分发的本地 bundle，不加载 CDN。修改后运行 `npm ci --prefix scripts/note-editor` 与 `npm run build --prefix scripts/note-editor`；依赖和锁文件位于该脚本目录，产物与依赖许可证在 `NoteEditor.bundle`，均需提交。Node 只用于开发时构建，Mac/iPad 运行时不依赖它。
+
+
+## 按需联合重排（v8）
+
+`PDFOriginalImport` 只保存原始 PDF；`ReflowEvidenceExtractor` 在用户选择重排后才协调同版本 HTML、PDF 区域解析和 `PDF/Import/OCR` 的 Vision 识别。OCR 只接受可核验英文正文，未知区域保留局部图，不依赖 Mac 服务。
+
+`Domain/Papers/AIReflowPlan` 和来源跨度描述受限计划；`Models/AIReflowEvidence` 生成本地证据/对象身份，`AIReflowEnvelopeStream` 增量解析原生 JSON 模式的 `events` 数组，完整事件立即交给 `AIReflowStream` 校验覆盖、次序、公式和恢复前缀，`AIReflowClient` 组织联合请求。顶层 JSON 未闭合时即可发布已完整验证的块；截断和多余字段仍拒绝。模型不能输出 HTML 或资源 URL。`ReflowJob` 保存活动断点，已发布 TextBlock 保留最终来源跨度；`RetainedReading` 保留旧版制品。
+
+`Application/Reading/AIReflowActions` 串行提交计划和完整块；首屏放行只在保存队列内修改最新 job 的就绪字段，避免覆盖并发提交。`Features/Reader/ReflowLoadingView` 提供阅读模式选择和加载状态；`Platform/HTML/HTMLCanvas` 以实际正文高度、字体和图片就绪判断首屏。新 HTML 按块追加，旧内容节点保持不变。以上联合入口替代旧的导入后全文 HTML 占位流程；旧实现保留兼容测试。
