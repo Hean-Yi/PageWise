@@ -96,4 +96,4 @@ HTML 文件使用进程内引用计数保护 WebKit 当前载入的文件：清�
 
 模型请求通过凭据适配器的异步读取入口访问 Keychain；设备适配器把可能等待系统授权的 SecItemCopyMatching 放到后台任务，完成后检查取消。View 的配置判断不读取密钥；仅状态检测与明确模型操作才读取，密钥不落盘。
 
-`Platform/HTML/HTMLSelectionScript` 负责源文本范围、跨段归一化、文字范围选区绘制与英中关联高亮；`Application/Reading/HTMLTextSelection` 保存本次选文的有序块范围，问答固定全部选中块为优先证据。持久化 Highlight 的可选 linksTranslation 标识源文本坐标与段落译文关联；缺省继续解释旧整段 DOM 坐标，不迁移旧记录或改变已发布节点。
+`Platform/HTML/HTMLSelectionScript` 负责语言独立的文本范围、跨段过滤、共享对象选择与文字选区绘制；`Application/Reading/HTMLTextSelection` 保存本次选文的有序块范围，问答固定全部选中块为优先证据。持久化 Highlight 的可选 htmlTarget 保存 source/translation 文本坐标或块内 object 索引；新文字坐标排除共享对象，译文发布后才可选择。图片、表格与公式以整体对象轮廓标记，引用仍固定原文块为证据，文本模型不接收图片字节。缺少 htmlTarget 时，可选 linksTranslation 继续解释此前的源文本与整段译文关联；两者均缺省继续解释旧整段 DOM 坐标，不迁移旧记录或改变已发布文本。

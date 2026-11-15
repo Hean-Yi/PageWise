@@ -6,14 +6,14 @@
 
     @testable import PaperReaderUI
 
-    @Test @MainActor func bilingualCrossParagraphSelectionCopiesOnlySourceAndRestoresPairedHighlights() async throws {
+    @Test @MainActor func independentBilingualSelectionFiltersBothLanguagesAndRestoresHighlights() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let model = try ReaderModel(root: root)
         await model.load()
         let first = TextBlock(sourcePage: 0, text: "First original evidence with emoji 🧪 and a conclusion.")
         let second = TextBlock(sourcePage: 1, text: "Second original paragraph remains selectable.")
-        let third = TextBlock(sourcePage: 1, text: "Pending original paragraph.")
+        let third = TextBlock(sourcePage: 1, text: "The model improves accuracy.")
         var paper = Paper(
             title: "Selection fixture", digest: "fixture", originalPath: "unused.pdf", pageCount: 2,
             blocks: [first, second, third], warnings: [], canReflow: true)
@@ -61,52 +61,78 @@
                 == "rgba(0, 0, 0, 0)")
         model.highlightSelection()
         #expect(model.state.highlights.count == 2)
-        #expect(model.state.highlights.allSatisfy { $0.linksTranslation == true && !$0.text.contains("中文") })
+        #expect(model.state.highlights.allSatisfy { $0.htmlTarget == "source" && $0.linksTranslation == nil })
         coordinator.update(web)
         for _ in 0..<100 {
-            if (try? await js(web, "return CSS.highlights.get('saved')?.size")) as? Int == 4 { break }
+            if (try? await js(web, "return CSS.highlights.get('saved')?.size")) as? Int == 2 { break }
             try await Task.sleep(for: .milliseconds(10))
         }
         #expect(
             try await js(web, "return [...CSS.highlights.get('saved')].map(r=>r.toString()).join('|')") as? String
-                == "original evidence with emoji 🧪 and a conclusion.|首段中文意译。|Second original|第二段的中文翻译。")
+                == "original evidence with emoji 🧪 and a conclusion.|Second original")
         #expect(
             try await js(
                 web, "return originalNode===blocks[0].querySelector('p') && originalHTML===blocks[0].innerHTML")
                 as? Bool == true)
-        // A Chinese-only selection links to the whole English paragraph, never its duplicate translation.
+        // Chinese quotes retain exactly the selected translation, with no English substitution.
         _ = try await js(
             web, "const n=blocks[1].querySelector('.translation').firstChild;getSelection().setBaseAndExtent(n,1,n,5)")
-        try await waitForSelection(model, count: 1, text: second.text)
-        #expect(model.selectionText == second.text)
+        try await waitForSelection(model, count: 1, text: "二段的中")
+        #expect(model.selectionText == "二段的中")
+        model.highlightSelection()
+        #expect(model.state.highlights.last?.htmlTarget == "translation")
+        // Cross-paragraph Chinese selection skips the intervening English paragraph.
+        _ = try await js(
+            web,
+            "getSelection().setBaseAndExtent(blocks[0].querySelector('.translation').firstChild,1,blocks[1].querySelector('.translation').firstChild,5)"
+        )
+        try await waitForSelection(model, count: 2, text: "段中文意译。\n\n第二段的中")
+        #expect(try await js(web, "return window.paperSelection.copyText()") as? String == model.selectionText)
+        _ = try await js(
+            web,
+            "getSelection().setBaseAndExtent(blocks[1].querySelector('.translation').firstChild,5,blocks[0].querySelector('.translation').firstChild,1)"
+        )
+        try await waitForSelection(model, count: 2, text: "段中文意译。\n\n第二段的中")
         // Backwards selection follows document order and includes only English.
         _ = try await js(
             web, "getSelection().setBaseAndExtent(blocks[1].querySelector('p').firstChild,15,originalNode.firstChild,6)"
         )
         try await waitForSelection(model, count: 2)
         #expect(model.htmlSelection.first?.text.hasPrefix("original evidence") == true)
-        // Highlighting pending source text picks up its translation when it publishes later.
+        // Incomplete word, incomplete sentence, and sentence ending inside a word.
+        for (end, expected) in [(2, ""), (18, "The model improves"), (22, "The model improves")] {
+            _ = try await js(
+                web, "const n=blocks[2].querySelector('p').firstChild;getSelection().setBaseAndExtent(n,0,n,\(end))")
+            try await waitForSelection(model, count: 1, text: String(third.text.prefix(end)))
+            let count = model.state.highlights.count
+            model.highlightSelection()
+            #expect(model.state.highlights.count == count + (expected.isEmpty ? 0 : 1))
+            if !expected.isEmpty { #expect(model.state.highlights.last?.text == expected) }
+        }
+        // Selecting only the middle of a word must also produce no highlight.
         _ = try await js(
-            web, "const n=blocks[2].querySelector('p').firstChild;getSelection().setBaseAndExtent(n,0,n,7)")
-        try await waitForSelection(model, count: 1, text: "Pending")
+            web, "const n=blocks[2].querySelector('p').firstChild;getSelection().setBaseAndExtent(n,5,n,7)")
+        try await waitForSelection(model, count: 1, text: "od")
+        let count = model.state.highlights.count
         model.highlightSelection()
+        #expect(model.state.highlights.count == count)
+        // Later Chinese publication must not expand English highlights into Chinese.
         paper.htmlReading = try await store.append(
             [BilingualBlock(block: third, translation: "后来完成的译文。")], to: paper.htmlReading, paper: paper, root: root)
         paper.translatedBlockCount = 3
         #expect(await model.save(publishingReflow: paper))
         coordinator.update(web)
         for _ in 0..<100 {
-            if (try? await js(web, "return [...CSS.highlights.get('saved')].some(r=>r.toString().trim()==='后来完成的译文。')"))
-                as? Bool == true
+            if (try? await js(web, "return blocks[2].querySelector('.translation:not(.pending)')!==null")) as? Bool
+                == true
             {
                 break
             }
             try await Task.sleep(for: .milliseconds(10))
         }
         #expect(
-            try await js(web, "return [...CSS.highlights.get('saved')].some(r=>r.toString().trim()==='后来完成的译文。')")
-                as? Bool
-                == true)
+            try await js(web, "return [...CSS.highlights.get('saved')].some(r=>r.toString().includes('后来'))") as? Bool
+                == false)
         model.selectionText = ""
         coordinator.update(web)
         for _ in 0..<100 {
@@ -117,8 +143,8 @@
         await model.flushReadingPosition()
         let reopened = try ReaderModel(root: root)
         await reopened.load()
-        #expect(reopened.state.highlights.count == 3)
-        #expect(reopened.state.highlights.allSatisfy { $0.linksTranslation == true })
+        #expect(reopened.state.highlights.count == 5)
+        #expect(reopened.state.highlights.allSatisfy { $0.htmlTarget != nil && $0.linksTranslation == nil })
         // Legacy coordinates keep their old meaning, including a translation-only highlight.
         let legacy = "return blocks[0].textContent.indexOf('首段中文意译。')"
         let start = try #require(try await js(web, legacy) as? Int)
@@ -131,6 +157,16 @@
         #expect(
             try await js(web, "return [...CSS.highlights.get('saved')].map(r=>r.toString()).join('')") as? String
                 == "首段中文意译。")
+        _ = try await web.callAsyncJavaScript(
+            "window.paperReader.highlights(marks)",
+            arguments: [
+                "marks": [
+                    ["key": first.id.uuidString, "text": "First", "range": [0, 5], "sourceOnly": true] as [String: Any]
+                ]
+            ], in: nil, contentWorld: .defaultClient)
+        #expect(
+            try await js(web, "return [...CSS.highlights.get('saved')].map(r=>r.toString()).join('|')") as? String
+                == "First|首段中文意译。")
         model.select(nil)
     }
 

@@ -32,7 +32,9 @@ enum HTMLReaderScript {
                   close.textContent='关闭'; close.setAttribute('aria-label','关闭放大图片');
                   close.onclick=()=>dialog.close();
                   const large=document.createElement('img');large.src=image.src;large.alt=image.alt;
-                  dialog.append(close,large);document.body.append(dialog);
+                  const quote=document.createElement('button');quote.textContent='引用图片';
+                  quote.onclick=()=>{dialog.close();window.paperSelection.selectObject(image);};
+                  dialog.append(close,quote,large);document.body.append(dialog);
                   dialog.addEventListener('close',()=>dialog.remove(),{once:true});dialog.showModal();return;
                 }
                 const link = event.target.closest?.('a[href]');

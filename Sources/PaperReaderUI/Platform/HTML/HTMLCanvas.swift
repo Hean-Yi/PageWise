@@ -159,7 +159,7 @@ final class HTMLCoordinator: NSObject, WKNavigationDelegate, WKScriptMessageHand
             let values: [[String: Any]] = marks.map {
                 [
                     "key": $0.pageKey, "text": $0.text, "range": $0.textRange ?? [],
-                    "sourceOnly": $0.linksTranslation == true,
+                    "sourceOnly": $0.linksTranslation == true, "target": $0.htmlTarget ?? "",
                 ]
             }
             view.callAsyncJavaScript(
@@ -228,12 +228,15 @@ final class HTMLCoordinator: NSObject, WKNavigationDelegate, WKScriptMessageHand
         case "position":
             if ready, let index { model.recordVisiblePage(index) }
         case "selection":
-            guard let values = value["parts"] as? [[String: Any]], values.count <= keys.count else { return }
+            guard let values = value["parts"] as? [[String: Any]], values.count <= 10_000 else { return }
             var parts: [HTMLTextSelection] = []
             var lastIndex = -1
             var total = 0
             for item in values {
-                guard let key = item["key"] as? String, let index = keys.firstIndex(of: key), index > lastIndex,
+                guard let key = item["key"] as? String, let index = keys.firstIndex(of: key), index >= lastIndex,
+                    let target = item["target"] as? String,
+                    target == "source" || target == "translation"
+                        || (target.hasPrefix("object:") && Int(target.dropFirst(7)).map { $0 >= 0 } == true),
                     let text = item["text"] as? String, !text.isEmpty,
                     let start = item["start"] as? Int, let end = item["end"] as? Int,
                     start >= 0, end > start, end <= 2_000_000, end - start == text.utf16.count
@@ -244,7 +247,13 @@ final class HTMLCoordinator: NSObject, WKNavigationDelegate, WKScriptMessageHand
                     model.status = "所选内容过长，请缩小选择范围。"
                     return
                 }
-                parts.append(HTMLTextSelection(pageKey: key, text: text, start: start, end: end))
+                let highlightStart = item["highlightStart"] as? Int ?? start
+                let highlightEnd = item["highlightEnd"] as? Int ?? end
+                guard highlightStart >= start, highlightEnd <= end, highlightEnd >= highlightStart else { return }
+                parts.append(
+                    HTMLTextSelection(
+                        pageKey: key, text: text, start: start, end: end, target: target,
+                        highlightStart: highlightStart, highlightEnd: highlightEnd))
                 lastIndex = index
             }
             hasSelection = !parts.isEmpty

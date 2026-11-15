@@ -209,10 +209,15 @@ public final class ReaderModel {
         if usesHTMLReading, !htmlSelection.isEmpty {
             for part in htmlSelection {
                 guard let index = pageKeys.firstIndex(of: part.pageKey) else { continue }
+                let start = part.highlightStart ?? part.start
+                let end = part.highlightEnd ?? part.end
+                guard start >= part.start, end <= part.end, end > start else { continue }
+                let text = (part.text as NSString).substring(
+                    with: NSRange(location: start - part.start, length: end - start))
                 var highlight = Highlight(
-                    paperID: id, pageKey: part.pageKey, pageIndex: index, text: part.text, rects: [])
-                highlight.textRange = [part.start, part.end]
-                highlight.linksTranslation = true
+                    paperID: id, pageKey: part.pageKey, pageIndex: index, text: text, rects: [])
+                highlight.textRange = [start, end]
+                highlight.htmlTarget = part.target
                 state.highlights.append(highlight)
             }
         } else {

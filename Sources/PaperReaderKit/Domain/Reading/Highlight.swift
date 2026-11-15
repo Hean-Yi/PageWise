@@ -12,6 +12,8 @@ public struct Highlight: Identifiable, Codable, Sendable {
     /// Source-only offsets and a shared paragraph highlight for its Chinese translation.
     /// Nil preserves the section-relative coordinates of existing HTML annotations.
     public var linksTranslation: Bool?
+    /// Language-specific text coordinates or a stable shared-object index; nil retains legacy semantics.
+    public var htmlTarget: String?
     public var createdAt = Date()
     public init(paperID: UUID, pageKey: String, pageIndex: Int, text: String, rects: [[Double]]) {
         self.paperID = paperID
