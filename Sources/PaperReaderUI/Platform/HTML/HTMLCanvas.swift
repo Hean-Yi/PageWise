@@ -38,6 +38,7 @@ final class HTMLCoordinator: NSObject, WKNavigationDelegate, WKScriptMessageHand
     private var paperID: UUID?
     private var loadedPath: String?
     private var requestedURL: URL?
+    private var requestedNavigation: WKNavigation?
     private var keys: [String] = []
     private var publishedCount = 0
     private var ready = false
@@ -73,6 +74,7 @@ final class HTMLCoordinator: NSObject, WKNavigationDelegate, WKScriptMessageHand
         ready = false
         appendTask?.cancel()
         view.stopLoading()
+        requestedNavigation = nil
         releaseDocument()
         view.navigationDelegate = nil
         view.configuration.userContentController.removeScriptMessageHandler(
@@ -101,7 +103,7 @@ final class HTMLCoordinator: NSObject, WKNavigationDelegate, WKScriptMessageHand
             requestedURL = url
             HTMLReadingStore.retainOpenDocument(url)
             leasedURL = url
-            view.loadFileURL(url, allowingReadAccessTo: url.deletingLastPathComponent())
+            requestedNavigation = view.loadFileURL(url, allowingReadAccessTo: url.deletingLastPathComponent())
             return
         }
         guard ready else { return }
@@ -196,7 +198,11 @@ final class HTMLCoordinator: NSObject, WKNavigationDelegate, WKScriptMessageHand
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        guard webView.url?.standardizedFileURL == requestedURL, paperID == model.selectedPaperID else { return }
+        // A recycled WebView can deliver the previous warmup navigation after a new URL was requested.
+        // Only the requested document may publish state or consume the highlight/note snapshots.
+        guard let requestedNavigation, navigation === requestedNavigation,
+            webView.url?.standardizedFileURL == requestedURL, paperID == model.selectedPaperID
+        else { return }
         ready = true
         webView.isHidden = false
         if keys.indices.contains(model.visiblePage) {

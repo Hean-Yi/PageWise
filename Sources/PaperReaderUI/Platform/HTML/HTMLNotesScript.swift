@@ -14,7 +14,7 @@ enum HTMLNotesScript {
           const flush=()=>send({kind:'noteFlush'});
           const store=e=>{e.markdown=e.input.value;e.html='';e.status.textContent='保存中…';send({kind:'noteChange',id:e.id,anchors:e.anchors,markdown:e.markdown});};
           const finish=()=>{
-            const e=records.get(editing);if(e){if(e.input.value!==e.markdown)store(e);e.card.classList.remove('editing-live');e.input.classList.add('note-hidden');e.footer.classList.add('note-hidden');e.content.classList.remove('note-hidden');e.tabs.classList.add('note-hidden');body(e);flush();}
+            const e=records.get(editing);if(e){e.emergeAnimation?.cancel();e.entrance=false;if(e.input.value!==e.markdown)store(e);e.card.classList.remove('editing-live');e.input.classList.add('note-hidden');e.footer.classList.add('note-hidden');e.content.classList.remove('note-hidden');e.tabs.classList.add('note-hidden');body(e);flush();}
             if(e?.card.contains(document.activeElement))document.activeElement.blur();
             editing=null;active=null;undock();selection.clear();
             if(e&&!e.markdown.trim()&&!e.persisted){e.editor?.destroy();e.card.remove();records.delete(e.id);}schedule();
@@ -23,7 +23,7 @@ enum HTMLNotesScript {
             if(editing&&editing!==id){if(!edit)return;finish();}
             const e=records.get(id);if(!e)return;active=id;reverse=backwards;
             if(edit){
-              editing=id;e.tabs.classList.remove('note-hidden');e.footer.classList.remove('note-hidden');e.card.classList.add('editing-live');e.input.classList.remove('note-hidden');e.content.classList.add('note-hidden');
+              e.entrance=editing!==id;e.needsFocus=true;editing=id;e.tabs.classList.remove('note-hidden');e.footer.classList.remove('note-hidden');e.card.classList.add('editing-live');e.input.classList.remove('note-hidden');e.content.classList.add('note-hidden');
               selection.restore(e.anchors);menu.classList.add('note-docked');e.card.prepend(menu);menu.hidden=false;window.paperAnnotationMenu.refresh();
               if(!e.editor)e.editor=PaperNoteEditor.create(e.input,e.markdown,()=>store(e),finish);
               e.input.value=e.markdown;if(e.html)e.editor.preview(e.markdown,e.html);e.input.focus({preventScroll:true});
@@ -33,7 +33,7 @@ enum HTMLNotesScript {
           const leave=()=>{if(active&&!editing){active=null;schedule();}};
           const button=(text,handler,label=text)=>{const b=document.createElement('button');b.type='button';b.textContent=text;b.setAttribute('aria-label',label);b.onclick=event=>{event.stopPropagation();handler();};return b;};
           const make=note=>{
-            const e={...note,persisted:false};e.card=document.createElement('article');e.card.className='reader-note-card';e.card.dataset.noteId=e.id;e.card.tabIndex=0;e.card.setAttribute('aria-label','阅读笔记');
+            const e={...note,persisted:false};e.card=document.createElement('article');e.card.className='reader-note-card';e.card.hidden=true;e.card.dataset.noteId=e.id;e.card.tabIndex=0;e.card.setAttribute('aria-label','阅读笔记');
             const header=document.createElement('header'),title=document.createElement('strong');title.textContent='笔记';header.append(title);
             e.choices=document.createElement('select');e.choices.setAttribute('aria-label','重叠笔记');e.choices.className='note-hidden';e.choices.onchange=()=>activate(e.choices.value,!!editing);header.append(e.choices);
             e.tabs=document.createElement('span');e.tabs.className='note-hidden';
@@ -63,10 +63,31 @@ enum HTMLNotesScript {
               if(!position&&editing===e.id){position={left:Math.max(16,innerWidth-366),top:16,width:350,height:Math.min(420,innerHeight-32),side:'floating'};}
               if(!position||(!isActive&&position.side==='floating')){e.card.hidden=true;continue;}
               e.card.hidden=false;e.card.classList.toggle('compact',position.height<300);position.fixed=editing===e.id;e.card.style.position=position.fixed?'fixed':'absolute';e.card.style.left=position.left+'px';e.card.style.top=(position.top+(position.fixed?0:scrollY))+'px';e.card.style.width=position.width+'px';e.card.style.maxHeight=Math.max(oldRect?.height||0,position.height)+'px';e.card.style.height=position.height+'px';e.card.dataset.placement=position.side;
-              if(oldRect&&wasActive!==isActive&&!matchMedia('(prefers-reduced-motion:reduce)').matches){const next=e.card.getBoundingClientRect(),dy=isActive?-2:0;e.moveAnimation?.cancel();e.moveAnimation=e.card.animate([{height:oldRect.height+'px',transform:'translate('+(oldRect.left-next.left)+'px,'+(oldRect.top-next.top+dy)+'px)'},{height:position.height+'px',transform:'translate(0,'+dy+'px)'}],{duration:isActive?180:160,easing:'cubic-bezier(.2,.7,.2,1)'});e.moveAnimation.onfinish=()=>{e.card.style.maxHeight=position.height+'px';};}else if(e.moveAnimation?.playState!=='running')e.card.style.maxHeight=position.height+'px';
+              if(e.entrance){e.moveAnimation?.cancel();e.card.style.maxHeight=position.height+'px';}
+              else if(oldRect&&wasActive!==isActive&&!matchMedia('(prefers-reduced-motion:reduce)').matches){const next=e.card.getBoundingClientRect(),dy=isActive?-2:0;e.moveAnimation?.cancel();e.moveAnimation=e.card.animate([{height:oldRect.height+'px',transform:'translate('+(oldRect.left-next.left)+'px,'+(oldRect.top-next.top+dy)+'px)'},{height:position.height+'px',transform:'translate(0,'+dy+'px)'}],{duration:isActive?180:160,easing:'cubic-bezier(.2,.7,.2,1)'});e.moveAnimation.onfinish=()=>{e.card.style.maxHeight=position.height+'px';};}else if(e.moveAnimation?.playState!=='running')e.card.style.maxHeight=position.height+'px';
               occupied.push({...position,right:position.left+position.width,bottom:position.top+position.height});if(isActive)chosen=position;
             }
-            layout.decorate([...records.values()],records.get(active),chosen,reverse);
+            const entry=records.get(active),opening=!!entry?.entrance;
+            layout.decorate([...records.values()],entry,chosen,opening?false:reverse,opening);
+            if(opening&&chosen){entry.entrance=false;emerge(entry,chosen);}
+            if(entry?.needsFocus&&chosen){entry.needsFocus=false;entry.input.focus();}
+          };
+          const emerge=(e,position)=>{
+            e.emergeAnimation?.cancel();
+            if(matchMedia('(prefers-reduced-motion:reduce)').matches){layout.endEntrance(e.id);return;}
+            const point=layout.connectionEnd(),floating=position.side==='floating';
+            const x=point?point.x-position.left:position.width/2,y=point?point.y-position.top:0;
+            e.card.style.transformOrigin=Math.max(0,Math.min(position.width,x))+'px '+Math.max(0,Math.min(position.height,y))+'px';
+            e.card.style.willChange='transform,opacity';
+            const animation=e.card.animate([
+              {transform:'translateY(-2px) scale('+(floating?'.12,.08':'.88,.76')+')',opacity:floating?0:.85,offset:0},
+              {transform:'translateY(-2px) scale(1.035,.975)',opacity:1,offset:.55},
+              {transform:'translateY(-2px) scale(.988,1.015)',opacity:1,offset:.79},
+              {transform:'translateY(-2px) scale(1,1)',opacity:1,offset:1}
+            ],{duration:360,delay:floating?80:40,fill:'backwards',easing:'cubic-bezier(.22,.7,.25,1)'});
+            e.emergeAnimation=animation;animation.id='note-emerge';
+            const release=()=>{if(e.emergeAnimation!==animation)return;e.card.style.willChange='';e.card.style.transformOrigin='';e.emergeAnimation=null;layout.endEntrance(e.id);};
+            animation.finished.then(release,release);
           };
           function schedule(){if(!queued){queued=true;requestAnimationFrame(()=>{if(queued)arrange();});setTimeout(()=>{if(queued)arrange();},32);}}
           const begin=()=>{

@@ -33,6 +33,20 @@
         try await noteWait { model.selectionText == "lpha be" }
         _ = try await noteJS(web, "document.querySelector('#annotation-menu .add-note').click()")
         #expect(try await noteJS(web, "return window.paperNotes.editing()") as? Bool == true)
+        try await noteWait {
+            (try? await noteJS(
+                web, "return document.querySelector('.reader-note-card').getAnimations().some(a=>a.id==='note-emerge')"))
+                as? Bool == true
+        }
+        #expect(
+            try await noteJS(
+                web,
+                "return !!document.querySelector('.note-link') && document.activeElement.closest('.note-editor')!==null && p.outerHTML===original && p.getBoundingClientRect().height===height"
+            ) as? Bool == true)
+        _ = try await noteJS(
+            web, "for(const a of document.querySelector('.reader-note-card').getAnimations())a.finish()")
+        try await noteWait { (try? await noteJS(web, "return !document.querySelector('.note-link')")) as? Bool == true }
+
         #expect(
             try await noteJS(web, "return document.querySelector('#annotation-menu').classList.contains('note-docked')")
                 as? Bool == true)
@@ -198,6 +212,12 @@
                 "const e=new ClipboardEvent('copy',{clipboardData:new DataTransfer(),cancelable:true});document.dispatchEvent(e);return !e.defaultPrevented"
             ) as? Bool == true)
         _ = try await noteJS(web, "window.paperNotes.finish()")
+        try await noteWait {
+            (try? await noteJS(
+                web,
+                "const card=document.querySelector('.reader-note-card');return !card.getAnimations().some(a=>a.id==='note-emerge') && card.style.willChange==='';"
+            )) as? Bool == true
+        }
         model.select(nil)
     }
 
