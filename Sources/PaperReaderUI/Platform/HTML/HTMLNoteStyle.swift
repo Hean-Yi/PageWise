@@ -46,7 +46,7 @@ enum HTMLNoteStyle {
           #annotation-menu.note-docked .bookmark,#annotation-menu.note-docked .add-note{display:none!important}
           #annotation-menu.note-docked .swatch{min-width:0;padding:3px;flex:1 1 0}#annotation-menu.note-docked .swatch span{width:16px;height:16px}
           #annotation-menu.note-docked .remove{padding:5px 8px;font-size:11px}
-          #reader-note-decoration{position:absolute;top:0;left:0;width:100%;height:1px;pointer-events:none;z-index:3;overflow:visible}
+          #reader-note-decoration{position:absolute;top:0;left:0;width:100%;height:1px;pointer-events:none;z-index:5;overflow:visible}
           .note-wave{fill:none;stroke:#a57957;stroke-width:1.05;stroke-linecap:round;stroke-linejoin:round;opacity:.85}
           #reader-note-decoration .note-link{fill:none;stroke:#ad7952;stroke-width:1.35;stroke-dasharray:2 5;stroke-linecap:round;opacity:.8}
           #reader-note-decoration .note-link-end{fill:#faf8f3;stroke:#a34c33;stroke-width:1.3}

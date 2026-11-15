@@ -152,7 +152,7 @@
             ) as? Bool == true)
         _ = try await noteJS(web, "window.scrollTo(0,0)")
         try await noteWait { (try? await noteJS(web, "return scrollY===0")) as? Bool == true }
-        // Hover works in both directions; the connector leaves beneath the text, not through it.
+        // Hover works in both directions; the direct connector floats above text without intercepting it.
         _ = try await noteJS(
             web,
             "window.anchor=paperNoteLayout.rects(paperSelection.parts()).at(0);const r=document.createRange();r.setStart(p.firstChild,1);r.setEnd(p.firstChild,8);window.anchor=r.getBoundingClientRect();p.dispatchEvent(new PointerEvent('pointermove',{bubbles:true,clientX:anchor.left+2,clientY:anchor.top+2}))"
@@ -163,7 +163,14 @@
         #expect(
             try await noteJS(
                 web,
-                "window.forward=document.querySelector('.note-link').getAttribute('d');return Number(forward.split(' ')[2])>anchor.bottom && document.querySelectorAll('#reader-note-lift span').length>0"
+                #"""
+                window.forward=document.querySelector('.note-link').getAttribute('d');
+                const decoration=getComputedStyle(document.querySelector('#reader-note-decoration')),lift=getComputedStyle(document.querySelector('#reader-note-lift'));
+                return Math.abs(Number(forward.split(' ')[2])-(anchor.top+anchor.bottom)/2)<.5
+                  && !forward.includes(' L ') && forward.includes(' C ')
+                  && Number(decoration.zIndex)>Number(lift.zIndex) && decoration.pointerEvents==='none'
+                  && document.querySelectorAll('#reader-note-lift span').length>0;
+                """#
             ) as? Bool == true)
         _ = try await noteJS(
             web, "document.querySelector('.reader-note-card').dispatchEvent(new MouseEvent('mouseenter'))")
