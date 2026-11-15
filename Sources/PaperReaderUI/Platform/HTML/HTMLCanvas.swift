@@ -1,3 +1,4 @@
+import OSLog
 import PaperReaderKit
 import SwiftUI
 import WebKit
@@ -252,6 +253,19 @@ final class HTMLCoordinator: NSObject, WKNavigationDelegate, WKScriptMessageHand
             return
         }
         switch kind {
+        case "imagePreviewTiming":
+            #if DEBUG
+                if let setup = value["setup"] as? Double, let frame = value["frame"] as? Double,
+                    let prepared = value["prepared"] as? Double,
+                    setup.isFinite, frame.isFinite, prepared.isFinite, (0...60_000).contains(setup),
+                    (0...60_000).contains(frame), (0...60_000).contains(prepared)
+                {
+                    Logger(subsystem: "dev.paperreader.mac", category: "ImagePreview")
+                        .notice(
+                            "ImagePreview setup_ms=\(setup, privacy: .public) prepared_ms=\(prepared, privacy: .public) next_frame_ms=\(frame, privacy: .public)"
+                        )
+                }
+            #endif
         case "position":
             if ready, let index { model.recordVisiblePage(index) }
         case "selection":

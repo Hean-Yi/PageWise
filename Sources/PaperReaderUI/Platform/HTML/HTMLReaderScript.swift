@@ -5,7 +5,8 @@ enum HTMLReaderScript {
     static let source =
         HTMLNativeNoteEditorScript.source + HTMLSelectionScript.source + HTMLAnnotationMenuScript.source
         + HTMLNoteStyle.source
-        + HTMLNoteLiftScript.source + HTMLNoteLayoutScript.source + HTMLNotesScript.source + #"""
+        + HTMLNoteLiftScript.source + HTMLNoteLayoutScript.source + HTMLNotesScript.source
+        + HTMLImagePreviewScript.source + #"""
             (() => {
               const send = value => window.webkit.messageHandlers.reader.postMessage(value);
               const root = document.getElementById('reader');
@@ -28,17 +29,6 @@ enum HTMLReaderScript {
               document.addEventListener('scroll', () => { if (!queued) { queued = true; requestAnimationFrame(report); } }, {passive:true});
               document.addEventListener('error', event => { if(event.target.tagName === 'IMG') send({kind:'imageError'}); }, true);
               document.addEventListener('click', event => {
-                const image = event.target.closest?.('#reader img');
-                if(image) {
-                  const dialog=document.createElement('dialog'), close=document.createElement('button');
-                  close.textContent='关闭'; close.setAttribute('aria-label','关闭放大图片');
-                  close.onclick=()=>dialog.close();
-                  const large=document.createElement('img');large.src=image.src;large.alt=image.alt;
-                  const quote=document.createElement('button');quote.textContent='引用图片';
-                  quote.onclick=()=>{dialog.close();window.paperSelection.selectObject(image);};
-                  dialog.append(close,quote,large);document.body.append(dialog);
-                  dialog.addEventListener('close',()=>dialog.remove(),{once:true});dialog.showModal();return;
-                }
                 const link = event.target.closest?.('a[href]');
                 if(!link) return;
                 event.preventDefault();
