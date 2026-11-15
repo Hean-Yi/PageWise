@@ -203,7 +203,7 @@ private struct ReflowFixture {
 
 @Test func aiReflowRejectsProtocolViolationsAndNeverCommitsEmptyOrUnclosedTranslation() async throws {
     let source = TextBlock(sourcePage: 0, text: "Body.")
-    for variant in 0..<10 {
+    for variant in 0..<11 {
         let f = try ReflowFixture([source])
         let output: String
         switch variant {
@@ -233,6 +233,12 @@ private struct ReflowFixture {
                 + f.line(
                     2, "translation_delta",
                     ["block_index": 0, "parts": [["type": "object_ref", "object_id": "unknown"]]])
+        case 9:
+            output =
+                try f.plan() + f.line(1, "block_start", ["block_index": 0])
+                + f.line(
+                    2, "translation_delta",
+                    ["block_index": 0, "parts": [["type": "text", "text": "bad\u{0000}control"]]])
         default:
             output = try f.line(0, "window_plan", ["blocks": f.blocks(), "dispositions": [], "carry": [], "seq": true])
         }
@@ -338,4 +344,44 @@ private actor ReflowRequestTransport: HTTPTransport {
     await #expect(throws: (any Error).self) {
         try await failing.consume(f.plan() + f.line(1, "block_start", ["block_index": 0]))
     }
+}
+
+@Test func aiReflowAcceptsCombiningScalarAndZWJSplitsWithoutLosingText() async throws {
+    let f = try ReflowFixture([TextBlock(sourcePage: 0, text: "A composed character and an emoji.")])
+    var output = try f.plan() + f.line(1, "block_start", ["block_index": 0])
+    let record = try f.line(
+        2, "translation_delta", ["block_index": 0, "parts": [["type": "text", "text": "__unicode_split__"]]])
+    let pieces = record.components(separatedBy: "__unicode_split__")
+    #expect(pieces.count == 2)
+    output += pieces[0]
+    // Each callback contains valid Unicode, but its final grapheme may grow in the next callback.
+    for fragment in ["e", "\u{0301}", " ", "👩", "\u{200D}", "💻"] {
+        output += fragment
+        try await f.stream.consume(output)
+        #expect(await f.capture.drafts.isEmpty)
+    }
+    output += pieces[1]
+    try await f.stream.consume(output)
+    let expected = "e\u{0301} 👩\u{200D}💻"
+    let draft = try #require(await f.capture.drafts.first)
+    #expect(Array(draft.utf8) == Array(expected.utf8))
+    output += try f.line(3, "block_end", ["block_index": 0])
+    output += try f.line(4, "window_end", ["block_count": 1])
+    try await f.stream.consume(output)
+    try await f.stream.finish()
+    let published = try #require(await f.capture.blocks.first?.translation)
+    #expect(Array(published.utf8) == Array(expected.utf8))
+}
+
+@Test func aiReflowRejectsCanonicalEquivalentRewriteOfReceivedBytes() async throws {
+    let f = try ReflowFixture([TextBlock(sourcePage: 0, text: "Original evidence.")])
+    let prefix = try f.plan() + f.line(1, "block_start", ["block_index": 0])
+    let record = try f.line(
+        2, "translation_delta", ["block_index": 0, "parts": [["type": "text", "text": "__unicode_split__"]]])
+    let recordPrefix = record.components(separatedBy: "__unicode_split__")[0]
+    try await f.stream.consume(prefix + recordPrefix + "é")
+    await #expect(throws: (any Error).self) {
+        try await f.stream.consume(prefix + recordPrefix + "e\u{0301}")
+    }
+    #expect(await f.capture.blocks.isEmpty)
 }

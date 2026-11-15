@@ -10,8 +10,8 @@ actor AIReflowStream {
     private let onPlan: @Sendable (AIReflowPlan) async throws -> Void
     private let onDraft: @Sendable (TextBlock, String) async throws -> Void
     private let onBlock: @Sendable (BilingualBlock, [UUID]) async throws -> Void
-    private var previous = ""
-    private var pending = ""
+    private var previous = Data()
+    private var pending = Data()
     private var sequence = 0
     private var plan: AIReflowPlan?
     private var index = 0
@@ -50,23 +50,30 @@ actor AIReflowStream {
     }
 
     func consume(_ output: String) async throws {
-        guard output.hasPrefix(previous), output.utf8.count <= 2_000_000 else { throw AIReflowEvidence.invalid() }
-        pending += output.dropFirst(previous.count)
-        previous = output
-        while let newline = pending.firstIndex(of: "\n") {
-            let line = String(pending[..<newline]).trimmingCharacters(in: .whitespacesAndNewlines)
+        let bytes = Data(output.utf8)
+        // A new combining scalar or ZWJ can extend the previous final Character.
+        // Stream offsets and integrity therefore use exact bytes, never grapheme counts
+        // or String's canonically equivalent prefix comparison.
+        guard bytes.starts(with: previous), bytes.count <= 2_000_000 else { throw AIReflowEvidence.invalid() }
+        pending.append(contentsOf: bytes.dropFirst(previous.count))
+        previous = bytes
+        while let newline = pending.firstIndex(of: 10) {
+            guard let decoded = String(data: pending[..<newline], encoding: .utf8) else {
+                throw AIReflowEvidence.invalid()
+            }
+            let line = decoded.trimmingCharacters(in: .whitespacesAndNewlines)
             pending.removeSubrange(...newline)
             guard !line.isEmpty else { throw AIReflowEvidence.invalid() }
             try await event(line)
         }
-        guard pending.utf8.count <= 65_536 else { throw AIReflowEvidence.invalid() }
+        guard pending.count <= 65_536 else { throw AIReflowEvidence.invalid() }
     }
 
     func finish() async throws {
         // A final complete JSON record need not end in LF; an incomplete JSON record fails decoding.
-        if !pending.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            let line = pending
-            pending = ""
+        guard let line = String(data: pending, encoding: .utf8) else { throw AIReflowEvidence.invalid() }
+        if !line.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            pending.removeAll()
             try await event(line)
         }
         guard ended, current == nil, let plan, index == plan.blocks.count else {
@@ -219,7 +226,7 @@ actor AIReflowStream {
                 guard let text = part["text"] as? String, !text.isEmpty, text.unicodeScalars.count <= 128,
                     !text.contains("[["), !text.contains("<"), !text.contains(">"),
                     !text.unicodeScalars.contains(where: {
-                        CharacterSet.controlCharacters.contains($0) && $0 != "\n" && $0 != "\t"
+                        $0.properties.generalCategory == .control && $0 != "\n" && $0 != "\t"
                     })
                 else { throw AIReflowEvidence.invalid() }
                 appended += text
