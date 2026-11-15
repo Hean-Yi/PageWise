@@ -4,6 +4,8 @@
 
 当前已提供可构建应用，最低 macOS 15 / iPadOS 18。先做本地版本；iCloud 应用同步将在开发者会员可用后接入。完整能力和验证边界见 [MVP 状态](docs/mvp-status.md)。
 
+最新已确认、尚待实现的流程调整：入库不自动重排，选择阅读重排后启动 AI 结构化重排与翻译；首次加载就绪后边读边生成，arXiv 优先利用同版本 HTML/LaTeX 来源。见 [新流程设计](docs/superpowers/specs/2026-11-15-ai-bilingual-reflow-design.md)。以下使用说明仍描述当前应用行为。
+
 ## 启动
 
 Mac（需要 Xcode）：
