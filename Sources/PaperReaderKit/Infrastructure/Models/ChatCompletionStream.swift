@@ -50,6 +50,10 @@ extension ModelClient {
             "max_tokens": maxOutputTokens,
             "messages": [["role": "system", "content": system], ["role": "user", "content": content]],
         ]
+        if reflowImages != nil {
+            // Native JSON mode constrains the envelope; semantic/schema validation remains local.
+            body["response_format"] = ["type": "json_object"]
+        }
         // Verified on 2026-11-15 for this model and official endpoint. The service still
         // reported reasoning tokens; requesting disabled does not guarantee zero thinking.
         if reflowImages != nil, settings.model.lowercased() == "glm-5.3-flash",

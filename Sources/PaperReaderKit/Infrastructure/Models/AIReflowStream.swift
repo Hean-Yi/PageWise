@@ -81,6 +81,12 @@ actor AIReflowStream {
         }
     }
 
+    /// Native JSON-mode framing supplies individual complete objects, including pretty printing.
+    func consumeEvent(_ data: Data) async throws {
+        guard let text = String(data: data, encoding: .utf8) else { throw AIReflowEvidence.invalid() }
+        try await event(text)
+    }
+
     private func event(_ line: String) async throws {
         guard !ended, line.utf8.count <= 65_536, sequence < 4096,
             let data = line.data(using: .utf8),

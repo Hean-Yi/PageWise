@@ -297,6 +297,11 @@ private actor ReflowRequestTransport: HTTPTransport {
         } else {
             #expect(body["thinking"] == nil)
         }
+        if variant == 4 {
+            #expect(body["response_format"] == nil)
+        } else {
+            #expect((body["response_format"] as? [String: String]) == ["type": "json_object"])
+        }
         #expect(String(decoding: data, as: UTF8.self).contains("fixture-key") == false)
     }
 }
@@ -516,4 +521,155 @@ private struct OfflineReflowTransport: HTTPTransport {
             sources: [source], title: "Fixture", settings: settings, key: "fixture-key",
             onPlan: { _ in }, onDraft: { _, _ in }, onBlock: { _, _ in })
     }
+}
+
+@Test func aiReflowNativeEnvelopePublishesBeforeClosureWithEscapedAndNestedJSON() async throws {
+    let sources = [TextBlock(sourcePage: 0, text: "First."), TextBlock(sourcePage: 1, text: "Second.")]
+    let f = try ReflowFixture(sources)
+    let envelope = AIReflowEnvelopeStream(stream: f.stream)
+    let translation = "比较 < 1；e\u{0301} 👩\u{200D}💻；{括号} [方括号] \"引号\" \\ 路径。"
+    let records = try [
+        f.plan(), f.line(1, "block_start", ["block_index": 0]),
+        f.line(2, "translation_delta", ["block_index": 0, "parts": [["type": "text", "text": translation]]]),
+        f.line(3, "block_end", ["block_index": 0]),
+    ]
+    let pretty = try records.map {
+        String(
+            decoding: try JSONSerialization.data(
+                withJSONObject: JSONSerialization.jsonObject(with: Data($0.utf8)), options: .prettyPrinted),
+            as: UTF8.self)
+    }
+    var output = ""
+    // Includes arbitrary splits inside escapes, combining characters and an unfinished envelope.
+    for scalar in ("{\n\"events\": [\n" + pretty.joined(separator: ",\n")).unicodeScalars {
+        output.unicodeScalars.append(scalar)
+        try await envelope.consume(output)
+    }
+    #expect(await f.capture.plans.count == 1)
+    #expect(await f.capture.drafts.last == translation)
+    #expect(await f.capture.blocks.count == 1)
+    #expect(await f.capture.blocks.first?.translation == translation)
+    await #expect(throws: AIReflowFailure.invalidStructure) { try await envelope.finish() }
+    output += "," + (try f.line(4, "block_start", ["block_index": 1]))
+    output +=
+        "," + (try f.line(5, "translation_delta", ["block_index": 1, "parts": [["type": "text", "text": "第二。"]]]))
+    output += "," + (try f.line(6, "block_end", ["block_index": 1]))
+    output += "," + (try f.line(7, "window_end", ["block_count": 2])) + "]}\n"
+    try await envelope.consume(output)
+    try await envelope.finish()
+    #expect(await f.capture.blocks.count == 2)
+}
+
+@Test func aiReflowNativeEnvelopeRejectsInvalidWrappersDuplicatesAndTruncation() async throws {
+    for variant in 0..<12 {
+        let f = try ReflowFixture([TextBlock(sourcePage: 0, text: "Body.")])
+        let envelope = AIReflowEnvelopeStream(stream: f.stream)
+        let plan = try f.plan()
+        let output: String
+        switch variant {
+        case 0: output = "{}"
+        case 1: output = "{\"wrong\":[]}"
+        case 2: output = "{\"events\":[1]}"
+        case 3: output = "{\"events\":[" + plan + ",]}"
+        case 4: output = "{\"events\":[" + plan + "],\"extra\":true}"
+        case 5: output = "{\"events\":[" + plan + "],\"events\":[]}"
+        case 6: output = "{\"events\":[" + plan + "," + plan + "]}"
+        case 7: output = "{\"events\":[" + plan + "]} trailing"
+        case 8: output = "{\"events\":[" + plan + "]}{}"
+        case 9: output = "{\"events\":[" + plan + ","
+        case 10: output = "{\"events\":[{\"type\":\"window_plan\\"
+        default: output = plan
+        }
+        await #expect(throws: AIReflowFailure.invalidStructure) {
+            try await envelope.consume(output)
+            try await envelope.finish()
+        }
+        #expect(await f.capture.blocks.isEmpty)
+    }
+}
+
+@Test func aiReflowNativeEnvelopeBoundsResponsesAndKeepsAcceptedResumeIDs() async throws {
+    let source = TextBlock(sourcePage: 0, text: "Body.")
+    let original = try ReflowFixture([source])
+    try await original.stream.consume(original.plan())
+    let accepted = try #require(await original.capture.plans.first)
+    let resumed = try ReflowFixture([source], accepted: accepted, committed: [accepted.blocks[0].id])
+    let envelope = AIReflowEnvelopeStream(stream: resumed.stream)
+    let output =
+        try "{\"events\":[" + resumed.plan(ModelClient.wireBlocks(accepted))
+        + "," + resumed.line(1, "window_end", ["block_count": 1]) + "]}"
+    try await envelope.consume(output)
+    try await envelope.finish()
+    #expect(await resumed.capture.plans == [accepted])
+    #expect(await resumed.capture.blocks.isEmpty)
+    for text in [
+        "{\"events\":[{\"text\":\"" + String(repeating: "a", count: 65_536), String(repeating: " ", count: 2_000_001),
+    ] {
+        let f = try ReflowFixture([source])
+        let limited = AIReflowEnvelopeStream(stream: f.stream)
+        await #expect(throws: AIReflowFailure.invalidStructure) { try await limited.consume(text) }
+    }
+}
+
+private actor NativeReflowTransport: HTTPTransport {
+    var finishedEnvelope = false
+    var requestedNativeJSON = false
+    func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) { throw URLError(.unsupportedURL) }
+    func stream(for request: URLRequest, onData: @Sendable (Data) async throws -> Void) async throws -> HTTPURLResponse
+    {
+        let body = try #require(JSONSerialization.jsonObject(with: request.httpBody!) as? [String: Any])
+        requestedNativeJSON = (body["response_format"] as? [String: String]) == ["type": "json_object"]
+        let messages = try #require(body["messages"] as? [[String: Any]])
+        let inputText = try #require(messages.last?["content"] as? String)
+        let input = try #require(JSONSerialization.jsonObject(with: Data(inputText.utf8)) as? [String: Any])
+        let sources = try #require(input["sources"] as? [[String: Any]])
+        let source = try #require(sources.first)
+        func event(_ seq: Int, _ type: String, _ payload: [String: Any]) throws -> String {
+            var value: [String: Any] = [
+                "v": 1, "request_id": input["request_id"]!, "window_id": input["window_id"]!, "seq": seq, "type": type,
+            ]
+            value.merge(payload) { _, new in new }
+            return String(decoding: try JSONSerialization.data(withJSONObject: value), as: UTF8.self)
+        }
+        func sse(_ content: String) throws -> Data {
+            let payload: [String: Any] = ["choices": [["delta": ["content": content]]]]
+            return Data("data: ".utf8) + (try JSONSerialization.data(withJSONObject: payload)) + Data("\n\n".utf8)
+        }
+        let segment: [String: Any] = [
+            "source_id": source["source_id"]!, "start_utf16": 0, "end_utf16": source["end_utf16"]!,
+        ]
+        let block: [String: Any] = [
+            "block_index": 0, "kind": source["kind"]!, "source_segments": [segment], "object_refs": [],
+        ]
+        let records = try [
+            event(0, "window_plan", ["blocks": [block], "dispositions": [], "carry": []]),
+            event(1, "block_start", ["block_index": 0]),
+            event(2, "translation_delta", ["block_index": 0, "parts": [["type": "text", "text": "本地夹具。"]]]),
+            event(3, "block_end", ["block_index": 0]),
+        ]
+        try await onData(sse("{\"events\":[" + records.joined(separator: ",")))
+        try await onData(sse("," + event(4, "window_end", ["block_count": 1]) + "]}"))
+        finishedEnvelope = true
+        try await onData(
+            Data("data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n".utf8))
+        return HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+    }
+}
+
+@Test func aiReflowProductionClientUsesNativeJSONAndCommitsBeforeEnvelopeFinishes() async throws {
+    let transport = NativeReflowTransport()
+    let capture = ReflowCapture()
+    var settings = ModelSettings()
+    settings.model = "glm-5.3-flash"
+    try await ModelClient(transport: transport).reflowAndTranslate(
+        sources: [TextBlock(sourcePage: 0, text: "Local fixture.")], title: "Fixture", settings: settings,
+        key: "fixture-key",
+        onPlan: { await capture.plan($0) }, onDraft: { _, text in await capture.draft(text) },
+        onBlock: { pair, ids in
+            #expect(await transport.finishedEnvelope == false)
+            await capture.block(pair, ids)
+        })
+    #expect(await transport.requestedNativeJSON)
+    #expect(await capture.blocks.count == 1)
+    #expect(await capture.blocks.first?.translation == "本地夹具。")
 }
