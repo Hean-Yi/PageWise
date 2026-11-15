@@ -58,6 +58,48 @@ import Testing
     #expect(try PDFRegionalReflow.recover(page, sourcePage: 0) == nil)
 }
 
+@Test func regionalTwoColumnEquationRetainsSourceWithoutPublishingCrossColumnOrder() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    let file = root.appendingPathComponent("two-column-equation.pdf")
+    var bounds = CGRect(x: 0, y: 0, width: 612, height: 792)
+    let context = try #require(CGContext(file as CFURL, mediaBox: &bounds, nil))
+    context.beginPDFPage(nil)
+    for (text, y) in [
+        ("The first left sentence comes before the equation.", 710.0),
+        ("Another left sentence continues this first paragraph.", 685.0),
+        ("The next left sentence follows the retained equation.", 490.0),
+        ("The last left sentence completes the entire left column.", 465.0),
+    ] {
+        regionalText(text, y: y, size: 8, x: 54, context: context)
+    }
+    regionalText("z = ∑ x + y", y: 600, size: 12, x: 54, context: context)
+    for (text, y) in [
+        ("The first right sentence follows the whole left column.", 710.0),
+        ("Another right sentence continues this separate column.", 685.0),
+        ("The next right sentence continues its original argument.", 490.0),
+        ("The last right sentence ends this original source page.", 465.0),
+    ] {
+        regionalText(text, y: y, size: 8, x: 330, context: context)
+    }
+    context.endPDFPage()
+    context.closePDF()
+    let original = try Data(contentsOf: file)
+    let document = try #require(PDFDocument(url: file))
+    let page = try #require(document.page(at: 0))
+    let source = try #require(page.string)
+    #expect(source.contains("∑"))
+    #expect(try PDFRegionalReflow.recover(page, sourcePage: 0) == nil)
+    let result = try PDFProcessor.extract(from: document, preservingComplexPages: true)
+    #expect(result.blocks.count == 1)
+    #expect(result.blocks.first?.preservesSourcePage == true)
+    #expect(result.blocks.first?.sourcePage == 0)
+    #expect(result.blocks.first?.text == source)
+    #expect(!result.canReflow)
+    #expect(try Data(contentsOf: file) == original)
+}
+
 private func regionalText(_ text: String, y: CGFloat, size: CGFloat = 12, x: CGFloat = 54, context: CGContext) {
     let attributes: [NSAttributedString.Key: Any] = [
         .init(kCTFontAttributeName as String): CTFontCreateWithName("Helvetica" as CFString, size, nil)

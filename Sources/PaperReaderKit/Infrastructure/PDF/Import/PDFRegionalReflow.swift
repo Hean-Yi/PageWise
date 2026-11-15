@@ -66,6 +66,14 @@ enum PDFRegionalReflow {
         // Regions span the page width so parallel labels/columns cannot be clipped or emitted twice.
         // Expand only through line centers: oversized glyph boxes must not absorb neighboring prose.
         regions = bands(regions, bounds: bounds, lines: lines)
+        if !regions.isEmpty {
+            // Cutting a multicolumn page into full-width bands would read the top of the
+            // right column before the bottom of the left. Preserve the page until crops
+            // have reliable per-column ownership rather than publishing false precedence.
+            let wholePageLayout = PDFProcessor.orderedColumns(
+                sourceRows.map { merge($0, bounds: bounds) }, pageBounds: bounds)
+            guard wholePageLayout.reliable, wholePageLayout.groups.count == 1 else { return nil }
+        }
         var result: [TextBlock] = []
         var top = bounds.maxY
         var proseCharacters = 0
