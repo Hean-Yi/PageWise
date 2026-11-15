@@ -8,7 +8,7 @@ enum HTMLNoteLiftScript {
           const host=document.createElement('div');host.id='reader-note-lift';host.setAttribute('aria-hidden','true');document.body.append(host);
           let current=null,timer=null;
           const clear=()=>{clearTimeout(timer);timer=null;current?.animation?.cancel();current=null;host.replaceChildren();CSS.highlights?.delete('note-lift');selection.liftRanges([]);document.querySelectorAll('.note-wave').forEach(p=>p.removeAttribute('mask'));document.getElementById('note-wave-cutouts')?.remove();};
-          const boxes=range=>[...range.getClientRects()].filter(r=>r.width>.01&&r.height>0);
+          const boxes=range=>selection.lineRanges(range).flatMap(r=>[...r.getClientRects()]).filter(r=>r.width>.01&&r.height>0);
           const paintBox=(rect,kind,color)=>{
             const e=document.createElement('i');e.className=kind;
             Object.assign(e.style,{left:rect.left+'px',top:(rect.top+scrollY)+'px',width:rect.width+'px',height:rect.height+'px',background:color});return e;

@@ -248,11 +248,22 @@
             window.section=document.querySelector('section');window.cn=section.querySelector('.translation');
             cn.firstChild.data='\n  '+cn.textContent+'\n';window.before=section.innerHTML;
             paperSelection.highlights([{key:section.dataset.key,text:'Original evidence.',range:[0,18],sourceOnly:true}]);
+            window.initialLines=[...CSS.highlights.get('saved')].filter(r=>r.startContainer===cn.firstChild);
+            window.initialBoxes=initialLines.flatMap(r=>[...r.getClientRects()]).filter(r=>r.width>.01&&r.height>0).map(r=>({left:r.left,top:r.top+scrollY,width:r.width,height:r.height}));
             window.r=document.createRange();r.setStart(cn.firstChild,3);r.setEnd(cn.firstChild,5);window.box=r.getBoundingClientRect();
             window.clickAt=(x,y)=>{cn.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,clientX:x,clientY:y}));cn.dispatchEvent(new MouseEvent('click',{bubbles:true,clientX:x,clientY:y}));};
             clickAt(box.left-2,(box.top+box.bottom)/2);
             """#)
         #expect(try await noteJS(web, "return paperNotes.editing()") as? Bool == false)
+        #expect(
+            try await noteJS(
+                web,
+                #"""
+                const painted=[...document.querySelectorAll('#reader-annotation-backgrounds span')];
+                return initialLines.length>3 && initialLines.every(r=>[...r.getClientRects()].filter(b=>b.width>.01&&b.height>0).length===1)
+                  && initialBoxes.every(b=>painted.some(e=>['left','top','width','height'].every(k=>Math.abs(parseFloat(e.style[k])-b[k])<.5)));
+                """#
+            ) as? Bool == true)
         _ = try await noteJS(web, "clickAt(box.left+2,(box.top+box.bottom)/2)")
         try await noteWait {
             (try? await noteJS(web, "return document.querySelectorAll('#reader-note-lift span').length>0")) as? Bool
@@ -265,8 +276,37 @@
                 web,
                 #"""
                 const spans=[...document.querySelectorAll('#reader-note-lift span')];
-                return section.innerHTML===before && spans.every(s=>!s.textContent.includes('\n') && getComputedStyle(s).fontFamily===getComputedStyle(cn).fontFamily && parseFloat(s.style.lineHeight)<parseFloat(getComputedStyle(cn).lineHeight))
+                const backgrounds=[...document.querySelectorAll('.note-lift-highlight')];
+                return backgrounds.length===initialBoxes.length && backgrounds.every((e,i)=>['left','top','width','height'].every(k=>Math.abs(parseFloat(e.style[k])-initialBoxes[i][k])<.5))
+                    && section.innerHTML===before && spans.every(s=>!s.textContent.includes('\n') && getComputedStyle(s).fontFamily===getComputedStyle(cn).fontFamily && parseFloat(s.style.lineHeight)<parseFloat(getComputedStyle(cn).lineHeight))
                     && Math.abs(parseFloat(spans[0].style.top)-box.top-scrollY)<1;
+                """#) as? Bool == true)
+        _ = try await noteJS(web, "paperNotes.finish()")
+        try await noteWait {
+            (try? await noteJS(web, "return !document.querySelector('.note-lift-group')")) as? Bool == true
+        }
+        // The reported case ends partway through a line while the remaining highlight continues below.
+        _ = try await noteJS(
+            web,
+            #"""
+            window.cut=initialLines[3].startOffset+5;
+            paperSelection.restore([{key:section.dataset.key,target:'translation',start:3,end:cut,text:cn.textContent.slice(3,cut)}]);paperNotes.begin();
+            """#)
+        try await noteWait {
+            (try? await noteJS(web, "return !!document.querySelector('.note-lift-highlight')")) as? Bool == true
+        }
+        #expect(
+            try await noteJS(
+                web,
+                #"""
+                const rest=[...CSS.highlights.get('saved')].filter(r=>r.startContainer===cn.firstChild);
+                const lifted=[...document.querySelectorAll('.note-lift-highlight')];
+                const tail=rest[0].getBoundingClientRect(),last=lifted.at(-1);
+                return rest[0].startOffset===cut && lifted.length===4
+                  && rest.every(r=>[...r.getClientRects()].filter(b=>b.width>.01&&b.height>0).length===1)
+                  && Math.abs(parseFloat(last.style.left)+parseFloat(last.style.width)-tail.left)<.5
+                  && Math.abs(parseFloat(last.style.top)-tail.top-scrollY)<.5
+                  && Math.abs(parseFloat(last.style.height)-tail.height)<.5 && section.innerHTML===before;
                 """#) as? Bool == true)
         _ = try await noteJS(web, "paperNotes.finish()")
         model.select(nil)

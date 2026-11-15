@@ -101,6 +101,8 @@ HTML 文件使用进程内引用计数保护 WebKit 当前载入的文件：清�
 
 `Domain/Reading/AnnotationRangeEditor` 负责选区减去旧范围并保留两侧片段，颜色与样式为 Highlight 的可选字段，旧记录默认黄色高亮。`Application/Reading/HTMLAnnotationActions` 协调旧坐标投影校验、范围编辑及选区书签持久化；`Platform/HTML/HTMLAnnotationMenuScript` 只负责浮层、选区覆盖状态和动作消息。下划线用独立覆盖层绘制，窗口/正文尺寸变化时重新定位，不包装或替换正文节点。旧坐标只在用户实际编辑命中记录时显式转换，未命中记录保持原样。
 
+文字标记底色和临时选区底色在正文下方显式按行绘制，CSS Highlight 仅提供前景色。静止与笔记上浮共用 `lineRanges` 的实际字形矩形，避免 WebKit 将跨行范围合并并额外填充行间空白，导致局部抬起时底色高度变化。尺寸变化和字体就绪时刷新两种底色，滚动保持文档坐标，不重新拆行；保存坐标仍为完整字符范围。
+
 
 ## HTML 阅读笔记
 

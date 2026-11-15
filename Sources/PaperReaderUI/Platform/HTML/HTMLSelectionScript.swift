@@ -67,6 +67,22 @@ enum HTMLSelectionScript {
             return '[公式] '+text;
           };
           let parts=[],savedMarks=[],lifted=[];const painted=new Map();
+          // WebKit fills inter-line gaps for one multiline Highlight range, but DOM rectangles do not.
+          // Give both native paint and the lifted copy the same line fragments, including partial last lines.
+          const lineRanges=range=>{
+            if(range.startContainer!==range.endContainer||range.startContainer.nodeType!==3)return [range];
+            const measured=[...range.getClientRects()].filter(b=>b.width>.01&&b.height>0);if(measured.length<=1)return measured.length?[range]:[];
+            const node=range.startContainer,end=range.endOffset,result=[];
+            const boxAt=offset=>{const r=document.createRange();r.setStart(node,offset);r.setEnd(node,Math.min(end,offset+1));return [...r.getClientRects()].filter(b=>b.width>.01&&b.height>0).at(-1);};
+            let start=range.startOffset;
+            while(start<end){
+              const first=boxAt(start);if(!first){start++;continue;}
+              let low=start+1,high=end;
+              while(low<high){const mid=Math.floor((low+high)/2),box=boxAt(mid);if(box&&box.top>first.top+2)high=mid;else low=mid+1;}
+              const fragment=document.createRange();fragment.setStart(node,start);fragment.setEnd(node,low);result.push(fragment);start=low;
+            }
+            return result;
+          };
           // Temporary paint exclusions never change the saved anchors or published text.
           const visibleRanges=ranges=>ranges.flatMap(range=>{
             if(range.startContainer!==range.endContainer)return [range];
@@ -78,13 +94,26 @@ enum HTMLSelectionScript {
           });
           const colors={yellow:'#f2d36b',red:'#f5aaa6',green:'#b7db9e',blue:'#b5d5f8',purple:'#cbb7ed',pink:'#edbdd8',orange:'#f5c28f',gray:'#d1d4d7'};
           const style=document.createElement('style');
-          style.textContent='#reader::selection,#reader ::selection{background:transparent;color:inherit}::highlight(reader-selection){background:rgba(35,42,50,.22);color:inherit}[data-reader-selected]{outline:2px solid #424953!important;outline-offset:2px}[data-reader-saved]{outline:2px solid #c9a331;outline-offset:2px}';
+          style.textContent='#reader{position:relative;z-index:1}#reader::selection,#reader ::selection{background:transparent;color:inherit}::highlight(reader-selection){background:transparent;color:inherit}[data-reader-selected]{outline:2px solid #424953!important;outline-offset:2px}[data-reader-saved]{outline:2px solid #c9a331;outline-offset:2px}';
           for(const [color,hex] of Object.entries(colors)) for(const kind of ['highlight','underline']) {
             const name=color==='yellow' && kind==='highlight' ? 'saved' : 'saved-'+color+'-'+kind;
-            style.textContent+='::highlight('+name+'){'+(kind==='highlight' ? 'background:'+hex+';color:#292e2e' : 'background:transparent')+'}';
+            style.textContent+='::highlight('+name+'){background:transparent;'+(kind==='highlight' ? 'color:#292e2e' : '')+'}';
             style.textContent+='[data-reader-saved="'+color+'-'+kind+'"]{'+(kind==='highlight' ? 'outline:2px solid '+hex : 'outline:none;box-shadow:0 3px 0 '+hex)+'}';
           }
           if(CSS.highlights) document.head.append(style);
+          // WebKit can coalesce adjacent highlight fragments and refill line gaps. Paint backgrounds
+          // explicitly beneath the unchanged reader; native Highlight still supplies text foreground colors.
+          const backgrounds=new Map();
+          for(const name of ['saved','reader-selection']){
+            const layer=document.createElement('div');layer.id=name==='saved'?'reader-annotation-backgrounds':'reader-selection-backgrounds';
+            layer.setAttribute('aria-hidden','true');layer.style.cssText='position:absolute;left:0;top:0;width:100%;height:0;pointer-events:none;z-index:0';document.body.append(layer);backgrounds.set(name,layer);
+          }
+          const background=(ranges,color,name)=>{
+            for(const range of ranges.flatMap(lineRanges))for(const r of range.getClientRects()){
+              if(r.width<=.01||r.height<=0)continue;
+              const e=document.createElement('span');e.style.cssText='position:absolute;left:'+(r.left+scrollX)+'px;top:'+(r.top+scrollY)+'px;width:'+r.width+'px;height:'+r.height+'px;background:'+color;backgrounds.get(name).append(e);
+            }
+          };
           const underlineLayer=document.createElement('div');underlineLayer.id='reader-annotation-lines';
           underlineLayer.setAttribute('aria-hidden','true');
           underlineLayer.style.cssText='position:absolute;left:0;top:0;width:100%;height:0;pointer-events:none;z-index:1';
@@ -97,6 +126,7 @@ enum HTMLSelectionScript {
             }
           };
           const render = (marks,name,attribute) => {
+            backgrounds.get(name)?.replaceChildren();
             if(name==='saved')underlineLayer.replaceChildren();
             root.querySelectorAll('['+attribute+']').forEach(e=>e.removeAttribute(attribute));
             if(!CSS.highlights) return;
@@ -129,7 +159,9 @@ enum HTMLSelectionScript {
             if(!groups.has(name)) groups.set(name,[]);
             for(const [group,ranges] of groups) {
               painted.set(group,ranges);
-              const highlight=new Highlight(...visibleRanges(ranges));
+              const visible=visibleRanges(ranges),selected=name==='reader-selection';
+              if(selected||!group.endsWith('-underline'))background(visible,selected?'rgba(35,42,50,.22)':colors[group==='saved'?'yellow':group.split('-')[1]],name);
+              const highlight=new Highlight(...visible.flatMap(lineRanges));
               // Composite the translucent selection above every saved annotation, regardless of insertion order.
               highlight.priority=name==='reader-selection' ? 100 : 0;
               CSS.highlights.set(group,highlight);
@@ -232,10 +264,11 @@ enum HTMLSelectionScript {
             });
             return result;
           };
-          window.addEventListener('resize',()=>render(savedMarks,'saved','data-reader-saved'));
-          const layoutObserver=new ResizeObserver(()=>render(savedMarks,'saved','data-reader-saved'));
+          const repaint=()=>{render(savedMarks,'saved','data-reader-saved');paint();};
+          window.addEventListener('resize',repaint);
+          const layoutObserver=new ResizeObserver(repaint);
           layoutObserver.observe(root);
-          document.fonts?.ready.then(()=>render(savedMarks,'saved','data-reader-saved'));
+          document.fonts?.ready.then(repaint);
           const rangesFor=part=>{
             const block=document.getElementById('block-'+part.key);if(!block)return [];
             if(part.target?.startsWith('object:')) {
@@ -261,6 +294,7 @@ enum HTMLSelectionScript {
             clear(){getSelection()?.removeAllRanges();parts=[];paint();window.paperAnnotationMenu?.hide();},
             selectObject(element){const range=document.createRange();range.selectNode(element);const s=getSelection();s.removeAllRanges();s.addRange(range);update();},
             copyText,
+            lineRanges,
             rangesFor,
             restore(anchors){parts=anchors.filter(a=>rangesFor(a).length).map(a=>({...a,highlightStart:a.start,highlightEnd:a.end}));publish();},
             parts:()=>parts,
