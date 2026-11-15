@@ -202,5 +202,5 @@ struct AIReflowEvidence: Sendable {
         text.replacingOccurrences(of: "&", with: "&amp;").replacingOccurrences(of: "<", with: "&lt;")
             .replacingOccurrences(of: ">", with: "&gt;")
     }
-    static func invalid() -> ReaderError { .message("AI 重排结构与原文证据不一致，已停止；已完成内容仍保留。") }
+    static func invalid() -> AIReflowFailure { .invalidStructure }
 }

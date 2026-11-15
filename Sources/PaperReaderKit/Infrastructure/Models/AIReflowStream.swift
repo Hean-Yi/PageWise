@@ -77,14 +77,14 @@ actor AIReflowStream {
             try await event(line)
         }
         guard ended, current == nil, let plan, index == plan.blocks.count else {
-            throw ReaderError.message("AI 重排流尚未完整结束，可从已保存的段落继续。")
+            throw AIReflowEvidence.invalid()
         }
     }
 
     private func event(_ line: String) async throws {
         guard !ended, line.utf8.count <= 65_536, sequence < 4096,
             let data = line.data(using: .utf8),
-            let value = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let value = try Self.object(from: data) as? [String: Any],
             let type = value["type"] as? String
         else { throw AIReflowEvidence.invalid() }
         let common: Set<String> = ["v", "request_id", "window_id", "seq", "type"]
@@ -97,7 +97,7 @@ actor AIReflowStream {
         default: throw AIReflowEvidence.invalid()
         }
         try Self.keys(value, common.union(extra))
-        let header = try JSONDecoder().decode(Header.self, from: data)
+        let header = try Self.decode(Header.self, from: data)
         guard header.v == 1, header.requestID == requestID, header.windowID == windowID,
             header.seq == sequence
         else { throw AIReflowEvidence.invalid() }
@@ -254,7 +254,17 @@ actor AIReflowStream {
     private static func integer(_ value: [String: Any], _ key: String) throws -> Int {
         guard let raw = value[key] else { throw AIReflowEvidence.invalid() }
         let data = try JSONSerialization.data(withJSONObject: raw, options: .fragmentsAllowed)
-        return try JSONDecoder().decode(Int.self, from: data)
+        return try decode(Int.self, from: data)
+    }
+    // Normalize only model parsing operations. A broad catch around consume/finish
+    // would incorrectly relabel a decoding or Cocoa error thrown by a storage callback.
+    private static func object(from data: Data) throws -> Any {
+        do { return try JSONSerialization.jsonObject(with: data) } catch { throw AIReflowEvidence.invalid() }
+    }
+    private static func decode<Value: Decodable>(_ type: Value.Type, from data: Data) throws -> Value {
+        do { return try JSONDecoder().decode(type, from: data) } catch is DecodingError {
+            throw AIReflowEvidence.invalid()
+        }
     }
     private struct Header: Decodable {
         let v: Int

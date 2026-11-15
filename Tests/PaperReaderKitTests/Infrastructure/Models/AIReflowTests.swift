@@ -443,3 +443,77 @@ private actor ReflowRequestTransport: HTTPTransport {
     #expect(try translated.select("img,script").isEmpty())
     #expect(try translated.html().contains("&lt;img"))
 }
+
+@Test func aiReflowNormalizesOnlyMalformedModelJSONAndTypes() async throws {
+    let source = TextBlock(sourcePage: 0, text: "Body.")
+    for variant in 0..<5 {
+        let f = try ReflowFixture([source])
+        switch variant {
+        case 0:
+            await #expect(throws: AIReflowFailure.invalidStructure) { try await f.stream.consume("{broken\n") }
+        case 1:
+            try await f.stream.consume("{broken")
+            await #expect(throws: AIReflowFailure.invalidStructure) { try await f.stream.finish() }
+        case 2:
+            let output = try f.line(
+                0, "window_plan", ["blocks": f.blocks(), "dispositions": [], "carry": [], "seq": "0"])
+            await #expect(throws: AIReflowFailure.invalidStructure) { try await f.stream.consume(output) }
+        case 3:
+            let output = try f.plan() + f.line(1, "block_start", ["block_index": "0"])
+            await #expect(throws: AIReflowFailure.invalidStructure) { try await f.stream.consume(output) }
+        default:
+            try await f.stream.consume(f.plan())
+            await #expect(throws: AIReflowFailure.invalidStructure) { try await f.stream.finish() }
+        }
+    }
+    #expect(AIReflowFailure.invalidStructure.localizedDescription.contains("此前已完成的内容已保留"))
+}
+
+@Test func aiReflowPreservesCallbackDecodingAndCancellationErrors() async throws {
+    let source = TextBlock(sourcePage: 0, text: "Body.")
+    for boundary in 0..<3 {
+        let f = try ReflowFixture([source])
+        let callbackFailure = DecodingError.dataCorrupted(
+            .init(codingPath: [], debugDescription: "fixture storage failure"))
+        let stream = try AIReflowStream(
+            evidence: f.evidence, requestID: f.requestID, windowID: f.windowID, configurationDigest: "test",
+            acceptedPlan: nil, committed: [],
+            onPlan: { _ in if boundary == 0 { throw callbackFailure } },
+            onDraft: { _, _ in if boundary == 1 { throw callbackFailure } },
+            onBlock: { _, _ in if boundary == 2 { throw callbackFailure } })
+        let output =
+            try f.plan() + f.line(1, "block_start", ["block_index": 0])
+            + f.line(2, "translation_delta", ["block_index": 0, "parts": [["type": "text", "text": "正文。"]]])
+            + f.line(3, "block_end", ["block_index": 0])
+        await #expect(throws: DecodingError.self) { try await stream.consume(output) }
+    }
+    let f = try ReflowFixture([source])
+    let cancelled = try AIReflowStream(
+        evidence: f.evidence, requestID: f.requestID, windowID: f.windowID, configurationDigest: "test",
+        acceptedPlan: nil, committed: [], onPlan: { _ in throw CancellationError() },
+        onDraft: { _, _ in }, onBlock: { _, _ in })
+    await #expect(throws: CancellationError.self) { try await cancelled.consume(f.plan()) }
+}
+
+private struct OfflineReflowTransport: HTTPTransport {
+    func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        throw URLError(.notConnectedToInternet)
+    }
+}
+
+@Test func aiReflowDoesNotRelabelConfigurationOrNetworkFailures() async throws {
+    let client = ModelClient(transport: OfflineReflowTransport())
+    let source = TextBlock(sourcePage: 0, text: "Offline fixture.")
+    await #expect(throws: ReaderError.self) {
+        try await client.reflowAndTranslate(
+            sources: [source], title: "Fixture", settings: ModelSettings(), key: "fixture-key",
+            onPlan: { _ in }, onDraft: { _, _ in }, onBlock: { _, _ in })
+    }
+    var settings = ModelSettings()
+    settings.model = "fixture-model"
+    await #expect(throws: URLError.self) {
+        try await client.reflowAndTranslate(
+            sources: [source], title: "Fixture", settings: settings, key: "fixture-key",
+            onPlan: { _ in }, onDraft: { _, _ in }, onBlock: { _, _ in })
+    }
+}
