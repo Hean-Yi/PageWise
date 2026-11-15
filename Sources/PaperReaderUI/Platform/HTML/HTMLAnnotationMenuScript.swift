@@ -49,7 +49,6 @@ enum HTMLAnnotationMenuScript {
               if(!m.parts.length && parts.some(p=>p.key===m.key)){send({kind:'annotationError'});return;}
               if(m.parts.some(p=>parts.some(s=>overlap({...p,key:m.key},s))))legacy.push({id:m.id,parts:m.parts});
             }
-            selection.revealAnnotation();
             send({kind:'annotationAction',color,style:mode,remove,legacy});
           };
           for(const [key,[label,hex]] of Object.entries(colors)){

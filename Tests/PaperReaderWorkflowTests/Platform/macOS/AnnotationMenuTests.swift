@@ -46,7 +46,7 @@
             (try? await menuJS(web, "return !document.querySelector('#annotation-menu .remove').hidden")) as? Bool
                 == true
         }
-        #expect(try await menuJS(web, "return CSS.highlights.get('reader-selection').size") as? Int == 0)
+        #expect(try await menuJS(web, "return CSS.highlights.get('reader-selection').size") as? Int == 1)
         _ = try await menuJS(web, "getSelection().setBaseAndExtent(p.firstChild,6,p.firstChild,16)")
         try await menuWait { model.selectionText == "beta gamma" }
         _ = try await menuJS(web, "document.querySelector('[data-color=blue]').click()")
@@ -66,6 +66,15 @@
             try await menuJS(
                 web, "return document.querySelector('#reader-annotation-lines span')?.style.borderBottomStyle")
                 as? String == "solid")
+        #expect(
+            try await menuJS(web, "return [...CSS.highlights.get('reader-selection')].map(r=>r.toString()).join('')")
+                as? String == "beta gamma")
+        #expect(
+            try await menuJS(
+                web,
+                "return CSS.highlights.get('reader-selection').priority > CSS.highlights.get('saved-blue-underline').priority"
+            ) as? Bool == true)
+        #expect(try await menuJS(web, "return !getSelection().isCollapsed") as? Bool == true)
         // Mixed new + previously annotated content; outside fragments must keep their old style.
         _ = try await menuJS(web, "getSelection().setBaseAndExtent(p.firstChild,11,p.firstChild,30)")
         try await menuWait { model.selectionText == "gamma delta epsilon" }
@@ -123,6 +132,19 @@
         #expect(
             model.state.highlights.filter { $0.htmlTarget == "source" }.sorted { $0.textRange![0] < $1.textRange![0] }
                 .map(\.text) == ["Alpha ", "beta", " gamma"])
+        // A menu focus change can collapse WebKit's native selection; the logical selection must survive.
+        _ = try await menuJS(
+            web,
+            "document.querySelector('[data-color=red]').dispatchEvent(new Event('focusin',{bubbles:true}));getSelection().removeAllRanges()"
+        )
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(model.selectionText == "beta")
+        #expect(try await menuJS(web, "return CSS.highlights.get('reader-selection').size") as? Int == 1)
+        // Clicking elsewhere clears even the preserved logical range.
+        _ = try await menuJS(
+            web, "p.dispatchEvent(new Event('pointerdown',{bubbles:true}));getSelection().collapse(p.firstChild,0)")
+        try await menuWait { model.selectionText.isEmpty }
+        #expect(try await menuJS(web, "return CSS.highlights.get('reader-selection').size") as? Int == 0)
         model.select(nil)
     }
 

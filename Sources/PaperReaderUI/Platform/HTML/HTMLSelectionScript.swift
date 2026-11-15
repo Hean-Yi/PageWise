@@ -66,23 +66,10 @@ enum HTMLSelectionScript {
             const text=element.getAttribute('alttext') || tex?.textContent || nodes(element).map(n=>n.data.trim()).join('');
             return '[公式] '+text;
           };
-          const wordBounds = (text,start,end) => {
-            const originalStart=start;
-            // ASCII/Latin scientific terms, including apostrophes and internal hyphens.
-            const words=/[\p{L}\p{N}\p{M}]+(?:['’\-‐‑][\p{L}\p{N}\p{M}]+)*/gu;
-            for(const match of text.matchAll(words)) {
-              const a=match.index,b=a+match[0].length;
-              if(a<start && start<b) start=b;
-              if(a<end && end<b) end=a;
-            }
-            while(start<end && /\s/.test(text[start])) start++;
-            while(end>start && /\s/.test(text[end-1])) end--;
-            return start<end ? [start,end] : [originalStart,originalStart];
-          };
-          let parts=[],savedMarks=[],emphasized=true;
+          let parts=[],savedMarks=[];
           const colors={yellow:'#ead078',red:'#e69a96',green:'#a9c995',blue:'#9dbfe2',purple:'#bda7d7',pink:'#dba7c3',orange:'#e6b184',gray:'#bdc0c4'};
           const style=document.createElement('style');
-          style.textContent='#reader::selection,#reader ::selection{background:transparent;color:inherit}::highlight(reader-selection){background:#b5d5f8;color:inherit}[data-reader-selected]{outline:2px solid #83b3ed;outline-offset:2px}[data-reader-saved]{outline:2px solid #c9a331;outline-offset:2px}';
+          style.textContent='#reader::selection,#reader ::selection{background:transparent;color:inherit}::highlight(reader-selection){background:rgba(35,42,50,.22);color:inherit}[data-reader-selected]{outline:2px solid #424953!important;outline-offset:2px}[data-reader-saved]{outline:2px solid #c9a331;outline-offset:2px}';
           for(const [color,hex] of Object.entries(colors)) for(const kind of ['highlight','underline']) {
             const name=color==='yellow' && kind==='highlight' ? 'saved' : 'saved-'+color+'-'+kind;
             style.textContent+='::highlight('+name+'){'+(kind==='highlight' ? 'background:'+hex+';color:#292e2e' : 'background:transparent')+'}';
@@ -131,14 +118,19 @@ enum HTMLSelectionScript {
             }
             if(name==='saved') for(const key of [...CSS.highlights.keys()]) if(key==='saved' || key.startsWith('saved-')) CSS.highlights.delete(key);
             if(!groups.has(name)) groups.set(name,[]);
-            for(const [group,ranges] of groups) CSS.highlights.set(group,new Highlight(...ranges));
+            for(const [group,ranges] of groups) {
+              const highlight=new Highlight(...ranges);
+              // Composite the translucent selection above every saved annotation, regardless of insertion order.
+              highlight.priority=name==='reader-selection' ? 100 : 0;
+              CSS.highlights.set(group,highlight);
+            }
           };
-          const paint = () => render(emphasized ? parts : [],'reader-selection','data-reader-selected');
+          const paint = () => render(parts,'reader-selection','data-reader-selected');
           const publish = () => {paint();send({kind:'selection',parts});window.paperAnnotationMenu?.selectionChanged();};
           const update = () => {
             const selection=getSelection();
             if(selection?.isCollapsed && window.paperAnnotationMenu?.preservingSelection())return;
-            parts=[];emphasized=true;
+            parts=[];
             if(selection && !selection.isCollapsed && selection.rangeCount) {
               const range=selection.getRangeAt(0);
               const chosen=language(selection.anchorNode) || language(selection.focusNode) || 'source';
@@ -174,9 +166,8 @@ enum HTMLSelectionScript {
                 }
                 for(const entry of merged) {
                   if(!entry.text.trim()) continue;
-                  const bounds=entry.target==='source' ? wordBounds(text,entry.start,entry.end) : [entry.start,entry.end];
                   parts.push({key:block.dataset.key,target:entry.target,start:entry.start,end:entry.end,text:entry.text,
-                    highlightStart:bounds[0],highlightEnd:bounds[1]});
+                    highlightStart:entry.start,highlightEnd:entry.end});
                 }
               }
             }
@@ -242,8 +233,7 @@ enum HTMLSelectionScript {
             copyText,
             parts:()=>parts,
             projectedMarks:()=>savedMarks.map(mark=>({...mark,parts:projected(mark)})),
-            selectionBounds(){const rectangles=[];for(const part of parts){const block=document.getElementById('block-'+part.key);if(!block)continue;if(part.target.startsWith('object:')){const e=objects(block)[Number(part.target.slice(7))];if(e)rectangles.push(e.getBoundingClientRect());}else for(const r of slices(nodes(block,part.target),part.start,part.end))rectangles.push(...r.getClientRects());}return rectangles.filter(r=>r.bottom>0 && r.top<innerHeight);},
-            revealAnnotation(){emphasized=false;paint();}
+            selectionBounds(){const rectangles=[];for(const part of parts){const block=document.getElementById('block-'+part.key);if(!block)continue;if(part.target.startsWith('object:')){const e=objects(block)[Number(part.target.slice(7))];if(e)rectangles.push(e.getBoundingClientRect());}else for(const r of slices(nodes(block,part.target),part.start,part.end))rectangles.push(...r.getClientRects());}return rectangles.filter(r=>r.bottom>0 && r.top<innerHeight);}
           };
         })();
         """#

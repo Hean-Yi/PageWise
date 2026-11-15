@@ -100,7 +100,7 @@
         try await waitForSelection(model, count: 2)
         #expect(model.htmlSelection.first?.text.hasPrefix("original evidence") == true)
         // Incomplete word, incomplete sentence, and sentence ending inside a word.
-        for (end, expected) in [(2, ""), (18, "The model improves"), (22, "The model improves")] {
+        for (end, expected) in [(2, "Th"), (18, "The model improves"), (22, "The model improves acc")] {
             _ = try await js(
                 web, "const n=blocks[2].querySelector('p').firstChild;getSelection().setBaseAndExtent(n,0,n,\(end))")
             try await waitForSelection(model, count: 1, text: String(third.text.prefix(end)))
@@ -109,13 +109,14 @@
             #expect(model.state.highlights.count == count + (expected.isEmpty ? 0 : 1))
             if !expected.isEmpty { #expect(model.state.highlights.last?.text == expected) }
         }
-        // Selecting only the middle of a word must also produce no highlight.
+        // Selecting the middle of a word saves exactly those characters.
         _ = try await js(
             web, "const n=blocks[2].querySelector('p').firstChild;getSelection().setBaseAndExtent(n,5,n,7)")
         try await waitForSelection(model, count: 1, text: "od")
         let count = model.state.highlights.count
         model.highlightSelection()
-        #expect(model.state.highlights.count == count)
+        #expect(model.state.highlights.count == count + 1)
+        #expect(model.state.highlights.last?.text == "od")
         // Later Chinese publication must not expand English highlights into Chinese.
         paper.htmlReading = try await store.append(
             [BilingualBlock(block: third, translation: "后来完成的译文。")], to: paper.htmlReading, paper: paper, root: root)
@@ -143,7 +144,7 @@
         await model.flushReadingPosition()
         let reopened = try ReaderModel(root: root)
         await reopened.load()
-        #expect(reopened.state.highlights.count == 5)
+        #expect(reopened.state.highlights.count == 7)
         #expect(reopened.state.highlights.allSatisfy { $0.htmlTarget != nil && $0.linksTranslation == nil })
         // Legacy coordinates keep their old meaning, including a translation-only highlight.
         let legacy = "return blocks[0].textContent.indexOf('首段中文意译。')"
