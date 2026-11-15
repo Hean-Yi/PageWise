@@ -52,6 +52,7 @@
             web,
             "window.blocks=[...document.querySelectorAll('section')];window.firstNode=blocks[0].querySelector('p');window.firstHTML=blocks[0].innerHTML;"
         )
+        var expectedNotes = 0
         for target in [".translation", "p"] {
             _ = try await sharedJS(
                 web,
@@ -78,6 +79,23 @@
                     web,
                     "const data=new DataTransfer();document.dispatchEvent(new ClipboardEvent('copy',{clipboardData:data,cancelable:true}));return data.getData('text/plain')"
                 ) as? String == model.selectionText)
+            _ = try await sharedJS(
+                web,
+                "paperNotes.begin();const e=document.querySelector('#annotation-menu').closest('.reader-note-card').querySelector('textarea');e.value='跨段图表笔记';e.dispatchEvent(new Event('input',{bubbles:true}))"
+            )
+            expectedNotes += 1
+            for _ in 0..<100 {
+                if model.currentReadingNotes.count == expectedNotes { break }
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            let note = try #require(model.currentReadingNotes.last)
+            #expect(note.anchors.filter { $0.target.hasPrefix("object:") }.count == 4)
+            #expect(
+                note.anchors.allSatisfy {
+                    $0.target.hasPrefix("object:") || $0.target == (target == "p" ? "source" : "translation")
+                })
+            #expect(!note.anchors.map(\.text).joined().contains(target == "p" ? "中文" : "English caption"))
+            _ = try await sharedJS(web, "paperNotes.finish()")
         }
         coordinator.update(web)
         for _ in 0..<100 {
@@ -101,6 +119,8 @@
         await model.flushReadingPosition()
         let reopened = try ReaderModel(root: root)
         await reopened.load()
+        #expect(reopened.state.readingNotes.count == 2)
+        #expect(reopened.state.readingNotes.allSatisfy { $0.markdown == "跨段图表笔记" })
         #expect(reopened.state.highlights.filter { $0.htmlTarget?.hasPrefix("object:") == true }.count == 4)
         // Restore both object outlines and independent Chinese ranges in a fresh WebView.
         model.select(nil)

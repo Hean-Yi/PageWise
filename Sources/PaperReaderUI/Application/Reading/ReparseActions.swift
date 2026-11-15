@@ -11,10 +11,11 @@ extension ReaderModel {
             original.previewPages.isEmpty, original.translatedPages.isEmpty
         else { return }
         let keys = Set(original.readingPages.map { $0.id.uuidString })
-        guard !state.highlights.contains(where: { $0.paperID == original.id && keys.contains($0.pageKey) }),
+        guard !state.readingNotes.contains(where: { $0.paperID == original.id }),
+            !state.highlights.contains(where: { $0.paperID == original.id && keys.contains($0.pageKey) }),
             !state.bookmarks.contains(where: { $0.paperID == original.id && keys.contains($0.pageKey) })
         else {
-            message = "当前重排已有批注或书签，保留其版式，不能直接重新生成。"
+            message = "当前重排已有批注、笔记或书签，保留其版式，不能直接重新生成。"
             return
         }
         isImporting = true

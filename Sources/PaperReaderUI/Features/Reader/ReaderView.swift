@@ -88,7 +88,10 @@ struct ReaderView: View {
                                     .disabled(model.translating.contains(model.selectedPaperID ?? UUID()))
                             }.frame(maxWidth: .infinity, maxHeight: .infinity)
                         } else if model.usesHTMLReading {
-                            HTMLCanvas(model: model)
+                            HTMLCanvas(
+                                model: model,
+                                sidebarOpen: (showAssistant && !libraryAgentPresented && width >= 900)
+                                    || showAssistantSheet)
                         } else {
                             PDFCanvas(model: model, penEnabled: penEnabled).frame(maxWidth: 820)
                         }

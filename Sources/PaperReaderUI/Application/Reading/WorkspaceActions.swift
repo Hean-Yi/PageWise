@@ -192,6 +192,7 @@ extension ReaderModel {
 
     /// Explicit flush for lifecycle boundaries and tests; scrolling normally uses the debounce below.
     public func flushReadingPosition() async {
+        await flushReadingNotes()
         updateReadingPosition()
         workspaceSaveTask?.cancel()
         workspaceSaveTask = nil

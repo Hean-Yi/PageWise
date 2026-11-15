@@ -29,6 +29,7 @@ extension ReaderModel {
         if active {
             beginReading()
         } else {
+            Task { await flushReadingNotes() }
             invalidateSearchNavigation()
             endReading()
             if suspendTranslation, !translationTasks.isEmpty {

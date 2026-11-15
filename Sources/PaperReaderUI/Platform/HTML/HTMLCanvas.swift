@@ -4,23 +4,30 @@ import WebKit
 
 struct HTMLCanvas: View {
     let model: ReaderModel
-    var body: some View { PlatformHTML(model: model) }
+    var sidebarOpen = true
+    var body: some View { PlatformHTML(model: model, sidebarOpen: sidebarOpen) }
 }
 
 #if os(macOS)
     private struct PlatformHTML: NSViewRepresentable {
         let model: ReaderModel
+        var sidebarOpen: Bool
         func makeCoordinator() -> HTMLCoordinator { HTMLCoordinator(model: model) }
         func makeNSView(context: Context) -> WKWebView { context.coordinator.makeView() }
-        func updateNSView(_ view: WKWebView, context: Context) { context.coordinator.update(view) }
+        func updateNSView(_ view: WKWebView, context: Context) {
+            context.coordinator.update(view, sidebarOpen: sidebarOpen)
+        }
         static func dismantleNSView(_ view: WKWebView, coordinator: HTMLCoordinator) { coordinator.stop(view) }
     }
 #else
     private struct PlatformHTML: UIViewRepresentable {
         let model: ReaderModel
+        var sidebarOpen: Bool
         func makeCoordinator() -> HTMLCoordinator { HTMLCoordinator(model: model) }
         func makeUIView(context: Context) -> WKWebView { context.coordinator.makeView() }
-        func updateUIView(_ view: WKWebView, context: Context) { context.coordinator.update(view) }
+        func updateUIView(_ view: WKWebView, context: Context) {
+            context.coordinator.update(view, sidebarOpen: sidebarOpen)
+        }
         static func dismantleUIView(_ view: WKWebView, coordinator: HTMLCoordinator) { coordinator.stop(view) }
     }
 #endif
@@ -40,11 +47,15 @@ final class HTMLCoordinator: NSObject, WKNavigationDelegate, WKScriptMessageHand
     private var draftHTML = ""
     private var leasedURL: URL?
     private var hasSelection = false
+    private weak var webView: WKWebView?
+    private var sidebarOpen = true
+    private lazy var notes = HTMLNoteBridge(model: model)
 
     init(model: ReaderModel) { self.model = model }
 
     func makeView() -> WKWebView {
         let view = HTMLWebViewPool.take()
+        webView = view
         let config = view.configuration
         config.userContentController.add(self, contentWorld: .defaultClient, name: "reader")
         config.userContentController.addUserScript(
@@ -57,6 +68,7 @@ final class HTMLCoordinator: NSObject, WKNavigationDelegate, WKScriptMessageHand
     }
 
     func stop(_ view: WKWebView) {
+        notes.stop()
         stopped = true
         ready = false
         appendTask?.cancel()
@@ -68,7 +80,8 @@ final class HTMLCoordinator: NSObject, WKNavigationDelegate, WKScriptMessageHand
         HTMLWebViewPool.recycle(view)
     }
 
-    func update(_ view: WKWebView) {
+    func update(_ view: WKWebView, sidebarOpen: Bool? = nil) {
+        if let sidebarOpen { self.sidebarOpen = sidebarOpen }
         guard !stopped, model.usesHTMLReading, let paper = model.paper, let artifact = paper.htmlReading else { return }
         if paperID != paper.id || loadedPath == nil || !artifact.sections.map({ $0.id.uuidString }).starts(with: keys) {
             appendTask?.cancel()
@@ -78,6 +91,8 @@ final class HTMLCoordinator: NSObject, WKNavigationDelegate, WKScriptMessageHand
             loadedPath = artifact.relativePath
             keys = artifact.sections.map { $0.id.uuidString }
             publishedCount = paper.translatedBlockCount
+            notes.stop()
+            notes = HTMLNoteBridge(model: model)
             highlightSnapshot = []
             draftHTML = ""
             ready = false
@@ -167,6 +182,7 @@ final class HTMLCoordinator: NSObject, WKNavigationDelegate, WKScriptMessageHand
                 "window.paperReader.highlights(marks)", arguments: ["marks": values], in: nil,
                 in: .defaultClient, completionHandler: nil)
         }
+        notes.update(view, sidebarOpen: sidebarOpen)
         if let index = model.jumpPage, keys.indices.contains(index) {
             view.callAsyncJavaScript(
                 "window.paperReader.jump(key)", arguments: ["key": keys[index]], in: nil,
@@ -225,6 +241,10 @@ final class HTMLCoordinator: NSObject, WKNavigationDelegate, WKScriptMessageHand
             let value = message.body as? [String: Any], let kind = value["kind"] as? String
         else { return }
         let index = (value["key"] as? String).flatMap { keys.firstIndex(of: $0) }
+        if kind.hasPrefix("note"), let webView {
+            notes.receive(value, view: webView)
+            return
+        }
         switch kind {
         case "position":
             if ready, let index { model.recordVisiblePage(index) }

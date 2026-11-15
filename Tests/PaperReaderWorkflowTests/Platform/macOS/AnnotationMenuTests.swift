@@ -105,7 +105,7 @@
         #expect(
             try await menuJS(
                 web,
-                "return !!document.querySelector('#annotation-menu button[disabled]') && p.outerHTML===html && p.getBoundingClientRect().height===height"
+                "return !!document.querySelector('#annotation-menu .add-note:not([disabled])') && p.outerHTML===html && p.getBoundingClientRect().height===height"
             ) as? Bool == true)
         await model.flushReadingPosition()
         let reopened = try ReaderModel(root: root)

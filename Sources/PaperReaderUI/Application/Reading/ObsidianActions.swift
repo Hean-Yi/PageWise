@@ -23,6 +23,17 @@ extension ReaderModel {
                 separator: "、")
             var body =
                 "## 论文信息\n\n\(current.title)\n\n\(current.sourceURL ?? "本地导入 PDF")\n\n## 阅读记录\n\n\(dates.isEmpty ? "已导入，阅读记录将在会话结束后保存。" : dates)\n\n## 划线批注\n\n\(marks.isEmpty ? "暂无文字批注。" : marks)\n\n## 总结\n\n\(current.summary.isEmpty ? "尚未生成总结，可先在应用中生成。" : current.summary)"
+            let notes = state.readingNotes.filter {
+                $0.paperID == original.id && $0.deletedAt == nil && !$0.markdown.isEmpty
+            }
+            if !notes.isEmpty {
+                body +=
+                    "\n\n## 阅读笔记\n\n"
+                    + notes.map { note in
+                        note.anchors.map { "> " + $0.text.replacingOccurrences(of: "\n", with: "\n> ") }.joined(
+                            separator: "\n\n") + "\n\n" + note.markdown
+                    }.joined(separator: "\n\n---\n\n")
+            }
             if !current.savedDiscussion.isEmpty { body += "\n\n## 讨论整理\n\n" + current.savedDiscussion }
             let ink = try await vault.exportInk(paperID: current.id, root: root)
             if !ink.isEmpty { body += "\n\n## 手写批注\n\n" + ink.joined(separator: "\n\n") }

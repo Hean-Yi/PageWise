@@ -1,9 +1,10 @@
 import Foundation
 
 public struct LibraryState: Codable, Sendable {
-    public static let currentVersion = 6
+    public static let currentVersion = 7
     public var version = currentVersion
     public var papers: [Paper] = []
+    public var readingNotes: [ReadingNote] = []
     public var highlights: [Highlight] = []
     public var chats: [ChatTurn] = []
     public var memories: [MemoryItem] = []
@@ -18,7 +19,7 @@ public struct LibraryState: Codable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case version, papers, highlights, chats, memories, reading, workspace, bookmarks, shelves, paperShelfIDs
-        case manualPaperIDs, preferredSort
+        case manualPaperIDs, preferredSort, readingNotes
     }
 
     public init(from decoder: any Decoder) throws {
@@ -54,6 +55,8 @@ public struct LibraryState: Codable, Sendable {
         // v5 introduces optional structured blocks and retained source pages. Missing v1-v4
         // fields decode to nil; all published page IDs, annotations and preview records survive.
         // v6 adds optional HTML reading artifacts and text-range highlights. Old PDF IDs remain unchanged.
+        // v7 adds independent reading notes; all existing annotation coordinates are preserved.
+        readingNotes = storedVersion >= 7 ? try values.decode([ReadingNote].self, forKey: .readingNotes) : []
         try validateOrdering()
         try validateShelves()
         version = Self.currentVersion

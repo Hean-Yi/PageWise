@@ -13,6 +13,13 @@ public final class ReaderModel {
     public var isImporting = false
     public var importProgress: PDFImportProgress?
     public var selectionHTMLRange: [Int]?
+    public var requestedReadingNote: UUID?
+    public var readingNoteNavigationToken = UUID()
+    public var lastDeletedNoteID: UUID?
+    public var noteRevision = 0
+    public var savedNoteRevision = 0
+    public var noteSaveFailed = false
+    @ObservationIgnored var noteSaveTask: Task<Void, Never>?
     public var htmlSelection: [HTMLTextSelection] = []
     public var usesHTMLReading: Bool { mode == "translated" && paper?.htmlReading != nil }
     var importProgressToken: UUID?
@@ -112,6 +119,8 @@ public final class ReaderModel {
     public func select(_ id: UUID?) {
         if let id, pendingImportIDs.contains(id) { return }
         if let id, !state.papers.contains(where: { $0.id == id }) { return }
+        Task { await flushReadingNotes() }
+        requestedReadingNote = nil
         let changedPaper = selectedPaperID != id
         invalidateSearchNavigation()
         endReading()

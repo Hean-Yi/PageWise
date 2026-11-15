@@ -11,6 +11,7 @@ struct ReaderNotesView: View {
         VStack(spacing: 0) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 26) {
+                    readingNotes
                     bookmarks
                     highlights
                     summary
@@ -22,6 +23,32 @@ struct ReaderNotesView: View {
                     .font(.system(size: 12, weight: .medium)).frame(maxWidth: .infinity).padding(.vertical, 12)
                     .background(ReaderTheme.elevated, in: RoundedRectangle(cornerRadius: 9))
             }.buttonStyle(.plain).padding(16)
+        }
+    }
+
+    private var readingNotes: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            heading("阅读笔记", icon: "note.text", count: model.currentReadingNotes.count)
+            if model.currentReadingNotes.isEmpty {
+                Text("点击划线，或选文后添加笔记。").font(.system(size: 12)).foregroundStyle(ReaderTheme.muted)
+            }
+            ForEach(model.currentReadingNotes) { note in
+                Button {
+                    model.openReadingNote(note)
+                    didNavigate()
+                } label: {
+                    VStack(alignment: .leading, spacing: 7) {
+                        Text(note.anchors.map(\.text).joined(separator: " ")).font(.system(size: 11)).foregroundStyle(
+                            ReaderTheme.muted
+                        ).lineLimit(2)
+                        Text(note.markdown.isEmpty ? "空白笔记" : note.markdown).font(.system(size: 13)).lineLimit(4)
+                    }.frame(maxWidth: .infinity, alignment: .leading).padding(12)
+                        .background(ReaderTheme.canvas, in: RoundedRectangle(cornerRadius: 9))
+                }.buttonStyle(.plain)
+            }
+            if model.lastDeletedNoteID != nil {
+                Button("撤销删除笔记", action: model.undoReadingNoteDeletion).font(.system(size: 12))
+            }
         }
     }
 

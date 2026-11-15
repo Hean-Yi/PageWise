@@ -100,3 +100,14 @@ HTML 文件使用进程内引用计数保护 WebKit 当前载入的文件：清�
 
 
 `Domain/Reading/AnnotationRangeEditor` 负责选区减去旧范围并保留两侧片段，颜色与样式为 Highlight 的可选字段，旧记录默认黄色高亮。`Application/Reading/HTMLAnnotationActions` 协调旧坐标投影校验、范围编辑及选区书签持久化；`Platform/HTML/HTMLAnnotationMenuScript` 只负责浮层、选区覆盖状态和动作消息。下划线用独立覆盖层绘制，窗口/正文尺寸变化时重新定位，不包装或替换正文节点。旧坐标只在用户实际编辑命中记录时显式转换，未命中记录保持原样。
+
+
+## HTML 阅读笔记
+
+`Domain/Reading/ReadingNote` 保存独立 NoteAnchor、稳定内容版本、Markdown 源文和软删除状态，不绑定可拆分的 Highlight ID。LibraryState v7 显式为 v1–v6 初始化空笔记集合，保留原批注。重新解析拒绝改写有笔记（包括可撤销删除记录）的版式。
+
+`Application/Reading/ReadingNoteActions` 负责输入保留、350 ms 延迟保存、离开时刷新、失败重试、删除撤销与列表定位；`ObsidianActions` 仅在显式保存时附加阅读笔记。`Infrastructure/HTML/Notes/NoteMarkdownRenderer` actor 复用本地 Marked 引擎，以 SwiftSoup 白名单净化，再调用既有 KaTeX 编译数学。Marked 18.2.0 与 MIT 许可证随 `Resources/Marked` 打包；运行时不加载 CDN。Markdown 源文是唯一持久正文，预览仅在内存复用。
+
+`Platform/HTML/HTMLNoteBridge` 隔离消息、预览与晚到结果；`HTMLNotesScript` 管理编辑状态及同一卡片，`HTMLNoteLayoutScript` 负责页边避让、曲线与非交互文字覆盖层，`HTMLNoteStyle` 定义预算和减少动态效果样式。复用语言独立选区接口，保留部分单词和共享对象；所有提示/上浮都在覆盖层绘制，不包装或移动已发布正文。`Features/Reader/ReaderNotesView` 汇总并定位同一笔记。
+
+笔记页边卡片、波浪线和文字覆盖层采用文档坐标，滚动由 WebKit 原生合成处理；只有激活、窗口/正文几何变化才计算布局。编辑卡片固定于当前视口，滚动只使用缓存锚点更新一条连接路径，不读取逐字几何、不重建装饰 DOM。上浮覆盖限制最多 2000 个字符，超长选区保留原文字体与完整锚点，不为动画产生无界逐字测量。编辑区同时显示源码和实时预览，预览合并 60 ms 输入后异步更新，落盘仍为 350 ms。

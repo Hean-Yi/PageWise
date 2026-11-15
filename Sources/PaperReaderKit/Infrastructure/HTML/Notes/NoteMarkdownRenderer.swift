@@ -1,0 +1,100 @@
+import Foundation
+import JavaScriptCore
+import SwiftSoup
+
+/// Local-only rendering. User source is never evaluated as JavaScript or sent to a server.
+public actor NoteMarkdownRenderer {
+    private var engine: JSContext?
+    private var mathCompiler: LatexMathCompiler?
+    public init() {}
+    public func render(_ markdown: String) throws -> String {
+        if engine == nil {
+            guard let context = JSContext(),
+                let url = Bundle.module.url(forResource: "marked.umd", withExtension: "js", subdirectory: "Marked")
+            else { throw ReaderError.message("本地 Markdown 组件不可用，源码已保留。") }
+            context.evaluateScript(try String(contentsOf: url, encoding: .utf8))
+            context.evaluateScript(Self.extensions)
+            engine = context
+        }
+        guard let context = engine else { throw ReaderError.message("Markdown 预览不可用，源码已保留。") }
+        context.evaluateScript("noteMath=[]")
+        context.exception = nil
+        guard
+            let html = context.objectForKeyedSubscript("marked")?.invokeMethod("parse", withArguments: [markdown])?
+                .toString(),
+            context.exception == nil
+        else { throw ReaderError.message("笔记预览暂不可用，源码已保留。") }
+        let math = context.objectForKeyedSubscript("noteMath")?.toArray() as? [[String: Any]] ?? []
+        let document = try SwiftSoup.parseBodyFragment(html)
+        // Allow semantic Markdown only. No raw styles, scripts, embedded frames or remote resources.
+        try document.select("script,style,iframe,object,embed,svg,math,link,meta,form,textarea").remove()
+        let allowed: Set<String> = [
+            "p", "br", "hr", "h1", "h2", "h3", "h4", "h5", "h6", "strong", "em", "del", "blockquote", "ul", "ol", "li",
+            "pre", "code", "table", "thead", "tbody", "tr", "th", "td", "a", "span", "input",
+        ]
+        for element in try document.body()?.select("*").array() ?? [] {
+            if element.tagName() == "body" { continue }
+            if !allowed.contains(element.tagName()) {
+                try element.unwrap()
+                continue
+            }
+            for attribute in element.getAttributes()?.asList() ?? [] {
+                let key = attribute.getKey()
+                let permitted =
+                    (element.tagName() == "a" && key == "href")
+                    || (element.tagName() == "span" && key == "data-note-math")
+                    || (element.tagName() == "input" && ["type", "checked", "disabled"].contains(key))
+                    || (element.tagName() == "ol" && key == "start")
+                if !permitted { try element.removeAttr(key) }
+            }
+            if element.tagName() == "input" {
+                guard try element.attr("type") == "checkbox" else {
+                    try element.remove()
+                    continue
+                }
+                try element.attr("disabled", "")
+            }
+            if element.tagName() == "a" {
+                let href = try element.attr("href")
+                if let url = URL(string: href), ["https", "http"].contains(url.scheme?.lowercased() ?? ""),
+                    url.host != nil
+                {
+                    try element.attr("rel", "noreferrer noopener")
+                } else {
+                    try element.removeAttr("href")
+                }
+            }
+        }
+
+        for element in try document.select("span[data-note-math]") {
+            guard let index = Int(try element.attr("data-note-math")), math.indices.contains(index),
+                let source = math[index]["text"] as? String
+            else {
+                try element.removeAttr("data-note-math")
+                continue
+            }
+            do {
+                if mathCompiler == nil { mathCompiler = try LatexMathCompiler() }
+                let rendered = try mathCompiler!.compile(source, display: math[index]["display"] as? Bool == true)
+                try element.html(rendered)
+                try element.attr("class", "note-math")
+            } catch {
+                try element.text(
+                    (math[index]["display"] as? Bool == true ? "$$" : "$") + source
+                        + (math[index]["display"] as? Bool == true ? "$$" : "$"))
+                try element.attr("class", "note-math-error")
+                try element.attr("title", "公式暂无法编译，源码已保留")
+            }
+            try element.removeAttr("data-note-math")
+        }
+        return try document.body()?.html() ?? ""
+    }
+
+    private static let extensions = #"""
+        var noteMath=[];
+        marked.use({extensions:[
+          {name:'noteBlockMath',level:'block',start(src){return src.indexOf('$$');},tokenizer(src){const m=/^\$\$\s*\n?([\s\S]+?)\$\$(?:\n|$)/.exec(src);if(m)return {type:'noteBlockMath',raw:m[0],text:m[1],display:true};},renderer(t){const i=noteMath.push({text:t.text,display:true})-1;return '<p><span data-note-math="'+i+'"></span></p>'; }},
+          {name:'noteInlineMath',level:'inline',start(src){return src.indexOf('$');},tokenizer(src){const m=/^\$(?!\$)((?:\\.|[^$\n])+?)\$(?!\$)/.exec(src);if(m)return {type:'noteInlineMath',raw:m[0],text:m[1]};},renderer(t){const i=noteMath.push({text:t.text,display:false})-1;return '<span data-note-math="'+i+'"></span>';}}
+        ]});
+        """#
+}

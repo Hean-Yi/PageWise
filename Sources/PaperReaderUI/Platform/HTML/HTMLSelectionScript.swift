@@ -129,7 +129,7 @@ enum HTMLSelectionScript {
           const publish = () => {paint();send({kind:'selection',parts});window.paperAnnotationMenu?.selectionChanged();};
           const update = () => {
             const selection=getSelection();
-            if(selection?.isCollapsed && window.paperAnnotationMenu?.preservingSelection())return;
+            if(window.paperNotes?.preservingSelection() || (selection?.isCollapsed && window.paperAnnotationMenu?.preservingSelection()))return;
             parts=[];
             if(selection && !selection.isCollapsed && selection.rangeCount) {
               const range=selection.getRangeAt(0);
@@ -186,6 +186,7 @@ enum HTMLSelectionScript {
           document.addEventListener('selectionchange',update);
           document.addEventListener('dragstart',event=>{if(event.target.closest?.('#reader img')) event.preventDefault();});
           document.addEventListener('copy',event=>{
+            if(document.activeElement?.closest('.reader-note-card'))return;
             if(!parts.length || !event.clipboardData) return;
             event.clipboardData.setData('text/plain',copyText());event.preventDefault();
           });
@@ -225,12 +226,24 @@ enum HTMLSelectionScript {
           const layoutObserver=new ResizeObserver(()=>render(savedMarks,'saved','data-reader-saved'));
           layoutObserver.observe(root);
           document.fonts?.ready.then(()=>render(savedMarks,'saved','data-reader-saved'));
+          const rangesFor=part=>{
+            const block=document.getElementById('block-'+part.key);if(!block)return [];
+            if(part.target?.startsWith('object:')) {
+              const index=Number(part.target.slice(7)),e=objects(block)[index];
+              if(!e || label(e,index)!==part.text)return [];
+              const r=document.createRange();r.selectNode(e);return [r];
+            }
+            const source=nodes(block,part.target),text=source.map(n=>n.data).join('');
+            return text.slice(part.start,part.end)===part.text ? slices(source,part.start,part.end) : [];
+          };
           window.paperSelection={
             highlights(marks){savedMarks=marks;render(marks,'saved','data-reader-saved');window.paperAnnotationMenu?.refresh();},
             refresh(){render(savedMarks,'saved','data-reader-saved');paint();},
             clear(){getSelection()?.removeAllRanges();parts=[];paint();window.paperAnnotationMenu?.hide();},
             selectObject(element){const range=document.createRange();range.selectNode(element);const s=getSelection();s.removeAllRanges();s.addRange(range);update();},
             copyText,
+            rangesFor,
+            restore(anchors){parts=anchors.filter(a=>rangesFor(a).length).map(a=>({...a,highlightStart:a.start,highlightEnd:a.end}));publish();},
             parts:()=>parts,
             projectedMarks:()=>savedMarks.map(mark=>({...mark,parts:projected(mark)})),
             selectionBounds(){const rectangles=[];for(const part of parts){const block=document.getElementById('block-'+part.key);if(!block)continue;if(part.target.startsWith('object:')){const e=objects(block)[Number(part.target.slice(7))];if(e)rectangles.push(e.getBoundingClientRect());}else for(const r of slices(nodes(block,part.target),part.start,part.end))rectangles.push(...r.getClientRects());}return rectangles.filter(r=>r.bottom>0 && r.top<innerHeight);}
