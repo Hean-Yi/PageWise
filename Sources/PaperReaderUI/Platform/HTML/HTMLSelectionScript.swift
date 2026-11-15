@@ -66,7 +66,16 @@ enum HTMLSelectionScript {
             const text=element.getAttribute('alttext') || tex?.textContent || nodes(element).map(n=>n.data.trim()).join('');
             return '[公式] '+text;
           };
-          let parts=[],savedMarks=[];
+          let parts=[],savedMarks=[],lifted=[];const painted=new Map();
+          // Temporary paint exclusions never change the saved anchors or published text.
+          const visibleRanges=ranges=>ranges.flatMap(range=>{
+            if(range.startContainer!==range.endContainer)return [range];
+            let spans=[[range.startOffset,range.endOffset]];
+            for(const cut of lifted){if(cut.startContainer!==range.startContainer)continue;
+              spans=spans.flatMap(([a,b])=>cut.endOffset<=a||cut.startOffset>=b?[[a,b]]:[[a,Math.max(a,cut.startOffset)],[Math.min(b,cut.endOffset),b]].filter(([s,e])=>e>s));
+            }
+            return spans.map(([a,b])=>{const r=document.createRange();r.setStart(range.startContainer,a);r.setEnd(range.endContainer,b);return r;});
+          });
           const colors={yellow:'#f2d36b',red:'#f5aaa6',green:'#b7db9e',blue:'#b5d5f8',purple:'#cbb7ed',pink:'#edbdd8',orange:'#f5c28f',gray:'#d1d4d7'};
           const style=document.createElement('style');
           style.textContent='#reader::selection,#reader ::selection{background:transparent;color:inherit}::highlight(reader-selection){background:rgba(35,42,50,.22);color:inherit}[data-reader-selected]{outline:2px solid #424953!important;outline-offset:2px}[data-reader-saved]{outline:2px solid #c9a331;outline-offset:2px}';
@@ -110,16 +119,17 @@ enum HTMLSelectionScript {
               if(text.slice(start,end)!==mark.text) continue;
               const selected=slices(source,start,end);
               ranges.push(...selected);
-              if(name==='saved' && kind==='underline')underline(selected,color);
+              if(name==='saved' && kind==='underline')underline(visibleRanges(selected),color);
               if(!mark.target && mark.sourceOnly) {
                 const translated=block.querySelector(':scope > .translation:not(.pending)');
-                if(translated) {const linked=slices(nodes(translated),0,translated.textContent.length);ranges.push(...linked);if(kind==='underline')underline(linked,color);}
+                if(translated) {const linked=slices(nodes(translated),0,translated.textContent.length);ranges.push(...linked);if(kind==='underline')underline(visibleRanges(linked),color);}
               }
             }
-            if(name==='saved') for(const key of [...CSS.highlights.keys()]) if(key==='saved' || key.startsWith('saved-')) CSS.highlights.delete(key);
+            if(name==='saved') for(const key of [...CSS.highlights.keys()]) if(key==='saved' || key.startsWith('saved-')) {CSS.highlights.delete(key);painted.delete(key);}
             if(!groups.has(name)) groups.set(name,[]);
             for(const [group,ranges] of groups) {
-              const highlight=new Highlight(...ranges);
+              painted.set(group,ranges);
+              const highlight=new Highlight(...visibleRanges(ranges));
               // Composite the translucent selection above every saved annotation, regardless of insertion order.
               highlight.priority=name==='reader-selection' ? 100 : 0;
               CSS.highlights.set(group,highlight);
@@ -237,7 +247,16 @@ enum HTMLSelectionScript {
             return text.slice(part.start,part.end)===part.text ? slices(source,part.start,part.end) : [];
           };
           window.paperSelection={
-            highlights(marks){savedMarks=marks;render(marks,'saved','data-reader-saved');window.paperAnnotationMenu?.refresh();},
+            liftPaint(ranges){const result=[];for(const [name,marks] of painted){
+              const selected=name==='reader-selection',kind=name.endsWith('-underline')?'underline':'highlight',color=selected?'rgba(35,42,50,.22)':colors[name==='saved'?'yellow':name.split('-')[1]];
+              if(!color)continue;
+              for(const r of ranges)for(const mark of marks){if(r.startContainer!==mark.startContainer||mark.startContainer!==mark.endContainer)continue;
+                const start=Math.max(r.startOffset,mark.startOffset),end=Math.min(r.endOffset,mark.endOffset);if(end<=start)continue;
+                const range=document.createRange();range.setStart(r.startContainer,start);range.setEnd(r.endContainer,end);result.push({range,color,kind,selected});
+              }
+            }return result.sort((a,b)=>Number(a.selected)-Number(b.selected));},
+            liftRanges(ranges){lifted=ranges;render(savedMarks,'saved','data-reader-saved');paint();},
+            highlights(marks){savedMarks=marks;render(marks,'saved','data-reader-saved');window.paperAnnotationMenu?.refresh();window.paperNotes?.layout();},
             refresh(){render(savedMarks,'saved','data-reader-saved');paint();},
             clear(){getSelection()?.removeAllRanges();parts=[];paint();window.paperAnnotationMenu?.hide();},
             selectObject(element){const range=document.createRange();range.selectNode(element);const s=getSelection();s.removeAllRanges();s.addRange(range);update();},

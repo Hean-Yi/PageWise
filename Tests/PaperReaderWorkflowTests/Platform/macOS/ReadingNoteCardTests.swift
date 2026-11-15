@@ -301,6 +301,81 @@
         #expect(reopened.state.readingNotes == [note])
     }
 
+    @Test @MainActor func noteLiftTransfersOnlySelectedPaintAndRestoresItOnExit() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let model = try ReaderModel(root: directory)
+        await model.load()
+        let block = TextBlock(sourcePage: 0, text: "Alpha beta gamma delta evidence.")
+        var paper = Paper(
+            title: "Lift fixture", digest: "lift", originalPath: "unused.pdf", pageCount: 1, blocks: [block],
+            warnings: [], canReflow: true)
+        paper.htmlReading = try await HTMLReadingStore().append(
+            [BilingualBlock(block: block, translation: "中文独立标记。")], to: nil, paper: paper, root: directory)
+        model.state.papers = [paper]
+        model.select(paper.id)
+        let coordinator = HTMLCoordinator(model: model)
+        let web = coordinator.makeView()
+        web.frame = CGRect(x: 0, y: 0, width: 1500, height: 900)
+        defer { coordinator.stop(web) }
+        coordinator.update(web)
+        try await noteWait { (try? await noteJS(web, "return !!window.paperNotes")) as? Bool == true }
+        _ = try await noteJS(
+            web,
+            #"""
+            window.p=document.querySelector('section p');window.before=p.outerHTML;window.height=p.getBoundingClientRect().height;
+            window.key=p.closest('section').dataset.key;
+            window.marks=[{key,target:'source',text:p.textContent.slice(0,10),range:[0,10],color:'red',style:'highlight'},
+              {key,target:'source',text:p.textContent.slice(10,20),range:[10,20],color:'blue',style:'underline'}];
+            paperSelection.highlights(marks);
+            window.note={id:'lift-note',anchors:[{key,target:'source',text:p.textContent.slice(3,14),start:3,end:14}],markdown:'A note',html:'<p>A note</p>'};
+            paperNotes.sync([note]);paperNotes.open(note.id,true);
+            """#)
+        try await noteWait {
+            (try? await noteJS(web, "return !!document.querySelector('.note-lift-underline')")) as? Bool == true
+        }
+        #expect(
+            try await noteJS(
+                web,
+                #"""
+                const lifted=document.querySelector('.note-lift-group');window.group=lifted;
+                const red=[...CSS.highlights.get('saved-red-highlight')];
+                const blue=[...CSS.highlights.get('saved-blue-underline')];
+                return red.length===1 && red[0].startOffset===0 && red[0].endOffset===3
+                  && blue.length===1 && blue[0].startOffset===14 && blue[0].endOffset===20
+                  && lifted.querySelector('.note-lift-highlight').style.background==='rgb(245, 170, 166)'
+                  && lifted.querySelector('.note-lift-underline').style.background==='rgb(181, 213, 248)'
+                  && !!lifted.querySelector('.note-lift-waves .note-wave')
+                  && !!document.querySelector('#reader-note-decoration .note-wave[mask]')
+                  && [...CSS.highlights.get('reader-selection')].length===0
+                  && paperSelection.copyText()===note.anchors[0].text
+                  && p.outerHTML===before && p.getBoundingClientRect().height===height;
+                """#) as? Bool == true)
+        // Changing the saved paint during editing updates the same moving unit, without replaying its lift.
+        _ = try await noteJS(web, "marks[0].color='green';paperSelection.highlights(marks)")
+        try await noteWait {
+            (try? await noteJS(
+                web,
+                "return document.querySelector('.note-lift-highlight')?.style.background==='rgb(183, 219, 158)'"))
+                as? Bool == true
+        }
+        #expect(try await noteJS(web, "return document.querySelector('.note-lift-group')===group") as? Bool == true)
+        _ = try await noteJS(web, "paperNotes.finish()")
+        try await noteWait {
+            (try? await noteJS(web, "return !document.querySelector('.note-lift-group')")) as? Bool == true
+        }
+        #expect(
+            try await noteJS(
+                web,
+                #"""
+                const green=[...CSS.highlights.get('saved-green-highlight')],blue=[...CSS.highlights.get('saved-blue-underline')];
+                return green[0].startOffset===0 && green[0].endOffset===10 && blue[0].startOffset===10 && blue[0].endOffset===20
+                  && !CSS.highlights.has('note-lift') && !document.querySelector('.note-wave[mask]')
+                  && !document.querySelector('#note-wave-cutouts') && p.outerHTML===before;
+                """#) as? Bool == true)
+        model.select(nil)
+    }
+
     @MainActor private func noteJS(_ web: WKWebView, _ source: String, _ arguments: [String: Any] = [:]) async throws
         -> Any?
     {

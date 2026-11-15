@@ -6,7 +6,6 @@ enum HTMLNoteLayoutScript {
           const root=document.getElementById('reader'),selection=window.paperSelection;
           const ns='http://www.w3.org/2000/svg';
           const svg=document.createElementNS(ns,'svg');svg.id='reader-note-decoration';svg.setAttribute('width','100%');svg.setAttribute('height','100%');svg.setAttribute('aria-hidden','true');document.body.append(svg);
-          const lift=document.createElement('div');lift.id='reader-note-lift';lift.setAttribute('aria-hidden','true');document.body.append(lift);
           const hitCache=new WeakMap();
           const rects=anchors=>{const result=anchors.flatMap(a=>selection.rangesFor(a).flatMap(r=>a.target.startsWith('object:') ? [r.getBoundingClientRect()] : [...r.getClientRects()])).filter(r=>r.width>0&&r.height>0);hitCache.set(anchors,result.map(r=>({left:r.left,right:r.right,top:r.top+scrollY,bottom:r.bottom+scrollY})));return result;};
           const hitRects=anchors=>{if(!hitCache.has(anchors))rects(anchors);return hitCache.get(anchors).map(r=>({...r,top:r.top-scrollY,bottom:r.bottom-scrollY}));};
@@ -43,7 +42,7 @@ enum HTMLNoteLayoutScript {
             return {left:Math.max(16,Math.min(innerWidth-width-16,(anchor.left+anchor.right-width)/2)),top,width,height,side:'floating',anchor};
           };
           const path=(d,kind)=>{const p=document.createElementNS(ns,'path');p.setAttribute('d',d);p.setAttribute('class',kind);svg.append(p);return p;};
-          let connection=null,liftTimer=null;
+          let connection=null;
           const updateConnection=()=>{
             if(!connection)return;
             const {a,b,from,edge,reverse,line,mask,reveal,startDot,endDot}=connection;
@@ -58,11 +57,7 @@ enum HTMLNoteLayoutScript {
             mask.setAttribute('x',Math.min(from.x,to.x)-5);mask.setAttribute('y',Math.min(from.y,to.y)-5);mask.setAttribute('width',Math.abs(to.x-from.x)+10);mask.setAttribute('height',Math.abs(to.y-from.y)+10);
           };
           const decorate=(notes,active,card,reverse,entrance=false)=>{
-            connection=null;svg.replaceChildren();clearTimeout(liftTimer);
-            if(!active&&lift.childElementCount&&!matchMedia('(prefers-reduced-motion:reduce)').matches){
-              for(const span of lift.children)span.animate([{transform:'translateY(-1.5px)'},{transform:'translateY(0)'}],{duration:160,fill:'forwards',easing:'ease-out'});
-              liftTimer=setTimeout(()=>{lift.replaceChildren();CSS.highlights?.delete('note-lift');},170);
-            }else{lift.replaceChildren();CSS.highlights?.delete('note-lift');}
+            connection=null;svg.replaceChildren();
             const seen=new Set();
             for(const note of notes){if(!note.markdown.trim())continue;for(const rect of rects(note.anchors)){const r={left:rect.left,right:rect.right,width:rect.width,top:rect.top+scrollY,bottom:rect.bottom+scrollY};
               const key=[r.left,r.top,r.width].join(':');if(seen.has(key))continue;seen.add(key);
@@ -74,25 +69,8 @@ enum HTMLNoteLayoutScript {
               for(let i=0;i<pts.length-1;i++){const a=pts[Math.max(0,i-1)],b=pts[i],c=pts[i+1],e=pts[Math.min(pts.length-1,i+2)];d+=' C '+(b.x+(c.x-a.x)/6)+' '+(b.y+(c.y-a.y)/6)+', '+(c.x-(e.x-b.x)/6)+' '+(c.y-(e.y-b.y)/6)+', '+c.x+' '+c.y;}
               path(d,'note-wave');
             }}
+            window.paperNoteLift.update(active,svg);
             if(!active)return;
-            const ranges=active.anchors.filter(a=>!a.target.startsWith('object:')).flatMap(a=>selection.rangesFor(a));
-            const hidden=[];let remaining=2000;
-            // Clone only the active glyph runs into a non-interactive overlay. Published nodes never move.
-            for(const range of ranges){
-              if(range.startContainer!==range.endContainer||range.startContainer.nodeType!==3||range.toString().length>remaining)continue;remaining-=range.toString().length;
-              const node=range.startContainer,css=getComputedStyle(node.parentElement);let offset=range.startOffset,run=null;
-              const flush=()=>{if(!run)return;const span=document.createElement('span');span.textContent=run.text;Object.assign(span.style,{left:run.left+'px',top:run.top+'px',fontFamily:css.fontFamily,fontSize:css.fontSize,fontWeight:css.fontWeight,fontStyle:css.fontStyle,fontVariant:css.fontVariant,lineHeight:run.height+'px',color:css.color,letterSpacing:css.letterSpacing,wordSpacing:css.wordSpacing});lift.append(span);run=null;};
-              for(const char of range.toString()){
-                const r=document.createRange();r.setStart(node,offset);offset+=char.length;r.setEnd(node,offset);const box=[...r.getClientRects()].filter(b=>b.width>.01&&b.height>0).at(-1);
-                // A wrap boundary may expose a zero-width rectangle on the preceding line. Never union both lines.
-                if(!box)continue;
-                // Collapsed indentation/newlines have no painted glyph. Copying them with white-space:pre creates phantom lines.
-                if(box.width<=.01||box.height<=0)continue;
-                if(!run||Math.abs(run.top-(box.top+scrollY))>2||Math.abs(run.right-box.left)>1){flush();run={left:box.left,right:box.left,top:box.top+scrollY,height:box.height,text:''};}
-                run.text+=/\s/.test(char)?' ':char;run.right=box.right;
-              }flush();hidden.push(range);
-            }
-            if(CSS.highlights){const h=new Highlight(...hidden);h.priority=200;CSS.highlights.set('note-lift',h);}
             const rs=rects(active.anchors).filter(visible);if(!rs.length||!card||(card.side==='floating'&&!entrance))return;
             const rect=rs[0],a={left:rect.left,right:rect.right,top:rect.top+scrollY,bottom:rect.bottom+scrollY},b={...card,top:card.top+(card.fixed?0:scrollY)},content=root.querySelector('section')?.getBoundingClientRect()||root.getBoundingClientRect();
             // Geometry is cached on activation. Native scrolling moves cards and glyph overlays together.

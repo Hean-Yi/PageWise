@@ -47,17 +47,16 @@ enum HTMLNoteStyle {
           #annotation-menu.note-docked .swatch{min-width:0;padding:3px;flex:1 1 0}#annotation-menu.note-docked .swatch span{width:16px;height:16px}
           #annotation-menu.note-docked .remove{padding:5px 8px;font-size:11px}
           #reader-note-decoration{position:absolute;top:0;left:0;width:100%;height:1px;pointer-events:none;z-index:3;overflow:visible}
-          #reader-note-decoration .note-wave{fill:none;stroke:#a57957;stroke-width:1.05;stroke-linecap:round;stroke-linejoin:round;opacity:.85}
+          .note-wave{fill:none;stroke:#a57957;stroke-width:1.05;stroke-linecap:round;stroke-linejoin:round;opacity:.85}
           #reader-note-decoration .note-link{fill:none;stroke:#ad7952;stroke-width:1.35;stroke-dasharray:2 5;stroke-linecap:round;opacity:.8}
           #reader-note-decoration .note-link-end{fill:#faf8f3;stroke:#a34c33;stroke-width:1.3}
           #reader-note-decoration .note-link-start{fill:#a34c33;stroke:none}
           #reader-note-decoration .note-link-reveal{fill:none;stroke:white;stroke-width:4;stroke-dasharray:1;stroke-dashoffset:0;animation:note-link-in .22s cubic-bezier(.2,.7,.2,1) both}
-          #reader-note-lift{position:absolute;top:0;left:0;width:100%;height:0;pointer-events:none;z-index:4}#reader-note-lift>span{position:absolute;white-space:pre;transform:translateY(-1.5px);text-shadow:0 1px 3px #332d2822;animation:note-lift .18s ease both}
+          #reader-note-lift{position:absolute;top:0;left:0;width:100%;height:0;pointer-events:none;z-index:4}.note-lift-group{position:absolute;left:0;top:0;width:100%;height:0;filter:drop-shadow(0 1px 1px #332d2820)}.note-lift-group>span,.note-lift-group>i{position:absolute;white-space:pre;font-style:normal}.note-lift-waves{position:absolute;left:0;top:0;width:100%;height:1px;overflow:visible}
           ::highlight(note-lift){color:transparent}
           #reader-note-undo{position:fixed;bottom:16px;right:20px;z-index:1100;background:#faf8f3;color:#a34c33;border:1px solid #d9d1c2;border-radius:9px;padding:9px 14px;font:13px system-ui;cursor:pointer}
-          @keyframes note-lift{from{transform:translateY(0);opacity:.5}to{transform:translateY(-1.5px);opacity:1}}
           @keyframes note-link-in{from{stroke-dashoffset:1}to{stroke-dashoffset:0}}
-          @media(prefers-reduced-motion:reduce){.reader-note-card,#reader-note-lift>span{transition:none!important;animation:none!important;transform:none!important}#reader-note-decoration .note-link-reveal{animation:none!important}}
+          @media(prefers-reduced-motion:reduce){.reader-note-card,#reader-note-lift .note-lift-group{transition:none!important;animation:none!important;transform:none!important}#reader-note-decoration .note-link-reveal{animation:none!important}}
           @media(prefers-color-scheme:dark){.reader-note-card{background:#302d28;color:#eee8dc;border-color:#51493f}.reader-note-card:not(.active){background:#282621}.reader-note-card header,.reader-note-card footer{color:#c0b3a1}.reader-note-card button:hover,.reader-note-card pre{background:#423a30}#annotation-menu.note-docked{background:#302d28}.reader-note-card footer{border-color:#51493f}}
           `;document.head.append(style);
         })();

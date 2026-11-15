@@ -108,7 +108,7 @@ HTML 文件使用进程内引用计数保护 WebKit 当前载入的文件：清�
 
 `Application/Reading/ReadingNoteActions` 负责输入保留、350 ms 延迟保存、离开时刷新、失败重试、删除撤销与列表定位；`ObsidianActions` 仅在显式保存时附加阅读笔记。`Infrastructure/HTML/Notes/NoteMarkdownRenderer` actor 复用本地 Marked 引擎，以 SwiftSoup 白名单净化，再调用既有 KaTeX 编译数学。Marked 18.2.0 与 MIT 许可证随 `Resources/Marked` 打包；运行时不加载 CDN。Markdown 源文是唯一持久正文，预览仅在内存复用。
 
-`Platform/HTML/HTMLNoteBridge` 隔离消息、预览与晚到结果；`HTMLNotesScript` 管理编辑状态及同一卡片，`HTMLNoteLayoutScript` 负责页边避让、曲线与非交互文字覆盖层，`HTMLNoteStyle` 定义预算和减少动态效果样式。复用语言独立选区接口，保留部分单词和共享对象；所有提示/上浮都在覆盖层绘制，不包装或移动已发布正文。`Features/Reader/ReaderNotesView` 汇总并定位同一笔记。
+`Platform/HTML/HTMLNoteBridge` 隔离消息、预览与晚到结果；`HTMLNotesScript` 管理编辑状态及同一卡片，`HTMLNoteLayoutScript` 负责页边避让与曲线，`HTMLNoteLiftScript` 合成文字、标注颜色、下划线和波浪线的统一非交互上浮层，`HTMLNoteStyle` 定义预算和减少动态效果样式。Selection 保存完整绘制范围并临时减去已转移范围，回落后恢复；波浪线使用互补遮罩，局部转移不影响其他标注。同一锚点更新样式不重播动画。复用语言独立选区接口，保留部分单词和共享对象；所有提示/上浮都在覆盖层绘制，不包装或移动已发布正文。`Features/Reader/ReaderNotesView` 汇总并定位同一笔记。
 
 笔记页边卡片、波浪线和文字覆盖层采用文档坐标，滚动由 WebKit 原生合成处理；只有激活、窗口/正文几何变化才计算布局。编辑卡片固定于当前视口，滚动只使用缓存锚点更新一条连接路径，不读取逐字几何、不重建装饰 DOM。上浮覆盖限制最多 2000 个字符，超长选区保留原文字体与完整锚点，不为动画产生无界逐字测量。编辑器在同一区域装饰 Markdown 源文，数学合并 60 ms 输入后异步编译，落盘仍为 350 ms。悬停通过缓存文档坐标命中，文字与卡片之间使用方向性通道；显式数值高度与位移共用一次短动画，避免 auto 高度和 CSS 动画竞争。点击进入编辑时独立使用一次可取消的 transform/opacity 入场动画，缩放原点来自连接终点；浮卡入场临时连线结束后移除，不产生定时器重排或持久数据。
 

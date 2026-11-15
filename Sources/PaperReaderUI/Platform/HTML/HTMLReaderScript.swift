@@ -5,7 +5,7 @@ enum HTMLReaderScript {
     static let source =
         HTMLNativeNoteEditorScript.source + HTMLSelectionScript.source + HTMLAnnotationMenuScript.source
         + HTMLNoteStyle.source
-        + HTMLNoteLayoutScript.source + HTMLNotesScript.source + #"""
+        + HTMLNoteLiftScript.source + HTMLNoteLayoutScript.source + HTMLNotesScript.source + #"""
             (() => {
               const send = value => window.webkit.messageHandlers.reader.postMessage(value);
               const root = document.getElementById('reader');
