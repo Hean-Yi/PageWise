@@ -4,7 +4,7 @@ import PaperReaderKit
 import PaperReaderUI
 import Testing
 
-@MainActor @Test func multiplePDFsInOneImportAllReflowAndSurviveRestart() async throws {
+@MainActor @Test func multiplePDFsInOneImportPreserveOriginalsWithoutReflowAcrossRestart() async throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: root) }
     let model = try ReaderModel(root: root)
@@ -24,7 +24,7 @@ import Testing
 
     for (index, id) in ids.enumerated() {
         let paper = try #require(model.state.papers.first { $0.id == id })
-        #expect(paper.canReflow)
+        #expect(!paper.canReflow && paper.blocks.isEmpty && paper.htmlReading == nil)
         #expect(paper.previewPages.isEmpty)
         #expect(try Data(contentsOf: root.appendingPathComponent(paper.originalPath)) == originals[index])
         #expect(try Data(contentsOf: urls[index]) == originals[index])

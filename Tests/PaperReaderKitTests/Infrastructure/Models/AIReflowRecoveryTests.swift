@@ -59,11 +59,14 @@ private actor RecoveryResult {
 {
     let transport = RecoveryTransport(interruptSecond: interrupt)
     let capture = RecoveryResult()
-    let group = UUID()
     let sources = ["Correspondence: person@example.invalid", "First whole paragraph.", "Second whole paragraph."].map {
         text in
         var block = TextBlock(sourcePage: 0, text: text)
-        block.reflowOrderGroup = group
+        if text.hasPrefix("Correspondence:") {
+            block.richContent = RichContent(
+                html: "<div class='front-matter'>\(text)</div>", translationInput: "", mathematics: [:],
+                mathDescriptions: [:])
+        }
         return block
     }
     let client = ModelClient(transport: transport)

@@ -12,22 +12,6 @@ struct SVGImageDocument: Sendable {
     let imageReferences: Set<String>
     let isAnimated: Bool
 
-    var coverageText: String {
-        func labels(_ node: Node, inText: Bool = false) -> String {
-            switch node {
-            case .text(let value): return inText ? value : ""
-            case .element(let name, let attrs, let children):
-                if ["defs", "style", "title", "desc", "annotation", "annotation-xml"].contains(name) { return "" }
-                let glyph = ["use", "path"].contains(name) ? attrs["data-text"] ?? "" : ""
-                return glyph
-                    + children.map {
-                        labels($0, inText: inText || name == "text" || name == "tspan" || name == "foreignObject")
-                    }.joined()
-            }
-        }
-        return labels(root)
-    }
-
     static func parse(_ data: Data) throws -> SVGImageDocument {
         guard data.count <= 8_000_000,
             var xml = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .utf16),

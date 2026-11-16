@@ -1,7 +1,7 @@
 import Foundation
 
 /// Startup-only cleanup: all committed page paths (including legacy annotated previews) are retained.
-public enum ReflowArtifactCleanup {
+public enum ReadingArtifactCleanup {
     public static func removeUncommittedFiles(in root: URL, papers: [Paper]) throws {
         let manager = FileManager.default
         let papersDirectory = root.appendingPathComponent("Papers", isDirectory: true)

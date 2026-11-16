@@ -5,7 +5,6 @@ public struct HTMLReadingArtifact: Codable, Sendable, Equatable {
     public var relativePath: String
     public var sections: [PageArtifact]
     public var assets: [String]
-    public var fullSource: Bool?
     public init(relativePath: String, sections: [PageArtifact], assets: [String]) {
         self.relativePath = relativePath
         self.sections = sections

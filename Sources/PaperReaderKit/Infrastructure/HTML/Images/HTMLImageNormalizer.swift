@@ -3,7 +3,7 @@ import SwiftSoup
 
 enum HTMLImageNormalizer {
     static func normalize(_ article: Element, source: URL, transport: any HTTPTransport) async throws {
-        let markers = ["data-pr-image", "data-pr-notice", "data-pr-failure", "data-pr-coverage"]
+        let markers = ["data-pr-image", "data-pr-notice", "data-pr-failure"]
         for element in try article.select("*") {
             for marker in markers { try element.removeAttr(marker) }
         }
@@ -27,7 +27,6 @@ enum HTMLImageNormalizer {
                 let size = images.reduce(0) { $0 + $1.dataURI.utf8.count }
                 guard size + embeddedBytes <= 80_000_000 else { throw ReaderError.message("图片总量超出本地处理范围。") }
                 embeddedBytes += size
-                try wrapper.attr("data-pr-coverage", images.map(\.coverageText).joined(separator: " "))
                 for image in images {
                     let node = try Element(Tag.valueOf("img"), "")
                         .attr("src", image.dataURI).attr("width", String(image.width)).attr(
@@ -41,11 +40,6 @@ enum HTMLImageNormalizer {
                 throw CancellationError()
             } catch {
                 try Task.checkCancellation()
-                if element.tagName() == "svg" {
-                    // Failed SVG text may locate its source page, but never counts as
-                    // successfully displayed content during PDF coverage checks.
-                    try wrapper.attr("data-pr-coverage", element.text())
-                }
                 try appendNotice("图片未能转换，请查看原版。" + error.localizedDescription, to: wrapper, failed: true)
             }
             try element.replaceWith(wrapper)

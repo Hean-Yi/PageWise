@@ -1,3 +1,4 @@
+import CoreText
 import Foundation
 import PDFKit
 import PaperReaderKit
@@ -164,6 +165,8 @@ import Testing
     let model = try ReaderModel(root: root)
     await model.load()
     await model.addDemo()
+    // A previously saved source block exercises citation navigation independently of import.
+    model.state.papers[0].blocks = [TextBlock(sourcePage: 1, text: "Original fixture evidence.")]
     let paper = try #require(model.paper)
     await model.loadNavigation()
     let items = model.navigationItems
@@ -529,8 +532,25 @@ private func splitSearchPaper() -> Paper {
             + String(
                 repeating: "The long original paragraph stays on immutable pages while its translation follows. ",
                 count: 130))
-    let pages = try PageRenderer().render(
-        [BilingualBlock(block: block, translation: translation)], to: root, prefix: "long-search")
+    let pages = try [block.text.prefix(100).description, translation].enumerated().map { index, text in
+        let path = "legacy-\(index).pdf"
+        var bounds = CGRect(x: 0, y: 0, width: 612, height: 792)
+        let context = try #require(CGContext(root.appendingPathComponent(path) as CFURL, mediaBox: &bounds, nil))
+        context.beginPDFPage(nil)
+        let attributed = NSAttributedString(
+            string: text,
+            attributes: [
+                NSAttributedString.Key(kCTFontAttributeName as String): CTFontCreateWithName(
+                    "PingFangSC-Regular" as CFString, 12, nil)
+            ])
+        let framesetter = CTFramesetterCreateWithAttributedString(attributed)
+        CTFrameDraw(
+            CTFramesetterCreateFrame(
+                framesetter, CFRange(), CGPath(rect: bounds.insetBy(dx: 50, dy: 50), transform: nil), nil), context)
+        context.endPDFPage()
+        context.closePDF()
+        return PageArtifact(blockIDs: [block.id], sourcePage: 0, relativePath: path)
+    }
     var paper = Paper(
         title: "Long local fixture", digest: "long", originalPath: "original.pdf", pageCount: 1, blocks: [block],
         warnings: [], canReflow: true)

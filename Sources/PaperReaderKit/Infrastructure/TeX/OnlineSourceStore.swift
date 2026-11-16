@@ -31,6 +31,7 @@ public actor OnlineSourceStore {
             source.archiveDigest = digest
         }
         paper.onlineSource = source
+        paper.canReflow = true
         if let notice = source.notice { paper.warnings.append(notice) }
         return paper
     }
@@ -40,7 +41,7 @@ public actor OnlineSourceStore {
     {
         guard let source = paper.onlineSource,
             let identifier = ArxivClient.versionedIdentifier(source.candidateID)
-        else { return OnlineReflowEvidence(blocks: [], route: "pdf", warnings: []) }
+        else { throw ReaderError.message("此论文没有可用的线上源码，请阅读原版 PDF。") }
         let original = try Data(contentsOf: root.appendingPathComponent(paper.originalPath))
         guard TeXPaperParser.digest(original) == paper.digest else {
             throw ReaderError.message("原始 PDF 内容已变化，未发布新版本。")
@@ -79,8 +80,7 @@ public actor OnlineSourceStore {
             try Task.checkCancellation()
             if (error as? URLError)?.code == .cancelled { throw CancellationError() }
         }
-        warnings.append("结构化来源不可用，本次重排使用原 PDF。")
-        return OnlineReflowEvidence(blocks: [], route: "pdf", warnings: warnings)
+        throw ReaderError.message((warnings + ["未能取得完整的 TeX 或同版本 HTML，请阅读原版 PDF。"]).joined(separator: "\n"))
     }
 }
 

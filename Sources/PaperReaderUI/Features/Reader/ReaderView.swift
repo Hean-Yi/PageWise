@@ -152,7 +152,7 @@ struct ReaderView: View {
                         } else if value == "reflow" {
                             model.readingChoicePresented = false
                             model.mode = "reflow"
-                        } else if model.paper?.htmlReading != nil {
+                        } else if model.paper?.readingPages.isEmpty == false {
                             model.openRetainedReading(model.retainedReadingID)
                         } else {
                             translate()
@@ -161,35 +161,47 @@ struct ReaderView: View {
             ) {
                 Text("原版").tag("original")
                 if model.paper?.previewPages.isEmpty == false { Text("旧重排").tag("reflow") }
-                Text("双语重排").tag("translated")
+                if model.paper?.htmlReading != nil || model.paper?.translatedPages.isEmpty == false
+                    || model.paper?.onlineSource != nil
+                {
+                    Text("双语重排").tag("translated")
+                }
             }.pickerStyle(.segmented).labelsHidden().frame(
                 width: model.paper?.previewPages.isEmpty == false ? 240 : 174)
             if model.translating.contains(model.selectedPaperID ?? UUID()) {
                 Button(action: model.pauseTranslation) { Image(systemName: "pause.circle") }
                     .help("暂停重排").accessibilityLabel("暂停重排")
-            } else if model.paper?.reflowJob?.finished != true {
+            } else if model.paper?.reflowJob?.finished != true,
+                (model.paper?.reflowJob == nil && model.paper?.onlineSource != nil)
+                    || model.paper?.reflowJob?.supportsContinuation == true
+            {
                 Button(action: translate) {
                     Label(model.paper?.reflowJob == nil ? "AI 重排" : "继续", systemImage: "sparkles")
                 }
                 .help("AI 双语重排 / 继续")
             }
-            Menu {
-                Button("重新生成双语版") {
-                    if configured { model.startAIReflow(regenerate: true) } else { requestSettings() }
-                }
-                if let versions = model.state.papers.first(where: { $0.id == model.selectedPaperID })?.retainedReadings,
-                    !versions.isEmpty
-                {
-                    Button("当前版本") { model.openRetainedReading(nil) }
-                    ForEach(Array(versions.enumerated()), id: \.element.id) { index, version in
-                        Button("保留版本 \(index + 1)") { model.openRetainedReading(version.id) }
+            if model.paper?.onlineSource != nil || model.paper?.retainedReadings?.isEmpty == false {
+                Menu {
+                    if model.paper?.onlineSource != nil {
+                        Button("重新生成双语版") {
+                            if configured { model.startAIReflow(regenerate: true) } else { requestSettings() }
+                        }
                     }
+                    if let versions = model.state.papers.first(where: { $0.id == model.selectedPaperID })?
+                        .retainedReadings,
+                        !versions.isEmpty
+                    {
+                        Button("当前版本") { model.openRetainedReading(nil) }
+                        ForEach(Array(versions.enumerated()), id: \.element.id) { index, version in
+                            Button("保留版本 \(index + 1)") { model.openRetainedReading(version.id) }
+                        }
+                    }
+                } label: {
+                    Image(systemName: "ellipsis.circle")
                 }
-            } label: {
-                Image(systemName: "ellipsis.circle")
+                .disabled(model.translating.contains(model.selectedPaperID ?? UUID()))
+                .help("阅读版本")
             }
-            .disabled(model.translating.contains(model.selectedPaperID ?? UUID()))
-            .help("阅读版本")
             Spacer(minLength: 0).frame(maxWidth: width < 760 ? .infinity : 0)
             Button {
                 requestNoteSave()

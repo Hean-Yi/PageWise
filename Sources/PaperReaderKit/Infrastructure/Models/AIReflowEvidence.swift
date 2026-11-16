@@ -46,21 +46,6 @@ struct AIReflowEvidence: Sendable {
         return UUID(uuidString: wireID)
     }
 
-    var orderGroups: [[UUID]] {
-        var groups: [[UUID]] = []
-        var previous: UUID?
-        for source in sources {
-            let group = source.block.reflowOrderGroup
-            if let group, group == previous {
-                groups[groups.count - 1].append(source.block.id)
-            } else {
-                groups.append([source.block.id])
-            }
-            previous = group
-        }
-        return groups
-    }
-
     init(_ blocks: [TextBlock]) throws {
         guard !blocks.isEmpty, blocks.count <= 128, Set(blocks.map(\.id)).count == blocks.count else {
             throw ReaderError.message("重排窗口为空、重复或过大，请重新准备资料。")
@@ -87,17 +72,9 @@ struct AIReflowEvidence: Sendable {
     private static func source(_ block: TextBlock) throws -> Source {
         let rich = block.richContent
         let doc = try SwiftSoup.parseBodyFragment(rich?.html ?? "")
-        let translates = block.preservesSourcePage != true && (rich?.requiresTranslation ?? !block.text.isEmpty)
+        let translates = rich?.requiresTranslation ?? !block.text.isEmpty
         let kind: AIReflowPlan.Kind
-        if block.preservesSourcePage == true {
-            kind = .preservedSource
-        } else if block.sourcePage == 0, block.text.count <= 600, rich?.isFigure != true,
-            block.text.range(
-                of: #"(?i)^\s*(?:correspondence|corresponding authors?|affiliations?|e-?mail|contact)\s*[:：]"#,
-                options: .regularExpression) != nil
-        {
-            kind = .frontMatter
-        } else if try !doc.select("table").isEmpty() {
+        if try !doc.select("table").isEmpty() {
             kind = .table
         } else if try !doc.select("pre,code,.ltx_listing").isEmpty(), !translates {
             kind = .code
@@ -210,7 +187,6 @@ struct AIReflowEvidence: Sendable {
             rich.translationInput = translates ? inputParts.joined(separator: " ") : ""
             rich.mathematics = mathematics
             rich.mathDescriptions = descriptions
-            rich.restoredTranslationHTML = nil
             result.richContent = rich
         } else if !translates {
             result.richContent = RichContent(
@@ -234,9 +210,6 @@ struct AIReflowEvidence: Sendable {
         }
         result.imageWarnings = selected.flatMap { $0.block.imageWarnings ?? [] }
         result.hasImageFailure = selected.contains { $0.block.hasImageFailure == true }
-        result.reflowOrderGroup = nil
-        result.reflowBounds = nil
-        result.reflowMayExclude = nil
         result.excludedFromReading = excluded ? true : nil
         return (result, objectMarkers, translates)
     }

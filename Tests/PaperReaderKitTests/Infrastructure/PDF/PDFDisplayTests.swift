@@ -23,16 +23,16 @@ import Testing
 @Test @MainActor func displayCombinesPagesAndRestoresExactSourceTextAndGeometry() throws {
     let root = try displayTestDirectory()
     defer { try? FileManager.default.removeItem(at: root) }
-    let blocks = [
-        BilingualBlock(
-            block: TextBlock(sourcePage: 0, text: "First source remains selectable. x² = 4."), translation: "第一页保持可选择。"),
-        BilingualBlock(
-            block: TextBlock(sourcePage: 1, text: "Second source has a separate page anchor."),
-            translation: "第二页具有独立的页面定位。"),
-    ]
-    let artifacts = try PageRenderer().render(blocks, to: root, prefix: "display")
-    #expect(artifacts.count == 2)
-    let urls = artifacts.map { root.appendingPathComponent($0.relativePath) }
+    let original = root.appendingPathComponent("demo.pdf")
+    try DemoPaper.write(to: original)
+    let sourceDocument = try #require(PDFDocument(url: original))
+    let urls = try (0..<sourceDocument.pageCount).map { index in
+        let document = PDFDocument()
+        document.insert(try #require(sourceDocument.page(at: index)?.copy() as? PDFPage), at: 0)
+        let url = root.appendingPathComponent("legacy-\(index).pdf")
+        #expect(document.write(to: url))
+        return url
+    }
     let fixture = try #require(PDFDocument(url: urls[1]))
     let annotated = try #require(fixture.page(at: 0))
     let bounds = CGRect(x: 56, y: 200, width: 80, height: 20)
@@ -71,7 +71,7 @@ import Testing
     }
     let firstPage = try #require(displayed.page(at: 0))
     let firstSource = try #require(sources[0].page(at: 0))
-    for text in ["第一页", "x²"] {
+    for text in ["Understanding", "Attention"] {
         let range = try #require(firstSource.string).range(of: text)
         let selectionRange = NSRange(try #require(range), in: try #require(firstSource.string))
         let selection = try #require(firstPage.selection(for: selectionRange))
@@ -92,28 +92,6 @@ import Testing
     }
     #expect(throws: (any Error).self) {
         try PDFDisplayDocument.load(urls: [file], expectedPageCount: 1)
-    }
-}
-
-@Test @MainActor func displayHandlesMultipageDemoReflow() async throws {
-    let root = try displayTestDirectory()
-    defer { try? FileManager.default.removeItem(at: root) }
-    let input = root.appendingPathComponent("demo.pdf")
-    try DemoPaper.write(to: input)
-    let paper = try await PDFImporter(root: root.appendingPathComponent("library")).importPDF(at: input)
-    let artifacts = try PageRenderer().render(
-        paper.blocks.map { BilingualBlock(block: $0, translation: nil) }, to: root, prefix: "display-demo")
-    #expect(artifacts.count > 1)
-    let urls = artifacts.map { root.appendingPathComponent($0.relativePath) }
-    let display = try PDFDisplayDocument.load(urls: urls, expectedPageCount: artifacts.count)
-    for index in artifacts.indices {
-        let sourceDocument = try #require(PDFDocument(url: urls[index]))
-        let source = try #require(sourceDocument.page(at: 0))
-        let page = try #require(display.document.page(at: index))
-        let selection = try #require(page.selection(for: NSRange(location: 0, length: page.numberOfCharacters)))
-        withExtendedLifetime(sourceDocument) {
-            #expect(display.text(for: selection, on: index) == source.string)
-        }
     }
 }
 

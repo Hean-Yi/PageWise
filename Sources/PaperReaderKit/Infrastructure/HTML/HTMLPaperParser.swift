@@ -8,7 +8,7 @@ public actor HTMLPaperParser {
 
     public func parse(_ data: Data, at source: URL, normalizeMath: Bool = true) async throws -> [TextBlock] {
         guard data.count <= 8_000_000, let html = String(data: data, encoding: .utf8)
-        else { throw ReaderError.message("HTML 正文结构无法确认，使用 PDF 解析。") }
+        else { throw ReaderError.message("HTML 正文结构无法确认，请阅读原版 PDF。") }
         let document = try SwiftSoup.parse(html)
         document.outputSettings().syntax(syntax: .xml).escapeMode(.xhtml).prettyPrint(pretty: false)
         for meta in try document.select("meta[name=citation_arxiv_id]") {
@@ -18,7 +18,7 @@ public actor HTMLPaperParser {
             }
         }
         guard let article = try document.select("article.ltx_document").first() else {
-            throw ReaderError.message("HTML 正文结构无法确认，使用 PDF 解析。")
+            throw ReaderError.message("HTML 正文结构无法确认，请阅读原版 PDF。")
         }
         try HTMLFrontMatterNormalizer.normalize(article)
         // LaTeXML can report an unknown floating-layout wrapper while preserving the
@@ -118,24 +118,8 @@ public actor HTMLPaperParser {
                     || containsTable
                     ? "" : converted.input.trimmingCharacters(in: .whitespacesAndNewlines),
                 mathematics: mathematics, mathDescriptions: descriptions)
-            let captions = try element.select("figcaption")
-            if captions.count == 1, let caption = captions.first() {
-                var captionMath: [String: String] = [:]
-                var captionDescriptions: [String: String] = [:]
-                let part = try Self.convert(caption, mathematics: &captionMath, descriptions: &captionDescriptions)
-                block.richContent?.figureCaption = FigureCaption(
-                    text: part.text.trimmingCharacters(in: .whitespacesAndNewlines), html: part.html,
-                    translationInput: part.input.trimmingCharacters(in: .whitespacesAndNewlines),
-                    mathematics: captionMath, mathDescriptions: captionDescriptions)
-            }
             let images = try element.select("img")
-            block.richContent?.imageSizes = try images.map {
-                PaperImageSize(width: Double(try $0.attr("width")) ?? 0, height: Double(try $0.attr("height")) ?? 0)
-            }
             block.richContent?.isFigure = !images.isEmpty() || element.hasAttr("data-pr-image")
-            block.richContent?.imageTextForCoverage = try element.select("[data-pr-coverage]").map {
-                try $0.attr("data-pr-coverage")
-            }.joined(separator: " ")
             block.imageWarnings = try element.select("[data-pr-notice]").map { try $0.text() }
             block.hasImageFailure = try !element.select("[data-pr-failure]").isEmpty()
             return block

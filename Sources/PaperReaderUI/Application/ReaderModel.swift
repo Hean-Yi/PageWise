@@ -11,9 +11,7 @@ public final class ReaderModel {
     public var message: String?
     public var status = "仅保存在此设备"
     public var isImporting = false
-    public var isRepairingReflow = false
-    @ObservationIgnored var reflowRepairTask: Task<Void, Never>?
-    public var importProgress: PDFImportProgress?
+    public var importProgress: String?
     public var selectionHTMLRange: [Int]?
     public var requestedReadingNote: UUID?
     public var readingNoteNavigationToken = UUID()
@@ -24,7 +22,6 @@ public final class ReaderModel {
     @ObservationIgnored var noteSaveTask: Task<Void, Never>?
     public var htmlSelection: [HTMLTextSelection] = []
     public var usesHTMLReading: Bool { mode == "translated" && paper?.htmlReading != nil }
-    var importProgressToken: UUID?
     public var translationDraft: TranslationDraft?
     public var translationPauseReason: String?
     public var readingChoicePresented = false
@@ -98,7 +95,8 @@ public final class ReaderModel {
     }
     public var showingReflowLoading: Bool {
         mode == "translated" && retainedReadingID == nil
-            && (paper?.reflowJob != nil || selectedPaperID.map { translating.contains($0) } == true)
+            && (paper?.reflowJob?.supportsContinuation == true
+                || selectedPaperID.map { translating.contains($0) } == true)
             && paper?.reflowJob?.hasPresentedContent != true
     }
     public var activePages: [PageArtifact] {
@@ -123,12 +121,11 @@ public final class ReaderModel {
         guard !loaded else { return }
         do {
             state = try await store.load()
-            do { try ReflowArtifactCleanup.removeUncommittedFiles(in: root, papers: state.papers) } catch {
+            do { try ReadingArtifactCleanup.removeUncommittedFiles(in: root, papers: state.papers) } catch {
                 status = "部分临时文件暂未清理，将在下次打开时重试。"
             }
             if let folder = try? await vault.directory() { vaultName = folder.lastPathComponent }
             loaded = true
-            for id in state.papers.map(\.id) { await retireUnusedPreview(for: id) }
         } catch {
             loadFailure = error.localizedDescription
             message = error.localizedDescription
@@ -153,7 +150,7 @@ public final class ReaderModel {
                 retainedReadingID =
                     current.retainedReadings?.first(where: { $0.readingPages.contains { $0.id.uuidString == key } })?.id
             }
-            readingChoicePresented = current.deferredReflow == true && current.reflowJob == nil && position == nil
+            readingChoicePresented = current.onlineSource != nil && current.reflowJob == nil && position == nil
         }
         selectionText = ""
         selectionRects = []
@@ -173,7 +170,6 @@ public final class ReaderModel {
         cancellable: Bool = false, adding importedPaper: Paper? = nil,
         shelfChange: ShelfChange? = nil, importShelfID: UUID? = nil,
         orderChange: LibraryOrderChange? = nil, publishingReflow publication: Paper? = nil,
-        repairBase: Paper? = nil, changedReadingKeys: Set<String> = [],
         presentingReflow: (paperID: UUID, jobID: UUID)? = nil
     ) async -> Bool {
         guard loaded else { return false }
@@ -198,12 +194,6 @@ public final class ReaderModel {
                 if let publication {
                     guard let index = snapshot.papers.firstIndex(where: { $0.id == publication.id }) else {
                         throw ReaderError.message("论文已不在书库中，未发布页面。")
-                    }
-                    if let repairBase {
-                        guard snapshot.papers[index].htmlReading == repairBase.htmlReading,
-                            Self.protectedReadingKeys(in: snapshot, paperID: publication.id).isDisjoint(
-                                with: changedReadingKeys)
-                        else { throw ReaderError.message("修复期间论文或批注已变化，保留原版式。") }
                     }
                     Self.applyReflow(publication, to: &snapshot.papers[index])
                 }
@@ -251,7 +241,6 @@ public final class ReaderModel {
         if paper.onlineSource?.archivePath == nil, let source = publication.onlineSource { paper.onlineSource = source }
         if alreadyPresented { paper.reflowJob?.hasPresentedContent = true }
         paper.retainedReadings = publication.retainedReadings
-        paper.deferredReflow = publication.deferredReflow
         paper.canReflow = publication.canReflow
         paper.warnings = publication.warnings
         paper.blocks = publication.blocks

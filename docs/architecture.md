@@ -73,73 +73,35 @@ Swift Package 自动递归发现每个 target 目录下的 Swift 文件。当前
 
 `.build/`、`.local/`、构建结果、验收样例及日志属于忽略的本地制品。用户资料不参与目录整理。已执行的规格与计划留在 `docs/superpowers/` 作为历史记录；当前导航以 README、本文和 engineering.md 为准。
 
-## 结构化重排的文件归属
+## 阅读生成与文件归属
 
-`Infrastructure/PDF/Import/PDFRegionalReflow` 负责 PDFKit 行碎片合并、阅读顺序和局部复杂区域，复用 `Figures` 像素与裁剪组件。`PDFSourceIdentity` 只接受页边明确版本身份；`PDFBibliographyRecovery` 处理唯一匹配的引用补全；`PDFTextCoverage` 检查旧整页补充是否已被逐行覆盖。字符计数是完整性门槛，不代表公式结构或视觉质量已经验收。
+| 路径 | 职责 |
+| --- | --- |
+| `Infrastructure/PDF/Import/PDFImporter` | 校验并保存原始 PDF，计算哈希和轻量元信息 |
+| `Infrastructure/PDF/{Display,Navigation}` | 原版与历史固定页的展示、目录和定位 |
+| `Infrastructure/Discovery/ArxivClient` | 可信候选与同版本 TeX/PDF 下载 |
+| `Infrastructure/TeX` | 有界解包、静态包含/宏展开、语义标记、源码保存和 TeX/HTML 路由 |
+| `Infrastructure/HTML` | HTML 净化、图片本地化、公式处理与最终阅读文件追加 |
+| `Infrastructure/Models` | SSE、结构计划、翻译与有界恢复；不接受模型生成的 HTML/资源地址 |
+| `Infrastructure/Persistence/ReadingArtifactCleanup` | 清理未引用的应用制品，保留旧版本 |
+| `UI/Application/Reading/ImportActions` | 导入、哈希去重、补齐线上来源和提交 |
+| `UI/Application/Reading/AIReflowActions` | 保存来源、计划与完整块，协调暂停、恢复和新版本 |
+| `ReaderSmoke/TeXPreviewSmoke` | 原创离线 TeX/HTML、原版完整性与重启验证 |
 
-`Infrastructure/HTML/HTMLFrontMatterNormalizer` 结合前部上下文、语义规则及结构提示合并元信息，不遍历正文做关键词删除。`HTMLRepairAlignment` 通过唯一相邻文本锚点匹配失败图件；`HTMLReflowRepair` 在新文件中更新可安全修改的内容。`Application/Reading/RepairReflowActions` 协调可取消的当前论文/书库修复；ReaderModel 串行保存时再次验证基线文件和最新批注依赖。审计入口放在 ReaderSmoke，报告和真实论文留在本地忽略目录。
+表内 UI 指 `PaperReaderUI`，其余适配路径位于 `PaperReaderKit`。PDF 目录没有重排生成器。独立 TeX 图件可以使用 PDF 图片格式，由图片解码器处理；这不读取或转换论文原 PDF 正文。
 
-`Infrastructure/HTML/HTMLPaperParser.swift` 负责受限 HTML/图片解析；`Infrastructure/PDF/Reflow/StructuredPageRenderer.swift` 负责固定页生成，`ReflowArtifactCleanup.swift` 只清理未提交的本应用制品。`Application/Reading/ImportAndReflowActions.swift` 协调导入、翻译和提交，`ReflowRetentionActions.swift` 检查旧预览的用户依赖；View 不直接解析文档或调用模型。第三方许可证放在 `PaperReaderKit/Resources` 并随资源包分发。
+`OnlinePaperSource` 保存来源版本、源码路径和哈希；`TeXSourceAnchor` 保存主文件与展开块序号。源码失败后只尝试同版本 HTML，失败交回原版阅读。`ReflowJob` 保存可恢复来源、计划与完成记录；仅 preparing/tex/html 路线可续跑，旧记录继续解码但不进入转换。
 
-`Infrastructure/HTML/Images` 分离图片来源本地化、ImageIO/CoreGraphics 解码、SVG 静态文档规范化和 HTML 图件替换。领域层只保存尺寸、局部失败提示和短期覆盖核验数据，不依赖图片或 WebKit 类型。
+`AIReflowEvidence` 建立来源和对象身份；`AIReflowEnvelopeStream` 增量解析 JSON events；`AIReflowStream` 校验原文顺序、覆盖、完整块、公式和恢复前缀。协议失败时 `AIReflowRecovery` 复用同一校验，按整段恢复。`ChatCompletionStream` 解码 SSE 文本和工具参数；`NetworkTransport` 复用 URLSession。密钥通过异步凭据适配读取，View 不直接访问 Keychain 或调用模型。
 
-`Infrastructure/PDF/Import/Figures` 负责 PDF 图注几何定位、灰度像素/连通区域分析和高清裁剪；失败图件替换由 PDFImporter 协调。领域层的 FigureCaption 保存独立图注结构，使补图后仍能翻译图注而不翻译图内标签。`scripts/FigureCropAudit.swift` 与 `audit-figure-crops.sh` 是基于人工真值框的本地开发验证器，不属于应用运行依赖。
+`HTMLReadingStore` 只追加完整块并写新文件。`HTMLReadingArtifact` 的稳定节 ID 同时用于导航、批注与引用，不代表 HTML 纸张分页；重复块拒绝发布。串行保存先提交引用，之后才清理孤立文件；WebKit 打开的文档有引用保护。`RetainedReading` 保存旧版本，旧 PDF/HTML 数据只保留阅读与定位兼容，旧生成代码已删除。
 
+## 平台阅读与笔记
 
-## HTML 连续阅读
+`Platform/HTML` 负责 WebKit、语言独立选区、浮层、图片预览和阅读笔记；`Application/Reading` 负责可持久化动作。HTML 高亮使用稳定块、语言和字符范围；旧字段继续按原语义读取，不自动扩大或迁移范围。共享图片/表格/公式按对象定位。
 
-`Domain/Papers/HTMLReadingArtifact` 描述唯一已提交 HTML、资源引用与稳定内容锚点；`Paper.readingPages` 为 HTML 内容段和旧 PDF 页面提供统一导航，不代表 HTML 仍然分页。`Infrastructure/HTML/Reading` 负责文件生成、资源去重与未提交文件回收；`Platform/HTML` 负责 WKWebView、隔离脚本桥、选文和滚动事件。HTML 先保存完整原文，只填充待译位置，已完成段落不改写；文本高亮使用 UTF-16 范围和原文核验，旧 PDF 高亮继续使用矩形坐标。
+`Domain/Reading/AnnotationRangeEditor` 处理局部范围编辑；`ReadingNote` 保存独立锚点、Markdown 与软删除状态。笔记编辑器资源由 `scripts/note-editor` 构建，预览不写入数据库。页边卡片使用文档坐标跟随原生滚动，编辑时保持位置；动画不能改变正文布局。
 
-阅读器最多保留一个空的 WebKit 实例用于预热，网站数据存储为非持久化；它不保留论文版本或另建磁盘缓存。实际文档及资源属于用户阅读制品，随数据库提交事务发布。
+`Infrastructure/HTML/Mathematics` 在 JavaScriptCore 中用随包 KaTeX 编译静态 MathML；图片模块保留 SVG 与受支持位图/PDF 图件，拒绝活动资源。第三方资源与许可证随 `Resources` 分发。
 
-`Infrastructure/HTML/Mathematics` 使用随包 KaTeX 在 JavaScriptCore 中将受支持 LaTeX 编译为静态 MathML；公式库和许可证位于 `Resources/KaTeX`。`Application/Reading/ReparseActions` 负责旧导入的显式重试、原始文件身份核对与事务发布，拒绝改写已发布版式。
-
-`Infrastructure/Models/ChatCompletionStream` 解码 SSE 文本与工具参数增量，`ParagraphTranslationStream` 验证顺序段落边界并逐段提交。`NetworkTransport` 复用 URLSession，连接能否保持由系统与服务器协商；不承诺整个长文只使用一次 HTTP 请求。UI 临时草稿不进入数据库，已完成段落提交后替换对应草稿。
-
-HTML 文件使用进程内引用计数保护 WebKit 当前载入的文件：清理跳过正在使用的文档，阅读器关闭时释放并清理；重启后无占用的旧文件正常回收。此机制不复制图片，也不累计历史版本。显式重排仅允许无 HTML 批注依赖的内容，保留原始 PDF、论文 ID、可复用块 ID 与已保存译文中的 MathML。
-
-模型请求通过凭据适配器的异步读取入口访问 Keychain；设备适配器把可能等待系统授权的 SecItemCopyMatching 放到后台任务，完成后检查取消。View 的配置判断不读取密钥；仅状态检测与明确模型操作才读取，密钥不落盘。
-
-`Platform/HTML/HTMLSelectionScript` 负责语言独立的文本范围、跨段过滤、共享对象选择与文字选区绘制；`Application/Reading/HTMLTextSelection` 保存本次选文的有序块范围，问答固定全部选中块为优先证据。持久化 Highlight 的可选 htmlTarget 保存 source/translation 文本坐标或块内 object 索引；新文字坐标排除共享对象，译文发布后才可选择。图片、表格与公式以整体对象轮廓标记，引用仍固定原文块为证据，文本模型不接收图片字节。缺少 htmlTarget 时，可选 linksTranslation 继续解释此前的源文本与整段译文关联；两者均缺省继续解释旧整段 DOM 坐标，不迁移旧记录或改变已发布文本。
-
-
-`Domain/Reading/AnnotationRangeEditor` 负责选区减去旧范围并保留两侧片段，颜色与样式为 Highlight 的可选字段，旧记录默认黄色高亮。`Application/Reading/HTMLAnnotationActions` 协调旧坐标投影校验、范围编辑及选区书签持久化；`Platform/HTML/HTMLAnnotationMenuScript` 只负责浮层、选区覆盖状态和动作消息。下划线用独立覆盖层绘制，窗口/正文尺寸变化时重新定位，不包装或替换正文节点。旧坐标只在用户实际编辑命中记录时显式转换，未命中记录保持原样。
-
-文字标记底色和临时选区底色在正文下方显式按行绘制，CSS Highlight 仅提供前景色。静止与笔记上浮共用 `lineRanges` 的实际字形矩形，避免 WebKit 将跨行范围合并并额外填充行间空白，导致局部抬起时底色高度变化。尺寸变化和字体就绪时刷新两种底色，滚动保持文档坐标，不重新拆行；保存坐标仍为完整字符范围。
-
-
-## HTML 阅读笔记
-
-`Domain/Reading/ReadingNote` 保存独立 NoteAnchor、稳定内容版本、Markdown 源文和软删除状态，不绑定可拆分的 Highlight ID。LibraryState v7 显式为 v1–v6 初始化空笔记集合，保留原批注。重新解析拒绝改写有笔记（包括可撤销删除记录）的版式。
-
-`Application/Reading/ReadingNoteActions` 负责输入保留、350 ms 延迟保存、离开时刷新、失败重试、删除撤销与列表定位；`ObsidianActions` 仅在显式保存时附加阅读笔记。`Infrastructure/HTML/Notes/NoteMarkdownRenderer` actor 复用本地 Marked 引擎，以 SwiftSoup 白名单净化，再调用既有 KaTeX 编译数学。Marked 18.2.0 与 MIT 许可证随 `Resources/Marked` 打包；运行时不加载 CDN。Markdown 源文是唯一持久正文，预览仅在内存复用。
-
-`Platform/HTML/HTMLNoteBridge` 隔离消息、预览与晚到结果；`HTMLNotesScript` 管理编辑状态及同一卡片，`HTMLNoteLayoutScript` 负责页边避让与曲线，`HTMLNoteLiftScript` 合成文字、标注颜色、下划线和波浪线的统一非交互上浮层，`HTMLNoteStyle` 定义预算和减少动态效果样式。Selection 保存完整绘制范围并临时减去已转移范围，回落后恢复；波浪线使用互补遮罩，局部转移不影响其他标注。同一锚点更新样式不重播动画。复用语言独立选区接口，保留部分单词和共享对象；所有提示/上浮都在覆盖层绘制，不包装或移动已发布正文。`Features/Reader/ReaderNotesView` 汇总并定位同一笔记。
-
-笔记页边卡片、波浪线和文字覆盖层采用文档坐标，滚动由 WebKit 原生合成处理；只有激活、窗口/正文几何变化才计算布局。编辑卡片固定于当前视口，滚动只使用缓存锚点更新一条连接路径，不读取逐字几何、不重建装饰 DOM。上浮覆盖限制最多 2000 个字符，超长选区保留原文字体与完整锚点，不为动画产生无界逐字测量。编辑器在同一区域装饰 Markdown 源文，数学合并 60 ms 输入后异步编译，落盘仍为 350 ms。悬停通过缓存文档坐标命中，文字与卡片之间使用方向性通道；显式数值高度与位移共用一次短动画，避免 auto 高度和 CSS 动画竞争。点击进入编辑时独立使用一次可取消的 transform/opacity 入场动画，缩放原点来自连接终点；浮卡入场临时连线结束后移除，不产生定时器重排或持久数据。
-
-`Platform/HTML/NoteEditor/Editor.js` 使用 CodeMirror 6 的状态、Markdown 语法树和装饰层，保持 Markdown 字符串为唯一正文，撤销与输入法由编辑器处理。公式及表格复用 Swift 净化后的渲染结果，点击回到对应源码；装饰替换范围为原子范围，普通加粗文字仍按字符移动光标。`HTMLNativeNoteEditorScript` 加载随应用分发的本地 bundle，不加载 CDN。修改后运行 `npm ci --prefix scripts/note-editor` 与 `npm run build --prefix scripts/note-editor`；依赖和锁文件位于该脚本目录，产物与依赖许可证在 `NoteEditor.bundle`，均需提交。Node 只用于开发时构建，Mac/iPad 运行时不依赖它。
-
-
-## 按需联合重排（v8）
-
-`PDFOriginalImport` 只保存原始 PDF；`ReflowEvidenceExtractor` 在用户选择重排后验证并打开已保存 PDF，按页提取文字和必要的 `PDF/Import/OCR` Vision 识别，不调用发现服务或重复导入。OCR 只接受可核验英文正文，未知区域保留局部图，不依赖 Mac 服务。
-
-`PDFModelPageEvidence` 将图表/公式限制在局部裁图，剩余文字保留为带归一化坐标的证据。`TextBlock.reflowOrderGroup` 允许模型在同组内排序；`AIReflowStream` 验证完整覆盖、去重、组间顺序及恢复计划。已发布块移除临时排序字段，保留逐来源 provenance；旧确定顺序的来源继续严格保序。
-
-`ReflowJob.nextSourcePage` 是可选提取游标，与本批来源在同次保存中提交；旧记录缺省 nil 表示原有完整来源，新任务从 0 开始。应用在一页来源处理完成后提取下一页，首段生成不等待全文。该可选字段兼容现有 v8，测试覆盖旧记录与重启续接，不改写已发布版式。
-
-`AIReflowPlan.Kind.nonContent` 与 `frontMatter` 记录明确的非正文处置；`publishAIBlock` 跳过 HTML 发布，仅原子提交完成来源与 `excludedSourceIDs`，不形成空节或虚假阅读进度。小型局部图件提供排除候选提示，模型须根据上下文确认；已知公式不进入装饰候选。
-
-`AIReflowStream` 支持有界响应的 `window_pause` 与引用既有计划的 `window_resume`；必须完成至少一个块才能正常暂停，恢复从已提交前缀开始。应用维持同一生成任务，完整页计划不重建、正文每次最多两块。`ModelStreamFailure.outputLimit` 单独自动续接，连续无进展预算与结构错误预算分离，网络/鉴权错误保持原策略。
-
-`Domain/Papers/AIReflowPlan` 和来源跨度描述受限计划；`Models/AIReflowEvidence` 生成本地证据/对象身份，`AIReflowEnvelopeStream` 增量解析原生 JSON 模式的 `events` 数组，完整事件立即交给 `AIReflowStream` 校验覆盖、次序、公式和恢复前缀，`AIReflowClient` 组织联合请求；紧凑计划的范围和对象引用由本地推导。`AIReflowRecovery` 在协议错误后独立规划，再按完整段落请求纯译文，复用相同覆盖校验和持久化回调；不通过移除来源校验获得表面成功。顶层 JSON 未闭合时即可发布已完整验证的块；截断和多余字段仍拒绝。模型不能输出 HTML 或资源 URL。`ReflowJob` 保存活动断点，已发布 TextBlock 保留最终来源跨度；`RetainedReading` 保留旧版制品。
-
-`Application/Reading/AIReflowActions` 串行提交计划和完整块；首屏放行只在保存队列内修改最新 job 的就绪字段，避免覆盖并发提交。`Features/Reader/ReflowLoadingView` 提供阅读模式选择和加载状态；`Platform/HTML/HTMLCanvas` 以实际正文高度、字体和图片就绪判断首屏。新 HTML 按块追加，旧内容节点保持不变。以上联合入口替代旧的导入后全文 HTML 占位流程；旧实现保留兼容测试。
-
-
-## 线上 TeX 优先来源
-
-`Domain/Papers/OnlinePaperSource` 保存版本、源码哈希、相对路径及可用性提示；`TeXSourceAnchor` 保存确定性展开文档的来源块身份。`Infrastructure/Discovery/ArxivClient.downloadPublication` 负责同版本 TeX/PDF 获取，在线查找与书库 Agent 共用该接口。`Infrastructure/TeX` 分离有界解包、静态包含/宏展开、语义标记生成、图件本地化与来源存储；不执行论文代码或访问包外资源。
-
-`OnlineSourceStore` 在选择重排时准备来源，并按 TeX、同版本 HTML、PDF 的顺序降级。`AIReflowActions` 保存路线及完整来源检查点，再复用联合重排协议；旧任务不自动切换来源。可选字段兼容既有 v8，TeX 原始页码保持未知，合并后的 provenance 继续保留每个源码锚点。`ReaderSmoke/TeXPreviewSmoke` 提供原创离线实际窗口验收资料，不能作为真实论文或模型成功率的证据。
+快照 v9 显式清除未完成 TeX/HTML 任务的旧窗口计划与窗口提交索引，避免已删除元数据改变来源摘要后阻断恢复；已完成来源 ID、已发布内容和用户记录不变。下一次继续只规划未发布部分。

@@ -1,5 +1,6 @@
+import CoreGraphics
+import CoreText
 import Foundation
-import PDFKit
 import PaperReaderKit
 
 /// Original, offline fixture for inspecting the real application's TeX-derived HTML.
@@ -56,22 +57,25 @@ enum TeXPreviewSmoke {
             """#
         let archive = tar([("main.tex", Data(source.utf8)), ("flow.svg", Data(svg.utf8))])
         let blocks = try await TeXPaperParser().parse(archive)
-        let directory = root.appendingPathComponent("source-pages")
-        let pages = try await StructuredPageRenderer().render(
-            blocks.map { BilingualBlock(block: $0, translation: nil) }, to: directory,
-            originalURL: root.appendingPathComponent("unused.pdf"))
-        let document = PDFDocument()
-        for artifact in pages {
-            guard let sourcePDF = PDFDocument(url: directory.appendingPathComponent(artifact.relativePath)) else {
-                throw ReaderError.message("验收原版未生成。")
-            }
-            for index in 0..<sourcePDF.pageCount {
-                guard let page = sourcePDF.page(at: index) else { throw ReaderError.message("验收原版缺页。") }
-                document.insert(page, at: document.pageCount)
-            }
-        }
+        // A one-page original fixture, independent of the application's reading generator.
         let pdf = root.appendingPathComponent("Original Fixture.pdf")
-        guard document.write(to: pdf) else { throw ReaderError.message("验收原版未保存。") }
+        var bounds = CGRect(x: 0, y: 0, width: 612, height: 792)
+        guard let context = CGContext(pdf as CFURL, mediaBox: &bounds, nil) else {
+            throw ReaderError.message("无法生成离线 PDF 样例。")
+        }
+        context.beginPDFPage(nil)
+        let text = NSAttributedString(
+            string: blocks.map(\.text).joined(separator: "\n\n"),
+            attributes: [
+                NSAttributedString.Key(kCTFontAttributeName as String): CTFontCreateWithName(
+                    "Helvetica" as CFString, 10, nil)
+            ])
+        let framesetter = CTFramesetterCreateWithAttributedString(text)
+        let frame = CTFramesetterCreateFrame(
+            framesetter, CFRange(), CGPath(rect: bounds.insetBy(dx: 40, dy: 40), transform: nil), nil)
+        CTFrameDraw(frame, context)
+        context.endPDFPage()
+        context.closePDF()
         var paper = try await PDFImporter(root: root).storeOriginal(at: pdf)
         let candidate = PaperCandidate(
             id: "https://arxiv.org/abs/0000.00000v1", title: "TeX 重排 · 原创离线验收", authors: "Fixture", year: "2026",
@@ -84,7 +88,6 @@ enum TeXPreviewSmoke {
         paper.blocks = evidence.blocks
         paper.reflowJob = ReflowJob(sources: evidence.blocks)
         paper.reflowJob?.evidenceRoute = "tex"
-        paper.reflowJob?.nextSourcePage = paper.pageCount
         paper.reflowJob?.finished = true
         paper.reflowJob?.hasPresentedContent = true
         let pairs = evidence.blocks.map { block -> BilingualBlock in
@@ -102,6 +105,14 @@ enum TeXPreviewSmoke {
         var state = LibraryState()
         state.papers = [paper]
         try await LibraryStore(directory: root).save(state)
+        let loaded = try await LibraryStore(directory: root).load()
+        guard loaded.papers.first?.htmlReading == paper.htmlReading,
+            try Data(contentsOf: pdf) == Data(contentsOf: root.appendingPathComponent(paper.originalPath))
+        else {
+            throw ReaderError.message("重启内容或原版完整性验证失败。")
+        }
+        let note = try NoteMerger.merge(existing: "# 用户笔记\n自己的观点应保留。", body: "离线验收", paperID: paper.id, baseline: nil)
+        guard note.text.contains("自己的观点应保留。") else { throw ReaderError.message("笔记保留验证失败。") }
         print("PASS: TeX source, protected mathematics, localized image, preserved table, persisted reading")
         print("Isolated library: \(root.path)")
     }

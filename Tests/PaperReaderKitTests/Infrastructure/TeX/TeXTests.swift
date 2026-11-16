@@ -149,7 +149,7 @@ func texArchiveRejectsUnsafePaths(_ path: String) {
     #expect(blocks.contains { $0.richContent?.mathematics.isEmpty == false })
     let figure = try #require(blocks.first { $0.richContent?.isFigure == true })
     #expect(figure.richContent?.html.contains("data:image/") == true)
-    #expect(figure.richContent?.figureCaption?.text == "An original rectangular diagram.")
+    #expect(figure.richContent?.html.contains("An original rectangular diagram.") == true)
     let table = try #require(blocks.first { $0.richContent?.html.contains("<table") == true })
     #expect(table.richContent?.requiresTranslation == false)
     let bibliography = try #require(blocks.first { $0.text.contains("An original reference") })
@@ -214,9 +214,9 @@ private actor SourceFallbackDiscovery: PaperDiscovery {
     let html = try await sourceStore.prepare(paper: noSource, root: root, discovery: discovery)
     #expect(html.route == "html")
     #expect(html.blocks.map(\.text) == ["HTML fallback"])
-    let fallback = try await sourceStore.prepare(paper: noSource, root: root, discovery: SourceFallbackDiscovery())
-    #expect(fallback.route == "pdf" && fallback.blocks.isEmpty)
-    #expect(!fallback.warnings.isEmpty)
+    await #expect(throws: (any Error).self) {
+        try await sourceStore.prepare(paper: noSource, root: root, discovery: SourceFallbackDiscovery())
+    }
     try Data("changed".utf8).write(to: root.appendingPathComponent(paper.originalPath))
     await #expect(throws: (any Error).self) {
         try await sourceStore.prepare(paper: attached, root: root, discovery: discovery)

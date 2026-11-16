@@ -41,7 +41,6 @@ private let vectorFigure = """
         let block = try #require(blocks.first)
         #expect(block.hasImageFailure == false)
         #expect(block.richContent?.isFigure == true)
-        #expect(block.richContent?.imageSizes == [PaperImageSize(width: 900, height: 240)])
         let html = try #require(block.richContent?.html)
         let encoded = try #require(html.components(separatedBy: "base64,").last?.components(separatedBy: "\"").first)
         let xmlBytes = try #require(Data(base64Encoded: encoded))
@@ -54,7 +53,6 @@ private let vectorFigure = """
         #expect(!xml.contains("onclick"))
         #expect(block.text == "Figure caption")
         #expect(block.richContent?.translationInput == "Figure caption")
-        #expect(block.richContent?.imageTextForCoverage?.contains("VECTOR_LABEL") == true)
     }
 }
 
@@ -105,112 +103,6 @@ private let vectorFigure = """
     #expect(!String(decoding: staticBytes, as: UTF8.self).contains("<animate"))
 }
 
-@Test func unresolvedHTMLFigureUsesOneCompletePDFReadingWithoutDuplicatePages() async throws {
-    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-    defer { try? FileManager.default.removeItem(at: directory) }
-    let source = directory.appendingPathComponent("fixture.pdf")
-    var box = CGRect(x: 0, y: 0, width: 612, height: 792)
-    let context = try #require(CGContext(source as CFURL, mediaBox: &box, nil))
-    context.beginPDFPage(nil)
-    context.textPosition = CGPoint(x: 50, y: 700)
-    let text = NSAttributedString(
-        string: "Unique figure caption",
-        attributes: [
-            NSAttributedString.Key(kCTFontAttributeName as String): CTFontCreateWithName(
-                "Helvetica" as CFString, 14, nil)
-        ])
-    CTLineDraw(CTLineCreateWithAttributedString(text), context)
-    let figureLabels = [
-        "alpha bravo charlie delta echo foxtrot golf hotel", "india juliet kilo lima mike november oscar papa",
-        "quebec romeo sierra tango uniform victor whiskey xray",
-    ]
-    for (index, labels) in figureLabels.enumerated() {
-        context.textPosition = CGPoint(x: 50, y: 650 - index * 30)
-        CTLineDraw(
-            CTLineCreateWithAttributedString(
-                NSAttributedString(string: labels, attributes: text.attributes(at: 0, effectiveRange: nil))), context)
-    }
-    context.strokeEllipse(in: CGRect(x: 50, y: 300, width: 300, height: 200))
-    context.endPDFPage()
-    context.closePDF()
-    let linkedDocument = try #require(PDFDocument(url: source))
-    let link = PDFAnnotation(bounds: CGRect(x: 50, y: 690, width: 100, height: 20), forType: .link, withProperties: nil)
-    link.url = URL(string: "https://example.com")
-    linkedDocument.page(at: 0)?.addAnnotation(link)
-    #expect(linkedDocument.write(to: source))
-    let parser = HTMLPaperParser(transport: ImageFixtureTransport())
-    let blocks = try await parser.parse(
-        Data(
-            "<article class='ltx_document'><figure><img src='bad'><figcaption>Unique figure caption</figcaption></figure><figure><img src='bad'><figcaption>Unmatched figure caption</figcaption></figure></article>"
-                .utf8), at: imageSource)
-    let paper = try await PDFImporter(root: directory).importPDF(at: source, structuredBlocks: blocks)
-    // One unmapped figure makes this partial HTML unsuitable. Use a single PDF-derived
-    // reading result instead of mixing an overlapping full page with incomplete HTML.
-    #expect(!paper.blocks.isEmpty)
-    #expect(paper.blocks.allSatisfy { $0.sourcePage == 0 })
-    #expect(!paper.blocks.contains { $0.hasImageFailure == true })
-    #expect(!paper.blocks.contains { $0.text.contains("Unmatched figure caption") })
-    let extracted = paper.blocks.map(\.text).joined(separator: " ")
-    #expect(extracted.components(separatedBy: "Unique figure caption").count == 2)
-    for labels in figureLabels { #expect(extracted.contains(labels)) }
-
-}
-
-@Test func svgLabelsExplainPDFCoverageWithoutBecomingTranslationOrEvidence() async throws {
-    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-    defer { try? FileManager.default.removeItem(at: directory) }
-    let source = directory.appendingPathComponent("labels.pdf")
-    var box = CGRect(x: 0, y: 0, width: 612, height: 792)
-    let context = try #require(CGContext(source as CFURL, mediaBox: &box, nil))
-    let lines = [
-        "Ordinary paragraph remains here.", "alpha bravo charlie delta echo foxtrot golf hotel",
-        "india juliet kilo lima mike november oscar papa", "quebec romeo sierra tango uniform victor whiskey xray",
-    ]
-    context.beginPDFPage(nil)
-    for (index, line) in lines.enumerated() {
-        context.textPosition = CGPoint(x: 50, y: 700 - index * 30)
-        let value = NSAttributedString(
-            string: line,
-            attributes: [
-                NSAttributedString.Key(kCTFontAttributeName as String): CTFontCreateWithName(
-                    "Helvetica" as CFString, 12, nil)
-            ])
-        CTLineDraw(CTLineCreateWithAttributedString(value), context)
-    }
-    context.endPDFPage()
-    context.closePDF()
-    let linkedDocument = try #require(PDFDocument(url: source))
-    let link = PDFAnnotation(bounds: CGRect(x: 50, y: 690, width: 100, height: 20), forType: .link, withProperties: nil)
-    link.url = URL(string: "https://example.com")
-    linkedDocument.page(at: 0)?.addAnnotation(link)
-    #expect(linkedDocument.write(to: source))
-    let localAnalysis = try PDFProcessor.extract(from: linkedDocument)
-    #expect(!localAnalysis.warnings.contains { $0.contains("已有批注") })
-    let parser = HTMLPaperParser(transport: ImageFixtureTransport())
-    for complete in [true, false] {
-        let labels = complete ? lines.dropFirst().joined(separator: " ") : "unrelated"
-        let blocks = try await parser.parse(
-            Data(
-                "<article class='ltx_document'><p>\(lines[0])</p><figure><svg width='500' height='200'><text x='0' y='20'>\(labels)</text></svg><figcaption>Caption.</figcaption></figure></article>"
-                    .utf8), at: imageSource)
-        #expect(blocks[1].text == "Caption.")
-        #expect(blocks[1].richContent?.translationInput == "Caption.")
-        let paper = try await PDFImporter(root: directory).importPDF(at: source, structuredBlocks: blocks)
-        #expect(paper.blocks.contains { $0.richContent != nil } == complete)
-    }
-    let annotated = try #require(PDFDocument(url: source))
-    annotated.page(at: 0)?.addAnnotation(
-        PDFAnnotation(bounds: CGRect(x: 50, y: 650, width: 100, height: 20), forType: .highlight, withProperties: nil))
-    #expect(annotated.write(to: source))
-    let blocks = try await parser.parse(
-        Data("<article class='ltx_document'><p>\(lines.joined(separator: " "))</p></article>".utf8), at: imageSource)
-    let protectedPaper = try await PDFImporter(root: directory).importPDF(at: source, structuredBlocks: blocks)
-    #expect(protectedPaper.blocks.allSatisfy { $0.richContent == nil })
-    #expect(!protectedPaper.canReflow)
-}
-
 @Test func rasterOrientationAlphaAnimationAndMultiplePages() async throws {
     let loader = PaperImageLoader(source: imageSource, transport: ImageFixtureTransport())
     func load(_ bytes: Data) async throws -> [PaperImage] {
@@ -241,54 +133,6 @@ private let vectorFigure = """
     let pdfImages = try await load(pdfData as Data)
     #expect(pdfImages.count == 2)
     #expect(pdfImages.allSatisfy { $0.width == 120 && $0.height == 60 })
-}
-
-@Test @MainActor func svgFixedPagesRemainVectorAndGiveWideAndTallFiguresRoom() async throws {
-    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-    defer { try? FileManager.default.removeItem(at: directory) }
-    let tall = vectorFigure.replacingOccurrences(
-        of: "width=\"900\" height=\"240\" viewBox=\"0 0 900 240\"",
-        with: "width=\"400\" height=\"1600\" viewBox=\"0 0 900 240\"")
-    let parser = HTMLPaperParser(transport: ImageFixtureTransport())
-    for (svg, wide) in [(vectorFigure, true), (tall, false)] {
-        let blocks = try await parser.parse(
-            Data(
-                "<article class='ltx_document'><figure>\(svg)<figcaption>Complete figure caption.</figcaption></figure></article>"
-                    .utf8), at: imageSource)
-        let pages = try await StructuredPageRenderer().render(
-            blocks.map { BilingualBlock(block: $0, translation: "完整图注。") }, to: directory,
-            originalURL: directory.appendingPathComponent("unused.pdf"))
-        #expect(pages.count == 1)
-        let document = try #require(PDFDocument(url: directory.appendingPathComponent(pages[0].relativePath)))
-        let page = try #require(document.page(at: 0))
-        #expect(document.string?.contains("Complete figure caption") == true)
-        #expect(document.string?.contains("完整图注") == true)
-        #expect(wide ? page.bounds(for: .mediaBox).width > 612 : page.bounds(for: .mediaBox).height > 1600)
-        // A rasterized SVG loses its labels from the PDF text layer.
-        #expect(document.string?.contains("VECTOR_LABEL") == true)
-    }
-}
-
-@Test @MainActor func multiPanelImagesKeepOrderAcrossFixedPages() async throws {
-    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-    defer { try? FileManager.default.removeItem(at: directory) }
-    let labels = ["PANEL_ONE", "PANEL_TWO", "PANEL_THREE"]
-    let panels = labels.map {
-        "<svg width='400' height='1800'><rect width='400' height='1800' fill='#e4eee7'/><text x='20' y='100' font-size='30'>\($0)</text></svg>"
-    }.joined()
-    let blocks = try await HTMLPaperParser(transport: ImageFixtureTransport()).parse(
-        Data(
-            "<article class='ltx_document'><figure>\(panels)<figcaption>Final panel caption.</figcaption></figure></article>"
-                .utf8), at: imageSource)
-    let pages = try await StructuredPageRenderer().render(
-        blocks.map { BilingualBlock(block: $0, translation: nil) }, to: directory,
-        originalURL: directory.appendingPathComponent("unused.pdf"))
-    #expect(pages.count >= 2)
-    let text = pages.compactMap { PDFDocument(url: directory.appendingPathComponent($0.relativePath))?.string }.joined()
-    for label in labels { #expect(text.components(separatedBy: label).count == 2) }
-    #expect(text.contains("Final panel caption"))
-    let positions = try labels.map { try #require(text.range(of: $0)?.lowerBound) }
-    #expect(positions == positions.sorted())
 }
 
 private func rasterFixture(type: String, pages: Int = 1, orientation: Int = 1) throws -> Data {
@@ -323,32 +167,7 @@ private func rasterFixture(type: String, pages: Int = 1, orientation: Int = 1) t
     #expect(output.contains("<pre xmlns=\"http://www.w3.org/1999/xhtml\">"))
     #expect(output.contains("<math xmlns=\"http://www.w3.org/1998/Math/MathML\">"))
     #expect(output.components(separatedBy: "xmlns=\"http://www.w3.org/2000/svg\"").count == 3)
-    #expect(image.coverageText.contains("value = memory * mask"))
     #expect(!output.contains("DO_NOT_DUPLICATE"))
-    #expect(!image.coverageText.contains("DO_NOT_DUPLICATE"))
-}
-
-@Test func recoveredImagesRequireUnambiguousBracketingText() {
-    let before = TextBlock(sourcePage: 0, text: "Unique paragraph before these diagrams.")
-    let after = TextBlock(sourcePage: 1, text: "Unique paragraph after these diagrams.")
-    var missing = TextBlock(sourcePage: 1, text: "")
-    missing.hasImageFailure = true
-    missing.preservesSourcePage = true
-    var image = TextBlock(sourcePage: -1, text: "")
-    image.richContent = RichContent(
-        html: "<figure>verified image</figure>", translationInput: "", mathematics: [:], mathDescriptions: [:],
-        isFigure: true)
-    let result = HTMLRepairAlignment.images(previous: [before, missing, after], recovered: [before, image, after])
-    #expect(result[missing.id]?.id == missing.id)
-    #expect(result[missing.id]?.sourcePage == missing.sourcePage)
-    #expect(result[missing.id]?.preservesSourcePage != true)
-    #expect(
-        HTMLRepairAlignment.images(previous: [before, missing, after], recovered: [before, image, image, after]).isEmpty
-    )
-    #expect(
-        HTMLRepairAlignment.images(previous: [before, missing, after], recovered: [before, image, after, before])
-            .isEmpty)
-    #expect(HTMLRepairAlignment.images(previous: [before, missing, after], recovered: [before, after]).isEmpty)
 }
 
 private actor UnavailableImageConnection: HTTPTransport {

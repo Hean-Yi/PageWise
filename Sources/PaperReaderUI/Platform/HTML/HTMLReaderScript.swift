@@ -46,12 +46,6 @@ enum HTMLReaderScript {
                   for (const element of parsed.body.children) {
                     if (element.tagName !== 'SECTION' || !element.dataset.key) continue;
                     const existing = document.getElementById(element.id);
-                    if(existing?.dataset.pending === 'true' && element.dataset.pending === 'false') {
-                      existing.querySelector(':scope > .translation.pending')?.remove();
-                      const translated = element.querySelector(':scope > .translation');
-                      if(translated) existing.appendChild(document.importNode(translated,true));
-                      existing.dataset.pending = 'false';
-                    }
                     if (!existing) {
                       root.insertBefore(document.importNode(element,true), document.getElementById('translation-draft'));
                       const draft = document.getElementById('translation-draft');
@@ -66,9 +60,6 @@ enum HTMLReaderScript {
                   let draft = document.getElementById('translation-draft');
                   if(!html) {
                     draft?.remove();
-                    for(const pending of root.querySelectorAll('.translation.pending.streaming')) {
-                      pending.textContent='译文待加载…';pending.classList.remove('streaming');
-                    }
                     return;
                   }
                   const parsed = new DOMParser().parseFromString(html,'text/html');
@@ -77,13 +68,6 @@ enum HTMLReaderScript {
                   const existing = document.getElementById('block-'+key);
                   if(existing) {
                     draft?.remove();
-                    if(existing.dataset.pending !== 'true') return;
-                    const pending = existing.querySelector(':scope > .translation.pending');
-                    const translation = parsed.body.firstElementChild?.querySelector('.translation');
-                    if(pending && translation) {
-                      pending.classList.add('streaming');
-                      pending.replaceChildren(...[...translation.childNodes].map(e=>document.importNode(e,true)));
-                    }
                     return;
                   }
                   if(!draft) { draft = document.createElement('div'); draft.id='translation-draft'; root.appendChild(draft); }

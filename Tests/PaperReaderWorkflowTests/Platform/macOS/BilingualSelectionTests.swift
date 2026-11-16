@@ -18,11 +18,11 @@
             title: "Selection fixture", digest: "fixture", originalPath: "unused.pdf", pageCount: 2,
             blocks: [first, second, third], warnings: [], canReflow: true)
         let store = HTMLReadingStore()
-        paper.htmlReading = try await store.prepareOriginal(paper: paper, root: root)
         paper.htmlReading = try await store.append(
             [
                 BilingualBlock(block: first, translation: "首段中文意译。"),
                 BilingualBlock(block: second, translation: "第二段的中文翻译。"),
+                BilingualBlock(block: third, translation: "第三段译文。"),
             ], to: paper.htmlReading, paper: paper, root: root)
         paper.translatedBlockCount = 2
         model.state.papers = [paper]
@@ -117,23 +117,6 @@
         model.highlightSelection()
         #expect(model.state.highlights.count == count + 1)
         #expect(model.state.highlights.last?.text == "od")
-        // Later Chinese publication must not expand English highlights into Chinese.
-        paper.htmlReading = try await store.append(
-            [BilingualBlock(block: third, translation: "后来完成的译文。")], to: paper.htmlReading, paper: paper, root: root)
-        paper.translatedBlockCount = 3
-        #expect(await model.save(publishingReflow: paper))
-        coordinator.update(web)
-        for _ in 0..<100 {
-            if (try? await js(web, "return blocks[2].querySelector('.translation:not(.pending)')!==null")) as? Bool
-                == true
-            {
-                break
-            }
-            try await Task.sleep(for: .milliseconds(10))
-        }
-        #expect(
-            try await js(web, "return [...CSS.highlights.get('saved')].some(r=>r.toString().includes('后来'))") as? Bool
-                == false)
         model.selectionText = ""
         coordinator.update(web)
         for _ in 0..<100 {

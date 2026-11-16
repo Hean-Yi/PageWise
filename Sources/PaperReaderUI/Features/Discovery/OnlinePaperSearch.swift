@@ -14,9 +14,9 @@ public final class OnlinePaperSearch {
     public private(set) var contextNotice: String?
     public private(set) var importingID: String?
     private var importStage = "下载 TeX 与原版 PDF"
-    public var importProgress: PDFImportProgress {
+    public var importProgress: String {
         if importStage == "本地处理", let progress = reader.importProgress { return progress }
-        return PDFImportProgress(sequence: 0, stage: importStage)
+        return importStage
     }
     public private(set) var imported: [String: UUID] = [:]
     public private(set) var importErrors: [String: String] = [:]

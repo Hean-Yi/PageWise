@@ -34,15 +34,3 @@ public struct AIReflowPlan: Codable, Sendable, Equatable {
         case preservedSource = "preserved_source"
     }
 }
-
-/// Explicitly supplied local image bytes; the service never fetches model-provided URLs.
-public struct AIReflowImage: Sendable {
-    public let sourceID: UUID
-    public let data: Data
-    public let mimeType: String
-    public init(sourceID: UUID, data: Data, mimeType: String) {
-        self.sourceID = sourceID
-        self.data = data
-        self.mimeType = mimeType
-    }
-}

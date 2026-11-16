@@ -141,29 +141,17 @@ import WebKit
             }
         }
         let input = folder.appendingPathComponent("input.pdf")
-        guard combined.write(to: input), let document = PDFDocument(url: input) else {
+        guard combined.write(to: input) else {
             throw ReaderError.message("Fixture write failed")
         }
-        let blocks = (0..<document.pageCount).map { index in
-            let text = document.page(at: index)?.string ?? ""
-            var block = TextBlock(sourcePage: index, text: text)
-            block.richContent = RichContent(
-                html: "<p>" + HTMLPaperParser.escape(text) + "</p>", translationInput: text, mathematics: [:],
-                mathDescriptions: [:])
-            return block
+        var samples: [Double] = []
+        for _ in 0..<5 {
+            let start = DispatchTime.now().uptimeNanoseconds
+            let paper = try await PDFImporter(root: folder).storeOriginal(at: input)
+            samples.append(elapsed(start))
+            try FileManager.default.removeItem(at: folder.appendingPathComponent(paper.originalPath).deletingLastPathComponent())
         }
-        for structured in [false, true] {
-            var samples: [Double] = []
-            for _ in 0..<5 {
-                let start = DispatchTime.now().uptimeNanoseconds
-                let paper = try await PDFImporter(root: folder).importPDF(
-                    at: input, preservingComplexPages: true, structuredBlocks: structured ? blocks : nil)
-                samples.append(elapsed(start))
-                try FileManager.default.removeItem(
-                    at: folder.appendingPathComponent(paper.originalPath).deletingLastPathComponent())
-            }
-            report(structured ? "structured_import_100_pages" : "pdf_import_100_pages", samples)
-        }
+        report("original_import_100_pages", samples)
     }
 
     static func elapsed(_ start: UInt64) -> Double { Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000 }

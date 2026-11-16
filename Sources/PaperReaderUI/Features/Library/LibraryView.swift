@@ -161,9 +161,9 @@ public struct LibraryView: View {
                 HStack(spacing: 10) {
                     if model.isImporting, let progress = model.importProgress {
                         VStack(alignment: .leading, spacing: 6) {
-                            Text(progress.label).font(.caption).lineLimit(1)
-                            ProgressView(value: progress.fraction).progressViewStyle(.linear)
-                                .accessibilityLabel(progress.label)
+                            Text(progress).font(.caption).lineLimit(1)
+                            ProgressView().progressViewStyle(.linear)
+                                .accessibilityLabel(progress)
                         }.frame(width: 250)
                     } else {
                         ProgressView().controlSize(.small)

@@ -7,13 +7,13 @@ extension ModelClient {
     ) async throws -> String {
         try await completeStream(
             settings: settings, key: key, maxOutputTokens: maxOutputTokens, system: system, user: user,
-            reflowImages: nil, onPartial: onPartial)
+            reflow: false, onPartial: onPartial)
     }
 
-    /// The optional argument distinguishes the verified reflow policy from generic chat requests.
+    /// The flag distinguishes the verified reflow policy from generic chat requests.
     func completeStream(
         settings: ModelSettings, key: String, maxOutputTokens: Int, system: String, user: String,
-        reflowImages: [AIReflowImage]?, reflowPlainText: Bool = false,
+        reflow: Bool, reflowPlainText: Bool = false,
         onPartial: @escaping @Sendable (String) async throws -> Void
     ) async throws -> String {
         let settings = try settings.normalized()
@@ -26,38 +26,18 @@ extension ModelClient {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
         request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
-        var content: Any = user
-        if let images = reflowImages, !images.isEmpty {
-            guard images.count <= 4, images.reduce(0, { $0 + $1.data.count }) <= 8_000_000,
-                images.allSatisfy({
-                    !$0.data.isEmpty && $0.data.count <= 4_000_000
-                        && ["image/png", "image/jpeg", "image/webp"].contains($0.mimeType)
-                })
-            else { throw ReaderError.message("局部视觉资料过大或格式不受支持。") }
-            var parts: [[String: Any]] = [["type": "text", "text": user]]
-            for image in images {
-                parts.append([
-                    "type": "text", "text": "Local evidence image for source_id: \(image.sourceID.uuidString)",
-                ])
-                parts.append([
-                    "type": "image_url",
-                    "image_url": ["url": "data:\(image.mimeType);base64,\(image.data.base64EncodedString())"],
-                ])
-            }
-            content = parts
-        }
         var body: [String: Any] = [
             "model": settings.model, "temperature": settings.temperature, "stream": true,
             "max_tokens": maxOutputTokens,
-            "messages": [["role": "system", "content": system], ["role": "user", "content": content]],
+            "messages": [["role": "system", "content": system], ["role": "user", "content": user]],
         ]
-        if reflowImages != nil, !reflowPlainText {
+        if reflow, !reflowPlainText {
             // Native JSON mode constrains the envelope; semantic/schema validation remains local.
             body["response_format"] = ["type": "json_object"]
         }
         // Verified on 2026-11-15 for this model and official endpoint. The service still
         // reported reasoning tokens; requesting disabled does not guarantee zero thinking.
-        if reflowImages != nil, settings.model.lowercased() == "glm-5.3-flash",
+        if reflow, settings.model.lowercased() == "glm-5.3-flash",
             request.url?.host == "open.bigmodel.cn", request.url?.port == nil,
             request.url?.path == "/api/paas/v4/chat/completions"
         {

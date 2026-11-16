@@ -41,7 +41,6 @@ final class HTMLCoordinator: NSObject, WKNavigationDelegate, WKScriptMessageHand
     private var requestedURL: URL?
     private var requestedNavigation: WKNavigation?
     private var keys: [String] = []
-    private var publishedCount = 0
     private var ready = false
     private var stopped = false
     private var appendTask: Task<Void, Never>?
@@ -94,7 +93,6 @@ final class HTMLCoordinator: NSObject, WKNavigationDelegate, WKScriptMessageHand
             paperID = paper.id
             loadedPath = artifact.relativePath
             keys = artifact.sections.map { $0.id.uuidString }
-            publishedCount = paper.translatedBlockCount
             notes.stop()
             notes = HTMLNoteBridge(model: model)
             highlightSnapshot = []
@@ -110,11 +108,7 @@ final class HTMLCoordinator: NSObject, WKNavigationDelegate, WKScriptMessageHand
         }
         guard ready else { return }
         if loadedPath != artifact.relativePath, appendTask == nil {
-            let changed = Set(
-                paper.blocks.dropFirst(publishedCount).prefix(max(0, paper.translatedBlockCount - publishedCount)).map {
-                    $0.id.uuidString
-                })
-            let oldKeys = Set(keys).subtracting(changed)
+            let oldKeys = Set(keys)
             let expectedID = paper.id
             let url = model.root.appendingPathComponent(artifact.relativePath).standardizedFileURL
             appendTask = Task { [weak self, weak view] in
@@ -134,7 +128,6 @@ final class HTMLCoordinator: NSObject, WKNavigationDelegate, WKScriptMessageHand
                     guard self.paperID == expectedID, !Task.isCancelled else { return }
                     self.loadedPath = artifact.relativePath
                     self.keys = artifact.sections.map { $0.id.uuidString }
-                    self.publishedCount = paper.translatedBlockCount
                     self.highlightSnapshot = []
                     self.updateState(view)
                 } catch is CancellationError {} catch {

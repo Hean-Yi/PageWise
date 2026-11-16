@@ -16,7 +16,6 @@ public struct Paper: Identifiable, Codable, Sendable {
     public var htmlReading: HTMLReadingArtifact?
     public var reflowJob: ReflowJob?
     public var retainedReadings: [RetainedReading]?
-    public var deferredReflow: Bool?
     /// Stable reading anchors; HTML sections and legacy PDF pages share navigation semantics.
     public var readingPages: [PageArtifact] { htmlReading?.sections ?? translatedPages }
     public var translations: [String: String] = [:]

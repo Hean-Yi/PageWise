@@ -1,7 +1,7 @@
 import Foundation
 
 public struct LibraryState: Codable, Sendable {
-    public static let currentVersion = 8
+    public static let currentVersion = 9
     public var version = currentVersion
     public var papers: [Paper] = []
     public var readingNotes: [ReadingNote] = []
@@ -59,6 +59,17 @@ public struct LibraryState: Codable, Sendable {
         readingNotes = storedVersion >= 7 ? try values.decode([ReadingNote].self, forKey: .readingNotes) : []
         // v8 adds optional on-demand reflow checkpoints and retained reading versions.
         // Legacy papers decode these fields as nil without changing their artifacts or annotations.
+        // v9 drops PDF-conversion metadata. Replan only the unpublished suffix of
+        // source jobs: old window digests included fields that are no longer decoded.
+        if storedVersion < 9 {
+            for index in papers.indices
+            where papers[index].reflowJob?.supportsContinuation == true
+                && papers[index].reflowJob?.finished == false
+            {
+                papers[index].reflowJob?.acceptedPlan = nil
+                papers[index].reflowJob?.committedBlockIDs = []
+            }
+        }
         try validateOrdering()
         try validateShelves()
         version = Self.currentVersion

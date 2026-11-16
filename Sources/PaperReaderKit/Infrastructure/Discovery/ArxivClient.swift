@@ -86,7 +86,7 @@ public actor ArxivClient: PaperDiscovery {
         } catch {
             try Task.checkCancellation()
             if (error as? URLError)?.code == .cancelled { throw CancellationError() }
-            notice = "TeX 源码包未能获取；重排时将尝试同版本 HTML 或 PDF。"
+            notice = "TeX 源码包未能获取；重排时将尝试同版本 HTML；原版 PDF 仍可阅读。"
         }
         let pdf = try await download(pinned)
         return DownloadedPublication(pdfURL: pdf, candidate: pinned, texArchive: archive, sourceNotice: notice)

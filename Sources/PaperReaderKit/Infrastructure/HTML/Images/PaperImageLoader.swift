@@ -8,7 +8,6 @@ struct PaperImage: Sendable {
     let width: Double
     let height: Double
     let notices: [String]
-    var coverageText: String = ""
 }
 
 /// All decoders inspect file bytes. Extensions and Content-Type are not trusted as format evidence.
@@ -93,7 +92,6 @@ actor PaperImageLoader {
         var replacements: [String: String] = [:]
         var embeddedBytes = data.count
         var notices = svg.isAnimated ? ["动态图按静态底图呈现。"] : []
-        var coverageText = svg.coverageText
         for reference in svg.imageReferences.sorted() {
             let nested = try await load(reference, relativeTo: url, depth: depth + 1)
             guard nested.count == 1 else { throw ReaderError.message("SVG 内的多页图片无法完整展开，请查看原版。") }
@@ -101,12 +99,11 @@ actor PaperImageLoader {
             guard embeddedBytes <= 32_000_000 else { throw ReaderError.message("SVG 内嵌资源过大，请查看原版。") }
             replacements[reference] = nested[0].dataURI
             notices += nested[0].notices
-            coverageText += " " + nested[0].coverageText
         }
         return [
             PaperImage(
                 dataURI: try svg.dataURI(replacing: replacements), width: svg.width, height: svg.height,
-                notices: notices, coverageText: coverageText)
+                notices: notices)
         ]
     }
 

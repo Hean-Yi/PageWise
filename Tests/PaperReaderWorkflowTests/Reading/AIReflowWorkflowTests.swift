@@ -1,7 +1,7 @@
 import Foundation
-import PaperReaderKit
 import Testing
 
+@testable import PaperReaderKit
 @testable import PaperReaderUI
 
 private actor JointReflowTransport: HTTPTransport {
@@ -156,8 +156,8 @@ private actor JointReflowTransport: HTTPTransport {
     #expect(imported.count == 1)
     let paper = try #require(model.paper)
     #expect(paper.blocks.isEmpty && paper.htmlReading == nil && paper.reflowJob == nil)
-    #expect(paper.deferredReflow == true)
-    #expect(model.readingChoicePresented)
+    #expect(!paper.canReflow)
+    #expect(!model.readingChoicePresented)
     model.readOriginal()
     #expect(!model.readingChoicePresented && model.mode == "original")
     #expect(await transport.calls == 0)
@@ -172,9 +172,10 @@ private actor JointReflowTransport: HTTPTransport {
     var settings = model.modelSettings
     settings.model = "test"
     try model.saveSettings(settings, key: nil)
-    let paper = Paper(
+    var paper = Paper(
         title: "Loading", digest: "fixture", originalPath: "unused.pdf", pageCount: 1,
         blocks: [], warnings: [], canReflow: true)
+    paper.onlineSource = OnlinePaperSource(candidateID: "https://arxiv.org/abs/0000.00000v1")
     model.state.papers = [paper]
     model.select(paper.id)
     model.startAIReflow()
@@ -202,6 +203,7 @@ private actor JointReflowTransport: HTTPTransport {
         TextBlock(sourcePage: 0, text: "The first complete source paragraph."),
         TextBlock(sourcePage: 0, text: "The second complete source paragraph."),
     ])
+    paper.reflowJob?.evidenceRoute = "html"
     model.state.papers = [paper]
     model.select(paper.id)
     model.startAIReflow()
@@ -356,6 +358,7 @@ private actor JointReflowTransport: HTTPTransport {
         title: "Switch", digest: "fixture", originalPath: "unused.pdf", pageCount: 2, blocks: [], warnings: [],
         canReflow: true)
     paper.reflowJob = ReflowJob(sources: sources)
+    paper.reflowJob?.evidenceRoute = "html"
     model.state.papers = [paper]
     model.select(paper.id)
     model.startAIReflow()
@@ -400,6 +403,7 @@ func structuralRecoveryRetainsPrefixAndHasABoundedRequestCount(alwaysMalformed: 
         title: "Recovery", digest: "fixture", originalPath: "unused.pdf", pageCount: 2, blocks: [], warnings: [],
         canReflow: true)
     paper.reflowJob = ReflowJob(sources: sources)
+    paper.reflowJob?.evidenceRoute = "html"
     model.state.papers = [paper]
     model.select(paper.id)
     model.startAIReflow()
@@ -414,50 +418,6 @@ func structuralRecoveryRetainsPrefixAndHasABoundedRequestCount(alwaysMalformed: 
     }
 }
 
-@Test @MainActor func firstPDFPagePublishesBeforeLaterPagesAreExtractedAndCursorSurvivesRestart() async throws {
-    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-    defer { try? FileManager.default.removeItem(at: root) }
-    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-    let pdf = root.appendingPathComponent("fixture.pdf")
-    try DemoPaper.write(to: pdf)
-    let transport = JointReflowTransport(holdOnce: true)
-    let credentials = WorkflowCredentials()
-    let model = try ReaderModel(root: root, client: ModelClient(transport: transport), credentials: credentials)
-    await model.load()
-    var settings = model.modelSettings
-    settings.model = "fixture"
-    try model.saveSettings(settings, key: nil)
-    _ = await model.importURLs([pdf])
-    let id = try #require(model.paper?.id)
-    model.startAIReflow()
-    for _ in 0..<500 {
-        if await transport.waiting { break }
-        try await Task.sleep(for: .milliseconds(10))
-    }
-    #expect(await transport.waiting)
-    let job = try #require(model.paper?.reflowJob)
-    #expect(job.nextSourcePage == 1)
-    #expect(job.sources.allSatisfy { $0.sourcePage == 0 })
-    #expect(model.paper?.blocks.count == 1)
-    model.pauseTranslation()
-    await transport.release()
-    try await waitForReflow(model, id: id)
-    let prefix = try #require(model.paper?.blocks.first)
-    let reopened = try ReaderModel(root: root, client: ModelClient(transport: transport), credentials: credentials)
-    await reopened.load()
-    reopened.select(id)
-    #expect(reopened.paper?.reflowJob?.nextSourcePage == 1)
-    reopened.startAIReflow()
-    try await waitForReflow(reopened, id: id)
-    let completed = try #require(reopened.paper)
-    #expect(completed.reflowJob?.finished == true)
-    #expect(completed.reflowJob?.nextSourcePage == completed.pageCount)
-    #expect(completed.blocks.first?.id == prefix.id)
-    #expect(
-        Set(completed.blocks.flatMap { $0.reflowProvenance?.map(\.sourceID) ?? [] }).count
-            == completed.reflowJob?.sources.count)
-}
-
 @Test(arguments: [false, true]) @MainActor
 func outputLimitAutomaticallyContinuesAndBoundsNoProgressRetries(stalled: Bool) async throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -469,21 +429,20 @@ func outputLimitAutomaticallyContinuesAndBoundsNoProgressRetries(stalled: Bool) 
     var settings = model.modelSettings
     settings.model = "fixture"
     try model.saveSettings(settings, key: nil)
-    let group = UUID()
     let sources = (0..<5).map { index in
-        var source = TextBlock(sourcePage: 0, text: "Original body paragraph number \(index).")
-        source.reflowOrderGroup = group
+        let source = TextBlock(sourcePage: 0, text: "Original body paragraph number \(index).")
         return source
     }
     var paper = Paper(
         title: "Continuity", digest: "fixture", originalPath: "unused.pdf", pageCount: 1,
         blocks: [], warnings: [], canReflow: true)
     paper.reflowJob = ReflowJob(sources: sources)
+    paper.reflowJob?.evidenceRoute = "html"
     model.state.papers = [paper]
     model.select(paper.id)
     model.startAIReflow()
     try await waitForReflow(model, id: paper.id)
-    #expect(await transport.calls == 3)
+    #expect(await transport.calls == (stalled ? 3 : 4))
     if stalled {
         #expect(model.paper?.blocks.isEmpty == true)
         #expect(model.paper?.reflowJob?.finished == false)
@@ -497,7 +456,7 @@ func outputLimitAutomaticallyContinuesAndBoundsNoProgressRetries(stalled: Bool) 
             Set(model.paper?.blocks.flatMap { $0.reflowProvenance?.map(\.sourceID) ?? [] } ?? [])
                 == Set(sources.map(\.id)))
         #expect(model.paper?.reflowJob?.acceptedPlan == nil)
-        #expect(await transport.tokenBudgets == [8192, 4096, 4096])
+        #expect(await transport.tokenBudgets == [8192, 4096, 4096, 8192])
     }
 }
 
@@ -511,15 +470,16 @@ func outputLimitAutomaticallyContinuesAndBoundsNoProgressRetries(stalled: Bool) 
     var settings = model.modelSettings
     settings.model = "fixture"
     try model.saveSettings(settings, key: nil)
-    let group = UUID()
     var author = TextBlock(sourcePage: 0, text: "Correspondence: author@example.invalid")
-    var body = TextBlock(sourcePage: 0, text: "The experiment measures the performance of the proposed method.")
-    author.reflowOrderGroup = group
-    body.reflowOrderGroup = group
+    let body = TextBlock(sourcePage: 0, text: "The experiment measures the performance of the proposed method.")
     var paper = Paper(
         title: "Body only", digest: "fixture", originalPath: "unused.pdf", pageCount: 1,
         blocks: [], warnings: [], canReflow: true)
+    author.richContent = RichContent(
+        html: "<div class='front-matter'>Correspondence: author@example.invalid</div>", translationInput: "",
+        mathematics: [:], mathDescriptions: [:])
     paper.reflowJob = ReflowJob(sources: [author, body])
+    paper.reflowJob?.evidenceRoute = "html"
     model.state.papers = [paper]
     model.select(paper.id)
     model.startAIReflow()
@@ -536,4 +496,36 @@ func outputLimitAutomaticallyContinuesAndBoundsNoProgressRetries(stalled: Bool) 
     #expect(result.htmlReading?.sections.count == 1)
     let reloaded = try await LibraryStore(directory: root).load()
     #expect(reloaded.papers.first?.reflowJob?.excludedSourceIDs == [author.id])
+}
+
+@Test(arguments: [nil, "pdf"] as [String?]) @MainActor
+func legacyPDFJobsRemainReadableButCannotGenerate(route: String?) async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let transport = JointReflowTransport()
+    let model = try ReaderModel(
+        root: root, client: ModelClient(transport: transport), credentials: WorkflowCredentials())
+    await model.load()
+    let block = TextBlock(sourcePage: 0, text: "Previously published evidence.")
+    var paper = Paper(
+        title: "Legacy", digest: "fixture", originalPath: "unused.pdf", pageCount: 1, blocks: [block], warnings: [],
+        canReflow: true)
+    paper.htmlReading = try await HTMLReadingStore().append(
+        [BilingualBlock(block: block, translation: "已发布译文。")], to: nil, paper: paper, root: root)
+    paper.reflowJob = ReflowJob(sources: [block])
+    paper.reflowJob?.evidenceRoute = route
+    let file = root.appendingPathComponent(try #require(paper.htmlReading).relativePath)
+    let bytes = try Data(contentsOf: file)
+    model.state.papers = [paper]
+    #expect(await model.save())
+    model.select(paper.id)
+    model.startAIReflow()
+    #expect(model.translating.isEmpty)
+    #expect(await transport.calls == 0)
+    #expect(model.message != nil)
+    #expect(!model.showingReflowLoading)
+    let loaded = try await LibraryStore(directory: root).load()
+    #expect(loaded.papers.first?.reflowJob == paper.reflowJob)
+    #expect(loaded.papers.first?.htmlReading == paper.htmlReading)
+    #expect(try Data(contentsOf: file) == bytes)
 }

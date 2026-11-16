@@ -253,15 +253,7 @@ actor AIReflowStream {
     private nonisolated func validate(_ blocks: [AIReflowPlan.Block]) throws {
         let ids = blocks.flatMap(\.sourceIDs)
         let originalIDs = evidence.sources.map { $0.block.id }
-        guard ids.count == originalIDs.count, Set(ids) == Set(originalIDs) else {
-            throw AIReflowEvidence.invalid()
-        }
-        let ranks = Dictionary(
-            uniqueKeysWithValues: evidence.orderGroups.enumerated().flatMap { rank, group in
-                group.map { ($0, rank) }
-            })
-        let orderedRanks = ids.compactMap { ranks[$0] }
-        guard orderedRanks == orderedRanks.sorted() else { throw AIReflowEvidence.invalid() }
+        guard ids == originalIDs else { throw AIReflowEvidence.invalid() }
         let byID = Dictionary(uniqueKeysWithValues: evidence.sources.map { ($0.block.id, $0) })
         for block in blocks {
             guard !block.sourceSegments.isEmpty else { throw AIReflowEvidence.invalid() }
@@ -276,44 +268,12 @@ actor AIReflowStream {
                     let prose =
                         source.kind == .paragraph && source.translates && block.kind == .paragraph
                         && source.objects.allSatisfy({ $0.marker != nil })
-                    // PDF text runs can span several sources even for one author list or
-                    // heading. Classification applies to their complete, verified group.
-                    let samePage =
-                        source.block.reflowOrderGroup != nil
-                        && block.sourceIDs.allSatisfy {
-                            byID[$0]?.block.reflowOrderGroup == source.block.reflowOrderGroup
-                        }
-                    let groupedText =
-                        samePage && source.objects.isEmpty
-                        && (source.kind == .paragraph || source.kind == block.kind)
-                        && [
-                            .title, .heading, .listItem, .figureCaption, .substantiveFootnote, .frontMatter,
-                            .nonContent, .bibliography,
-                            .code,
-                        ]
-                        .contains(block.kind)
-                    guard prose || groupedText else { throw AIReflowEvidence.invalid() }
+                    guard prose else { throw AIReflowEvidence.invalid() }
                 } else if source.kind == .paragraph {
                     let ordinary: [AIReflowPlan.Kind] = [
                         .paragraph, .title, .heading, .listItem, .figureCaption, .substantiveFootnote,
                     ]
-                    let modelTypes: [AIReflowPlan.Kind] = [.frontMatter, .nonContent, .bibliography, .code]
-                    guard
-                        ordinary.contains(block.kind)
-                            || (source.block.reflowOrderGroup != nil && source.objects.isEmpty
-                                && modelTypes.contains(block.kind))
-                    else {
-                        throw AIReflowEvidence.invalid()
-                    }
-                } else if [.nonContent, .frontMatter].contains(block.kind), source.kind == .figure,
-                    source.block.reflowMayExclude == true
-                {
-                    // Only explicitly eligible local crops may be treated as decorative metadata.
-                } else if source.kind == .figure, source.block.reflowOrderGroup != nil,
-                    [.figure, .table, .displayFormula].contains(block.kind)
-                {
-                    // Native PDF crops share one storage type. The model may distinguish
-                    // a table or equation without changing pixels or translating its labels.
+                    guard ordinary.contains(block.kind) else { throw AIReflowEvidence.invalid() }
                 } else if block.kind != source.kind {
                     Logger(subsystem: "dev.paperreader", category: "ReflowValidation").error(
                         "Type mismatch: source=\(source.kind.rawValue, privacy: .public), planned=\(block.kind.rawValue, privacy: .public)"

@@ -9,8 +9,11 @@ import Testing
     defer { try? FileManager.default.removeItem(at: root) }
     let model = try ReaderModel(root: root)
     await model.load()
-    await model.addDemo()
-    let original = try #require(model.paper)
+    let original = Paper(
+        title: "Fixture", digest: "fixture", originalPath: "unused.pdf", pageCount: 1,
+        blocks: [TextBlock(sourcePage: 0, text: "Published source.")], warnings: [], canReflow: true)
+    model.state.papers = [original]
+    model.select(original.id)
     var publication = original
     publication.translatedBlockCount = 1
     publication.translatedPages = [
@@ -30,8 +33,11 @@ import Testing
     defer { try? FileManager.default.removeItem(at: root) }
     let model = try ReaderModel(root: root)
     await model.load()
-    await model.addDemo()
-    let original = try #require(model.paper)
+    let original = Paper(
+        title: "Fixture", digest: "fixture", originalPath: "unused.pdf", pageCount: 1,
+        blocks: [TextBlock(sourcePage: 0, text: "Published source.")], warnings: [], canReflow: true)
+    model.state.papers = [original]
+    model.select(original.id)
     var publication = original
     publication.translatedBlockCount = 1
     publication.translatedPages = [
@@ -59,6 +65,7 @@ import Testing
         title: "Ready", digest: "fixture", originalPath: "unused.pdf", pageCount: 1,
         blocks: [first], warnings: [], canReflow: true)
     paper.reflowJob = ReflowJob(sources: [first, second])
+    paper.reflowJob?.evidenceRoute = "html"
     let jobID = try #require(paper.reflowJob?.id)
     model.state.papers = [paper]
     #expect(await model.save())

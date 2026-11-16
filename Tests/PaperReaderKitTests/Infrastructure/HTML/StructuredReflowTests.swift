@@ -1,7 +1,4 @@
-import CoreGraphics
-import CoreText
 import Foundation
-import PDFKit
 import Testing
 
 @testable import PaperReaderKit
@@ -44,90 +41,6 @@ private let sourceURL = URL(string: "https://arxiv.org/html/2401.00001v1")!
     }
 }
 
-@Test @MainActor func richFixedPagesPreserveTextMathAndExistingBytes() async throws {
-    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-    defer { try? FileManager.default.removeItem(at: directory) }
-    let html = """
-        <article class="ltx_document"><p>Evidence connects a query
-        <math alttext="q_i"><msub><mi>q</mi><mi>i</mi></msub></math>
-        to a result.</p><table><tr><th>Method</th><th>Score</th></tr><tr><td>Local</td><td>42</td></tr></table></article>
-        """
-    let blocks = try await HTMLPaperParser(transport: NoHTMLNetwork()).parse(Data(html.utf8), at: sourceURL)
-    let renderer = StructuredPageRenderer()
-    let first = try await renderer.render(
-        [BilingualBlock(block: blocks[0], translation: "证据将查询 [[MATH_1]] 与结果联系起来。")], to: directory,
-        originalURL: directory.appendingPathComponent("unused.pdf"))
-    #expect(first.count == 1)
-    let pageURL = directory.appendingPathComponent(try #require(first.first).relativePath)
-    let bytes = try Data(contentsOf: pageURL)
-    let document = try #require(PDFDocument(data: bytes))
-    #expect(document.string?.contains("Evidence") == true)
-    #expect(document.string?.contains("证据") == true)
-    #expect(document.page(at: 0)?.bounds(for: .mediaBox).width == 612)
-    _ = try await renderer.render(
-        [BilingualBlock(block: blocks[1], translation: nil)], to: directory,
-        originalURL: directory.appendingPathComponent("unused.pdf"))
-    #expect(try Data(contentsOf: pageURL) == bytes)
-    #expect(first[0].blockIDs == [blocks[0].id])
-}
-
-@Test @MainActor func oversizedHTMLFailsWithoutLeavingPublishedFiles() async throws {
-    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-    defer { try? FileManager.default.removeItem(at: directory) }
-    let rows = String(repeating: "<mi>W</mi>", count: 200)
-    let blocks = try await HTMLPaperParser(transport: NoHTMLNetwork()).parse(
-        Data("<article class='ltx_document'><math><mrow>\(rows)</mrow></math></article>".utf8), at: sourceURL)
-    await #expect(throws: (any Error).self) {
-        try await StructuredPageRenderer().render(
-            [BilingualBlock(block: blocks[0], translation: nil)], to: directory,
-            originalURL: directory.appendingPathComponent("unused.pdf"))
-    }
-    #expect(try FileManager.default.contentsOfDirectory(atPath: directory.path).isEmpty)
-}
-
-@Test @MainActor func mixedPDFKeepsComplexPageGeometryAndSelectableText() async throws {
-    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-    defer { try? FileManager.default.removeItem(at: directory) }
-    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-    let source = directory.appendingPathComponent("input.pdf")
-    var bounds = CGRect(x: 0, y: 0, width: 612, height: 792)
-    let context = try #require(CGContext(source as CFURL, mediaBox: &bounds, nil))
-    for index in 0..<3 {
-        context.beginPDFPage(nil)
-        let value = NSAttributedString(
-            string: index == 0
-                ? "Reliable prose can be translated and reflowed." : "An important vector figure remains intact.",
-            attributes: [.init(kCTFontAttributeName as String): CTFontCreateWithName("Helvetica" as CFString, 12, nil)])
-        context.textPosition = CGPoint(x: 54, y: 720)
-        if index < 2 { CTLineDraw(CTLineCreateWithAttributedString(value), context) }
-        if index > 0 { context.strokeEllipse(in: CGRect(x: 60, y: 400, width: 240, height: 140)) }
-        context.endPDFPage()
-    }
-    context.closePDF()
-    let annotated = try #require(PDFDocument(url: source))
-    annotated.page(at: 1)?.addAnnotation(
-        PDFAnnotation(
-            bounds: CGRect(x: 70, y: 400, width: 30, height: 30), forType: .text, withProperties: nil))
-    #expect(annotated.write(to: source))
-    let originalBytes = try Data(contentsOf: source)
-    let root = directory.appendingPathComponent("library")
-    let paper = try await PDFImporter(root: root).importPDF(at: source, preservingComplexPages: true)
-    #expect(paper.canReflow)
-    #expect(paper.blocks.contains { $0.preservesSourcePage == true && $0.sourcePage == 1 })
-    #expect(paper.blocks.contains { $0.preservesSourcePage == true && $0.sourcePage == 2 && $0.text.isEmpty })
-    let pages = try await StructuredPageRenderer().render(
-        paper.blocks.map { BilingualBlock(block: $0, translation: $0.preservesSourcePage == true ? nil : "可靠正文。") },
-        to: directory.appendingPathComponent("pages"), originalURL: root.appendingPathComponent(paper.originalPath))
-    let preserved = try #require(pages.first { $0.sourcePage == 1 })
-    let copied = try #require(
-        PDFDocument(url: directory.appendingPathComponent("pages").appendingPathComponent(preserved.relativePath)))
-    let original = try #require(PDFDocument(url: source))
-    #expect(copied.page(at: 0)?.string == original.page(at: 1)?.string)
-    #expect(copied.page(at: 0)?.bounds(for: .mediaBox) == original.page(at: 1)?.bounds(for: .mediaBox))
-    #expect(try pixels(of: #require(copied.page(at: 0))) == pixels(of: #require(original.page(at: 1))))
-    #expect(try Data(contentsOf: root.appendingPathComponent(paper.originalPath)) == originalBytes)
-}
-
 @Test func cleanupRetainsCommittedAndLegacyPagesOnlyRemovesOwnedOrphans() throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: root) }
@@ -141,33 +54,8 @@ private let sourceURL = URL(string: "https://arxiv.org/html/2401.00001v1")!
     let orphan = "html-\(UUID().uuidString).pdf"
     for name in [keep, orphan, "user.pdf"] { try Data(name.utf8).write(to: directory.appendingPathComponent(name)) }
     paper.translatedPages = [PageArtifact(blockIDs: [], sourcePage: 0, relativePath: prefix + keep)]
-    try ReflowArtifactCleanup.removeUncommittedFiles(in: root, papers: [paper])
+    try ReadingArtifactCleanup.removeUncommittedFiles(in: root, papers: [paper])
     #expect(Set(try FileManager.default.contentsOfDirectory(atPath: directory.path)) == [keep, "user.pdf"])
-}
-
-@Test @MainActor func longStructuredParagraphAndTableKeepEveryRowAcrossPages() async throws {
-    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-    defer { try? FileManager.default.removeItem(at: directory) }
-    let prose = (0..<180).map { "Sentence\($0) describes how evidence supports a local query." }.joined(separator: " ")
-    let rows = (0..<60).map { "<tr><td>Row\($0)</td><td>Value\($0)</td></tr>" }.joined()
-    let html = "<article class='ltx_document'><p>\(prose)</p><table>\(rows)</table></article>"
-    let blocks = try await HTMLPaperParser(transport: NoHTMLNetwork()).parse(Data(html.utf8), at: sourceURL)
-    let pages = try await StructuredPageRenderer().render(
-        blocks.map { BilingualBlock(block: $0, translation: nil) }, to: directory,
-        originalURL: directory.appendingPathComponent("unused.pdf"))
-    #expect(pages.count > 3)
-    let text = try pages.map {
-        try #require(PDFDocument(url: directory.appendingPathComponent($0.relativePath))?.string)
-    }.joined(separator: " ")
-    for index in 0..<180 { #expect(text.contains("Sentence\(index)")) }
-    for index in 0..<60 {
-        #expect(text.contains("Row\(index)"))
-        #expect(text.contains("Value\(index)"))
-    }
-    #expect(pages.first?.blockIDs.contains(blocks[0].id) == true)
-    #expect(pages.last?.blockIDs.contains(blocks[1].id) == true)
-    _ = try PDFDisplayDocument.load(
-        urls: pages.map { directory.appendingPathComponent($0.relativePath) }, expectedPageCount: pages.count)
 }
 
 private actor HTMLResponses: HTTPTransport {
@@ -224,43 +112,6 @@ private actor HTMLResponses: HTTPTransport {
     #expect(PaperPageLocator.position(sourcePage: -1, blockID: block.id, mode: "translated", in: paper) != nil)
     #expect(PaperPageLocator.position(sourcePage: -1, mode: "original", in: paper) == nil)
     #expect(PaperTextSearch.search("evidence", in: paper).first?.blockID == block.id)
-}
-
-private func pixels(of page: PDFPage) throws -> Data {
-    let context = try #require(
-        CGContext(
-            data: nil, width: 612, height: 792, bitsPerComponent: 8, bytesPerRow: 612 * 4,
-            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
-    context.setFillColor(CGColor(gray: 1, alpha: 1))
-    context.fill(CGRect(x: 0, y: 0, width: 612, height: 792))
-    context.drawPDFPage(try #require(page.pageRef))
-    return Data(bytes: try #require(context.data), count: 612 * 792 * 4)
-}
-
-@Test func localizedHTMLCoverageGapUsesOneCompleteTextReadingWithoutDuplicatedPages() async throws {
-    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-    defer { try? FileManager.default.removeItem(at: root) }
-    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-    let source = root.appendingPathComponent("fixture.pdf")
-    try DemoPaper.write(to: source)
-    let document = try #require(PDFDocument(url: source))
-    let firstText = try #require(document.page(at: 0)?.string)
-    var first = TextBlock(sourcePage: -1, text: firstText)
-    first.richContent = RichContent(
-        html: "<p>\(HTMLPaperParser.escape(firstText))</p>", translationInput: firstText, mathematics: [:],
-        mathDescriptions: [:])
-    let imported = try await PDFImporter(root: root).importPDF(
-        at: source, preservingComplexPages: true, structuredBlocks: [first])
-    #expect(imported.canReflow)
-    #expect(imported.blocks.count > 2)
-    #expect(!imported.blocks.contains { $0.preservesSourcePage == true })
-    for index in 0..<document.pageCount {
-        let actual = imported.blocks.filter { $0.sourcePage == index }.map(\.text).joined()
-        #expect(
-            PDFRegionalReflow.characters(actual) == PDFRegionalReflow.characters(document.page(at: index)?.string ?? "")
-        )
-    }
-    #expect(try Data(contentsOf: source) == Data(contentsOf: root.appendingPathComponent(imported.originalPath)))
 }
 
 @Test(arguments: [true, false]) func frontMatterSemanticsStayOutOfTranslationWithoutRemovingBody(tagged: Bool)

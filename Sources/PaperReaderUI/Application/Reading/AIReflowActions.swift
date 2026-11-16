@@ -23,6 +23,14 @@ extension ReaderModel {
     public func startAIReflow(regenerate: Bool = false) {
         guard loaded, let selected = paper, !translating.contains(selected.id) else { return }
         let id = selected.id
+        guard selected.onlineSource != nil || (!regenerate && selected.reflowJob?.supportsContinuation == true) else {
+            message = "双语重排需要线上 TeX 或 HTML 来源；此论文可继续阅读原版。"
+            return
+        }
+        if !regenerate, let job = selected.reflowJob, !job.supportsContinuation {
+            message = "旧 PDF 转换任务已停用，已有内容保留。获取线上源码后可重新生成。"
+            return
+        }
         guard (try? modelSettings.normalized()) != nil else {
             message = "请先在模型设置中保存服务地址、模型和密钥。"
             return
@@ -56,20 +64,12 @@ extension ReaderModel {
                         current.retainedReadings = versions
                     }
                     current.reflowJob = ReflowJob(sources: [])
-                    current.reflowJob?.nextSourcePage = 0
-                    current.reflowJob?.evidenceRoute = current.onlineSource == nil ? "pdf" : "preparing"
+                    current.reflowJob?.evidenceRoute = "preparing"
                     current.htmlReading = nil
                     current.translatedPages = []
                     current.translations = [:]
                     current.translatedBlockCount = 0
                     current.blocks = []
-                    current.warnings.removeAll { warning in
-                        warning.hasPrefix("第 ")
-                            && [
-                                "保留原始版面", "OCR 未能可靠分离", "超过 OCR 局部图像预算", "本地 OCR 未完成",
-                                "文字提取与 OCR 未能可靠分离",
-                            ].contains(where: warning.contains)
-                    }
                     current.canReflow = true
                     guard await self.save(publishingReflow: current) else { throw ReaderError.message("任务未能保存。") }
                 }
@@ -90,7 +90,6 @@ extension ReaderModel {
                     current.reflowJob?.failure = nil
                     guard await self.save(publishingReflow: current) else { throw ReaderError.message("恢复状态未能保存。") }
                 }
-                let extractor = ReflowEvidenceExtractor()
                 var structureRetries = 0
                 var usingRecovery = false
                 var outputStalls = 0
@@ -109,7 +108,6 @@ extension ReaderModel {
                         else { throw CancellationError() }
                         publication.reflowJob?.sources = evidence.blocks
                         publication.reflowJob?.evidenceRoute = evidence.route
-                        publication.reflowJob?.nextSourcePage = evidence.route == "pdf" ? 0 : current.pageCount
                         publication.warnings += evidence.warnings
                         guard await self.save(publishingReflow: publication) else {
                             throw ReaderError.message("源码证据未能保存，已暂停。")
@@ -128,31 +126,6 @@ extension ReaderModel {
                         continue
                     }
                     let pending = job.sources.filter { !job.completedSourceIDs.contains($0.id) }
-                    let nextPage = job.nextSourcePage ?? (job.sources.isEmpty ? 0 : current.pageCount)
-                    if pending.isEmpty, nextPage < current.pageCount {
-                        let result = try await extractor.extractBatch(
-                            paper: current, root: self.root, startingAt: nextPage
-                        ) { stage in
-                            Task { @MainActor [weak self] in
-                                guard self?.state.papers.first(where: { $0.id == id })?.reflowJob?.id == jobID else {
-                                    return
-                                }
-                                self?.reflowStages[id] = stage
-                            }
-                        }
-                        try Task.checkCancellation()
-                        guard self.modelSettings == settings,
-                            var publication = self.state.papers.first(where: { $0.id == id }),
-                            publication.reflowJob?.id == jobID
-                        else { throw CancellationError() }
-                        publication.reflowJob?.sources += result.blocks
-                        publication.reflowJob?.nextSourcePage = result.nextPage
-                        publication.warnings += result.warnings
-                        guard await self.save(publishingReflow: publication) else {
-                            throw ReaderError.message("原文证据与提取进度未能保存。")
-                        }
-                        continue
-                    }
                     if pending.isEmpty {
                         var publication = current
                         job.finished = true
@@ -172,9 +145,6 @@ extension ReaderModel {
                     if let plan = job.acceptedPlan {
                         let ids = Set(plan.blocks.flatMap(\.sourceIDs))
                         window = job.sources.filter { ids.contains($0.id) }
-                    } else if let group = pending.first?.reflowOrderGroup {
-                        // Keep a page's unresolved order in one plan, including resume after a model change.
-                        window = Array(pending.prefix { $0.reflowOrderGroup == group })
                     } else {
                         var chosen: [TextBlock] = []
                         var characters = 0
@@ -188,7 +158,7 @@ extension ReaderModel {
                         window = chosen
                     }
                     let sourceLabel =
-                        job.evidenceRoute == "tex" ? "TeX · " : job.evidenceRoute == "html" ? "HTML · " : "PDF · "
+                        job.evidenceRoute == "tex" ? "TeX · " : "HTML · "
                     self.reflowStages[id] = sourceLabel + (current.blocks.isEmpty ? "整理结构与生成首段内容" : "继续生成双语内容")
                     do {
                         if usingRecovery {
