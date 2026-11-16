@@ -913,3 +913,35 @@ private actor NativeReflowTransport: HTTPTransport {
         #expect(await rejected.capture.blocks.isEmpty)
     }
 }
+
+@Test func compactResumeInheritsOnlyAnAlreadyValidatedPlanContext() async throws {
+    let sources = [TextBlock(sourcePage: 0, text: "First."), TextBlock(sourcePage: 0, text: "Second.")]
+    let original = try ReflowFixture(sources)
+    try await original.stream.consume(original.plan())
+    let plan = try #require(await original.capture.plans.first)
+    for variant in 0..<4 {
+        let resumed = try ReflowFixture(sources, accepted: plan, committed: [plan.blocks[0].id], compactEvents: true)
+        await resumed.capture.plan(plan)
+        var event: [String: Any] = ["seq": 0, "type": "window_resume", "block_index": 1]
+        if variant == 1 { event["request_id"] = UUID().uuidString }
+        if variant == 2 { event["block_index"] = 0 }
+        if variant == 3 { event["seq"] = 1 }
+        let start = String(decoding: try JSONSerialization.data(withJSONObject: event), as: UTF8.self) + "\n"
+        if variant > 0 {
+            await #expect(throws: AIReflowFailure.invalidStructure) { try await resumed.stream.consume(start) }
+            continue
+        }
+        let output =
+            try start + resumed.line(1, "block_start", ["block_index": 1])
+            + resumed.line(2, "translation_delta", ["block_index": 1, "parts": [["type": "text", "text": "第二段。"]]])
+            + resumed.line(3, "block_end", ["block_index": 1])
+            + resumed.line(4, "window_end", ["block_count": 2])
+        try await resumed.stream.consume(output)
+        try await resumed.stream.finish()
+        #expect(await resumed.capture.blocks.map { $0.block.id } == [plan.blocks[1].id])
+    }
+    let noSavedPlan = try ReflowFixture(sources, compactEvents: true)
+    await #expect(throws: AIReflowFailure.invalidStructure) {
+        try await noSavedPlan.stream.consume("{\"seq\":0,\"type\":\"window_resume\",\"block_index\":0}\n")
+    }
+}

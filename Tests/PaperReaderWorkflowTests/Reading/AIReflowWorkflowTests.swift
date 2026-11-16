@@ -14,13 +14,16 @@ private actor JointReflowTransport: HTTPTransport {
     var models: [String] = []
     var holdOnce: Bool
     var malformedOnce: Bool
+    var unknownFormulaOnce: Bool
     let alwaysMalformed: Bool
     var waiting = false
     var continuation: CheckedContinuation<Void, Never>?
     init(
         interruptOnce: Bool = false, holdOnce: Bool = false, malformedOnce: Bool = false, alwaysMalformed: Bool = false,
-        outputLimitOnce: Bool = false, outputLimitAlways: Bool = false, excludeMetadata: Bool = false
+        outputLimitOnce: Bool = false, outputLimitAlways: Bool = false, excludeMetadata: Bool = false,
+        unknownFormulaOnce: Bool = false
     ) {
+        self.unknownFormulaOnce = unknownFormulaOnce
         self.outputLimitOnce = outputLimitOnce
         self.outputLimitAlways = outputLimitAlways
         self.excludeMetadata = excludeMetadata
@@ -51,7 +54,9 @@ private actor JointReflowTransport: HTTPTransport {
         }
         let messages = body["messages"] as! [[String: Any]]
         if body["response_format"] == nil {
-            let packet = try JSONSerialization.data(withJSONObject: ["choices": [["delta": ["content": "这是完整的恢复译文。"]]]])
+            let output = unknownFormulaOnce ? "这是错误的译文[[MATH_n]]。" : "这是完整的恢复译文。"
+            unknownFormulaOnce = false
+            let packet = try JSONSerialization.data(withJSONObject: ["choices": [["delta": ["content": output]]]])
             try await onData(Data("data: ".utf8) + packet + Data("\n\n".utf8))
             try await onData(
                 Data("data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n".utf8))
@@ -283,11 +288,13 @@ private actor JointReflowTransport: HTTPTransport {
     #expect(await transport.models == ["first-model", "second-model"])
 }
 
-@Test(arguments: [false, true]) @MainActor
-func structuralRecoveryRetainsPrefixAndHasABoundedRequestCount(alwaysMalformed: Bool) async throws {
+@Test(arguments: [false, true], [false, true]) @MainActor
+func structuralRecoveryRetainsPrefixAndHasABoundedRequestCount(alwaysMalformed: Bool, unknownFormula: Bool) async throws
+{
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: root) }
-    let transport = JointReflowTransport(malformedOnce: !alwaysMalformed, alwaysMalformed: alwaysMalformed)
+    let transport = JointReflowTransport(
+        malformedOnce: !alwaysMalformed, alwaysMalformed: alwaysMalformed, unknownFormulaOnce: unknownFormula)
     let model = try ReaderModel(
         root: root, client: ModelClient(transport: transport), credentials: WorkflowCredentials())
     await model.load()
@@ -306,10 +313,14 @@ func structuralRecoveryRetainsPrefixAndHasABoundedRequestCount(alwaysMalformed: 
     model.select(paper.id)
     model.startAIReflow()
     for _ in 0..<300 where !model.translating.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
-    #expect(await transport.calls == (alwaysMalformed ? 3 : 2))
+    #expect(await transport.calls == (alwaysMalformed || unknownFormula ? 3 : 2))
     #expect(model.paper?.reflowJob?.finished == !alwaysMalformed)
     #expect(model.paper?.blocks.count == (alwaysMalformed ? 0 : 2))
     #expect(model.paper?.reflowJob?.completedSourceIDs.count == (alwaysMalformed ? 0 : 2))
+    if !alwaysMalformed {
+        #expect(model.translationPauseReason == nil)
+        #expect(model.paper?.translations.values.allSatisfy { !$0.contains("[[MATH_") } == true)
+    }
 }
 
 @Test @MainActor func firstPDFPagePublishesBeforeLaterPagesAreExtractedAndCursorSurvivesRestart() async throws {

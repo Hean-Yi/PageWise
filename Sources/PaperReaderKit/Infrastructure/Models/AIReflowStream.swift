@@ -103,7 +103,10 @@ actor AIReflowStream {
             let type = value["type"] as? String
         else { throw AIReflowEvidence.invalid() }
         // Only explicitly negotiated compact events inherit an already verified response identity.
-        if compactEvents, plan != nil, value["v"] == nil, value["request_id"] == nil, value["window_id"] == nil {
+        let resumesSavedPlan = type == "window_resume" && sequence == 0 && acceptedPlan != nil
+        if compactEvents, plan != nil || resumesSavedPlan,
+            value["v"] == nil, value["request_id"] == nil, value["window_id"] == nil
+        {
             value["v"] = 1
             value["request_id"] = requestID.uuidString
             value["window_id"] = windowID.uuidString
@@ -157,7 +160,7 @@ actor AIReflowStream {
                 guard !result.isEmpty, usedObjects == Set(current.markers.keys) else {
                     throw AIReflowEvidence.invalid()
                 }
-                try current.block.richContent?.validate(result)
+                try AIReflowEvidence.validateTranslation(result, for: current.block)
             } else if !result.isEmpty {
                 throw AIReflowEvidence.invalid()
             }

@@ -241,6 +241,23 @@ struct AIReflowEvidence: Sendable {
         return (result, objectMarkers, translates)
     }
 
+    static func validateTranslation(_ translation: String, for block: TextBlock) throws {
+        // Catch only model-output validation, never a storage/publication callback.
+        // These errors must enter the same bounded recovery path as malformed events.
+        let content =
+            block.richContent
+            ?? RichContent(html: "", translationInput: block.text, mathematics: [:], mathDescriptions: [:])
+        do {
+            try content.validate(translation)
+        } catch {
+            Logger(subsystem: "dev.paperreader", category: "ReflowValidation")
+                .error(
+                    "Translation formula validation rejected; expected markers=\(block.richContent?.mathematics.count ?? 0)"
+                )
+            throw invalid()
+        }
+    }
+
     static func escape(_ text: String) -> String {
         text.replacingOccurrences(of: "&", with: "&amp;").replacingOccurrences(of: "<", with: "&lt;")
             .replacingOccurrences(of: ">", with: "&gt;")

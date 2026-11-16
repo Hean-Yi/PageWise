@@ -116,3 +116,29 @@ private func recoverySettings() -> ModelSettings {
     settings.model = "fixture"
     return settings
 }
+
+@Test func recoveryPromptMentionsOnlyFormulaMarkersActuallyPresentInTheParagraph() {
+    var source = TextBlock(sourcePage: 0, text: "A paragraph without a formula.")
+    #expect(!ModelClient.recoveryTranslationInstructions(for: source).contains("[[MATH_"))
+    source.richContent = RichContent(
+        html: "<p>A formula</p>", translationInput: "A formula [[MATH_7]].",
+        mathematics: ["[[MATH_7]]": "<math><mi>x</mi></math>"], mathDescriptions: [:])
+    let prompt = ModelClient.recoveryTranslationInstructions(for: source)
+    #expect(prompt.contains("[[MATH_7]]"))
+    #expect(!prompt.contains("[[MATH_n]]"))
+    #expect(!prompt.contains("[[MATH_1]]"))
+}
+
+@Test(arguments: ["中文[[MATH_9]]", "中文", "中文[[MATH_1]][[MATH_1]]"])
+func invalidFormulaOutputEntersBoundedReflowRecovery(translation: String) {
+    var source = TextBlock(sourcePage: 0, text: "A formula.")
+    source.richContent = RichContent(
+        html: "<p>A formula</p>", translationInput: "A formula [[MATH_1]].",
+        mathematics: ["[[MATH_1]]": "<math><mi>x</mi></math>"], mathDescriptions: [:])
+    #expect(throws: AIReflowFailure.invalidStructure) {
+        try AIReflowEvidence.validateTranslation(translation, for: source)
+    }
+    #expect(throws: Never.self) {
+        try AIReflowEvidence.validateTranslation("完整的公式[[MATH_1]]。", for: source)
+    }
+}
