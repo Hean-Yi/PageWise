@@ -6,6 +6,8 @@ public struct ReflowJob: Codable, Sendable, Equatable {
     public var sources: [TextBlock]
     /// nil denotes legacy fully extracted evidence. New jobs persist a page cursor atomically with sources.
     public var nextSourcePage: Int?
+    /// nil keeps legacy PDF jobs on their original route. Preparing is persisted before any publication.
+    public var evidenceRoute: String?
     /// Excluded metadata stays in sources and the original PDF, outside the reading sections.
     public var excludedSourceIDs: Set<UUID>?
     public var completedSourceIDs: Set<UUID> = []

@@ -77,3 +77,62 @@ func arxivRejectsUntrustedCandidateWithoutNetworking(_ address: String) async th
     await #expect(throws: (any Error).self) { try await ArxivClient(transport: transport).download(candidate) }
     #expect(await transport.count == 0)
 }
+
+private actor PublicationTransport: HTTPTransport {
+    var paths: [String] = []
+    let sourceAvailable: Bool
+    let wrongVersion: Bool
+    init(sourceAvailable: Bool = true, wrongVersion: Bool = false) {
+        self.sourceAvailable = sourceAvailable
+        self.wrongVersion = wrongVersion
+    }
+    func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        let url = request.url!
+        paths.append(url.path)
+        let source = url.path.hasPrefix("/src/")
+        let body: String
+        if url.path == "/api/query" {
+            body = """
+                <feed><entry><id>https://arxiv.org/abs/2401.00001v2</id><title>Original fixture</title>
+                <link title="pdf" href="https://arxiv.org/pdf/2401.00001v2"/></entry></feed>
+                """
+        } else if source {
+            body = #"\documentclass{article}\begin{document}Original source.\end{document}"#
+        } else {
+            body = "%PDF-1.7\nfixture"
+        }
+        let responseURL = source && wrongVersion ? URL(string: "https://arxiv.org/src/2401.00001v1")! : url
+        return (
+            Data(body.utf8),
+            HTTPURLResponse(
+                url: responseURL,
+                statusCode: source && !sourceAvailable ? 404 : 200, httpVersion: nil, headerFields: nil)!
+        )
+    }
+}
+
+@Test func onlineDownloadPinsVersionAndRequestsTeXBeforePDF() async throws {
+    let transport = PublicationTransport()
+    let candidate = PaperCandidate(
+        id: "https://arxiv.org/abs/2401.00001", title: "Original", authors: "", year: "",
+        pdfURL: URL(string: "https://arxiv.org/pdf/2401.00001")!)
+    let downloaded = try await ArxivClient(transport: transport).downloadPublication(candidate)
+    defer { try? FileManager.default.removeItem(at: downloaded.pdfURL) }
+    #expect(downloaded.candidate.id == "https://arxiv.org/abs/2401.00001v2")
+    #expect(downloaded.texArchive != nil)
+    #expect(downloaded.sourceNotice == nil)
+    #expect(await transport.paths == ["/api/query", "/src/2401.00001v2", "/pdf/2401.00001v2"])
+}
+
+@Test(arguments: [false, true]) func missingOrMismatchedTeXStillDownloadsSameVersionPDF(wrongVersion: Bool) async throws
+{
+    let transport = PublicationTransport(sourceAvailable: wrongVersion, wrongVersion: wrongVersion)
+    let candidate = PaperCandidate(
+        id: "https://arxiv.org/abs/2401.00001v2", title: "Original", authors: "", year: "",
+        pdfURL: URL(string: "https://arxiv.org/pdf/2401.00001v2")!)
+    let downloaded = try await ArxivClient(transport: transport).downloadPublication(candidate)
+    defer { try? FileManager.default.removeItem(at: downloaded.pdfURL) }
+    #expect(downloaded.texArchive == nil)
+    #expect(downloaded.sourceNotice != nil)
+    #expect(await transport.paths == ["/src/2401.00001v2", "/pdf/2401.00001v2"])
+}

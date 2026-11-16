@@ -19,15 +19,89 @@ public protocol PaperDiscovery: Sendable {
     func search(_ query: String) async throws -> [PaperCandidate]
     func download(_ candidate: PaperCandidate) async throws -> URL
     func structuredContent(_ candidate: PaperCandidate) async throws -> [TextBlock]?
+    func downloadPublication(_ candidate: PaperCandidate) async throws -> DownloadedPublication
 }
 
 extension PaperDiscovery {
     public func structuredContent(_ candidate: PaperCandidate) async throws -> [TextBlock]? { nil }
+    public func downloadPublication(_ candidate: PaperCandidate) async throws -> DownloadedPublication {
+        DownloadedPublication(pdfURL: try await download(candidate), candidate: candidate)
+    }
+}
+
+public struct DownloadedPublication: Sendable {
+    public var pdfURL: URL
+    public var candidate: PaperCandidate
+    public var texArchive: Data?
+    public var sourceNotice: String?
+    public init(pdfURL: URL, candidate: PaperCandidate, texArchive: Data? = nil, sourceNotice: String? = nil) {
+        self.pdfURL = pdfURL
+        self.candidate = candidate
+        self.texArchive = texArchive
+        self.sourceNotice = sourceNotice
+    }
 }
 
 public actor ArxivClient: PaperDiscovery {
     private let transport: any HTTPTransport
     public init(transport: any HTTPTransport = NetworkTransport()) { self.transport = transport }
+    public func downloadPublication(_ candidate: PaperCandidate) async throws -> DownloadedPublication {
+        guard let candidate = Self.verified(candidate) else { throw ReaderError.message("论文下载来源无效。") }
+        // Search normally returns a version. Resolve older unversioned candidates before either download.
+        let pinned: PaperCandidate
+        if Self.versionedIdentifier(candidate.id) != nil {
+            pinned = candidate
+        } else {
+            let identifier = String(URL(string: candidate.id)!.path.dropFirst(5))
+            var components = URLComponents(string: "https://export.arxiv.org/api/query")!
+            components.queryItems = [.init(name: "id_list", value: identifier)]
+            let (data, response) = try await transport.data(for: URLRequest(url: components.url!))
+            try Task.checkCancellation()
+            guard response.statusCode == 200, response.url == components.url, data.count <= 2_000_000 else {
+                throw ReaderError.message("无法确认论文版本，请稍后重试。")
+            }
+            let parser = XMLParser(data: data)
+            let delegate = FeedParser()
+            parser.delegate = delegate
+            parser.shouldResolveExternalEntities = false
+            guard parser.parse(), delegate.results.count == 1, let result = delegate.results.first,
+                let resolved = Self.versionedIdentifier(result.id),
+                resolved.replacingOccurrences(of: #"v[1-9][0-9]*$"#, with: "", options: .regularExpression)
+                    == identifier
+            else { throw ReaderError.message("无法确认论文版本，请重新查找。") }
+            pinned = result
+        }
+        let identifier = Self.versionedIdentifier(pinned.id)!
+        let sourceURL = URL(string: "https://arxiv.org/src/" + identifier)!
+        var archive: Data?
+        var notice: String?
+        do {
+            let (data, response) = try await transport.data(for: URLRequest(url: sourceURL))
+            try Task.checkCancellation()
+            guard response.statusCode == 200, Self.trustedOrigin(response.url),
+                response.url?.path == sourceURL.path, !data.isEmpty, data.count <= 50_000_000,
+                TeXArchive.looksLikeSource(data)
+            else { throw ReaderError.message("此版本没有可用的 TeX 源码包。") }
+            archive = data
+        } catch {
+            try Task.checkCancellation()
+            if (error as? URLError)?.code == .cancelled { throw CancellationError() }
+            notice = "TeX 源码包未能获取；重排时将尝试同版本 HTML 或 PDF。"
+        }
+        let pdf = try await download(pinned)
+        return DownloadedPublication(pdfURL: pdf, candidate: pinned, texArchive: archive, sourceNotice: notice)
+    }
+
+    public static func versionedIdentifier(_ id: String) -> String? {
+        guard let url = URL(string: id), trustedOrigin(url), url.path.hasPrefix("/abs/") else { return nil }
+        let value = String(url.path.dropFirst(5))
+        guard
+            value.range(
+                of: #"^(?:[0-9]{4}\.[0-9]{4,5}|[A-Za-z-]+(?:\.[A-Za-z-]+)?/[0-9]{7})v[1-9][0-9]*$"#,
+                options: .regularExpression) != nil
+        else { return nil }
+        return value
+    }
     public func structuredContent(_ candidate: PaperCandidate) async throws -> [TextBlock]? {
         guard let candidate = Self.verified(candidate), let source = URL(string: candidate.id),
             source.path.range(of: #"v[1-9][0-9]*$"#, options: .regularExpression) != nil,

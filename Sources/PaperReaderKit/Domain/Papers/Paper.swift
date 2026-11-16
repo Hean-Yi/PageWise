@@ -4,6 +4,7 @@ public struct Paper: Identifiable, Codable, Sendable {
     public var id: UUID
     public var title: String
     public var sourceURL: String?
+    public var onlineSource: OnlinePaperSource?
     public var digest: String
     public var originalPath: String
     public var pageCount: Int

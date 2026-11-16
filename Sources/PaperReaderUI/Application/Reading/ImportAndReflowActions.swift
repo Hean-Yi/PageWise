@@ -4,8 +4,15 @@ import PaperReaderKit
 extension ReaderModel {
     @discardableResult public func importURLs(
         _ urls: [URL], selectAfterImport: Bool = true, metadata: PaperCandidate? = nil, shelfID: UUID? = nil,
-        moveDuplicateToShelf: Bool = false, structuredBlocks: [TextBlock]? = nil, prepareSample: Bool = false
+        moveDuplicateToShelf: Bool = false, structuredBlocks: [TextBlock]? = nil, prepareSample: Bool = false,
+        onlineDownload: DownloadedPublication? = nil
     ) async -> [UUID] {
+        if let onlineDownload,
+            urls.count != 1 || urls.first != onlineDownload.pdfURL || metadata?.id != onlineDownload.candidate.id
+        {
+            message = "线上资料与导入论文不匹配，未导入。"
+            return []
+        }
         if let metadata, ArxivClient.verified(metadata) == nil {
             message = "论文来源无效，未导入。"
             return []
@@ -44,6 +51,24 @@ extension ReaderModel {
                 defer { if !retained { try? FileManager.default.removeItem(at: importedDirectory) } }
                 try Task.checkCancellation()
                 if let existing = state.papers.first(where: { $0.digest == imported.digest }) {
+                    if let onlineDownload, existing.onlineSource?.archivePath == nil,
+                        existing.sourceURL == nil || existing.sourceURL == onlineDownload.candidate.id,
+                        existing.onlineSource == nil
+                            || existing.onlineSource?.candidateID == onlineDownload.candidate.id
+                    {
+                        let attached = try await OnlineSourceStore().attach(onlineDownload, to: existing, root: root)
+                        guard var latest = state.papers.first(where: { $0.id == existing.id }) else {
+                            throw CancellationError()
+                        }
+                        latest.onlineSource = attached.onlineSource
+                        latest.warnings = Array(Set(latest.warnings + attached.warnings)).sorted()
+                        guard await save(cancellable: true, publishingReflow: latest) else {
+                            if let path = attached.onlineSource?.archivePath {
+                                try? FileManager.default.removeItem(at: root.appendingPathComponent(path))
+                            }
+                            return importedIDs
+                        }
+                    }
                     if shelfID != nil || moveDuplicateToShelf {
                         guard await movePaper(existing.id, to: shelfID) else { return importedIDs }
                     }
@@ -56,6 +81,9 @@ extension ReaderModel {
                 if let metadata {
                     imported.title = metadata.title
                     imported.sourceURL = metadata.id
+                }
+                if let onlineDownload {
+                    imported = try await OnlineSourceStore().attach(onlineDownload, to: imported, root: root)
                 }
                 if prepareSample, imported.canReflow {
                     imported.htmlReading = try await HTMLReadingStore().prepareOriginal(paper: imported, root: root)

@@ -247,6 +247,97 @@ private actor JointReflowTransport: HTTPTransport {
     Issue.record("Reflow task did not terminate")
 }
 
+@Test @MainActor func onlineTeXImportReflowRestartAndRegenerationKeepSourceAndOldReading() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    let pdf = root.appendingPathComponent("fixture.pdf")
+    try DemoPaper.write(to: pdf)
+    let original = try Data(contentsOf: pdf)
+    let transport = JointReflowTransport(interruptOnce: true)
+    let credentials = WorkflowCredentials()
+    let model = try ReaderModel(root: root, client: ModelClient(transport: transport), credentials: credentials)
+    await model.load()
+    var settings = model.modelSettings
+    settings.model = "fixture"
+    try model.saveSettings(settings, key: nil)
+    let candidate = PaperCandidate(
+        id: "https://arxiv.org/abs/2401.00001v1", title: "Original TeX fixture", authors: "", year: "",
+        pdfURL: URL(string: "https://arxiv.org/pdf/2401.00001v1")!)
+    let source = Data(
+        #"""
+        \documentclass{article}
+        \title{Original TeX fixture}
+        \begin{document}
+        \maketitle
+        The first paragraph comes from the source package.
+
+        The second paragraph has an independent stable source identity.
+        \end{document}
+        """#.utf8)
+    let download = DownloadedPublication(pdfURL: pdf, candidate: candidate, texArchive: source)
+    let ids = await model.importURLs([pdf], metadata: candidate, onlineDownload: download)
+    let id = try #require(ids.first)
+    let imported = try #require(model.paper)
+    #expect(imported.blocks.isEmpty && imported.reflowJob == nil)
+    #expect(await transport.calls == 0)
+    let sourcePath = try #require(imported.onlineSource?.archivePath)
+    #expect(try Data(contentsOf: root.appendingPathComponent(sourcePath)) == source)
+    model.startAIReflow()
+    try await waitForReflow(model, id: id)
+    let first = try #require(model.paper?.blocks.first)
+    #expect(model.paper?.reflowJob?.evidenceRoute == "tex")
+    #expect(model.paper?.reflowJob?.sources.allSatisfy { $0.sourcePage == -1 } == true)
+    #expect(first.reflowProvenance?.first?.texSource != nil)
+    let reopened = try ReaderModel(root: root, client: ModelClient(transport: transport), credentials: credentials)
+    await reopened.load()
+    reopened.select(id)
+    reopened.startAIReflow()
+    try await waitForReflow(reopened, id: id)
+    let completed = try #require(reopened.paper)
+    #expect(completed.reflowJob?.finished == true)
+    #expect(completed.blocks.count == 3)
+    #expect(completed.blocks.first?.id == first.id)
+    let artifact = try #require(completed.htmlReading)
+    let sealed = try Data(contentsOf: root.appendingPathComponent(artifact.relativePath))
+    reopened.startAIReflow(regenerate: true)
+    try await waitForReflow(reopened, id: id)
+    #expect(reopened.paper?.reflowJob?.finished == true)
+    #expect(reopened.paper?.retainedReadings?.last?.html == artifact)
+    #expect(try Data(contentsOf: root.appendingPathComponent(artifact.relativePath)) == sealed)
+    #expect(try Data(contentsOf: root.appendingPathComponent(imported.originalPath)) == original)
+    let duplicate = await reopened.importURLs([pdf], metadata: candidate, onlineDownload: download)
+    #expect(duplicate == [id])
+    #expect(reopened.state.papers.count == 1)
+    #expect(try Data(contentsOf: root.appendingPathComponent(sourcePath)) == source)
+}
+
+@Test @MainActor func onlineDuplicateCanAttachSourceWithoutReplacingExistingPDFJob() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    let pdf = root.appendingPathComponent("fixture.pdf")
+    try DemoPaper.write(to: pdf)
+    let model = try ReaderModel(root: root, credentials: WorkflowCredentials())
+    await model.load()
+    let ids = await model.importURLs([pdf])
+    let id = try #require(ids.first)
+    let job = ReflowJob(sources: [TextBlock(sourcePage: 0, text: "Saved PDF evidence")])
+    model.state.papers[0].reflowJob = job
+    _ = await model.save()
+    let candidate = PaperCandidate(
+        id: "https://arxiv.org/abs/2401.00001v1", title: "Original fixture", authors: "", year: "",
+        pdfURL: URL(string: "https://arxiv.org/pdf/2401.00001v1")!)
+    let source = Data(#"\documentclass{article}\begin{document}Original source.\end{document}"#.utf8)
+    let download = DownloadedPublication(pdfURL: pdf, candidate: candidate, texArchive: source)
+    #expect(await model.importURLs([pdf], metadata: candidate, onlineDownload: download) == [id])
+    #expect(model.paper?.reflowJob == job)
+    #expect(model.paper?.onlineSource?.archivePath != nil)
+    let restored = try await LibraryStore(directory: root).load()
+    #expect(restored.papers.first?.reflowJob == job)
+    #expect(restored.papers.first?.onlineSource?.archiveDigest == TeXPaperParser.digest(source))
+}
+
 @Test @MainActor func changingModelStopsOldGenerationAndResumesOnlyUnpublishedSources() async throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: root) }

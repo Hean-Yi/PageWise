@@ -6,7 +6,7 @@ public actor HTMLPaperParser {
     private let transport: any HTTPTransport
     public init(transport: any HTTPTransport = NetworkTransport()) { self.transport = transport }
 
-    public func parse(_ data: Data, at source: URL) async throws -> [TextBlock] {
+    public func parse(_ data: Data, at source: URL, normalizeMath: Bool = true) async throws -> [TextBlock] {
         guard data.count <= 8_000_000, let html = String(data: data, encoding: .utf8)
         else { throw ReaderError.message("HTML 正文结构无法确认，使用 PDF 解析。") }
         let document = try SwiftSoup.parse(html)
@@ -63,7 +63,7 @@ public actor HTMLPaperParser {
         else {
             throw ReaderError.message("HTML 包含尚不支持的内容，使用 PDF 保留完整原文。")
         }
-        try HTMLMathNormalizer.normalize(article)
+        if normalizeMath { try HTMLMathNormalizer.normalize(article) }
         try await HTMLImageNormalizer.normalize(article, source: source, transport: transport)
         try article.select("script,style,noscript,.ltx_page_header,.ltx_page_footer").remove()
         var elements: [Element] = []

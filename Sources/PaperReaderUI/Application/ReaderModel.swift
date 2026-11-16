@@ -248,6 +248,7 @@ public final class ReaderModel {
         let alreadyPresented =
             paper.reflowJob?.id == publication.reflowJob?.id && paper.reflowJob?.hasPresentedContent == true
         paper.reflowJob = publication.reflowJob
+        if paper.onlineSource?.archivePath == nil, let source = publication.onlineSource { paper.onlineSource = source }
         if alreadyPresented { paper.reflowJob?.hasPresentedContent = true }
         paper.retainedReadings = publication.retainedReadings
         paper.deferredReflow = publication.deferredReflow

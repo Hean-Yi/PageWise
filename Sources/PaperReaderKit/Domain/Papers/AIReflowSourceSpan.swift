@@ -7,11 +7,13 @@ public struct AIReflowSourceSpan: Codable, Sendable, Equatable {
     public let startUTF16: Int
     public let endUTF16: Int
     public let sourcePage: Int
+    public var texSource: TeXSourceAnchor?
 
-    public init(sourceID: UUID, startUTF16: Int, endUTF16: Int, sourcePage: Int) {
+    public init(sourceID: UUID, startUTF16: Int, endUTF16: Int, sourcePage: Int, texSource: TeXSourceAnchor? = nil) {
         self.sourceID = sourceID
         self.startUTF16 = startUTF16
         self.endUTF16 = endUTF16
         self.sourcePage = sourcePage
+        self.texSource = texSource
     }
 }

@@ -9,6 +9,10 @@ import PaperReaderKit
 @main
 struct ReaderSmoke {
     @MainActor static func main() async throws {
+        if CommandLine.arguments.count == 3, CommandLine.arguments[1] == "--tex-preview" {
+            try await TeXPreviewSmoke.run(root: URL(fileURLWithPath: CommandLine.arguments[2]))
+            return
+        }
         if CommandLine.arguments.count == 4, CommandLine.arguments[1] == "--audit-pdf-evidence" {
             try await PDFReflowAudit.run(
                 root: URL(fileURLWithPath: CommandLine.arguments[2]),

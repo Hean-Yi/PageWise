@@ -57,6 +57,7 @@ extension ReaderModel {
                     }
                     current.reflowJob = ReflowJob(sources: [])
                     current.reflowJob?.nextSourcePage = 0
+                    current.reflowJob?.evidenceRoute = current.onlineSource == nil ? "pdf" : "preparing"
                     current.htmlReading = nil
                     current.translatedPages = []
                     current.translations = [:]
@@ -98,6 +99,23 @@ extension ReaderModel {
                 {
                     try Task.checkCancellation()
                     guard self.modelSettings == settings else { throw CancellationError() }
+                    if job.evidenceRoute == "preparing" {
+                        self.reflowStages[id] = "解析 TeX 源码与图件"
+                        let evidence = try await OnlineSourceStore().prepare(paper: current, root: self.root)
+                        try Task.checkCancellation()
+                        guard self.modelSettings == settings,
+                            var publication = self.state.papers.first(where: { $0.id == id }),
+                            publication.reflowJob?.id == jobID
+                        else { throw CancellationError() }
+                        publication.reflowJob?.sources = evidence.blocks
+                        publication.reflowJob?.evidenceRoute = evidence.route
+                        publication.reflowJob?.nextSourcePage = evidence.route == "pdf" ? 0 : current.pageCount
+                        publication.warnings += evidence.warnings
+                        guard await self.save(publishingReflow: publication) else {
+                            throw ReaderError.message("源码证据未能保存，已暂停。")
+                        }
+                        continue
+                    }
                     if let plan = job.acceptedPlan, job.committedBlockIDs.count == plan.blocks.count {
                         var publication = current
                         structureRetries = 0
@@ -169,7 +187,9 @@ extension ReaderModel {
                         }
                         window = chosen
                     }
-                    self.reflowStages[id] = current.blocks.isEmpty ? "整理结构与生成首段内容" : "继续生成双语内容"
+                    let sourceLabel =
+                        job.evidenceRoute == "tex" ? "TeX · " : job.evidenceRoute == "html" ? "HTML · " : "PDF · "
+                    self.reflowStages[id] = sourceLabel + (current.blocks.isEmpty ? "整理结构与生成首段内容" : "继续生成双语内容")
                     do {
                         if usingRecovery {
                             try await self.client.recoverReflowAndTranslate(

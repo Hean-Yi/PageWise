@@ -6,6 +6,7 @@ public struct TextBlock: Identifiable, Codable, Sendable, Equatable {
     public var text: String
     /// Ordered extraction spans survive window-plan cleanup and retain every source page.
     public var reflowProvenance: [AIReflowSourceSpan]?
+    public var texSource: TeXSourceAnchor?
     /// Sources within this page-sized group await model ordering; groups themselves cannot move.
     public var reflowOrderGroup: UUID?
     /// Normalized PDF coordinates (x, y, width, height), with a bottom-left origin.

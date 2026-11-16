@@ -73,6 +73,10 @@ struct ReadingModeChoiceView: View {
             }.controlSize(.large)
             Text("选择双语重排后才会调用已配置的模型")
                 .font(.caption).foregroundStyle(ReaderTheme.muted)
+            if model.paper?.onlineSource?.archivePath != nil {
+                Text("已保存 TeX 源码，重排时优先使用")
+                    .font(.caption).foregroundStyle(ReaderTheme.muted)
+            }
         }.padding(30).frame(maxWidth: .infinity, maxHeight: .infinity).background(ReaderTheme.canvas)
     }
 }

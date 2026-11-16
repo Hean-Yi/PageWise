@@ -13,7 +13,7 @@ public final class OnlinePaperSearch {
     public private(set) var error: String?
     public private(set) var contextNotice: String?
     public private(set) var importingID: String?
-    private var importStage = "下载 PDF"
+    private var importStage = "下载 TeX 与原版 PDF"
     public var importProgress: PDFImportProgress {
         if importStage == "本地处理", let progress = reader.importProgress { return progress }
         return PDFImportProgress(sequence: 0, stage: importStage)
@@ -117,7 +117,7 @@ public final class OnlinePaperSearch {
             importErrors[candidate.id] = "目标书架已删除，请关闭查找后从其他书架重试。"
             return
         }
-        importStage = "下载 PDF"
+        importStage = "下载 TeX 与原版 PDF"
         importingID = candidate.id
         importErrors[candidate.id] = nil
         importTask = Task { [weak self] in
@@ -132,13 +132,16 @@ public final class OnlinePaperSearch {
                 }
             }
             do {
-                let url = try await self.discovery.download(candidate)
+                let download = try await self.discovery.downloadPublication(candidate)
+                let url = download.pdfURL
                 defer { try? FileManager.default.removeItem(at: url) }
                 self.importStage = "获取正文与图片"
                 try Task.checkCancellation()
                 self.importStage = "本地处理"
                 let ids = await self.reader.importURLs(
-                    [url], selectAfterImport: false, metadata: candidate, shelfID: shelfID, moveDuplicateToShelf: true)
+                    [url], selectAfterImport: false, metadata: download.candidate, shelfID: shelfID,
+                    moveDuplicateToShelf: true,
+                    onlineDownload: download)
                 if let id = ids.first {
                     // A committed import remains successful even if cancellation arrived during commit.
                     self.imported[candidate.id] = id

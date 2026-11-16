@@ -171,7 +171,7 @@ struct AIReflowEvidence: Sendable {
         result.reflowProvenance = zip(planned.sourceSegments, selected).map { segment, source in
             AIReflowSourceSpan(
                 sourceID: segment.sourceID, startUTF16: segment.startUTF16,
-                endUTF16: segment.endUTF16, sourcePage: source.block.sourcePage)
+                endUTF16: segment.endUTF16, sourcePage: source.block.sourcePage, texSource: source.block.texSource)
         }
         // A legacy single-page citation cannot truthfully describe a cross-page paragraph.
         result.sourcePage = Set(selected.map { $0.block.sourcePage }).count == 1 ? first.block.sourcePage : -1
