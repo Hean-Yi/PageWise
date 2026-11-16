@@ -60,12 +60,20 @@ enum PDFRegionalReflow {
                 || (!modelOrdering && merged.count == 2 && merged.allSatisfy { !isProse($0.text) })
             let tall = row.contains { $0.bounds.height > 36 && $0.bounds.width < $0.bounds.height * 2 }
             if math || damagedEncoding || overlapping || tabular || tall {
-                if modelOrdering, !overlapping, !tabular {
-                    regions += row.filter {
-                        isMathematical($0.text)
-                            || $0.text.unicodeScalars.contains { $0.value == 0 || $0.value == 0xFFFD }
-                            || ($0.bounds.height > 36 && $0.bounds.width < $0.bounds.height * 2)
+                if modelOrdering {
+                    regions += row.filter { line in
+                        isMathematical(line.text)
+                            || line.text.unicodeScalars.contains { $0.value == 0 || $0.value == 0xFFFD }
+                            || (line.bounds.height > 36 && line.bounds.width < line.bounds.height * 2)
+                            || row.contains { other in
+                                other.bounds != line.bounds && other.bounds.intersection(line.bounds).width > 1
+                            }
                     }.map(\.bounds)
+                    if tabular {
+                        // A body column beside several diagram labels is not a full-width table.
+                        // Keep prose out of the graphic seeds; each label retains its own bounds.
+                        regions += merged.filter { !isProse($0.text) }.map(\.bounds)
+                    }
                 } else {
                     regions.append(row.reduce(CGRect.null) { $0.union($1.bounds) })
                 }
@@ -140,7 +148,7 @@ enum PDFRegionalReflow {
         return result.map { $0.sorted { $0.bounds.minX < $1.bounds.minX } }
     }
 
-    private static func merge(_ row: [Line], bounds: CGRect) -> [Line] {
+    static func merge(_ row: [Line], bounds: CGRect) -> [Line] {
         var result: [Line] = []
         for line in row {
             let last = result.last

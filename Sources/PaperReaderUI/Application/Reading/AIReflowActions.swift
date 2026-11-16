@@ -62,6 +62,13 @@ extension ReaderModel {
                     current.translations = [:]
                     current.translatedBlockCount = 0
                     current.blocks = []
+                    current.warnings.removeAll { warning in
+                        warning.hasPrefix("第 ")
+                            && [
+                                "保留原始版面", "OCR 未能可靠分离", "超过 OCR 局部图像预算", "本地 OCR 未完成",
+                                "文字提取与 OCR 未能可靠分离",
+                            ].contains(where: warning.contains)
+                    }
                     current.canReflow = true
                     guard await self.save(publishingReflow: current) else { throw ReaderError.message("任务未能保存。") }
                 }
@@ -78,8 +85,13 @@ extension ReaderModel {
                     current.reflowJob?.modelSettings = settings
                     guard await self.save(publishingReflow: current) else { throw ReaderError.message("模型配置未能保存。") }
                 }
+                if current.reflowJob?.failure != nil {
+                    current.reflowJob?.failure = nil
+                    guard await self.save(publishingReflow: current) else { throw ReaderError.message("恢复状态未能保存。") }
+                }
                 let extractor = ReflowEvidenceExtractor()
                 var structureRetries = 0
+                var usingRecovery = false
                 var outputStalls = 0
                 while let current = self.state.papers.first(where: { $0.id == id }), var job = current.reflowJob,
                     job.id == jobID
@@ -88,6 +100,8 @@ extension ReaderModel {
                     guard self.modelSettings == settings else { throw CancellationError() }
                     if let plan = job.acceptedPlan, job.committedBlockIDs.count == plan.blocks.count {
                         var publication = current
+                        structureRetries = 0
+                        usingRecovery = false
                         publication.reflowJob?.acceptedPlan = nil
                         publication.reflowJob?.committedBlockIDs = []
                         guard await self.save(publishingReflow: publication) else {
@@ -157,25 +171,46 @@ extension ReaderModel {
                     }
                     self.reflowStages[id] = current.blocks.isEmpty ? "整理结构与生成首段内容" : "继续生成双语内容"
                     do {
-                        try await self.client.reflowAndTranslate(
-                            sources: window, title: current.title, settings: settings, key: key,
-                            acceptedPlan: job.acceptedPlan, committedPlanBlockIDs: job.committedBlockIDs,
-                            maxOutputTokens: min(32_768, (job.acceptedPlan == nil ? 8192 : 4096) << outputStalls),
-                            translationBlockLimit: outputStalls > 0 ? 1 : 2,
-                            onPlan: { [weak self] plan in
-                                guard let self else { throw CancellationError() }
-                                try await self.persistAIPlan(plan, paperID: id, jobID: jobID, settings: settings)
-                            },
-                            onDraft: { [weak self] block, text in
-                                guard let self else { throw CancellationError() }
-                                try await self.setAIDraft(
-                                    block: block, text: text, paperID: id, jobID: jobID, settings: settings)
-                            },
-                            onBlock: { [weak self] pair, sourceIDs in
-                                guard let self else { throw CancellationError() }
-                                try await self.publishAIBlock(
-                                    pair, sourceIDs: sourceIDs, paperID: id, jobID: jobID, settings: settings)
-                            })
+                        if usingRecovery {
+                            try await self.client.recoverReflowAndTranslate(
+                                sources: window, title: current.title, settings: settings, key: key,
+                                acceptedPlan: job.acceptedPlan, committedPlanBlockIDs: job.committedBlockIDs,
+                                maxOutputTokens: min(32_768, 8192 << outputStalls),
+                                onPlan: { [weak self] plan in
+                                    guard let self else { throw CancellationError() }
+                                    try await self.persistAIPlan(plan, paperID: id, jobID: jobID, settings: settings)
+                                },
+                                onDraft: { [weak self] block, text in
+                                    guard let self else { throw CancellationError() }
+                                    try await self.setAIDraft(
+                                        block: block, text: text, paperID: id, jobID: jobID, settings: settings)
+                                },
+                                onBlock: { [weak self] pair, sourceIDs in
+                                    guard let self else { throw CancellationError() }
+                                    try await self.publishAIBlock(
+                                        pair, sourceIDs: sourceIDs, paperID: id, jobID: jobID, settings: settings)
+                                })
+                        } else {
+                            try await self.client.reflowAndTranslate(
+                                sources: window, title: current.title, settings: settings, key: key,
+                                acceptedPlan: job.acceptedPlan, committedPlanBlockIDs: job.committedBlockIDs,
+                                maxOutputTokens: min(32_768, (job.acceptedPlan == nil ? 8192 : 4096) << outputStalls),
+                                translationBlockLimit: outputStalls > 0 ? 1 : 2,
+                                onPlan: { [weak self] plan in
+                                    guard let self else { throw CancellationError() }
+                                    try await self.persistAIPlan(plan, paperID: id, jobID: jobID, settings: settings)
+                                },
+                                onDraft: { [weak self] block, text in
+                                    guard let self else { throw CancellationError() }
+                                    try await self.setAIDraft(
+                                        block: block, text: text, paperID: id, jobID: jobID, settings: settings)
+                                },
+                                onBlock: { [weak self] pair, sourceIDs in
+                                    guard let self else { throw CancellationError() }
+                                    try await self.publishAIBlock(
+                                        pair, sourceIDs: sourceIDs, paperID: id, jobID: jobID, settings: settings)
+                                })
+                        }
                     } catch ModelStreamFailure.outputLimit {
                         try Task.checkCancellation()
                         guard self.modelSettings == settings,
@@ -196,8 +231,12 @@ extension ReaderModel {
                     } catch AIReflowFailure.invalidStructure where structureRetries < 2 {
                         try Task.checkCancellation()
                         guard self.modelSettings == settings else { throw CancellationError() }
-                        structureRetries += 1
-                        self.reflowStages[id] = "模型结构校验未通过，正在续接已保存进度（\(structureRetries)/2）"
+                        usingRecovery = true
+                        let completed =
+                            self.state.papers.first(where: { $0.id == id })?.reflowJob?.completedSourceIDs.count ?? 0
+                        structureRetries = completed > job.completedSourceIDs.count ? 0 : structureRetries + 1
+                        if self.translationDraft?.paperID == id { self.translationDraft = nil }
+                        self.reflowStages[id] = "正在逐段生成，已完成内容可继续阅读"
                         continue
                     }
                     structureRetries = 0
@@ -208,6 +247,8 @@ extension ReaderModel {
                     if let plan = publication.reflowJob?.acceptedPlan,
                         publication.reflowJob?.committedBlockIDs.count == plan.blocks.count
                     {
+                        structureRetries = 0
+                        usingRecovery = false
                         publication.reflowJob?.acceptedPlan = nil
                         publication.reflowJob?.committedBlockIDs = []
                         guard await self.save(publishingReflow: publication) else {
@@ -217,7 +258,9 @@ extension ReaderModel {
                 }
             } catch {
                 guard var publication = self.state.papers.first(where: { $0.id == id }) else { return }
-                let reason = error is CancellationError ? "已暂停，可从已保存进度继续" : error.localizedDescription
+                let cancelled =
+                    error is CancellationError || Task.isCancelled || (error as? URLError)?.code == .cancelled
+                let reason = cancelled ? "已暂停，可从已保存进度继续" : error.localizedDescription
                 publication.reflowJob?.failure = reason
                 _ = await self.save(publishingReflow: publication)
                 self.translationPauseReason = reason
@@ -286,6 +329,7 @@ extension ReaderModel {
             publication.blocks.append(savedBlock)
         }
         publication.translatedBlockCount = publication.blocks.count
+        publication.reflowJob?.failure = nil
         publication.reflowJob?.completedSourceIDs.formUnion(sourceIDs)
         publication.reflowJob?.committedBlockIDs.insert(pair.block.id)
         guard await save(publishingReflow: publication) else { throw ReaderError.message("双语内容未能保存，已暂停。") }

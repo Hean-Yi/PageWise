@@ -133,6 +133,6 @@ HTML 文件使用进程内引用计数保护 WebKit 当前载入的文件：清�
 
 `AIReflowStream` 支持有界响应的 `window_pause` 与引用既有计划的 `window_resume`；必须完成至少一个块才能正常暂停，恢复从已提交前缀开始。应用维持同一生成任务，完整页计划不重建、正文每次最多两块。`ModelStreamFailure.outputLimit` 单独自动续接，连续无进展预算与结构错误预算分离，网络/鉴权错误保持原策略。
 
-`Domain/Papers/AIReflowPlan` 和来源跨度描述受限计划；`Models/AIReflowEvidence` 生成本地证据/对象身份，`AIReflowEnvelopeStream` 增量解析原生 JSON 模式的 `events` 数组，完整事件立即交给 `AIReflowStream` 校验覆盖、次序、公式和恢复前缀，`AIReflowClient` 组织联合请求。顶层 JSON 未闭合时即可发布已完整验证的块；截断和多余字段仍拒绝。模型不能输出 HTML 或资源 URL。`ReflowJob` 保存活动断点，已发布 TextBlock 保留最终来源跨度；`RetainedReading` 保留旧版制品。
+`Domain/Papers/AIReflowPlan` 和来源跨度描述受限计划；`Models/AIReflowEvidence` 生成本地证据/对象身份，`AIReflowEnvelopeStream` 增量解析原生 JSON 模式的 `events` 数组，完整事件立即交给 `AIReflowStream` 校验覆盖、次序、公式和恢复前缀，`AIReflowClient` 组织联合请求；紧凑计划的范围和对象引用由本地推导。`AIReflowRecovery` 在协议错误后独立规划，再按完整段落请求纯译文，复用相同覆盖校验和持久化回调；不通过移除来源校验获得表面成功。顶层 JSON 未闭合时即可发布已完整验证的块；截断和多余字段仍拒绝。模型不能输出 HTML 或资源 URL。`ReflowJob` 保存活动断点，已发布 TextBlock 保留最终来源跨度；`RetainedReading` 保留旧版制品。
 
 `Application/Reading/AIReflowActions` 串行提交计划和完整块；首屏放行只在保存队列内修改最新 job 的就绪字段，避免覆盖并发提交。`Features/Reader/ReflowLoadingView` 提供阅读模式选择和加载状态；`Platform/HTML/HTMLCanvas` 以实际正文高度、字体和图片就绪判断首屏。新 HTML 按块追加，旧内容节点保持不变。以上联合入口替代旧的导入后全文 HTML 占位流程；旧实现保留兼容测试。

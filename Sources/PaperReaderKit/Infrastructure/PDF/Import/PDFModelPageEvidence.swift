@@ -42,7 +42,10 @@ enum PDFModelPageEvidence {
                 rows.append([line])
             }
         }
-        rows = rows.map { $0.sorted { $0.bounds.minX < $1.bounds.minX } }
+        // PDFKit can split a visual line at each font run or superscript. Rejoin
+        // neighboring runs before column detection; otherwise one author row
+        // makes the whole page look ambiguous and turns every body line into a source.
+        rows = rows.map { PDFRegionalReflow.merge($0.sorted { $0.bounds.minX < $1.bounds.minX }, bounds: bounds) }
         let layout = PDFProcessor.orderedColumns(rows, pageBounds: bounds)
         let groups = layout.reliable ? layout.groups : rows.flatMap { $0 }.map { [$0] }
         for group in groups {
@@ -65,7 +68,6 @@ enum PDFModelPageEvidence {
                     let indented = line.bounds.minX - last.bounds.minX > max(12, line.bounds.height)
                     let corridor = last.bounds.union(line.bounds)
                     if gap > max(7, line.bounds.height * 0.65) || changedSize || indented
-                        || chunk.reduce(0, { $0 + $1.text.count }) + line.text.count > 1_200
                         || crops.contains(where: { $0.intersects(corridor) })
                     {
                         flush()

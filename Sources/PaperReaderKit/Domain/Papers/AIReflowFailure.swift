@@ -7,7 +7,7 @@ public enum AIReflowFailure: Error, LocalizedError, Sendable, Equatable {
     public var errorDescription: String? {
         switch self {
         case .invalidStructure:
-            "模型返回的重排结构格式无效，当前内容未发布；此前已完成的内容已保留，可继续重试。"
+            "本页仍未能完成整理，已暂停生成。已完成内容和阅读位置已保留，原版可继续阅读。"
         }
     }
 }

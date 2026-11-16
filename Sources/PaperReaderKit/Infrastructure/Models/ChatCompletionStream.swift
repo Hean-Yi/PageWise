@@ -13,7 +13,8 @@ extension ModelClient {
     /// The optional argument distinguishes the verified reflow policy from generic chat requests.
     func completeStream(
         settings: ModelSettings, key: String, maxOutputTokens: Int, system: String, user: String,
-        reflowImages: [AIReflowImage]?, onPartial: @escaping @Sendable (String) async throws -> Void
+        reflowImages: [AIReflowImage]?, reflowPlainText: Bool = false,
+        onPartial: @escaping @Sendable (String) async throws -> Void
     ) async throws -> String {
         let settings = try settings.normalized()
         let key = key.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -50,7 +51,7 @@ extension ModelClient {
             "max_tokens": maxOutputTokens,
             "messages": [["role": "system", "content": system], ["role": "user", "content": content]],
         ]
-        if reflowImages != nil {
+        if reflowImages != nil, !reflowPlainText {
             // Native JSON mode constrains the envelope; semantic/schema validation remains local.
             body["response_format"] = ["type": "json_object"]
         }

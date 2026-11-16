@@ -208,7 +208,9 @@ struct ReaderView: View {
 
     private func readingBar(width: CGFloat) -> some View {
         HStack(spacing: 12) {
-            if model.usesHTMLReading {
+            if model.pageKeys.isEmpty {
+                Text("等待正文就绪").font(.caption).foregroundStyle(ReaderTheme.muted)
+            } else if model.usesHTMLReading {
                 Text("连续阅读 · \(model.visiblePage + 1) / \(model.pageKeys.count) 段")
                     .font(.caption).foregroundStyle(ReaderTheme.muted)
             } else {

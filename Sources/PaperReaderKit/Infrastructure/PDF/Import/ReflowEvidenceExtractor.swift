@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import OSLog
 import PDFKit
 
 public struct ReflowEvidence: Sendable {
@@ -48,6 +49,7 @@ public actor ReflowEvidenceExtractor {
         var blocks: [TextBlock] = []
         var warnings: [String] = []
         for index in startingAt..<end {
+            let pageStarted = Date()
             try Task.checkCancellation()
             onProgress("提取 PDF 文字：第 \(index + 1) / \(document.pageCount) 页")
             guard let page = document.page(at: index) else { throw ReaderError.message("无法读取第 \(index + 1) 页。") }
@@ -70,6 +72,10 @@ public actor ReflowEvidenceExtractor {
             }
             blocks += result.blocks
             warnings += result.warnings
+            Logger(subsystem: "dev.paperreader", category: "ReflowTiming")
+                .notice(
+                    "PDF page=\(index + 1), sources=\(result.blocks.count), seconds=\(Date().timeIntervalSince(pageStarted), privacy: .public)"
+                )
         }
         return ReflowEvidence(blocks: blocks, warnings: warnings, nextPage: end, finished: end == document.pageCount)
     }

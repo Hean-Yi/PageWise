@@ -50,6 +50,13 @@ private actor JointReflowTransport: HTTPTransport {
             throw ModelStreamFailure.outputLimit
         }
         let messages = body["messages"] as! [[String: Any]]
+        if body["response_format"] == nil {
+            let packet = try JSONSerialization.data(withJSONObject: ["choices": [["delta": ["content": "这是完整的恢复译文。"]]]])
+            try await onData(Data("data: ".utf8) + packet + Data("\n\n".utf8))
+            try await onData(
+                Data("data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n".utf8))
+            return HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+        }
         let input =
             try JSONSerialization.jsonObject(with: Data((messages[1]["content"] as! String).utf8)) as! [String: Any]
         let sources = input["sources"] as! [[String: Any]]

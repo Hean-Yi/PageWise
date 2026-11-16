@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import OSLog
 import SwiftSoup
 
 /// Only complete locally extracted sources may be grouped in protocol v1. This avoids
@@ -244,5 +245,9 @@ struct AIReflowEvidence: Sendable {
         text.replacingOccurrences(of: "&", with: "&amp;").replacingOccurrences(of: "<", with: "&lt;")
             .replacingOccurrences(of: ">", with: "&gt;")
     }
-    static func invalid() -> AIReflowFailure { .invalidStructure }
+    static func invalid(file: String = #fileID, line: Int = #line) -> AIReflowFailure {
+        Logger(subsystem: "dev.paperreader", category: "ReflowValidation")
+            .error("Rejected reflow at \(file, privacy: .public):\(line)")
+        return .invalidStructure
+    }
 }

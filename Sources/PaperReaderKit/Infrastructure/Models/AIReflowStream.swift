@@ -1,4 +1,5 @@
 import Foundation
+import OSLog
 
 actor AIReflowStream {
     private let evidence: AIReflowEvidence
@@ -182,6 +183,8 @@ actor AIReflowStream {
         }
     }
 
+    func planningResult() -> AIReflowPlan? { plan }
+
     private func receivePlan(_ value: [String: Any]) async throws {
         guard plan == nil, sequence == 1,
             let rawBlocks = value["blocks"] as? [[String: Any]], !rawBlocks.isEmpty, rawBlocks.count <= 128,
@@ -190,9 +193,30 @@ actor AIReflowStream {
         else { throw AIReflowEvidence.invalid() }
         var blocks: [AIReflowPlan.Block] = []
         for (index, raw) in rawBlocks.enumerated() {
+            if compactEvents, let ids = raw["source_ids"] as? [String] {
+                try Self.keys(raw, ["kind", "source_ids"])
+                guard let kindString = raw["kind"] as? String, let kind = Self.kind(kindString),
+                    !ids.isEmpty
+                else { throw AIReflowEvidence.invalid() }
+                let selected = try ids.map { id in
+                    guard let sourceID = evidence.sourceID(id),
+                        let source = evidence.sources.first(where: { $0.block.id == sourceID })
+                    else { throw AIReflowEvidence.invalid() }
+                    return source
+                }
+                blocks.append(
+                    .init(
+                        id: acceptedPlan?.blocks.indices.contains(index) == true
+                            ? acceptedPlan!.blocks[index].id : UUID(),
+                        kind: kind,
+                        sourceSegments: selected.map {
+                            .init(sourceID: $0.block.id, startUTF16: 0, endUTF16: $0.block.text.utf16.count)
+                        }, objectRefs: selected.flatMap(\.objectIDs)))
+                continue
+            }
             try Self.keys(raw, ["block_index", "kind", "source_segments", "object_refs"])
             guard try Self.integer(raw, "block_index") == index,
-                let kindString = raw["kind"] as? String, let kind = AIReflowPlan.Kind(rawValue: kindString),
+                let kindString = raw["kind"] as? String, let kind = Self.kind(kindString),
                 let segments = raw["source_segments"] as? [[String: Any]], !segments.isEmpty,
                 let refs = raw["object_refs"] as? [String]
             else { throw AIReflowEvidence.invalid() }
@@ -238,23 +262,38 @@ actor AIReflowStream {
         let byID = Dictionary(uniqueKeysWithValues: evidence.sources.map { ($0.block.id, $0) })
         for block in blocks {
             guard !block.sourceSegments.isEmpty else { throw AIReflowEvidence.invalid() }
-            if block.sourceIDs.count > 1,
-                block.sourceIDs.contains(where: { byID[$0]?.block.reflowOrderGroup != nil }),
-                block.sourceIDs.reduce(0, { $0 + (byID[$1]?.block.text.utf16.count ?? 0) }) > 1_600
-            {
-                throw AIReflowEvidence.invalid()
-            }
+            // Paragraph size is a generation hint, not evidence validity. A natural
+            // abstract slightly over that hint must not invalidate an otherwise complete plan.
             var refs: [String] = []
             for segment in block.sourceSegments {
                 guard let source = byID[segment.sourceID], segment.startUTF16 == 0,
                     segment.endUTF16 == source.block.text.utf16.count
                 else { throw AIReflowEvidence.invalid() }
                 if block.sourceSegments.count > 1 {
-                    guard source.kind == .paragraph, source.translates, block.kind == .paragraph,
-                        source.objects.allSatisfy({ $0.marker != nil })
-                    else { throw AIReflowEvidence.invalid() }
+                    let prose =
+                        source.kind == .paragraph && source.translates && block.kind == .paragraph
+                        && source.objects.allSatisfy({ $0.marker != nil })
+                    // PDF text runs can span several sources even for one author list or
+                    // heading. Classification applies to their complete, verified group.
+                    let samePage =
+                        source.block.reflowOrderGroup != nil
+                        && block.sourceIDs.allSatisfy {
+                            byID[$0]?.block.reflowOrderGroup == source.block.reflowOrderGroup
+                        }
+                    let groupedText =
+                        samePage && source.objects.isEmpty
+                        && (source.kind == .paragraph || source.kind == block.kind)
+                        && [
+                            .title, .heading, .listItem, .figureCaption, .substantiveFootnote, .frontMatter,
+                            .nonContent, .bibliography,
+                            .code,
+                        ]
+                        .contains(block.kind)
+                    guard prose || groupedText else { throw AIReflowEvidence.invalid() }
                 } else if source.kind == .paragraph {
-                    let ordinary: [AIReflowPlan.Kind] = [.paragraph, .title, .heading, .listItem, .substantiveFootnote]
+                    let ordinary: [AIReflowPlan.Kind] = [
+                        .paragraph, .title, .heading, .listItem, .figureCaption, .substantiveFootnote,
+                    ]
                     let modelTypes: [AIReflowPlan.Kind] = [.frontMatter, .nonContent, .bibliography, .code]
                     guard
                         ordinary.contains(block.kind)
@@ -267,7 +306,15 @@ actor AIReflowStream {
                     source.block.reflowMayExclude == true
                 {
                     // Only explicitly eligible local crops may be treated as decorative metadata.
+                } else if source.kind == .figure, source.block.reflowOrderGroup != nil,
+                    [.figure, .table, .displayFormula].contains(block.kind)
+                {
+                    // Native PDF crops share one storage type. The model may distinguish
+                    // a table or equation without changing pixels or translating its labels.
                 } else if block.kind != source.kind {
+                    Logger(subsystem: "dev.paperreader", category: "ReflowValidation").error(
+                        "Type mismatch: source=\(source.kind.rawValue, privacy: .public), planned=\(block.kind.rawValue, privacy: .public)"
+                    )
                     throw AIReflowEvidence.invalid()
                 }
                 refs += source.objectIDs
@@ -312,8 +359,31 @@ actor AIReflowStream {
         try await onDraft(current.block, translation)
     }
 
-    private static func keys(_ value: [String: Any], _ expected: Set<String>) throws {
-        guard Set(value.keys) == expected else { throw AIReflowEvidence.invalid() }
+    private static func kind(_ value: String) -> AIReflowPlan.Kind? {
+        // Lossless terminology aliases; none authorizes excluding content or changing objects.
+        switch value {
+        case "abstract": .paragraph
+        case "caption": .figureCaption
+        case "footnote": .substantiveFootnote
+        case "references": .bibliography
+        default: AIReflowPlan.Kind(rawValue: value)
+        }
+    }
+
+    private static func keys(_ value: [String: Any], _ expected: Set<String>, line: Int = #line) throws {
+        let actual = Set(value.keys)
+        guard actual == expected else {
+            let protocolKeys: Set<String> = [
+                "v", "request_id", "window_id", "seq", "type", "block_index", "block_count",
+                "blocks", "dispositions", "carry", "kind", "source_ids", "source_segments", "object_refs", "source_id",
+                "start_utf16", "end_utf16", "parts", "text", "object_id",
+            ]
+            let extra = actual.subtracting(expected)
+            Logger(subsystem: "dev.paperreader", category: "ReflowValidation").error(
+                "Fields at \(line): missing=\(expected.subtracting(actual).sorted().joined(separator: ","), privacy: .public), extra=\(extra.intersection(protocolKeys).sorted().joined(separator: ","), privacy: .public), unknown=\(extra.subtracting(protocolKeys).count)"
+            )
+            throw AIReflowEvidence.invalid(line: line)
+        }
     }
     private static func integer(_ value: [String: Any], _ key: String) throws -> Int {
         guard let raw = value[key] else { throw AIReflowEvidence.invalid() }

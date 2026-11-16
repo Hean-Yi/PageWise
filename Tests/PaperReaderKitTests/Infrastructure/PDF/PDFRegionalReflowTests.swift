@@ -116,6 +116,81 @@ private func regionalText(_ text: String, y: CGFloat, size: CGFloat = 12, x: CGF
     CTLineDraw(CTLineCreateWithAttributedString(NSAttributedString(string: text, attributes: attributes)), context)
 }
 
+@Test func modelEvidenceKeepsLongNaturalParagraphWhole() throws {
+    let page = PDFPage()
+    page.setBounds(CGRect(x: 0, y: 0, width: 612, height: 792), for: .mediaBox)
+    var lines = (0..<25).map { index in
+        PDFProcessor.TextLine(
+            text: "This continuation belongs to the same natural paragraph and must remain connected",
+            bounds: CGRect(x: 54, y: 700 - index * 14, width: 490, height: 12))
+    }
+    lines.append(.init(text: "until the sentence ends here.", bounds: CGRect(x: 54, y: 350, width: 200, height: 12)))
+    lines.append(
+        .init(text: "A separate paragraph begins here.", bounds: CGRect(x: 68, y: 320, width: 220, height: 12)))
+    let blocks = try #require(try PDFModelPageEvidence.recover(page, sourcePage: 1, lines: lines, regions: []))
+    #expect(blocks.count == 2)
+    #expect(blocks[0].text.count > 1_600)
+    #expect(blocks[0].text.hasSuffix("until the sentence ends here."))
+    #expect(
+        PDFRegionalReflow.characters(blocks.map(\.text).joined())
+            == PDFRegionalReflow.characters(lines.map(\.text).joined()))
+}
+
+@Test func diagramLabelsBesideProseDoNotTurnTheWholeRowIntoAnImage() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    let file = root.appendingPathComponent("side-by-side.pdf")
+    var bounds = CGRect(x: 0, y: 0, width: 612, height: 792)
+    let context = try #require(CGContext(file as CFURL, mediaBox: &bounds, nil))
+    context.beginPDFPage(nil)
+    for index in 0..<10 {
+        regionalText(
+            "The complete body sentence beside the drawing remains selectable.", y: Double(700 - index * 14), size: 7,
+            context: context)
+    }
+    for (label, x) in [("ONE", 350.0), ("TWO", 425.0), ("THREE", 510.0)] {
+        regionalText(label, y: 700, size: 7, x: x, context: context)
+    }
+    context.setStrokeColor(CGColor(gray: 0, alpha: 1))
+    context.stroke(CGRect(x: 340, y: 580, width: 210, height: 135))
+    regionalText("Figure 1. A diagram beside the body.", y: 560, size: 8, x: 340, context: context)
+    context.endPDFPage()
+    context.closePDF()
+    let document = try #require(PDFDocument(url: file))
+    let page = try #require(document.page(at: 0))
+    let blocks = try #require(try PDFRegionalReflow.recover(page, sourcePage: 1, modelOrdering: true))
+    #expect(
+        blocks.filter { $0.richContent?.isFigure == true }.allSatisfy { !$0.text.contains("complete body sentence") })
+    #expect(
+        blocks.contains { $0.richContent?.requiresTranslation == true && $0.text.contains("complete body sentence") })
+    #expect(
+        PDFRegionalReflow.characters(page.string ?? "") == PDFRegionalReflow.characters(blocks.map(\.text).joined()))
+}
+
+@Test func fragmentedAuthorRowDoesNotFragmentEveryBodyLine() throws {
+    let document = PDFDocument()
+    let page = PDFPage()
+    page.setBounds(CGRect(x: 0, y: 0, width: 612, height: 792), for: .mediaBox)
+    document.insert(page, at: 0)
+    var lines = [PDFProcessor.TextLine(text: "A research title", bounds: CGRect(x: 54, y: 740, width: 360, height: 18))]
+    for index in 0..<6 {
+        lines.append(.init(text: "Author \(index),", bounds: CGRect(x: 54 + index * 70, y: 700, width: 64, height: 12)))
+    }
+    for index in 0..<12 {
+        lines.append(
+            .init(
+                text: "This body line preserves the same source characters and joins its neighboring lines.",
+                bounds: CGRect(x: 54, y: 650 - index * 14, width: 490, height: 12)))
+    }
+    let blocks = try #require(try PDFModelPageEvidence.recover(page, sourcePage: 0, lines: lines, regions: []))
+    #expect(blocks.count <= 4)
+    #expect(blocks.contains { $0.text.contains("Author 0,") && $0.text.contains("Author 5,") })
+    #expect(
+        PDFRegionalReflow.characters(blocks.map(\.text).joined())
+            == PDFRegionalReflow.characters(lines.map(\.text).joined()))
+}
+
 @Test func regionalRepairPreservesPublishedAnchorsAndOriginalBytes() async throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: root) }
