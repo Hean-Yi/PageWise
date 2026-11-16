@@ -7,7 +7,7 @@ import PDFKit
 enum PDFRegionalReflow {
     typealias Line = PDFProcessor.TextLine
 
-    static func recover(_ page: PDFPage, sourcePage: Int) throws -> [TextBlock]? {
+    static func recover(_ page: PDFPage, sourcePage: Int, modelOrdering: Bool = false) throws -> [TextBlock]? {
         guard page.rotation % 360 == 0,
             !page.annotations.contains(where: { $0.type != String(PDFAnnotationSubtype.link.rawValue.dropFirst()) }),
             let source = page.string, !source.isEmpty
@@ -57,11 +57,22 @@ enum PDFRegionalReflow {
             let overlapping = zip(row, row.dropFirst()).contains { $0.bounds.maxX > $1.bounds.minX + 1 }
             let tabular =
                 merged.count > 2
-                || (merged.count == 2 && merged.allSatisfy { !isProse($0.text) })
+                || (!modelOrdering && merged.count == 2 && merged.allSatisfy { !isProse($0.text) })
             let tall = row.contains { $0.bounds.height > 36 && $0.bounds.width < $0.bounds.height * 2 }
             if math || damagedEncoding || overlapping || tabular || tall {
-                regions.append(row.reduce(CGRect.null) { $0.union($1.bounds) })
+                if modelOrdering, !overlapping, !tabular {
+                    regions += row.filter {
+                        isMathematical($0.text)
+                            || $0.text.unicodeScalars.contains { $0.value == 0 || $0.value == 0xFFFD }
+                            || ($0.bounds.height > 36 && $0.bounds.width < $0.bounds.height * 2)
+                    }.map(\.bounds)
+                } else {
+                    regions.append(row.reduce(CGRect.null) { $0.union($1.bounds) })
+                }
             }
+        }
+        if modelOrdering {
+            return try PDFModelPageEvidence.recover(page, sourcePage: sourcePage, lines: lines, regions: regions)
         }
         // Regions span the page width so parallel labels/columns cannot be clipped or emitted twice.
         // Expand only through line centers: oversized glyph boxes must not absorb neighboring prose.

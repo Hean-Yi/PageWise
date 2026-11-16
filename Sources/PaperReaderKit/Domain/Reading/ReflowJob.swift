@@ -4,6 +4,10 @@ import Foundation
 public struct ReflowJob: Codable, Sendable, Equatable {
     public var id = UUID()
     public var sources: [TextBlock]
+    /// nil denotes legacy fully extracted evidence. New jobs persist a page cursor atomically with sources.
+    public var nextSourcePage: Int?
+    /// Excluded metadata stays in sources and the original PDF, outside the reading sections.
+    public var excludedSourceIDs: Set<UUID>?
     public var completedSourceIDs: Set<UUID> = []
     public var modelSettings: ModelSettings?
     public var acceptedPlan: AIReflowPlan?

@@ -9,13 +9,17 @@ enum PDFOCREvidence {
         let warning: String
     }
 
-    static func recover(_ page: PDFPage, sourcePage: Int) throws -> Recovery? {
+    static func recover(_ page: PDFPage, sourcePage: Int, modelOrdering: Bool = false) throws -> Recovery? {
         guard eligible(page) else { return nil }
-        return try recover(page, sourcePage: sourcePage, candidates: VisionPDFTextRecognizer.recognize(page))
+        return try recover(
+            page, sourcePage: sourcePage, candidates: VisionPDFTextRecognizer.recognize(page),
+            modelOrdering: modelOrdering)
     }
 
     /// Separate candidate admission from Vision so uncertainty and omissions can be tested deterministically.
-    static func recover(_ page: PDFPage, sourcePage: Int, candidates: [PDFOCRLine]) throws -> Recovery? {
+    static func recover(_ page: PDFPage, sourcePage: Int, candidates: [PDFOCRLine], modelOrdering: Bool = false) throws
+        -> Recovery?
+    {
         guard eligible(page), !candidates.isEmpty, candidates.count <= 600,
             let pixels = PDFFigurePixels(page: page)
         else { return nil }
@@ -38,6 +42,26 @@ enum PDFOCREvidence {
         let unexplained = try pixels.graphicComponents(
             excluding: lines.map(\.bounds), minimumCells: 1, minimumExtent: 0)
         guard unexplained.count <= 300 else { return nil }
+        if modelOrdering {
+            unsafe += unexplained
+            unsafe += nativeLines.filter { native in
+                !lines.contains {
+                    $0.bounds.insetBy(dx: -3, dy: -3).contains(native.bounds)
+                        && normalized($0.text) == normalized(native.text)
+                }
+            }.map(\.bounds)
+            guard
+                var blocks = try PDFModelPageEvidence.recover(
+                    page, sourcePage: sourcePage, lines: lines.map { .init(text: $0.text, bounds: $0.bounds) },
+                    regions: unsafe)
+            else { return nil }
+            for index in blocks.indices where blocks[index].richContent?.requiresTranslation == true {
+                let html = blocks[index].richContent!.html.replacingOccurrences(
+                    of: "<p>", with: "<p data-ocr-confidence='device-recognized'>")
+                blocks[index].richContent?.html = html
+            }
+            return Recovery(blocks: blocks, warning: "第 \(sourcePage + 1) 页正文由设备端 OCR 识别，结构交给模型整理；不确定区域保留原图，请对照原版核对。")
+        }
         // Large graphics can contain paragraph-like labels. Their boundaries are too ambiguous
         // for this prose-only OCR adapter; retain the complete page instead.
         if unexplained.contains(where: { $0.height > 45 && $0.width > 45 }) { return nil }

@@ -31,6 +31,35 @@ struct AIReflowEvidence: Sendable {
     let sources: [Source]
     let digest: String
 
+    func wireID(_ id: UUID) -> String {
+        guard let index = sources.firstIndex(where: { $0.block.id == id }) else { return id.uuidString }
+        return "s\(index)"
+    }
+
+    func sourceID(_ wireID: String) -> UUID? {
+        if wireID.hasPrefix("s"), let index = Int(wireID.dropFirst()), wireID == "s\(index)",
+            sources.indices.contains(index)
+        {
+            return sources[index].block.id
+        }
+        return UUID(uuidString: wireID)
+    }
+
+    var orderGroups: [[UUID]] {
+        var groups: [[UUID]] = []
+        var previous: UUID?
+        for source in sources {
+            let group = source.block.reflowOrderGroup
+            if let group, group == previous {
+                groups[groups.count - 1].append(source.block.id)
+            } else {
+                groups.append([source.block.id])
+            }
+            previous = group
+        }
+        return groups
+    }
+
     init(_ blocks: [TextBlock]) throws {
         guard !blocks.isEmpty, blocks.count <= 128, Set(blocks.map(\.id)).count == blocks.count else {
             throw ReaderError.message("重排窗口为空、重复或过大，请重新准备资料。")
@@ -61,6 +90,12 @@ struct AIReflowEvidence: Sendable {
         let kind: AIReflowPlan.Kind
         if block.preservesSourcePage == true {
             kind = .preservedSource
+        } else if block.sourcePage == 0, block.text.count <= 600, rich?.isFigure != true,
+            block.text.range(
+                of: #"(?i)^\s*(?:correspondence|corresponding authors?|affiliations?|e-?mail|contact)\s*[:：]"#,
+                options: .regularExpression) != nil
+        {
+            kind = .frontMatter
         } else if try !doc.select("table").isEmpty() {
             kind = .table
         } else if try !doc.select("pre,code,.ltx_listing").isEmpty(), !translates {
@@ -85,7 +120,7 @@ struct AIReflowEvidence: Sendable {
         }
         // These locally known categories always preserve their original contents.
         let shouldTranslate =
-            translates && ![.table, .code, .bibliography, .frontMatter, .preservedSource].contains(kind)
+            translates && ![.table, .code, .bibliography, .frontMatter, .nonContent, .preservedSource].contains(kind)
         let input = shouldTranslate ? (rich?.translationInput ?? block.text) : ""
         var objects: [Object] = []
         var parts: [Part] = []
@@ -160,7 +195,10 @@ struct AIReflowEvidence: Sendable {
             }
             inputParts.append(input)
         }
-        let translates = selected.contains(where: \.translates)
+        let excluded = [.frontMatter, .nonContent].contains(planned.kind)
+        let translates =
+            selected.contains(where: \.translates)
+            && !excluded && ![.bibliography, .code].contains(planned.kind)
         if selected.count > 1 || first.block.richContent != nil {
             let html = selected.map { $0.block.richContent?.html ?? "<p>\(Self.escape($0.block.text))</p>" }.joined(
                 separator: "\n")
@@ -195,6 +233,10 @@ struct AIReflowEvidence: Sendable {
         }
         result.imageWarnings = selected.flatMap { $0.block.imageWarnings ?? [] }
         result.hasImageFailure = selected.contains { $0.block.hasImageFailure == true }
+        result.reflowOrderGroup = nil
+        result.reflowBounds = nil
+        result.reflowMayExclude = nil
+        result.excludedFromReading = excluded ? true : nil
         return (result, objectMarkers, translates)
     }
 

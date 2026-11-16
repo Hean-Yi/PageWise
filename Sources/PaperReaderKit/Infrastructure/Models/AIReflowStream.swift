@@ -19,10 +19,16 @@ actor AIReflowStream {
     private var translation = ""
     private var usedObjects = Set<String>()
     private var ended = false
+    private var paused = false
+    private var translatedCount = 0
+    private let translationBlockLimit: Int?
+    private let compactEvents: Bool
 
     init(
         evidence: AIReflowEvidence, requestID: UUID, windowID: UUID, configurationDigest: String,
         acceptedPlan: AIReflowPlan?, committed: Set<UUID>,
+        translationBlockLimit: Int? = nil,
+        compactEvents: Bool = false,
         onPlan: @escaping @Sendable (AIReflowPlan) async throws -> Void,
         onDraft: @escaping @Sendable (TextBlock, String) async throws -> Void,
         onBlock: @escaping @Sendable (BilingualBlock, [UUID]) async throws -> Void
@@ -33,6 +39,8 @@ actor AIReflowStream {
         self.configurationDigest = configurationDigest
         self.acceptedPlan = acceptedPlan
         self.committed = committed
+        self.translationBlockLimit = translationBlockLimit
+        self.compactEvents = compactEvents
         self.onPlan = onPlan
         self.onDraft = onDraft
         self.onBlock = onBlock
@@ -76,7 +84,7 @@ actor AIReflowStream {
             pending.removeAll()
             try await event(line)
         }
-        guard ended, current == nil, let plan, index == plan.blocks.count else {
+        guard ended, current == nil, let plan, index == plan.blocks.count || paused else {
             throw AIReflowEvidence.invalid()
         }
     }
@@ -90,20 +98,29 @@ actor AIReflowStream {
     private func event(_ line: String) async throws {
         guard !ended, line.utf8.count <= 65_536, sequence < 4096,
             let data = line.data(using: .utf8),
-            let value = try Self.object(from: data) as? [String: Any],
+            var value = try Self.object(from: data) as? [String: Any],
             let type = value["type"] as? String
         else { throw AIReflowEvidence.invalid() }
+        // Only explicitly negotiated compact events inherit an already verified response identity.
+        if compactEvents, plan != nil, value["v"] == nil, value["request_id"] == nil, value["window_id"] == nil {
+            value["v"] = 1
+            value["request_id"] = requestID.uuidString
+            value["window_id"] = windowID.uuidString
+        }
+        if compactEvents, ["window_pause", "window_end"].contains(type), value["block_count"] == nil, let plan {
+            value["block_count"] = plan.blocks.count
+        }
         let common: Set<String> = ["v", "request_id", "window_id", "seq", "type"]
         let extra: Set<String>
         switch type {
         case "window_plan": extra = ["blocks", "dispositions", "carry"]
-        case "block_start", "block_end": extra = ["block_index"]
+        case "block_start", "block_end", "window_resume": extra = ["block_index"]
         case "translation_delta": extra = ["block_index", "parts"]
-        case "window_end": extra = ["block_count"]
+        case "window_end", "window_pause": extra = ["block_count"]
         default: throw AIReflowEvidence.invalid()
         }
         try Self.keys(value, common.union(extra))
-        let header = try Self.decode(Header.self, from: data)
+        let header = try Self.decode(Header.self, from: JSONSerialization.data(withJSONObject: value))
         guard header.v == 1, header.requestID == requestID, header.windowID == windowID,
             header.seq == sequence
         else { throw AIReflowEvidence.invalid() }
@@ -111,11 +128,22 @@ actor AIReflowStream {
         try Task.checkCancellation()
         switch type {
         case "window_plan": try await receivePlan(value)
+        case "window_resume":
+            guard plan == nil, sequence == 1, let acceptedPlan,
+                try Self.integer(value, "block_index") == committed.count
+            else { throw AIReflowEvidence.invalid() }
+            plan = acceptedPlan
+            index = committed.count
         case "block_start":
             guard let plan, current == nil, index < plan.blocks.count,
                 try Self.integer(value, "block_index") == index
             else { throw AIReflowEvidence.invalid() }
             current = try evidence.assemble(plan.blocks[index])
+            if current?.translates == true, ![.title, .heading].contains(plan.blocks[index].kind),
+                let translationBlockLimit, translatedCount >= translationBlockLimit
+            {
+                throw AIReflowEvidence.invalid()
+            }
             translation = ""
             usedObjects = []
         case "translation_delta": try await delta(value)
@@ -135,12 +163,20 @@ actor AIReflowStream {
             try await onBlock(
                 BilingualBlock(block: current.block, translation: current.translates ? result : nil),
                 plan.blocks[index].sourceIDs)
+            if current.translates, ![.title, .heading].contains(plan.blocks[index].kind) { translatedCount += 1 }
             self.current = nil
             index += 1
         case "window_end":
             guard let plan, current == nil, index == plan.blocks.count,
                 try Self.integer(value, "block_count") == plan.blocks.count
             else { throw AIReflowEvidence.invalid() }
+            ended = true
+        case "window_pause":
+            guard translationBlockLimit != nil, let plan, current == nil,
+                index > committed.count, index < plan.blocks.count,
+                try Self.integer(value, "block_count") == plan.blocks.count
+            else { throw AIReflowEvidence.invalid() }
+            paused = true
             ended = true
         default: throw AIReflowEvidence.invalid()
         }
@@ -163,7 +199,7 @@ actor AIReflowStream {
             var mapped: [AIReflowPlan.SourceSegment] = []
             for segment in segments {
                 try Self.keys(segment, ["source_id", "start_utf16", "end_utf16"])
-                guard let rawID = segment["source_id"] as? String, let id = UUID(uuidString: rawID) else {
+                guard let rawID = segment["source_id"] as? String, let id = evidence.sourceID(rawID) else {
                     throw AIReflowEvidence.invalid()
                 }
                 mapped.append(
@@ -188,16 +224,29 @@ actor AIReflowStream {
     }
 
     private nonisolated func validate(_ blocks: [AIReflowPlan.Block]) throws {
-        guard blocks.flatMap(\.sourceIDs) == evidence.sources.map({ $0.block.id }) else {
+        let ids = blocks.flatMap(\.sourceIDs)
+        let originalIDs = evidence.sources.map { $0.block.id }
+        guard ids.count == originalIDs.count, Set(ids) == Set(originalIDs) else {
             throw AIReflowEvidence.invalid()
         }
-        var sourceIndex = 0
+        let ranks = Dictionary(
+            uniqueKeysWithValues: evidence.orderGroups.enumerated().flatMap { rank, group in
+                group.map { ($0, rank) }
+            })
+        let orderedRanks = ids.compactMap { ranks[$0] }
+        guard orderedRanks == orderedRanks.sorted() else { throw AIReflowEvidence.invalid() }
+        let byID = Dictionary(uniqueKeysWithValues: evidence.sources.map { ($0.block.id, $0) })
         for block in blocks {
             guard !block.sourceSegments.isEmpty else { throw AIReflowEvidence.invalid() }
+            if block.sourceIDs.count > 1,
+                block.sourceIDs.contains(where: { byID[$0]?.block.reflowOrderGroup != nil }),
+                block.sourceIDs.reduce(0, { $0 + (byID[$1]?.block.text.utf16.count ?? 0) }) > 1_600
+            {
+                throw AIReflowEvidence.invalid()
+            }
             var refs: [String] = []
             for segment in block.sourceSegments {
-                let source = evidence.sources[sourceIndex]
-                guard segment.sourceID == source.block.id, segment.startUTF16 == 0,
+                guard let source = byID[segment.sourceID], segment.startUTF16 == 0,
                     segment.endUTF16 == source.block.text.utf16.count
                 else { throw AIReflowEvidence.invalid() }
                 if block.sourceSegments.count > 1 {
@@ -205,14 +254,23 @@ actor AIReflowStream {
                         source.objects.allSatisfy({ $0.marker != nil })
                     else { throw AIReflowEvidence.invalid() }
                 } else if source.kind == .paragraph {
-                    guard [.paragraph, .title, .heading, .listItem, .substantiveFootnote].contains(block.kind) else {
+                    let ordinary: [AIReflowPlan.Kind] = [.paragraph, .title, .heading, .listItem, .substantiveFootnote]
+                    let modelTypes: [AIReflowPlan.Kind] = [.frontMatter, .nonContent, .bibliography, .code]
+                    guard
+                        ordinary.contains(block.kind)
+                            || (source.block.reflowOrderGroup != nil && source.objects.isEmpty
+                                && modelTypes.contains(block.kind))
+                    else {
                         throw AIReflowEvidence.invalid()
                     }
+                } else if [.nonContent, .frontMatter].contains(block.kind), source.kind == .figure,
+                    source.block.reflowMayExclude == true
+                {
+                    // Only explicitly eligible local crops may be treated as decorative metadata.
                 } else if block.kind != source.kind {
                     throw AIReflowEvidence.invalid()
                 }
                 refs += source.objectIDs
-                sourceIndex += 1
             }
             guard Set(block.objectRefs).count == block.objectRefs.count, Set(block.objectRefs) == Set(refs) else {
                 throw AIReflowEvidence.invalid()
@@ -229,7 +287,7 @@ actor AIReflowStream {
             switch part["type"] as? String {
             case "text":
                 try Self.keys(part, ["type", "text"])
-                guard let text = part["text"] as? String, !text.isEmpty, text.unicodeScalars.count <= 128,
+                guard let text = part["text"] as? String, !text.isEmpty, text.unicodeScalars.count <= 512,
                     !text.contains("[["),
                     !text.unicodeScalars.contains(where: {
                         $0.properties.generalCategory == .control && $0 != "\n" && $0 != "\t"

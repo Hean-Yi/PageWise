@@ -28,13 +28,17 @@ private struct ReflowFixture {
     let windowID: UUID
     let capture = ReflowCapture()
     let stream: AIReflowStream
-    init(_ sources: [TextBlock], accepted: AIReflowPlan? = nil, committed: Set<UUID> = []) throws {
+    init(
+        _ sources: [TextBlock], accepted: AIReflowPlan? = nil, committed: Set<UUID> = [],
+        translationBlockLimit: Int? = nil, compactEvents: Bool = false
+    ) throws {
         evidence = try AIReflowEvidence(sources)
         windowID = accepted?.windowID ?? UUID()
         let capture = capture
         stream = try AIReflowStream(
             evidence: evidence, requestID: requestID, windowID: windowID, configurationDigest: "test",
-            acceptedPlan: accepted, committed: committed,
+            acceptedPlan: accepted, committed: committed, translationBlockLimit: translationBlockLimit,
+            compactEvents: compactEvents,
             onPlan: { await capture.plan($0) }, onDraft: { _, text in await capture.draft(text) },
             onBlock: { await capture.block($0, $1) })
     }
@@ -236,7 +240,7 @@ private struct ReflowFixture {
                 try f.plan() + f.line(1, "block_start", ["block_index": 0])
                 + f.line(
                     2, "translation_delta",
-                    ["block_index": 0, "parts": [["type": "text", "text": String(repeating: "文", count: 129)]]])
+                    ["block_index": 0, "parts": [["type": "text", "text": String(repeating: "文", count: 513)]]])
         case 8:
             output =
                 try f.plan() + f.line(1, "block_start", ["block_index": 0])
@@ -672,4 +676,142 @@ private actor NativeReflowTransport: HTTPTransport {
     #expect(await transport.requestedNativeJSON)
     #expect(await capture.blocks.count == 1)
     #expect(await capture.blocks.first?.translation == "本地夹具。")
+}
+
+@Test func modelOrdersUncertainPageButCannotMoveAcrossPagesOrDuplicateSources() async throws {
+    let group = UUID()
+    var sources = [
+        TextBlock(sourcePage: 0, text: "Right column follows the whole left column."),
+        TextBlock(sourcePage: 0, text: "Left column starts here."),
+        TextBlock(sourcePage: 1, text: "Next page must stay after the first page."),
+    ]
+    sources[0].reflowOrderGroup = group
+    sources[1].reflowOrderGroup = group
+    for order in [[1, 0, 2], [2, 1, 0], [1, 1, 2]] {
+        let f = try ReflowFixture(sources)
+        let original = f.blocks()
+        let blocks = order.enumerated().map { index, sourceIndex in
+            var block = original[sourceIndex]
+            block["block_index"] = index
+            return block
+        }
+        if order == [1, 0, 2] {
+            try await f.stream.consume(f.plan(blocks))
+            let plan = try #require(await f.capture.plans.first)
+            #expect(plan.blocks.flatMap(\.sourceIDs) == [sources[1].id, sources[0].id, sources[2].id])
+            let assembled = try f.evidence.assemble(plan.blocks[0]).0
+            #expect(assembled.text == sources[1].text)
+            #expect(assembled.reflowProvenance?.first?.sourceID == sources[1].id)
+            let resumed = try ReflowFixture(sources, accepted: plan, committed: [plan.blocks[0].id])
+            try await resumed.stream.consume(resumed.plan(ModelClient.wireBlocks(plan)))
+            #expect(await resumed.capture.plans == [plan])
+        } else {
+            await #expect(throws: AIReflowFailure.invalidStructure) { try await f.stream.consume(f.plan(blocks)) }
+            #expect(await f.capture.plans.isEmpty)
+        }
+    }
+}
+
+@Test func modelCanPreserveUncertainFrontMatterWithoutTranslatingOrDroppingIt() async throws {
+    var source = TextBlock(sourcePage: 0, text: "Alice Example, Department of Computing")
+    source.reflowOrderGroup = UUID()
+    let f = try ReflowFixture([source])
+    var blocks = f.blocks()
+    blocks[0]["kind"] = "front_matter"
+    let output =
+        try f.plan(blocks) + f.line(1, "block_start", ["block_index": 0])
+        + f.line(2, "block_end", ["block_index": 0]) + f.line(3, "window_end", ["block_count": 1])
+    try await f.stream.consume(output)
+    try await f.stream.finish()
+    let published = try #require(await f.capture.blocks.first)
+    #expect(published.block.text == source.text)
+    #expect(published.translation == nil)
+    #expect(published.block.excludedFromReading == true)
+    #expect(published.block.richContent?.html.contains(source.text) == true)
+}
+
+@Test func boundedStreamPausesCleanlyAndResumesWithoutRepeatingPlan() async throws {
+    let sources = [TextBlock(sourcePage: 0, text: "First body."), TextBlock(sourcePage: 0, text: "Second body.")]
+    let first = try ReflowFixture(sources, translationBlockLimit: 1)
+    let output =
+        try first.plan() + first.line(1, "block_start", ["block_index": 0])
+        + first.line(2, "translation_delta", ["block_index": 0, "parts": [["type": "text", "text": "第一段。"]]])
+        + first.line(3, "block_end", ["block_index": 0]) + first.line(4, "window_pause", ["block_count": 2])
+    try await first.stream.consume(output)
+    try await first.stream.finish()
+    let plan = try #require(await first.capture.plans.first)
+    let resumed = try ReflowFixture(sources, accepted: plan, committed: [plan.blocks[0].id], translationBlockLimit: 1)
+    let rest =
+        try resumed.line(0, "window_resume", ["block_index": 1])
+        + resumed.line(1, "block_start", ["block_index": 1])
+        + resumed.line(2, "translation_delta", ["block_index": 1, "parts": [["type": "text", "text": "第二段。"]]])
+        + resumed.line(3, "block_end", ["block_index": 1]) + resumed.line(4, "window_end", ["block_count": 2])
+    // Resume uses a plan already saved before the first response.
+    await resumed.capture.plan(plan)
+    try await resumed.stream.consume(rest)
+    try await resumed.stream.finish()
+    #expect(await resumed.capture.blocks.count == 1)
+    #expect(await resumed.capture.blocks.first?.block.id == plan.blocks[1].id)
+    let empty = try ReflowFixture(sources, translationBlockLimit: 1)
+    await #expect(throws: AIReflowFailure.invalidStructure) {
+        try await empty.stream.consume(empty.plan() + empty.line(1, "window_pause", ["block_count": 2]))
+    }
+}
+
+@Test(arguments: [false, true], ["non_content", "front_matter"]) func onlyEligibleGraphicsCanBeExcludedAsDecoration(
+    eligible: Bool, kind: String
+) async throws {
+    var source = TextBlock(sourcePage: 0, text: "")
+    source.reflowOrderGroup = UUID()
+    source.reflowMayExclude = eligible
+    source.richContent = RichContent(
+        html: "<figure><img src='data:image/png;base64,aA=='></figure>",
+        translationInput: "", mathematics: [:], mathDescriptions: [:], isFigure: true)
+    let f = try ReflowFixture([source])
+    var blocks = f.blocks()
+    blocks[0]["kind"] = kind
+    if eligible {
+        try await f.stream.consume(f.plan(blocks))
+        let plan = try #require(await f.capture.plans.first)
+        let pair = try f.evidence.assemble(plan.blocks[0])
+        #expect(pair.0.excludedFromReading == true)
+        #expect(pair.2 == false)
+        #expect(plan.blocks[0].objectRefs == f.evidence.sources[0].objectIDs)
+    } else {
+        await #expect(throws: AIReflowFailure.invalidStructure) { try await f.stream.consume(f.plan(blocks)) }
+    }
+}
+
+@Test func compactEventsKeepIdentityCoverageAndCompletionChecks() async throws {
+    let source = TextBlock(sourcePage: 0, text: "A source with a stable identity.")
+    let f = try ReflowFixture([source], compactEvents: true)
+    var blocks = f.blocks()
+    blocks[0]["source_segments"] = [["source_id": "s0", "start_utf16": 0, "end_utf16": source.text.utf16.count]]
+    var output = try f.plan(blocks)
+    output += "{\"seq\":1,\"type\":\"block_start\",\"block_index\":0}\n"
+    output +=
+        "{\"seq\":2,\"type\":\"translation_delta\",\"block_index\":0,\"parts\":[{\"type\":\"text\",\"text\":\"稳定的来源。\"}]}\n"
+    output += "{\"seq\":3,\"type\":\"block_end\",\"block_index\":0}\n"
+    output += "{\"seq\":4,\"type\":\"window_end\"}\n"
+    try await f.stream.consume(output)
+    try await f.stream.finish()
+    #expect(await f.capture.sourceIDs == [[source.id]])
+    for variant in 0..<4 {
+        let rejected = try ReflowFixture([source], compactEvents: variant != 0)
+        var plan = rejected.blocks()
+        if variant == 3 {
+            plan[0]["source_segments"] = [["source_id": "s99", "start_utf16": 0, "end_utf16": source.text.utf16.count]]
+        }
+        let next: String
+        switch variant {
+        case 0: next = "{\"seq\":1,\"type\":\"block_start\",\"block_index\":0}\n"
+        case 1: next = "{\"seq\":1,\"type\":\"window_end\"}\n"
+        case 2: next = "{\"seq\":1,\"type\":\"block_start\",\"block_index\":0,\"request_id\":\"wrong\"}\n"
+        default: next = ""
+        }
+        await #expect(throws: AIReflowFailure.invalidStructure) {
+            try await rejected.stream.consume(rejected.plan(plan) + next)
+        }
+        #expect(await rejected.capture.blocks.isEmpty)
+    }
 }

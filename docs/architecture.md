@@ -123,7 +123,15 @@ HTML 文件使用进程内引用计数保护 WebKit 当前载入的文件：清�
 
 ## 按需联合重排（v8）
 
-`PDFOriginalImport` 只保存原始 PDF；`ReflowEvidenceExtractor` 在用户选择重排后才协调同版本 HTML、PDF 区域解析和 `PDF/Import/OCR` 的 Vision 识别。OCR 只接受可核验英文正文，未知区域保留局部图，不依赖 Mac 服务。
+`PDFOriginalImport` 只保存原始 PDF；`ReflowEvidenceExtractor` 在用户选择重排后验证并打开已保存 PDF，按页提取文字和必要的 `PDF/Import/OCR` Vision 识别，不调用发现服务或重复导入。OCR 只接受可核验英文正文，未知区域保留局部图，不依赖 Mac 服务。
+
+`PDFModelPageEvidence` 将图表/公式限制在局部裁图，剩余文字保留为带归一化坐标的证据。`TextBlock.reflowOrderGroup` 允许模型在同组内排序；`AIReflowStream` 验证完整覆盖、去重、组间顺序及恢复计划。已发布块移除临时排序字段，保留逐来源 provenance；旧确定顺序的来源继续严格保序。
+
+`ReflowJob.nextSourcePage` 是可选提取游标，与本批来源在同次保存中提交；旧记录缺省 nil 表示原有完整来源，新任务从 0 开始。应用在一页来源处理完成后提取下一页，首段生成不等待全文。该可选字段兼容现有 v8，测试覆盖旧记录与重启续接，不改写已发布版式。
+
+`AIReflowPlan.Kind.nonContent` 与 `frontMatter` 记录明确的非正文处置；`publishAIBlock` 跳过 HTML 发布，仅原子提交完成来源与 `excludedSourceIDs`，不形成空节或虚假阅读进度。小型局部图件提供排除候选提示，模型须根据上下文确认；已知公式不进入装饰候选。
+
+`AIReflowStream` 支持有界响应的 `window_pause` 与引用既有计划的 `window_resume`；必须完成至少一个块才能正常暂停，恢复从已提交前缀开始。应用维持同一生成任务，完整页计划不重建、正文每次最多两块。`ModelStreamFailure.outputLimit` 单独自动续接，连续无进展预算与结构错误预算分离，网络/鉴权错误保持原策略。
 
 `Domain/Papers/AIReflowPlan` 和来源跨度描述受限计划；`Models/AIReflowEvidence` 生成本地证据/对象身份，`AIReflowEnvelopeStream` 增量解析原生 JSON 模式的 `events` 数组，完整事件立即交给 `AIReflowStream` 校验覆盖、次序、公式和恢复前缀，`AIReflowClient` 组织联合请求。顶层 JSON 未闭合时即可发布已完整验证的块；截断和多余字段仍拒绝。模型不能输出 HTML 或资源 URL。`ReflowJob` 保存活动断点，已发布 TextBlock 保留最终来源跨度；`RetainedReading` 保留旧版制品。
 

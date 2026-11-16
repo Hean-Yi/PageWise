@@ -90,6 +90,13 @@ import Testing
     let page = try #require(document.page(at: 0))
     let source = try #require(page.string)
     #expect(source.contains("∑"))
+    let modelEvidence = try #require(try PDFRegionalReflow.recover(page, sourcePage: 0, modelOrdering: true))
+    #expect(!modelEvidence.contains { $0.preservesSourcePage == true })
+    #expect(modelEvidence.filter { $0.richContent?.requiresTranslation == true }.count >= 4)
+    #expect(modelEvidence.contains { $0.richContent?.isFigure == true && $0.text.contains("∑") })
+    #expect(Set(modelEvidence.compactMap(\.reflowOrderGroup)).count == 1)
+    #expect(modelEvidence.allSatisfy { $0.reflowBounds?.count == 4 })
+    #expect(PDFRegionalReflow.characters(source) == PDFRegionalReflow.characters(modelEvidence.map(\.text).joined()))
     #expect(try PDFRegionalReflow.recover(page, sourcePage: 0) == nil)
     let result = try PDFProcessor.extract(from: document, preservingComplexPages: true)
     #expect(result.blocks.count == 1)
@@ -318,4 +325,72 @@ private struct OfflineRepairDiscovery: PaperDiscovery {
     #expect(repaired.changedKeys.isEmpty)
     #expect(repaired.paper.htmlReading == paper.htmlReading)
     #expect(try Data(contentsOf: root.appendingPathComponent(artifact.relativePath)) == bytes)
+}
+
+@Test func directPDFEvidenceStartsWithOnePageWithoutHTMLOrDuplicateImport() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    let file = root.appendingPathComponent("original.pdf")
+    try DemoPaper.write(to: file)
+    var paper = try await PDFImporter(root: root).storeOriginal(at: file)
+    paper.sourceURL = "https://arxiv.org/abs/9999.99999v1"
+    let extractor = ReflowEvidenceExtractor()
+    let start = ContinuousClock.now
+    let first = try await extractor.extractBatch(paper: paper, root: root, startingAt: 0) { stage in
+        #expect(!stage.contains("HTML") && !stage.contains("结构化原文") && !stage.contains("OCR"))
+    }
+    print("PDF fixture first-page extraction: \(start.duration(to: .now)), prepared 1/\(paper.pageCount) pages")
+    #expect(first.nextPage == 1 && !first.finished)
+    #expect(!first.blocks.isEmpty && first.blocks.allSatisfy { $0.sourcePage == 0 })
+    let second = try await extractor.extractBatch(paper: paper, root: root, startingAt: first.nextPage)
+    #expect(second.finished && second.nextPage == paper.pageCount)
+    #expect(second.blocks.allSatisfy { $0.sourcePage == 1 })
+    #expect(try FileManager.default.contentsOfDirectory(atPath: root.appendingPathComponent("Papers").path).count == 1)
+    #expect(try Data(contentsOf: root.appendingPathComponent(paper.originalPath)) == Data(contentsOf: file))
+    paper.digest = "changed"
+    await #expect(throws: ReaderError.self) {
+        try await ReflowEvidenceExtractor().extractBatch(paper: paper, root: root, startingAt: 0)
+    }
+}
+
+@Test func authorAndLogoCropRemainsEligibleForModelExclusionWithoutEnlargement() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    let file = root.appendingPathComponent("metadata.pdf")
+    var bounds = CGRect(x: 0, y: 0, width: 612, height: 792)
+    let context = try #require(CGContext(file as CFURL, mediaBox: &bounds, nil))
+    context.beginPDFPage(nil)
+    regionalText("A Reliable Evaluation", y: 740, size: 20, context: context)
+    regionalText("Alice Example and Bob Example", y: 712, size: 11, context: context)
+    regionalText("Abstract", y: 620, size: 14, context: context)
+    regionalText("Department of Computing, Example University", y: 690, size: 11, context: context)
+    regionalText("Correspondence: author@example.invalid", y: 668, size: 11, context: context)
+    context.setStrokeColor(CGColor(gray: 0, alpha: 1))
+    context.strokeEllipse(in: CGRect(x: 520, y: 675, width: 25, height: 25))
+    regionalText("EXAMPLE LAB", y: 663, size: 6, x: 507, context: context)
+    regionalText(
+        "The experiment measures accuracy and does not establish causality.", y: 594, size: 11, context: context)
+    regionalText("x = y + 2", y: 400, context: context)
+    context.endPDFPage()
+    context.closePDF()
+    let document = try #require(PDFDocument(url: file))
+    let page = try #require(document.page(at: 0))
+    let blocks = try #require(try PDFRegionalReflow.recover(page, sourcePage: 0, modelOrdering: true))
+    let author = try #require(blocks.first { $0.text == "Alice Example and Bob Example" })
+    #expect(author.richContent?.requiresTranslation == false)
+    #expect(try AIReflowEvidence([author]).sources.first?.kind == .frontMatter)
+    let metadata = try #require(blocks.first { $0.text.contains("Correspondence:") })
+    #expect(metadata.richContent?.isFigure == true)
+    #expect(metadata.reflowMayExclude == true)
+    let formula = try #require(blocks.first { $0.text.contains("x = y") })
+    #expect(formula.reflowMayExclude == false)
+    let width = Int(ceil(try #require(formula.reflowBounds?[2]) * 612 * 1.5))
+    #expect(width < 150)
+    #expect(formula.richContent?.html.contains("style='width:\(width)px;max-width:100%") == true)
+    #expect(
+        blocks.contains {
+            $0.text.contains("does not establish causality") && $0.richContent?.requiresTranslation == true
+        })
 }

@@ -6,6 +6,14 @@ public struct TextBlock: Identifiable, Codable, Sendable, Equatable {
     public var text: String
     /// Ordered extraction spans survive window-plan cleanup and retain every source page.
     public var reflowProvenance: [AIReflowSourceSpan]?
+    /// Sources within this page-sized group await model ordering; groups themselves cannot move.
+    public var reflowOrderGroup: UUID?
+    /// Normalized PDF coordinates (x, y, width, height), with a bottom-left origin.
+    public var reflowBounds: [Double]?
+    /// Small or marginal graphics may be classified as decoration by the model.
+    public var reflowMayExclude: Bool?
+    /// A validated model disposition, consumed before HTML publication.
+    public var excludedFromReading: Bool?
     /// Present only until the corresponding fixed pages have been committed.
     public var richContent: RichContent?
     /// Complex PDF pages keep their original geometry inside the single reading result.

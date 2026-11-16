@@ -97,7 +97,7 @@ import Testing
     #expect(recovery.warning.contains("未识别区域已保留原图"))
 }
 
-@Test func ambiguousScannedGraphicKeepsEntireOriginalPage() async throws {
+@Test func scannedGraphicKeepsLocalObjectAndSendsBodyToModel() async throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: root) }
     try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -110,9 +110,10 @@ import Testing
         ], graphic: true)
     let paper = try await PDFImporter(root: root).storeOriginal(at: url)
     let evidence = try await ReflowEvidenceExtractor().extract(paper: paper, root: root)
-    #expect(evidence.blocks.count == 1)
-    #expect(evidence.blocks.first?.preservesSourcePage == true)
-    #expect(evidence.warnings.contains { $0.contains("OCR 未能可靠分离") })
+    #expect(!evidence.blocks.contains { $0.preservesSourcePage == true })
+    #expect(evidence.blocks.contains { $0.richContent?.requiresTranslation == true })
+    #expect(evidence.blocks.contains { $0.richContent?.isFigure == true })
+    #expect(evidence.warnings.contains { $0.contains("OCR") })
 }
 
 @Test func localOCRRejectsConflictingTextLayerAndRetainsAnnotations() throws {
@@ -180,9 +181,9 @@ import Testing
     #expect(try PDFOCREvidence.recover(page, sourcePage: 0, candidates: candidates) == nil)
     let paper = try await PDFImporter(root: root).storeOriginal(at: url)
     let evidence = try await ReflowEvidenceExtractor().extract(paper: paper, root: root)
-    #expect(evidence.blocks.count == 1)
-    #expect(evidence.blocks.first?.preservesSourcePage == true)
-    #expect(evidence.blocks.first?.sourcePage == 0)
+    #expect(!evidence.blocks.contains { $0.preservesSourcePage == true })
+    #expect(evidence.blocks.filter { $0.richContent?.requiresTranslation == true }.count >= 4)
+    #expect(evidence.blocks.allSatisfy { $0.sourcePage == 0 && $0.reflowOrderGroup != nil })
     #expect(try Data(contentsOf: root.appendingPathComponent(paper.originalPath)) == original)
 }
 

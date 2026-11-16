@@ -30,6 +30,7 @@ public struct AIReflowPlan: Codable, Sendable, Equatable {
         case displayFormula = "display_formula"
         case figure, table, code, bibliography
         case frontMatter = "front_matter"
+        case nonContent = "non_content"
         case preservedSource = "preserved_source"
     }
 }
