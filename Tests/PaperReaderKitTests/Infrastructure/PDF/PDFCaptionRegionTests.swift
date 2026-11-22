@@ -61,6 +61,54 @@ import Testing
     #expect(try PDFCaptionRegionDetector.regions(on: page).isEmpty)
 }
 
+@Test func pdfCaptionMatchesSplitTypeAndWraparoundTableWithoutNeighboringProse() throws {
+    let url = try illustratedFixture()
+    defer { try? FileManager.default.removeItem(at: url) }
+    let document = try #require(PDFDocument(url: url))
+    defer { withExtendedLifetime(document) {} }
+    let page = try #require(document.page(at: 4))
+    let table = try #require(try PDFCaptionRegionDetector.regions(on: page).first)
+    let bounds = try #require(table.sourceBounds)
+    #expect(table.captionBounds.width > 140)
+    #expect(bounds.contains(CGRect(x: 262, y: 545, width: 218, height: 52)))
+    #expect(bounds.minX > 245)
+    #expect(!bounds.intersects(table.captionBounds))
+}
+
+@Test func pdfCaptionFindsShortPlotAxesWhenSupportedByScaleLabels() throws {
+    let url = try illustratedFixture()
+    defer { try? FileManager.default.removeItem(at: url) }
+    let document = try #require(PDFDocument(url: url))
+    defer { withExtendedLifetime(document) {} }
+    let page = try #require(document.page(at: 5))
+    let figure = try #require(try PDFCaptionRegionDetector.regions(on: page).first)
+    let bounds = try #require(figure.sourceBounds)
+    #expect(bounds.contains(CGRect(x: 73, y: 557, width: 301, height: 32)))
+    #expect(!bounds.intersects(figure.captionBounds))
+}
+
+@Test func pdfCaptionExcludesVerticalArchiveStampAndPreservesHeadingAndLeftPanel() throws {
+    let url = try illustratedFixture()
+    defer { try? FileManager.default.removeItem(at: url) }
+    let document = try #require(PDFDocument(url: url))
+    defer { withExtendedLifetime(document) {} }
+    let page = try #require(document.page(at: 6))
+    let figure = try #require(try PDFCaptionRegionDetector.regions(on: page).first)
+    let bounds = try #require(figure.sourceBounds)
+    #expect(bounds.contains(CGRect(x: 75, y: 528, width: 199, height: 77)))
+    #expect(bounds.minX > 65)
+    #expect(bounds.maxY < 638)
+    let reading = try PDFSentenceExtractor.extractPage(url: url, pageIndex: 6, includingIllustrations: true)
+    #expect(reading.paragraphSentences.contains { $0.text.contains("Introduction") })
+    let caption = try #require(reading.paragraphSentences.first { $0.text.contains("Figure 11") })
+    let heading = try #require(page.selection(for: CGRect(x: 70, y: 634, width: 105, height: 18)))
+    let mixed = PDFSentenceExtraction(
+        sentences: [caption], notice: nil, unpairedBounds: [heading.bounds(for: page)])
+    let inline = try PDFIllustratedPage.compose(text: mixed, on: page, pageIndex: 6).illustrations
+    #expect(inline.map(\.presentation) == [.excerpt, .illustration])
+    #expect(inline.map(\.insertBeforeSentenceID) == [caption.id, caption.id])
+}
+
 private func illustratedFixture() throws -> URL {
     let url = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID()).pdf")
     let consumer = try #require(CGDataConsumer(url: url as CFURL))
@@ -111,6 +159,40 @@ private func illustratedFixture() throws -> URL {
     context.fill(CGRect(x: 72, y: 378, width: 180, height: 49))
     text("Figure 9: Ambiguous panel assignment.", 72, 357)
     context.fill(CGRect(x: 72, y: 301, width: 180, height: 42))
+    context.endPDFPage()
+    context.beginPDFPage(nil)
+    for y in [599, 585, 571, 557, 543, 529] {
+        text("The other column describes this result.", 64, CGFloat(y))
+    }
+    for y in [597, 583, 545] {
+        context.fill(CGRect(x: 262, y: y, width: 218, height: 1))
+    }
+    for (y, name, value) in [(586, "Group", "Median"), (569, "First group", "36"), (552, "Second group", "78")] {
+        text(name, 266, CGFloat(y))
+        text(value, 417, CGFloat(y))
+    }
+    text("Table 3:", 258, 529)
+    text("Counts in both observed groups.", 304, 529)
+    context.endPDFPage()
+    context.beginPDFPage(nil)
+    for x in [80, 170, 260, 350] {
+        context.fill(CGRect(x: x, y: 557, width: 29, height: 34))
+        for (y, value) in [(558, "1"), (572, "2"), (586, "3")] {
+            text(value, CGFloat(x - 7), CGFloat(y), size: 4)
+        }
+    }
+    text("Figure 10: Distributions across four groups.", 72, 539)
+    context.endPDFPage()
+    context.beginPDFPage(nil)
+    context.saveGState()
+    context.translateBy(x: 28, y: 492)
+    context.rotate(by: .pi / 2)
+    text("arXiv:2609.12345v1  example archive entry", 0, 0)
+    context.restoreGState()
+    text("1 Introduction", 72, 638, size: 12)
+    context.fill(CGRect(x: 75, y: 528, width: 68, height: 77))
+    context.fill(CGRect(x: 206, y: 528, width: 68, height: 77))
+    text("Figure 11: Distribution in two panels.", 72, 500)
     context.endPDFPage()
     context.closePDF()
     return url

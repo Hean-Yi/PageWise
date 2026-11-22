@@ -72,7 +72,7 @@ public actor PDFDocumentTranslationQueue {
             try Task.checkCancellation()
             // Capture only the sentence anchors. Release PDFKit objects and all rendered crops before awaiting I/O.
             let sentences = try autoreleasepool {
-                try PDFSentenceExtractor.extractPage(url: url, pageIndex: index, includingIllustrations: true)
+                try PDFSentenceExtractor.extractPage(url: url, pageIndex: index, illustrations: .translation)
                     .paragraphSentences
             }
             if sentences.isEmpty {

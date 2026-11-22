@@ -13,6 +13,12 @@ public enum PDFSentenceExtractor {
     public static func extractPage(url: URL, pageIndex: Int, includingIllustrations: Bool = false) throws
         -> PDFSentenceExtraction
     {
+        try extractPage(url: url, pageIndex: pageIndex, illustrations: includingIllustrations ? .reading : .none)
+    }
+
+    enum IllustrationUse { case none, reading, translation }
+
+    static func extractPage(url: URL, pageIndex: Int, illustrations: IllustrationUse) throws -> PDFSentenceExtraction {
         guard let document = PDFDocument(url: url), !document.isLocked,
             (0..<document.pageCount).contains(pageIndex)
         else { throw ReaderError.message("无法读取原始 PDF 的这一页。") }
@@ -20,12 +26,23 @@ public enum PDFSentenceExtractor {
         guard let page = document.page(at: pageIndex) else {
             return PDFSentenceExtraction(sentences: [], notice: "本页无法读取，请检查原始 PDF。")
         }
-        let text = try extractText(on: page, document: document, pageIndex: pageIndex)
-        guard includingIllustrations else { return text }
-        return try PDFIllustratedPage.compose(text: text, on: page, pageIndex: pageIndex)
+        var regions: [PDFCaptionRegion]?
+        func captionRegions() throws -> [PDFCaptionRegion] {
+            if let regions { return regions }
+            let detected = try PDFCaptionRegionDetector.regions(on: page)
+            regions = detected
+            return detected
+        }
+        let text = try extractText(on: page, document: document, pageIndex: pageIndex, captionRegions: captionRegions)
+        guard illustrations != .none else { return text }
+        return try PDFIllustratedPage.compose(
+            text: text, on: page, pageIndex: pageIndex, includeSourceReading: illustrations == .reading,
+            regions: captionRegions())
     }
 
-    private static func extractText(on page: PDFPage, document: PDFDocument, pageIndex: Int) throws
+    private static func extractText(
+        on page: PDFPage, document: PDFDocument, pageIndex: Int, captionRegions: () throws -> [PDFCaptionRegion]
+    ) throws
         -> PDFSentenceExtraction
     {
         let empty = PDFSentenceExtraction(sentences: [], notice: "本页没有可提取的正文，请查看原页。")
@@ -39,6 +56,7 @@ public enum PDFSentenceExtractor {
         else { return uncertain }
 
         var omitted = false
+        var remainder = PDFSourceRemainder()
         var runs = [Run]()
         let crop = page.bounds(for: .cropBox)
         var seen = IndexSet()
@@ -53,25 +71,58 @@ public enum PDFSentenceExtractor {
                 guard !seen.intersects(integersIn: indices) else { return uncertain }
                 seen.insert(integersIn: indices)
                 let bounds = line.bounds(for: page)
-                // Sideways arXiv stamps and discarded crop-box matter must not interrupt the two columns.
-                if bounds.height > max(30, bounds.width * 1.7) || !crop.intersects(bounds) {
-                    omitted = true
+                if bounds.isEmpty || bounds.isInfinite || !bounds.minX.isFinite || !bounds.minY.isFinite {
+                    remainder.add(range.location..<NSMaxRange(range), on: page, source: source, within: crop)
                     continue
                 }
-                runs += fragments(on: page, source: source, range: range, crop: crop, omitted: &omitted)
+                guard crop.intersects(bounds) else { continue }
+                if bounds.height > max(30, bounds.width * 1.7) {
+                    // Ignore the rotated preprint stamp. Other rotated labels can belong to a figure or equation.
+                    let margin = min(bounds.midX - crop.minX, crop.maxX - bounds.midX)
+                    let stamp =
+                        margin < crop.width * 0.09
+                        && source.substring(with: range).localizedCaseInsensitiveContains("arxiv")
+                    if !stamp { remainder.add(bounds, within: crop) }
+                    continue
+                }
+                var damaged = false
+                runs += fragments(on: page, source: source, range: range, crop: crop, omitted: &damaged)
+                if damaged { remainder.add(bounds, within: crop) }
             }
         }
         guard !runs.isEmpty, runs.count <= 2_000 else { return uncertain }
         if seen.count < source.length {
-            for missing in (0..<source.length) where !seen.contains(missing) && !isSpace(source.character(at: missing))
-            {
-                omitted = true
-                break
-            }
+            var missing = IndexSet(integersIn: 0..<source.length)
+            missing.subtract(seen)
+            for range in missing.rangeView { remainder.add(range, on: page, source: source, within: crop) }
         }
 
-        let rows = physicalRows(runs)
-        let readingRows = withoutMetadata(rows, source: source, crop: crop, pageIndex: pageIndex, omitted: &omitted)
+        // A wrap-around float is local to a few rows. Remove its own source ranges before estimating
+        // page-wide columns, so the sentence beside it can continue onto a full-width line below.
+        let possibleFloat = runs.contains { run in
+            let text = source.substring(with: run.range)
+            guard text.localizedCaseInsensitiveCompare("Table") == .orderedSame || text.lowercased().hasPrefix("table ")
+            else { return false }
+            let b = run.bounds
+            return runs.contains {
+                let peer = $0.bounds
+                return peer.width > crop.width * 0.12 && abs(peer.midY - b.midY) < b.height * 6
+                    && abs(peer.midY - b.midY) > b.height && (peer.maxX < b.minX || peer.minX > b.maxX)
+            }
+        }
+        let wrapped = possibleFloat ? wrappedTables(in: runs, regions: try captionRegions(), crop: crop) : []
+        var floatRanges = Set<Int>()
+        for table in wrapped {
+            for run in table.cells {
+                floatRanges.insert(run.range.location)
+                remainder.add(run.bounds, within: crop)
+            }
+            for line in table.caption {
+                for run in line.runs { floatRanges.insert(run.range.location) }
+            }
+        }
+        let rows = physicalRows(runs.filter { !floatRanges.contains($0.range.location) })
+        let readingRows = withoutMetadata(rows, source: source, crop: crop, pageIndex: pageIndex, remainder: &remainder)
         let bands = orderedColumns(rows: readingRows, crop: crop, omitted: &omitted)
         let hasWrappedHyphen = runs.contains { source.character(at: NSMaxRange($0.range) - 1) == 45 }
         let spellings = hasWrappedHyphen ? nearbySpellings(in: document, pageIndex: pageIndex, source: string) : []
@@ -96,13 +147,58 @@ public enum PDFSentenceExtractor {
                     unpairedRegions: &unpairedRegions)
             }
         }
+        for table in wrapped {
+            let caption = split(
+                table.caption, on: page, source: source, pageIndex: pageIndex, spellings: spellings,
+                omitted: &omitted, unpairedRegions: &unpairedRegions)
+            guard let anchor = table.caption.first else { continue }
+            var insertion =
+                sentences.firstIndex { sentence in
+                    guard let rect = sentence.rects.first else { return false }
+                    return rect[1] + rect[3] / 2 < anchor.bounds.midY
+                } ?? sentences.endIndex
+            if insertion > 0 {
+                let preceding = sentences[insertion - 1].readingParagraphID
+                while insertion < sentences.count && sentences[insertion].readingParagraphID == preceding {
+                    insertion += 1
+                }
+            }
+            sentences.insert(contentsOf: caption, at: insertion)
+        }
         if sentences.isEmpty { return uncertain }
+        // A rejected fragment may sit on the same baseline as a verified sentence. Subtract the
+        // exact source ranges before asking PDFKit for the fragment bounds, preserving both.
+        if omitted || !unpairedRegions.isEmpty {
+            var covered = IndexSet()
+            for sentence in sentences {
+                for range in sentence.characterRanges {
+                    covered.insert(integersIn: range.location..<NSMaxRange(range))
+                }
+            }
+            for row in readingRows + wrapped.map(\.caption) {
+                for run in row.flatMap(\.runs) {
+                    let range = run.range.location..<NSMaxRange(run.range)
+                    if covered.contains(integersIn: range) { continue }
+                    if !covered.intersects(integersIn: range) {
+                        remainder.add(run.bounds, within: crop)
+                    } else {
+                        var missing = IndexSet(integersIn: range)
+                        missing.subtract(covered)
+                        for part in missing.rangeView { remainder.add(part, on: page, source: source, within: crop) }
+                    }
+                }
+            }
+        }
+        let notice: String?
         if !unpairedRegions.isEmpty {
             let locations = unpairedRegions.sorted().joined(separator: "、")
-            return PDFSentenceExtraction(sentences: sentences, notice: "\(locations)有文字无法可靠配对，请在原页核对。")
+            notice = "\(locations)有文字无法可靠配对，请在原页核对。"
+        } else {
+            notice = remainder.hasUnlocatedText || !remainder.bounds.isEmpty ? "本页有部分内容需在原页核对。" : nil
         }
         return PDFSentenceExtraction(
-            sentences: sentences, notice: omitted ? "本页有部分内容需在原页核对。" : nil)
+            sentences: sentences, notice: notice, unpairedBounds: remainder.bounds,
+            hasUnlocatedText: remainder.hasUnlocatedText)
     }
 
     private struct Run {
@@ -113,6 +209,69 @@ public enum PDFSentenceExtractor {
     private struct Line {
         var runs: [Run]
         var bounds: CGRect
+    }
+
+    private struct WrappedTable {
+        let cells: [Run]
+        let caption: [Line]
+    }
+
+    private static func wrappedTables(in runs: [Run], regions: [PDFCaptionRegion], crop: CGRect) -> [WrappedTable] {
+        regions.compactMap { region in
+            guard region.label.hasPrefix("表 "), let table = region.sourceBounds else { return nil }
+            let anchor = region.captionBounds
+            let height = anchor.height
+            let frame = anchor.union(table)
+            let right = frame.midX > crop.midX
+            // Require substantive, tightly adjacent prose beside the caption as well as a nearby
+            // line crossing that gutter. A regular two-column page keeps its usual reading order.
+            let peers = runs.filter {
+                let box = $0.bounds
+                let gap = right ? frame.minX - box.maxX : box.minX - frame.maxX
+                return box.width > crop.width * 0.12 && (0...height * 4).contains(gap)
+                    && abs(box.midY - anchor.midY) < height * 6
+            }
+            guard peers.count >= 3, let top = peers.map(\.bounds.midY).max(),
+                let bottom = peers.map(\.bounds.midY).min(), top - bottom > height * 1.8,
+                runs.contains(where: {
+                    let b = $0.bounds
+                    let edge = right ? frame.minX : frame.maxX
+                    return abs(b.midY - anchor.midY) < frame.height + height * 10
+                        && b.minX < edge - crop.width * 0.12 && b.maxX > edge + crop.width * 0.12
+                })
+            else { return nil }
+
+            let inTable = table.insetBy(dx: -1, dy: -1)
+            let cells = runs.filter { inTable.contains($0.bounds) }
+            let lane = frame.insetBy(dx: -3, dy: 0)
+            let local = runs.filter {
+                let b = $0.bounds
+                return b.minX >= lane.minX && b.maxX <= lane.maxX && !inTable.contains(b)
+                    && b.midY <= anchor.midY + height * 0.5
+            }
+            var caption = [Line]()
+            for row in physicalRows(local) {
+                guard let first = row.first else { continue }
+                let line = Line(runs: row.flatMap(\.runs), bounds: row.reduce(CGRect.null) { $0.union($1.bounds) })
+                if caption.isEmpty {
+                    guard line.runs.contains(where: { NSIntersectionRange($0.range, region.captionRange).length > 0 })
+                    else { continue }
+                } else if let previous = caption.last {
+                    let pitch = previous.bounds.midY - line.bounds.midY
+                    let nextCaption = regions.contains { other in
+                        other.captionRange != region.captionRange
+                            && line.runs.contains { NSIntersectionRange($0.range, other.captionRange).length > 0 }
+                    }
+                    guard !nextCaption, (height * 0.5...height * 1.65).contains(pitch),
+                        abs(first.bounds.minX - anchor.minX) < height * 0.8,
+                        (height * 0.70...height * 1.4).contains(line.bounds.height)
+                    else { break }
+                }
+                caption.append(line)
+            }
+            guard !caption.isEmpty else { return nil }
+            return WrappedTable(cells: cells, caption: caption)
+        }
     }
 
     private static func isSpace(_ char: unichar) -> Bool {
@@ -209,7 +368,7 @@ public enum PDFSentenceExtractor {
     }
 
     private static func withoutMetadata(
-        _ rows: [[Line]], source: NSString, crop: CGRect, pageIndex: Int, omitted: inout Bool
+        _ rows: [[Line]], source: NSString, crop: CGRect, pageIndex: Int, remainder: inout PDFSourceRemainder
     ) -> [[Line]] {
         let all = rows.flatMap { $0 }
         let heights = all.map(\.bounds.height).sorted()
@@ -245,7 +404,8 @@ public enum PDFSentenceExtractor {
                 let text = content(line, source: source)
                 let lower = text.lowercased()
                 let isPageNumber =
-                    text.count < 6 && Int(text) != nil && line.bounds.midY < crop.minY + crop.height * 0.12
+                    row.count == 1 && text.count < 6 && Int(text) != nil
+                    && line.bounds.midY < crop.minY + crop.height * 0.12
                 let isFooter =
                     line.bounds.midY < crop.minY + crop.height * 0.2
                     && (lower.contains("corresponding author") || lower.contains("correspondence to")
@@ -255,10 +415,11 @@ public enum PDFSentenceExtractor {
                 let isHeader =
                     pageIndex > 0 && line.bounds.midY > crop.maxY - crop.height * 0.1
                     && line.bounds.height < typicalHeight * 0.88
-                if authorBand?.contains(line.bounds.midY) == true || isPageNumber || isFooter || isHeader
+                if isPageNumber { return false }
+                if authorBand?.contains(line.bounds.midY) == true || isFooter || isHeader
                     || (text.contains("@") && text.contains("."))
                 {
-                    omitted = true
+                    remainder.add(line.bounds, within: crop)
                     return false
                 }
                 return true

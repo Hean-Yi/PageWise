@@ -79,14 +79,15 @@ Swift Package 自动递归发现每个 target 目录下的 Swift 文件。当前
 | --- | --- |
 | `Infrastructure/PDF/Import/PDFImporter` | 校验并保存原始 PDF，计算哈希和轻量元信息 |
 | `Infrastructure/PDF/{Display,Navigation}` | 原版与历史固定页的展示、目录、定位，按页提取带原文范围和行框的句子 |
-| `Infrastructure/PDF/Navigation/PDFIllustratedPage` | 按原页题注、栏界及绘制内容确定图表位置，在内存中组合本页裁片与正文；点击裁片可按页内矩形定位 |
+| `Infrastructure/PDF/Navigation/PDFIllustratedPage` | 按原页题注、栏界及绘制内容定位图表，组合本页正文、表格、原排片段和整页预览，保留原页矩形 |
+| `Infrastructure/PDF/Navigation/{PDFTableExtractor,PDFSourceRemainder}` | 核对单元格文字、格式与墨迹，合并未配对且未被图表覆盖的原排区域 |
 | `Infrastructure/PDF/Display/PDFRegionRenderer` | 有尺寸上限的原页区域渲染，输出本机阅读所用的 PNG |
 | `Infrastructure/Models/PDFSentenceTranslator` | 批量逐句翻译并校验来源编号、数字、单位及引用 |
 | `Infrastructure/Persistence/PDFSentenceTranslationStore` | 独立于书库快照的逐页原子写入与续译，按原文件和句子签名隔离缓存版本 |
 | `Application/Reading/PDFDocumentTranslationQueue` | 从当前页开始逐页提取段落、复用译句、处理缺译与无正文页，按阅读位置更新优先级 |
 | `UI/Application/Reading/PDFDocumentTranslationController` | 管理每篇论文的翻译任务与进度、用户暂停和应用生命周期 |
 | `UI/Application/Reading/PDFBilingualSession` | 原页、译句、选区和暂停/恢复的协调 |
-| `UI/Platform/HTML/PDFSentenceTextCanvas` | 呈现逐句对照与连续段落正文，连接视口页码、按语言选文与原句定位 |
+| `UI/Platform/HTML/{PDFSentenceTextCanvas,PDFReadingTableScript}` | 呈现逐句对照、连续段落和可选表格，连接视口页码、选文复制与原页定位 |
 | `Infrastructure/Discovery/ArxivClient` | 可信候选与同版本 TeX/PDF 下载 |
 | `Infrastructure/TeX` | 有界解包、静态包含/宏展开、语义标记、源码保存和 TeX/HTML 路由 |
 | `Infrastructure/HTML` | HTML 净化、图片本地化、公式处理与最终阅读文件追加 |

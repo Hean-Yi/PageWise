@@ -66,6 +66,7 @@ final class PDFBilingualSession {
     private(set) var paragraphJumpRevision = 0
     private struct LoadedPage {
         let originalSentences: [PDFSourceSentence]
+        let originalNotice: String?
         var paragraph: PDFParagraphPage
     }
     private var loadedPages: [Int: LoadedPage] = [:]
@@ -227,7 +228,7 @@ final class PDFBilingualSession {
         sentences = page?.originalSentences ?? []
         paragraphSentences = page?.paragraph.sentences ?? []
         illustrations = page?.paragraph.illustrations ?? []
-        notice = page?.paragraph.notice
+        notice = page?.originalNotice
         translations = page?.paragraph.translations ?? pendingTranslations[pageIndex] ?? [:]
         isLoading = page == nil
         if page != nil, let focusedID, !sentences.contains(where: { $0.id == focusedID }) { self.focusedID = nil }
@@ -264,6 +265,7 @@ final class PDFBilingualSession {
         let priority: TaskPriority = index == pageIndex ? .userInitiated : .utility
         loadTasks[index] = Task {
             var original: [PDFSourceSentence] = []
+            var originalNotice: String?
             var paragraph = PDFParagraphPage(
                 index: index, sentences: [], translations: [:], illustrations: [], notice: nil)
             do {
@@ -277,14 +279,16 @@ final class PDFBilingualSession {
                 }
                 try Task.checkCancellation()
                 original = page.sentences
+                originalNotice = page.notice
                 paragraph = PDFParagraphPage(
                     index: index, sentences: page.paragraphSentences, translations: [:],
                     illustrations: page.illustrations,
-                    notice: page.notice)
+                    notice: page.paragraphNotice)
                 paragraph.translations = try await store.cached(
                     documentHash: paper.digest, sentences: original, settings: settings.model.isEmpty ? nil : settings)
             } catch {
                 guard !Task.isCancelled else { return }
+                originalNotice = error.localizedDescription
                 paragraph = PDFParagraphPage(
                     index: index, sentences: paragraph.sentences, translations: [:],
                     illustrations: paragraph.illustrations, notice: error.localizedDescription)
@@ -296,7 +300,7 @@ final class PDFBilingualSession {
                 paragraph.translations.merge(published) { _, new in new }
             }
             loadTasks[index] = nil
-            let loaded = LoadedPage(originalSentences: original, paragraph: paragraph)
+            let loaded = LoadedPage(originalSentences: original, originalNotice: originalNotice, paragraph: paragraph)
             loadedPages[index] = loaded
             if pageIndex == index { show(loaded) }
         }

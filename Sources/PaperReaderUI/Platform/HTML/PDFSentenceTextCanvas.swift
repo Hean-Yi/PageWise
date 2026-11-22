@@ -166,8 +166,45 @@ import WebKit
         static func figure(_ item: PDFReadingIllustration) -> [String: Any] {
             var result: [String: Any] = [
                 "id": item.id, "label": item.label, "before": item.insertBeforeSentenceID ?? "",
-                "png": item.imagePNG?.base64EncodedString() ?? "",
+                "presentation": item.presentation.rawValue,
             ]
+            if let table = item.table {
+                func runs(_ values: [PDFReadingTable.Run]) -> [[String: Any]] {
+                    values.map { run in
+                        ["text": run.text, "baseline": run.baseline.rawValue, "bold": run.bold, "italic": run.italic]
+                    }
+                }
+                let styled = table.styledCells.map { cell -> [String: Any] in
+                    ["row": cell.row, "column": cell.column, "runs": runs(cell.runs)]
+                }
+                let headers = table.headerRows.map { row in
+                    row.map { cell -> [String: Any] in
+                        [
+                            "text": cell.text, "column": cell.column, "rowSpan": cell.rowSpan,
+                            "columnSpan": cell.columnSpan, "runs": runs(cell.runs),
+                        ]
+                    }
+                }
+                var data: [String: Any] = [
+                    "header": table.header, "rows": table.rows, "styledCells": styled, "headerRows": headers,
+                ]
+                if !table.sourceCellBounds.isEmpty, item.imagePNG != nil {
+                    let source = item.sourceBounds
+                    data["cellBounds"] = table.sourceCellBounds.map { boxes in
+                        boxes.map { box in
+                            [
+                                (box.minX - source.minX) / source.width, (source.maxY - box.maxY) / source.height,
+                                box.width / source.width, box.height / source.height,
+                            ]
+                        }
+                    }
+                    result["sourceWidth"] = source.width
+                }
+                result["table"] = data
+                if data["cellBounds"] == nil { return result }
+            }
+            result["png"] = item.imagePNG?.base64EncodedString() ?? ""
+            if item.presentation == .excerpt { result["sourceWidth"] = item.sourceBounds.width }
             // Reserve the exact raster aspect ratio before WebKit decodes it, including rotated crops.
             if let data = item.imagePNG, data.count >= 24 {
                 let dimensions = data.dropFirst(16).prefix(8)
@@ -286,6 +323,23 @@ extension PDFSentenceTextCanvas {
         .page-marker:after{content:"";height:1px;background:currentColor;opacity:.2;flex:1}
         .page-note,.page-loading{color:var(--en);font:.82em/1.65 -apple-system,sans-serif}
         .page-body>.page-note{margin:0 0 1.2em}
+        .reading-table{max-width:100%;overflow-x:auto}
+        .reading-table table{width:100%;border-collapse:collapse;text-align:start;font-size:.93em;line-height:1.45;font-variant-numeric:tabular-nums}
+        .reading-table :is(caption,figcaption){text-align:start;padding-bottom:.5rem}
+        .reading-table :is(caption,figcaption) button{color:var(--en);font-size:.9em;text-decoration:none}
+        .reading-table :is(th,td){padding:.44em .7em;text-align:start;vertical-align:top;overflow-wrap:normal}
+        .reading-table thead{border-block:1px solid var(--en)}
+        .reading-table tbody tr{border-bottom:1px solid color-mix(in srgb,var(--en) 22%,transparent)}
+        .reading-table tbody tr:last-child{border-bottom:1px solid var(--en)}
+        .source-table{position:relative;container-type:inline-size;width:100%}
+        .source-table>img{width:100%;pointer-events:none;-webkit-user-select:none;user-select:none}
+        .source-table table{position:absolute;inset:0;display:block;height:100%}
+        .source-table :is(thead,tbody,tr){display:block;border:none!important}
+        .source-table :is(th,td){position:absolute;box-sizing:border-box;display:block;overflow:hidden;padding:0;
+          white-space:nowrap;cursor:text;color:transparent;font-family:Georgia,serif;font-weight:normal;line-height:1}
+        .source-table :is(th,td)>span{display:inline-block;transform-origin:left center}
+        .page-supplement summary{width:fit-content;color:var(--en);font-size:.85em;cursor:pointer}
+        .page-supplement[open] summary{margin-bottom:.6em}
         .page-source{border:0;background:none;color:var(--focus);padding:0;cursor:pointer;font:inherit;text-decoration:underline;text-underline-offset:.2em}
         ::selection{background:rgba(160,125,89,.30)}
         </style></head><body><main aria-label="本页逐句译文"></main></body></html>
@@ -341,6 +395,19 @@ extension PDFSentenceTextCanvas {
               if (visible && lastScroll!==visible.id) {lastScroll=visible.id;send('scroll',visible.id);}
             },70);
           },{passive:true});
+          \(tableScript)
+          function selectedText(range, text) {
+            const content = document.createRange();
+            content.selectNodeContents(text);
+            const overlap = range.cloneRange();
+            if (overlap.compareBoundaryPoints(Range.START_TO_START, content) < 0) {
+              overlap.setStart(text, 0);
+            }
+            if (overlap.compareBoundaryPoints(Range.END_TO_END, content) > 0) {
+              overlap.setEnd(text, text.childNodes.length);
+            }
+            return overlap.toString();
+          }
           function selectedPieces() {
             const selection = getSelection();
             if (!selection.rangeCount || selection.isCollapsed) return [];
@@ -351,16 +418,7 @@ extension PDFSentenceTextCanvas {
             const pieces = [];
             for (const text of main.querySelectorAll('.' + language)) {
               if (!range.intersectsNode(text)) continue;
-              const content = document.createRange();
-              content.selectNodeContents(text);
-              const overlap = range.cloneRange();
-              if (overlap.compareBoundaryPoints(Range.START_TO_START, content) < 0) {
-                overlap.setStart(text, 0);
-              }
-              if (overlap.compareBoundaryPoints(Range.END_TO_END, content) > 0) {
-                overlap.setEnd(text, text.childNodes.length);
-              }
-              const value = overlap.toString();
+              const value = selectedText(range,text);
               if (value.length) pieces.push({id: text.dataset.sentence, text: value, language});
             }
             return pieces;
@@ -386,6 +444,13 @@ extension PDFSentenceTextCanvas {
             }
           });
           document.addEventListener('copy', event => {
+            const selection=getSelection();
+            if (event.clipboardData && selection.rangeCount && !selection.isCollapsed) {
+              const cells=copyTableCells(selection.getRangeAt(0));
+              if (cells!==null) {
+                event.clipboardData.setData('text/plain',cells);event.preventDefault();return;
+              }
+            }
             const pieces = selectedPieces();
             if (!pieces.length || !event.clipboardData) return;
             let plain = '';
@@ -469,26 +534,53 @@ extension PDFSentenceTextCanvas {
             const node=document.createElement('figure'), button=document.createElement('button');
             button.type='button';
             button.dataset.illustration=item.id;
-            const action='在原页查看'+item.label;
+            const action=item.presentation==='originalPage' || item.presentation==='supplement' ? '打开原 PDF' : '在原页查看'+item.label;
             button.setAttribute('aria-label',action);
+            if (item.table) {
+              try {
+                node.className='reading-table';
+                const table=makeTable(item.table,item.label,button);
+                if (item.table.cellBounds && item.png) makeSourceTable(node,table,item);
+                else node.append(table);
+                return {before:item.before,node};
+              } catch {
+                // A failure to place selectable cells must not remove the source crop or later figures.
+                node.className='';node.replaceChildren();button.replaceChildren();
+              }
+            }
             if (item.png) {
               const image=document.createElement('img');
               image.alt=item.label; image.draggable=false;
               if (item.width>0 && item.height>0) {image.width=item.width;image.height=item.height;}
               image.addEventListener('error',()=>{button.textContent=action;},{once:true});
+              if (item.sourceWidth) image.style.width=(item.sourceWidth/10)+'em';
               image.src='data:image/png;base64,'+item.png;
               button.append(image); button.title=action;
             } else {
               button.textContent=action;
             }
-            node.append(button);
+            if (item.presentation==='supplement') {
+              const details=document.createElement('details'), summary=document.createElement('summary');
+              details.className='page-supplement';
+              summary.textContent=item.label;
+              details.append(summary,button);node.append(details);
+            } else node.append(button);
             return {before:item.before,node};
           }
           function renderRows(root,rows,pageFigures,changingStructure,note=null) {
             const previous=changingStructure ? new Map() : new Map([...root.querySelectorAll('[data-group]')].map(p=>[p.dataset.group,p]));
             const groups=new Map();
+            const beforeSentence=new Map();
+            for (const item of pageFigures) {
+              if (!beforeSentence.has(item.before)) beforeSentence.set(item.before,[]);
+              beforeSentence.get(item.before).push(item.node);
+            }
+            let groupKey, priorParagraph;
             for (const row of rows) {
-              if (!groups.has(row.paragraph)) groups.set(row.paragraph,[]);
+              if (row.paragraph!==priorParagraph || beforeSentence.has(row.id)) {
+                groupKey=groups.has(row.paragraph) ? row.paragraph+':'+row.id : row.paragraph;
+                groups.set(groupKey,[]);priorParagraph=row.paragraph;
+              }
               let pair=pairs.get(row.id);
               if (!pair || changingStructure) {
                 pair=pair||makePair(row.id);
@@ -499,16 +591,14 @@ extension PDFSentenceTextCanvas {
               pair.group=row.paragraph;
               if (pair.en.textContent!==row.en) pair.en.textContent=row.en;
               if (pair.zh.textContent!==row.zh) pair.zh.textContent=row.zh;
-              groups.get(row.paragraph).push(pair);
+              groups.get(groupKey).push(pair);
             }
-            const blocks=note ? [note] : [], beforeGroup=new Map();
-            for (const item of pageFigures) {
-              const group=pairs.get(item.before)?.group;
-              if (!beforeGroup.has(group)) beforeGroup.set(group,[]);
-              beforeGroup.get(group).push(item.node);
-            }
+            const blocks=note ? [note] : [];
             for (const [id,members] of groups) {
-              if (beforeGroup.has(id)) blocks.push(...beforeGroup.get(id));
+              const anchor=members[0].en.dataset.sentence;
+              if (beforeSentence.has(anchor)) {
+                blocks.push(...beforeSentence.get(anchor));beforeSentence.delete(anchor);
+              }
               const group=previous.get(id)||makeGroup(id);
               if (paragraphMode) {
                 const english=[], chinese=[];
@@ -527,7 +617,7 @@ extension PDFSentenceTextCanvas {
               }
               blocks.push(group);
             }
-            if (beforeGroup.has(undefined)) blocks.push(...beforeGroup.get(undefined));
+            for (const remaining of beforeSentence.values()) blocks.push(...remaining);
             setChildren(root,blocks);
           }
           \(continuousScript)

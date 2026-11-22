@@ -34,6 +34,23 @@ struct PDFCaptionInk {
         self.scale = scale
     }
 
+    /// A rotated preprint identifier can connect otherwise separate painted rows, even across a
+    /// wide empty gutter. Mask only an isolated stamp in the measurement bitmap. The displayed
+    /// crop always draws the original PDF, including any ink in the publisher's margin.
+    func excludeIsolatedStamp(_ stamp: CGRect) throws {
+        let padded = stamp.insetBy(dx: -2, dy: -2)
+        let clearance: CGFloat = 3
+        let sides = [
+            CGRect(x: padded.minX - clearance, y: padded.minY, width: clearance, height: padded.height),
+            CGRect(x: padded.maxX, y: padded.minY, width: clearance, height: padded.height),
+            CGRect(x: padded.minX, y: padded.minY - clearance, width: padded.width, height: clearance),
+            CGRect(x: padded.minX, y: padded.maxY, width: padded.width, height: clearance),
+        ]
+        for side in sides where try !strips(in: side).isEmpty { return }
+        bitmap.setFillColor(gray: 1, alpha: 1)
+        bitmap.fill(padded)
+    }
+
     struct Strip {
         var bounds: CGRect
         var longestStroke: CGFloat

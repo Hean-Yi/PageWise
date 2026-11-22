@@ -36,16 +36,27 @@ enum PDFCaptionRegionDetector {
         let selections = selected.selectionsByLine()
         guard selections.count <= 2_000 else { return [] }
         var lines = [Line]()
+        var marginStamps: [CGRect] = []
         for selection in selections {
             try Task.checkCancellation()
             guard selection.numberOfTextRanges(on: page) == 1 else { continue }
             let range = selection.range(at: 0, on: page)
             let bounds = selection.bounds(for: page)
             guard range.location != NSNotFound, range.length > 0, NSMaxRange(range) <= source.length,
-                bounds.width > 0, bounds.height > 0, bounds.height < max(24, bounds.width * 1.5),
+                bounds.width > 0, bounds.height > 0,
                 box.contains(CGPoint(x: bounds.midX, y: bounds.midY))
             else { continue }
-            lines.append(Line(text: source.substring(with: range), bounds: bounds, range: range))
+            let text = source.substring(with: range)
+            guard bounds.height < max(24, bounds.width * 1.5) else {
+                let margin = min(bounds.midX - box.minX, box.maxX - bounds.midX)
+                if bounds.height > 3 * bounds.width, margin < box.width * 0.09,
+                    text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased().hasPrefix("arxiv:")
+                {
+                    marginStamps.append(bounds)
+                }
+                continue
+            }
+            lines.append(Line(text: text, bounds: bounds, range: range))
         }
 
         let anchors = lines.compactMap { line -> (Line, NSRange, String)? in
@@ -73,13 +84,30 @@ enum PDFCaptionRegionDetector {
             else { return nil }
             let kind = text.substring(with: match.range(at: 1)).lowercased() == "table" ? "表" : "图"
             let label = kind + " " + text.substring(with: match.range(at: 2))
+            // A change from bold to regular type can split the marker from the rest of its visual line.
+            // Use the whole heading for column geometry, while retaining the exact marker range for navigation.
+            let suffix = text.substring(from: NSMaxRange(match.range)).trimmingCharacters(in: .whitespacesAndNewlines)
+            var caption = line
+            if suffix.isEmpty,
+                let continuation = lines.filter({
+                    abs($0.bounds.midY - line.bounds.midY) < line.bounds.height * 0.35
+                        && $0.bounds.minX >= line.bounds.maxX - 1
+                        && $0.bounds.minX - line.bounds.maxX < line.bounds.height * 1.5
+                }).min(by: { $0.bounds.minX < $1.bounds.minX })
+            {
+                caption = Line(
+                    text: line.text + " " + continuation.text, bounds: line.bounds.union(continuation.bounds),
+                    range: line.range)
+            }
             return (
-                line, NSRange(location: line.range.location + match.range.location, length: match.range.length), label
+                caption, NSRange(location: line.range.location + match.range.location, length: match.range.length),
+                label
             )
         }
         guard !anchors.isEmpty else { return [] }
         // Keep work bounded on index pages containing hundreds of figure references.
         let ink = anchors.count <= 16 ? PDFCaptionInk(page) : nil
+        for stamp in marginStamps { try ink?.excludeIsolatedStamp(stamp) }
         var results = [PDFCaptionRegion]()
         for (line, range, label) in anchors {
             try Task.checkCancellation()
@@ -114,8 +142,9 @@ enum PDFCaptionRegionDetector {
     /// Find the edge of the neighbouring column from actual prose, including asymmetrical wrap-around layouts.
     private static func column(for caption: Line, lines: [Line], box: CGRect) -> CGRect {
         let anchor = caption.bounds
-        guard anchor.minX >= box.midX - 2 || anchor.maxX <= box.midX + 2 else { return box }
-        let right = anchor.minX >= box.midX - 2
+        let right = anchor.midX > box.midX
+        guard right ? anchor.minX > box.minX + box.width * 0.27 : anchor.maxX < box.maxX - box.width * 0.27
+        else { return box }
         let peers = lines.filter {
             $0.isProse && $0.bounds.width > box.width * 0.21
                 && abs($0.bounds.midY - anchor.midY) < box.height * 0.24
@@ -214,7 +243,21 @@ enum PDFCaptionRegionDetector {
             drawing.minX > lane.minX + 1.5, drawing.maxX < lane.maxX - 1.5,
             (above ? far - drawing.maxY : drawing.minY - far) > 1
         else { return nil }
-        let broad = accepted.filter { $0.longestStroke >= max(20, drawing.width * 0.21) }
+        // In a row of small plots, each axis may be much shorter than the caption line. Look for
+        // repeated, vertically aligned tick labels as separate evidence before accepting shorter strokes.
+        let ticks = inDirection.filter { line in
+            line.bounds.height < caption.bounds.height * 0.75 && drawing.contains(line.bounds)
+                && line.text.trimmingCharacters(in: .whitespacesAndNewlines).wholeMatch(of: /[−-]?\d+(?:\.\d+)?/) != nil
+        }
+        let hasAxis =
+            label.hasPrefix("图")
+            && ticks.contains { tick in
+                ticks.filter {
+                    abs($0.bounds.maxX - tick.bounds.maxX) < 2
+                        && abs($0.bounds.midY - tick.bounds.midY) > tick.bounds.height
+                }.count >= 2
+            }
+        let broad = accepted.filter { $0.longestStroke >= max(20, drawing.width * (hasAxis ? 0.08 : 0.21)) }
         let rules = broad.filter { $0.bounds.height <= 2.5 && $0.longestStroke > drawing.width * 0.55 }
         let hasDrawing =
             broad.contains { $0.drawnRows >= 5 }
