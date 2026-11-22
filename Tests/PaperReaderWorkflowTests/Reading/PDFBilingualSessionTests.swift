@@ -1,3 +1,5 @@
+import CoreGraphics
+import CoreText
 import Foundation
 import PaperReaderKit
 import Testing
@@ -230,6 +232,76 @@ import Testing
     try await waitForPageSession { !session.isLoading }
     #expect(session.translations[sentence.id] == fresh[sentence.id])
     #expect(session.translations["foreign"] == nil)
+}
+
+@Test @MainActor func continuousParagraphReadingPrefetchesAndTracksPhysicalPagesWithoutNavigationFeedback() async throws
+{
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let transport = SentenceWorkflowTransport()
+    let model = try ReaderModel(
+        root: root, client: ModelClient(transport: transport), credentials: WorkflowCredentials())
+    await model.load()
+    let file = root.appendingPathComponent("continuous.pdf")
+    var bounds = CGRect(x: 0, y: 0, width: 612, height: 792)
+    let context = try #require(CGContext(file as CFURL, mediaBox: &bounds, nil))
+    let font = CTFontCreateWithName("Georgia" as CFString, 12, nil)
+    for index in 0..<7 {
+        context.beginPDFPage(nil)
+        let text = NSAttributedString(
+            string: "Readers can follow the source text on page \(index + 1).",
+            attributes: [NSAttributedString.Key(kCTFontAttributeName as String): font])
+        context.textPosition = CGPoint(x: 60, y: 520)
+        CTLineDraw(CTLineCreateWithAttributedString(text), context)
+        context.endPDFPage()
+    }
+    context.closePDF()
+    let paperID = try #require(await model.importURLs([file]).first)
+    model.navigateToPage(2)
+    let session = model.pdfBilingual
+    session.open(model)
+    session.prepareParagraphReading(model)
+    session.consumeParagraphJump(model)
+    try await waitForPageSession { Set(session.paragraphPages.keys) == [1, 2, 3] }
+    #expect(model.pdfDocumentTranslation.status(for: paperID) == nil)
+    let revision = session.paragraphJumpRevision
+
+    let neighboring = try #require(session.paragraphPages[3]?.sentences.first)
+    session.receiveDocumentTranslations([neighboring.id: "相邻页保存的译句。"], paperID: paperID, page: 3)
+    session.focusParagraphSentence(neighboring.id, model: model)
+    #expect(model.visiblePage == 3 && session.pageIndex == 3 && !session.isLoading)
+    #expect(session.focusedID == neighboring.id && session.translations[neighboring.id] == "相邻页保存的译句。")
+    #expect(session.paragraphJumpRevision == revision && session.paragraphJumpPage == 3 && model.jumpPage == nil)
+    #expect(model.workspace(for: paperID).position?.pageIndex == 3)
+    session.followsScroll = false
+    session.scrollFromParagraph(neighboring.id)
+    #expect(session.pdfScrollID == neighboring.id)
+    session.revealParagraphPage(3, model: model)
+    #expect(session.pdfScrollID == nil && session.focusedID == nil)
+    session.loadPage(model)
+    #expect(session.paragraphJumpRevision == revision)
+
+    model.navigateToPage(6)
+    session.paragraphDidScroll(to: 2, model: model)
+    #expect(model.visiblePage == 6)
+    session.consumeParagraphJump(model)
+    #expect(model.jumpPage == nil && session.paragraphJumpPage == 6)
+    #expect(session.paragraphJumpRevision == revision + 1)
+    try await waitForPageSession { Set(session.paragraphPages.keys) == [5, 6] }
+    #expect(session.paragraphSentences.first?.pageIndex == 6)
+    model.navigateToPage(6)
+    session.consumeParagraphJump(model)
+    #expect(session.paragraphJumpRevision == revision + 2)
+
+    session.paragraphDidScroll(to: 0, model: model)
+    session.paragraphDidScroll(to: 4, model: model)
+    try await waitForPageSession { Set(session.paragraphPages.keys) == [3, 4, 5] }
+    #expect(session.paragraphJumpRevision == revision + 2)
+    session.setParagraphLayout(false, model: model)
+    #expect(Set(session.paragraphPages.keys) == [4])
+    session.close()
+    #expect(session.paragraphPages.isEmpty)
+    #expect(await transport.requests == 0)
 }
 
 @MainActor private func waitForPageSession(_ done: () -> Bool) async throws {

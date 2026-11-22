@@ -23,6 +23,18 @@ import WebKit
     var illustrations: [PDFReadingIllustration] = []
     var onRevealIllustration: ((PDFReadingIllustration) -> Void)?
 
+    var continuous: Continuous?
+
+    struct Continuous {
+        let paperID: UUID
+        let pageCount: Int
+        let pages: [Int: PDFParagraphPage]
+        let targetPage: Int
+        let jumpRevision: Int
+        let onVisiblePage: (Int) -> Void
+        let onOpenOriginalPage: (Int) -> Void
+    }
+
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
     @MainActor final class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
@@ -39,6 +51,7 @@ import WebKit
         private var lastScrollRevision = -1
         private var lastPDFSelection: [String] = []
         private var ready = false
+        private var paragraphWindow = PDFParagraphWindowBridge()
 
         init(_ parent: PDFSentenceTextCanvas) { latest = parent }
 
@@ -73,28 +86,23 @@ import WebKit
         func update(_ parent: PDFSentenceTextCanvas, view: WKWebView) {
             latest = parent
             guard ready else { return }
-            let changed = renderedSentences != parent.sentences || translated != parent.translations
+            let continuous = parent.layout == .paragraph ? parent.continuous : nil
+            let leftDocument = continuous == nil && paragraphWindow.paperID != nil
+            let changed =
+                continuous == nil
+                && (leftDocument || renderedSentences != parent.sentences || translated != parent.translations)
+            let windowChanged =
+                continuous.map { paragraphWindow.update($0, fontSize: parent.fontSize, view: view) } ?? false
             let layoutChanged = displayedLayout != parent.layout
             let paragraph = parent.layout == .paragraph
             let illustrations = paragraph ? parent.illustrations : []
-            let illustrationsChanged = renderedIllustrations != illustrations
-            if changed || layoutChanged || illustrationsChanged {
-                let rows = parent.sentences.compactMap { sentence -> [String: String]? in
-                    let translation = parent.translations[sentence.id]
-                    guard paragraph || translation != nil else { return nil }
-                    return [
-                        "id": sentence.id, "paragraph": paragraph ? sentence.readingParagraphID : sentence.paragraphID,
-                        "en": sentence.text, "zh": translation ?? "",
-                    ]
-                }
+            let illustrationsChanged = leftDocument || renderedIllustrations != illustrations
+            if continuous == nil && (changed || layoutChanged || illustrationsChanged) {
+                paragraphWindow = PDFParagraphWindowBridge()
+                let rows = Self.rows(parent.sentences, translations: parent.translations, paragraph: paragraph)
                 var arguments: [String: Any] = ["rows": rows, "layout": parent.layout.rawValue, "figures": NSNull()]
                 if illustrationsChanged {
-                    arguments["figures"] = illustrations.map { item in
-                        [
-                            "id": item.id, "label": item.label, "before": item.insertBeforeSentenceID ?? "",
-                            "png": item.imagePNG?.base64EncodedString() ?? "",
-                        ]
-                    }
+                    arguments["figures"] = illustrations.map(Self.figure)
                     renderedIllustrations = illustrations
                 }
                 view.callAsyncJavaScript(
@@ -103,7 +111,8 @@ import WebKit
                 renderedSentences = parent.sentences
                 translated = parent.translations
             }
-            if changed || layoutChanged || displayedFontSize != parent.fontSize || active != parent.activeID
+            if changed || windowChanged || layoutChanged || displayedFontSize != parent.fontSize
+                || active != parent.activeID
                 || focused != parent.focusedID
                 || revision != parent.focusRevision
             {
@@ -141,15 +150,68 @@ import WebKit
             }
         }
 
+        static func rows(_ sentences: [PDFSourceSentence], translations: [String: String], paragraph: Bool)
+            -> [[String: String]]
+        {
+            sentences.compactMap { sentence in
+                let translation = translations[sentence.id]
+                guard paragraph || translation != nil else { return nil }
+                return [
+                    "id": sentence.id, "paragraph": paragraph ? sentence.readingParagraphID : sentence.paragraphID,
+                    "en": sentence.text, "zh": translation ?? "",
+                ]
+            }
+        }
+
+        static func figure(_ item: PDFReadingIllustration) -> [String: Any] {
+            var result: [String: Any] = [
+                "id": item.id, "label": item.label, "before": item.insertBeforeSentenceID ?? "",
+                "png": item.imagePNG?.base64EncodedString() ?? "",
+            ]
+            // Reserve the exact raster aspect ratio before WebKit decodes it, including rotated crops.
+            if let data = item.imagePNG, data.count >= 24 {
+                let dimensions = data.dropFirst(16).prefix(8)
+                result["width"] = dimensions.prefix(4).reduce(0) { $0 * 256 + Int($1) }
+                result["height"] = dimensions.suffix(4).reduce(0) { $0 * 256 + Int($1) }
+            }
+            return result
+        }
+
         private func isDisplayed(_ id: String) -> Bool {
-            latest.translations[id] != nil || (latest.layout == .paragraph && latest.sentences.contains { $0.id == id })
+            if let continuous = latest.continuous {
+                return continuous.pages.values.contains { page in page.sentences.contains { $0.id == id } }
+            }
+            return latest.translations[id] != nil
+                || (latest.layout == .paragraph && latest.sentences.contains { $0.id == id })
         }
 
         func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
             guard ready, message.frameInfo.isMainFrame, let event = message.body as? [String: Any] else { return }
+            if let stamp = event["paper"] as? String {
+                guard let window = latest.continuous, stamp == window.paperID.uuidString,
+                    event["revision"] as? Int == window.jumpRevision
+                else { return }
+                if let index = event["page"] as? Int, (0..<window.pageCount).contains(index) {
+                    switch event["action"] as? String {
+                    case "viewport":
+                        window.onVisiblePage(index)
+                        if let sentence = event["id"] as? String, isDisplayed(sentence) { latest.onScroll(sentence) }
+                        return
+                    case "original":
+                        window.onOpenOriginalPage(index)
+                        return
+                    default: break
+                    }
+                }
+            } else if latest.continuous != nil {
+                return
+            }
             if event["action"] as? String == "illustration" {
                 if latest.layout == .paragraph, let id = event["id"] as? String,
-                    let item = latest.illustrations.first(where: { $0.id == id })
+                    let item = latest.continuous?.pages.values.lazy.compactMap({
+                        $0.illustrations.first(where: { $0.id == id })
+                    }).first
+                        ?? latest.illustrations.first(where: { $0.id == id })
                 {
                     latest.onRevealIllustration?(item)
                 }
@@ -217,6 +279,14 @@ extension PDFSentenceTextCanvas {
         .paragraph .en{display:inline}.paragraph p[lang="zh-Hans"]{margin-top:.45em;line-height:1.8}
         .pending{color:var(--en);font:.8em/1.6 -apple-system,sans-serif;margin-inline:.2em;-webkit-user-select:none;user-select:none}
         [data-selecting="zh"] .en,[data-selecting="en"] .zh{-webkit-user-select:none;user-select:none}
+        .paragraph.continuous main{padding-top:0}
+        .continuous main>.source-page{display:flow-root;margin:0;overflow-anchor:none}
+        .page-body>*+*{margin-top:1.7em}
+        .page-marker{display:flex;align-items:center;gap:.8em;margin:2.4em 0 1.4em;color:var(--en);font:500 .75em/1.5 -apple-system,sans-serif}
+        .page-marker:after{content:"";height:1px;background:currentColor;opacity:.2;flex:1}
+        .page-note,.page-loading{color:var(--en);font:.82em/1.65 -apple-system,sans-serif}
+        .page-body>.page-note{margin:0 0 1.2em}
+        .page-source{border:0;background:none;color:var(--focus);padding:0;cursor:pointer;font:inherit;text-decoration:underline;text-underline-offset:.2em}
         ::selection{background:rgba(160,125,89,.30)}
         </style></head><body><main aria-label="本页逐句译文"></main></body></html>
         """
@@ -227,7 +297,12 @@ extension PDFSentenceTextCanvas {
           let figures=[];
           let hot='', active='', focused='', track=false, userScroll=false, scrollTimer=0, lastScroll='';
           let lastSelection=[], related=[], order=[], paragraphMode=false, revealLanguage='en';
-          const send=(action,id)=>window.webkit.messageHandlers.sentence.postMessage({action,id});
+          let flow=null;
+          function post(event) {
+            if (flow) { event.paper=flow.paper;event.revision=flow.revision; }
+            window.webkit.messageHandlers.sentence.postMessage(event);
+          }
+          const send=(action,id)=>post({action,id});
           const pairAt=node=>node?.closest?.('[data-sentence]');
           const sideOf=node=>node?.closest('.en') ? 'en' : 'zh';
           function hover(id) { if (id!==hot) {hot=id; send('hover',id);} }
@@ -254,6 +329,7 @@ extension PDFSentenceTextCanvas {
             document.addEventListener(event,()=>{userScroll=true;},{passive:true});
           }
           window.addEventListener('scroll',()=>{
+            if (flow) { scheduleViewport();return; }
             if (!userScroll || !track || scrollTimer) return;
             scrollTimer=setTimeout(()=>{
               scrollTimer=0;
@@ -306,7 +382,7 @@ extension PDFSentenceTextCanvas {
             const ids = pieces.map(piece => piece.id);
             if (ids.join('|') !== lastSelection.join('|')) {
               lastSelection = ids;
-              window.webkit.messageHandlers.sentence.postMessage({action: 'selection', ids});
+              post({action:'selection',ids});
             }
           });
           document.addEventListener('copy', event => {
@@ -327,6 +403,8 @@ extension PDFSentenceTextCanvas {
           main.addEventListener('pointerover',e=>{if(e.pointerType==='mouse') hover(pairAt(e.target)?.dataset.sentence||'');});
           main.addEventListener('pointerleave',()=>hover(''));
           main.addEventListener('click',e=>{
+            const source=e.target.closest('[data-original]');
+            if (source) {post({action:'original',page:Number(source.dataset.original)});return;}
             const figure=e.target.closest('[data-illustration]');
             if (figure && (e.detail===0 || getSelection().isCollapsed)) {
               send('illustration',figure.dataset.illustration); return;
@@ -396,6 +474,7 @@ extension PDFSentenceTextCanvas {
             if (item.png) {
               const image=document.createElement('img');
               image.alt=item.label; image.draggable=false;
+              if (item.width>0 && item.height>0) {image.width=item.width;image.height=item.height;}
               image.addEventListener('error',()=>{button.textContent=action;},{once:true});
               image.src='data:image/png;base64,'+item.png;
               button.append(image); button.title=action;
@@ -405,62 +484,68 @@ extension PDFSentenceTextCanvas {
             node.append(button);
             return {before:item.before,node};
           }
+          function renderRows(root,rows,pageFigures,changingStructure,note=null) {
+            const previous=changingStructure ? new Map() : new Map([...root.querySelectorAll('[data-group]')].map(p=>[p.dataset.group,p]));
+            const groups=new Map();
+            for (const row of rows) {
+              if (!groups.has(row.paragraph)) groups.set(row.paragraph,[]);
+              let pair=pairs.get(row.id);
+              if (!pair || changingStructure) {
+                pair=pair||makePair(row.id);
+                setButton(pair.button,!paragraphMode);
+                setButton(pair.en,paragraphMode);setButton(pair.zh,paragraphMode);
+                pairs.set(row.id,pair);
+              }
+              pair.group=row.paragraph;
+              if (pair.en.textContent!==row.en) pair.en.textContent=row.en;
+              if (pair.zh.textContent!==row.zh) pair.zh.textContent=row.zh;
+              groups.get(row.paragraph).push(pair);
+            }
+            const blocks=note ? [note] : [], beforeGroup=new Map();
+            for (const item of pageFigures) {
+              const group=pairs.get(item.before)?.group;
+              if (!beforeGroup.has(group)) beforeGroup.set(group,[]);
+              beforeGroup.get(group).push(item.node);
+            }
+            for (const [id,members] of groups) {
+              if (beforeGroup.has(id)) blocks.push(...beforeGroup.get(id));
+              const group=previous.get(id)||makeGroup(id);
+              if (paragraphMode) {
+                const english=[], chinese=[];
+                let gap=false;
+                for (const pair of members) {
+                  if (english.length) english.push(pair.space);
+                  english.push(pair.en);
+                  if (pair.zh.textContent) chinese.push(pair.zh);
+                  else if (!gap) chinese.push(pair.pending);
+                  gap=!pair.zh.textContent;
+                }
+                setChildren(group.firstChild,english);setChildren(group.lastChild,chinese);
+              } else {
+                for (const pair of members) setChildren(pair.button,[pair.en,pair.zh]);
+                setChildren(group,members.map(pair=>pair.button));
+              }
+              blocks.push(group);
+            }
+            if (beforeGroup.has(undefined)) blocks.push(...beforeGroup.get(undefined));
+            setChildren(root,blocks);
+          }
+          \(continuousScript)
           window.sentenceReader={
+            pageWindow,
             render(rows,layout,items) {
               const changingStructure=paragraphMode!==(layout==='paragraph');
+              if (flow) {flow=null;figures=[];main.replaceChildren();}
               const selection=getSelection();
               const {anchorNode,anchorOffset,focusNode,focusOffset}=selection;
               paragraphMode=layout==='paragraph';
               document.body.className=layout;
               main.setAttribute('aria-label',paragraphMode ? '本页段落对照' : '本页逐句译文');
               if (items) figures=items.map(makeFigure);
-              const previous=changingStructure ? new Map() : new Map([...main.querySelectorAll('[data-group]')].map(p=>[p.dataset.group,p]));
-              const groups=new Map();
               order=rows.map(row=>row.id);
               const incoming=new Set(order);
               for (const id of pairs.keys()) if (!incoming.has(id)) pairs.delete(id);
-              for (const row of rows) {
-                if (!groups.has(row.paragraph)) groups.set(row.paragraph,[]);
-                let pair=pairs.get(row.id);
-                if (!pair || changingStructure) {
-                  pair=pair||makePair(row.id);
-                  setButton(pair.button,!paragraphMode);
-                  setButton(pair.en,paragraphMode);setButton(pair.zh,paragraphMode);
-                  pairs.set(row.id,pair);
-                }
-                pair.group=row.paragraph;
-                if (pair.en.textContent!==row.en) pair.en.textContent=row.en;
-                if (pair.zh.textContent!==row.zh) pair.zh.textContent=row.zh;
-                groups.get(row.paragraph).push(pair);
-              }
-              const blocks=[], beforeGroup=new Map();
-              for (const item of figures) {
-                const group=pairs.get(item.before)?.group;
-                if (!beforeGroup.has(group)) beforeGroup.set(group,[]);
-                beforeGroup.get(group).push(item.node);
-              }
-              for (const [id,members] of groups) {
-                if (beforeGroup.has(id)) blocks.push(...beforeGroup.get(id));
-                const group=previous.get(id)||makeGroup(id);
-                if (paragraphMode) {
-                  const english=[], chinese=[];
-                  let gap=false;
-                  for (const pair of members) {
-                    if (english.length) english.push(pair.space);
-                    english.push(pair.en);
-                    if (pair.zh.textContent) chinese.push(pair.zh);
-                    else if (!gap) chinese.push(pair.pending);
-                    gap=!pair.zh.textContent;
-                  }
-                  setChildren(group.firstChild,english);setChildren(group.lastChild,chinese);
-                } else {
-                  for (const pair of members) setChildren(pair.button,[pair.en,pair.zh]);
-                  setChildren(group,members.map(pair=>pair.button));
-                }
-                blocks.push(group);
-              }
-              if (beforeGroup.has(undefined)) blocks.push(...beforeGroup.get(undefined));
-              setChildren(main,blocks);
+              renderRows(main,rows,figures,changingStructure);
               if (changingStructure) {
                 revealLanguage='en';
                 for (const pair of pairs.values()) {

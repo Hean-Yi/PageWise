@@ -13,6 +13,7 @@ struct PDFCanvas: View {
     var body: some View {
         let session = model.pdfBilingual
         let focus = PDFSentenceDisplay(
+            isVisible: acceptsSentenceInput,
             sentences: session.matches(model) && acceptsSentenceInput ? session.sentences : [],
             activeID: session.activeID,
             focusedID: session.focusedID, revealRevision: session.revealRevision,
@@ -24,6 +25,7 @@ struct PDFCanvas: View {
 }
 
 private struct PDFSentenceDisplay {
+    let isVisible: Bool
     let sentences: [PDFSourceSentence]
     let activeID: String?
     let focusedID: String?
@@ -117,6 +119,7 @@ private final class PDFCoordinator: NSObject, @preconcurrency PDFPageOverlayView
     var keys: [String] = []
     var highlightIDs: Set<UUID> = []
     var penEnabled = false
+    private var isVisible = false
     private var displayedSentenceIDs: [String] = []
     private var scrollRevision = 0
     private var revealRevision: Int?
@@ -171,6 +174,8 @@ private final class PDFCoordinator: NSObject, @preconcurrency PDFPageOverlayView
     func update(_ view: PDFView, penEnabled: Bool, focus: PDFSentenceDisplay) {
         isUpdating = true
         defer { isUpdating = false }
+        let becameVisible = focus.isVisible && !isVisible
+        isVisible = focus.isVisible
         self.penEnabled = penEnabled
         #if os(macOS)
             (view as? ReaderPDFView)?.observesSentenceInput = !focus.sentences.isEmpty
@@ -259,18 +264,20 @@ private final class PDFCoordinator: NSObject, @preconcurrency PDFPageOverlayView
             }
             highlightIDs.insert(mark.id)
         }
-        if let index = model.jumpPage, let page = view.document?.page(at: index) {
+        if isVisible, let index = model.jumpPage, let page = view.document?.page(at: index) {
             view.clearSelection()
             view.go(to: page)
             Task { @MainActor [weak self] in
-                guard let self, self.identity == newIdentity, self.model.jumpPage == index,
+                guard let self, self.isVisible, self.identity == newIdentity, self.model.jumpPage == index,
                     self.paperID == self.model.selectedPaperID, self.keys == self.model.pageKeys
                 else { return }
                 self.model.recordVisiblePage(index)
                 self.model.jumpPage = nil
             }
+        } else if becameVisible, let page = view.document?.page(at: model.visiblePage), view.currentPage !== page {
+            view.go(to: page)
         }
-        updateSentenceFocus(in: view, display: focus)
+        if isVisible { updateSentenceFocus(in: view, display: focus, becameVisible: becameVisible) }
         #if os(iOS)
             for canvas in canvases.values { canvas.isUserInteractionEnabled = penEnabled }
             if let current = view.currentPage, let document = view.document {
@@ -284,7 +291,7 @@ private final class PDFCoordinator: NSObject, @preconcurrency PDFPageOverlayView
     }
 
     private func sentence(at point: CGPoint) -> PDFSourceSentence? {
-        guard let view, !penEnabled, model.pdfBilingual.matches(model),
+        guard isVisible, let view, !penEnabled, model.pdfBilingual.matches(model),
             let page = view.page(for: point, nearest: false),
             view.document?.index(for: page) == model.pdfBilingual.pageIndex
         else { return nil }
@@ -307,7 +314,7 @@ private final class PDFCoordinator: NSObject, @preconcurrency PDFPageOverlayView
         return CGRect(x: values[0], y: values[1], width: values[2], height: values[3])
     }
 
-    private func updateSentenceFocus(in view: PDFView, display: PDFSentenceDisplay) {
+    private func updateSentenceFocus(in view: PDFView, display: PDFSentenceDisplay, becameVisible: Bool) {
         let ids = display.selectedIDs.isEmpty ? [display.activeID].compactMap { $0 } : display.selectedIDs
         let active = ids.isEmpty ? [] : display.sentences.filter { ids.contains($0.id) }
         let visibleIDs = active.map(\.id)
@@ -327,17 +334,19 @@ private final class PDFCoordinator: NSObject, @preconcurrency PDFPageOverlayView
             }
             view.highlightedSelections = selections
         }
-        let newFocus = revealRevision != display.revealRevision
-        let newScroll = scrollRevision != display.scrollRevision
+        let newFocus = becameVisible || revealRevision != display.revealRevision
+        let newScroll = becameVisible || scrollRevision != display.scrollRevision
         revealRevision = display.revealRevision
         scrollRevision = display.scrollRevision
-        if let item = display.illustration, revealedIllustrationID != item.id,
-            let page = view.document?.page(at: item.pageIndex)
-        {
-            view.go(to: item.sourceBounds, on: page)
+        if let item = display.illustration {
+            if becameVisible || revealedIllustrationID != item.id, let page = view.document?.page(at: item.pageIndex) {
+                view.go(to: item.sourceBounds, on: page)
+            }
+            revealedIllustrationID = item.id
+            return
         }
-        revealedIllustrationID = display.illustration?.id
-        let targetID = newFocus ? display.focusedID : (newScroll ? display.scrollID : nil)
+        revealedIllustrationID = nil
+        let targetID = (newFocus ? display.focusedID : nil) ?? (newScroll ? display.scrollID : nil)
         if let targetID, let sentence = display.sentences.first(where: { $0.id == targetID }),
             let page = view.document?.page(at: sentence.pageIndex),
             let firstRect = sentence.rects.first.flatMap(Self.rectangle),
@@ -349,7 +358,7 @@ private final class PDFCoordinator: NSObject, @preconcurrency PDFPageOverlayView
 
     @objc private func originalScrolled() {
         let session = model.pdfBilingual
-        guard !isUpdating, session.matches(model), session.followsScroll, let view,
+        guard isVisible, !isUpdating, session.matches(model), session.followsScroll, let view,
             let page = view.document?.page(at: session.pageIndex)
         else { return }
         let visible = view.convert(view.bounds, to: page)
@@ -365,7 +374,7 @@ private final class PDFCoordinator: NSObject, @preconcurrency PDFPageOverlayView
     }
 
     @objc func selectionChanged() {
-        guard !isUpdating, paperID == model.selectedPaperID, keys == model.pageKeys else { return }
+        guard isVisible, !isUpdating, paperID == model.selectedPaperID, keys == model.pageKeys else { return }
         guard let view, let selected = view.currentSelection, let page = selected.pages.first,
             let document = view.document, let text = selected.string,
             !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -414,7 +423,7 @@ private final class PDFCoordinator: NSObject, @preconcurrency PDFPageOverlayView
     }
 
     @objc func pageChanged() {
-        guard !isUpdating, paperID == model.selectedPaperID, keys == model.pageKeys,
+        guard isVisible, !isUpdating, model.jumpPage == nil, paperID == model.selectedPaperID, keys == model.pageKeys,
             let view, let page = view.currentPage, let document = view.document
         else { return }
         model.recordVisiblePage(document.index(for: page))

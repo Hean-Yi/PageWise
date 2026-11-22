@@ -267,6 +267,7 @@ struct ReaderView: View {
 
     private func readingBar(width: CGFloat) -> some View {
         let originalVisible = !model.pdfBilingual.isOpen || peekingAtOriginal || pdfLayout.resolved(at: width) == .split
+        let continuousParagraphs = model.pdfBilingual.isOpen && pdfLayout == .paragraph && !peekingAtOriginal
         return HStack(spacing: 12) {
             if model.pageKeys.isEmpty {
                 Text("等待正文就绪").font(.caption).foregroundStyle(ReaderTheme.muted)
@@ -274,12 +275,16 @@ struct ReaderView: View {
                 Text("连续阅读 · \(model.visiblePage + 1) / \(model.pageKeys.count) 段")
                     .font(.caption).foregroundStyle(ReaderTheme.muted)
             } else {
-                Button {
-                    model.navigateToPage(model.visiblePage - 1)
-                } label: {
-                    Image(systemName: "chevron.left")
+                if continuousParagraphs {
+                    Text("连续阅读").foregroundStyle(ReaderTheme.muted)
+                } else {
+                    Button {
+                        model.navigateToPage(model.visiblePage - 1)
+                    } label: {
+                        Image(systemName: "chevron.left")
+                    }
+                    .disabled(model.visiblePage <= 0).help("上一页").accessibilityLabel("上一页")
                 }
-                .disabled(model.visiblePage <= 0).help("上一页").accessibilityLabel("上一页")
                 HStack(spacing: 4) {
                     TextField("页码", text: $pageInput).textFieldStyle(.plain).multilineTextAlignment(.center)
                         .frame(width: 28).focused($pageFocused).onSubmit(jumpToPage).accessibilityLabel("跳转页码")
@@ -287,12 +292,15 @@ struct ReaderView: View {
                 }.font(.system(size: 11, design: .monospaced)).padding(.horizontal, 9).padding(.vertical, 5)
                     .background(ReaderTheme.surface, in: RoundedRectangle(cornerRadius: 6))
                     .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(ReaderTheme.line))
-                Button {
-                    model.navigateToPage(model.visiblePage + 1)
-                } label: {
-                    Image(systemName: "chevron.right")
+                    .help("输入原页页码并回车跳转")
+                if !continuousParagraphs {
+                    Button {
+                        model.navigateToPage(model.visiblePage + 1)
+                    } label: {
+                        Image(systemName: "chevron.right")
+                    }
+                    .disabled(model.visiblePage >= model.pageKeys.count - 1).help("下一页").accessibilityLabel("下一页")
                 }
-                .disabled(model.visiblePage >= model.pageKeys.count - 1).help("下一页").accessibilityLabel("下一页")
             }
             Button(action: model.toggleBookmark) {
                 Image(systemName: model.isCurrentPageBookmarked ? "bookmark.fill" : "bookmark")

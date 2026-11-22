@@ -28,6 +28,8 @@ struct PDFBilingualReadingView: View {
 
     private var session: PDFBilingualSession { model.pdfBilingual }
 
+    private var paragraphVisible: Bool { session.isOpen && layout == .paragraph && !peekingAtOriginal }
+
     var body: some View {
         GeometryReader { geometry in
             let width = geometry.size.width
@@ -71,6 +73,15 @@ struct PDFBilingualReadingView: View {
                 session.hover(nil)
                 if visible, let id = session.focusedID { session.focus(id) }
             }
+        }
+        .onChange(of: paragraphVisible, initial: true) { _, visible in
+            if visible {
+                session.prepareParagraphReading(model)
+                session.consumeParagraphJump(model)
+            }
+        }
+        .onChange(of: model.jumpPage) { _, _ in
+            if paragraphVisible { session.consumeParagraphJump(model) }
         }
         .onChange(of: session.isOpen) { _, _ in peekingAtOriginal = false }
         .onChange(of: session.selectionRequestRevision) { _, _ in peekingAtOriginal = false }
@@ -159,7 +170,7 @@ struct PDFBilingualReadingView: View {
             }
             .buttonStyle(.borderless).padding(.horizontal, 22).padding(.vertical, 14)
             Divider()
-            if let notice = session.notice {
+            if !paragraphs, let notice = session.notice {
                 Text(notice).font(.caption).foregroundStyle(ReaderTheme.muted)
                     .fixedSize(horizontal: false, vertical: true).padding(.horizontal, 20).padding(.top, 8)
             }
@@ -174,9 +185,7 @@ struct PDFBilingualReadingView: View {
             if let source = session.selectionSource {
                 selectionResult(source, sentences: sentences)
             }
-            if translations.isEmpty
-                && (!paragraphs || (sentences.isEmpty && session.illustrations.isEmpty))
-            {
+            if !paragraphs && translations.isEmpty {
                 emptyPage(hasSentences: !sentences.isEmpty, showsPageAction: showsPageAction)
             } else {
                 PDFSentenceTextCanvas(
@@ -184,13 +193,31 @@ struct PDFBilingualReadingView: View {
                     layout: textLayout, fontSize: fontSize, activeID: session.activeID, focusedID: session.focusedID,
                     focusRevision: session.sourceFocusRevision, followsScroll: session.followsScroll,
                     sourceScrollID: session.sourceScrollID, sourceScrollRevision: session.sourceScrollRevision,
-                    pdfSelectedIDs: session.pdfSelectedIDs, onScroll: session.scrollFromTranslation,
-                    onSelection: session.selectFromTranslation, onFocus: session.focus, onHover: session.hover,
+                    pdfSelectedIDs: session.pdfSelectedIDs,
+                    onScroll: { id in
+                        if paragraphs {
+                            if paragraphVisible { session.scrollFromParagraph(id) }
+                        } else {
+                            session.scrollFromTranslation(id)
+                        }
+                    },
+                    onSelection: session.selectFromTranslation,
+                    onFocus: { id in
+                        if paragraphs {
+                            if paragraphVisible { session.focusParagraphSentence(id, model: model) }
+                        } else {
+                            session.focus(id)
+                        }
+                    }, onHover: session.hover,
                     illustrations: session.illustrations,
                     onRevealIllustration: { item in
-                        session.revealIllustration(item)
+                        if paragraphs {
+                            session.revealParagraphIllustration(item, model: model)
+                        } else {
+                            session.revealIllustration(item)
+                        }
                         peekingAtOriginal = true
-                    })
+                    }, continuous: paragraphs ? paragraphDocument : nil)
                 if showsPageAction && session.selectionSource == nil && !sentences.isEmpty
                     && (session.isTranslating || translations.count < sentences.count)
                 {
@@ -211,6 +238,20 @@ struct PDFBilingualReadingView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(ReaderTheme.surface)
+    }
+
+    private var paragraphDocument: PDFSentenceTextCanvas.Continuous? {
+        guard let paper = model.paper else { return nil }
+        return PDFSentenceTextCanvas.Continuous(
+            paperID: paper.id, pageCount: paper.pageCount, pages: session.paragraphPages,
+            targetPage: session.paragraphJumpPage, jumpRevision: session.paragraphJumpRevision,
+            onVisiblePage: { page in
+                if paragraphVisible { session.paragraphDidScroll(to: page, model: model) }
+            },
+            onOpenOriginalPage: { page in
+                session.revealParagraphPage(page, model: model)
+                peekingAtOriginal = true
+            })
     }
 
     private func documentBar(_ status: PDFDocumentTranslationStatus, paperID: UUID) -> some View {
