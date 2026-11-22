@@ -61,6 +61,6 @@ extension ReaderModel {
         guard !selections.isEmpty else { return }
         state.highlights = AnnotationRangeEditor.applying(
             selections, to: working, color: color, style: style, removing: value["remove"] as? Bool == true)
-        Task { await save() }
+        highlightSaveTask = Task { await save() }
     }
 }

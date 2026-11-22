@@ -73,7 +73,7 @@ struct ReaderView: View {
                                 sidebarOpen: (showAssistant && !libraryAgentPresented && width >= 900)
                                     || showAssistantSheet)
                         } else if !model.showingReflowLoading && !model.readingChoicePresented {
-                            PDFCanvas(model: model, penEnabled: penEnabled).frame(maxWidth: 820)
+                            PDFBilingualReadingView(model: model, penEnabled: penEnabled, openSettings: requestSettings)
                         }
                         if model.readingChoicePresented {
                             ReadingModeChoiceView(model: model, reflow: translate)
@@ -83,7 +83,7 @@ struct ReaderView: View {
                     }.frame(maxWidth: .infinity, maxHeight: .infinity)
                     readingBar(width: width)
                 }
-                if showAssistant && !libraryAgentPresented && width >= 900 {
+                if showAssistant && !model.pdfBilingual.isOpen && !libraryAgentPresented && width >= 900 {
                     Divider()
                     assistant.frame(width: 312)
                 }
@@ -94,7 +94,14 @@ struct ReaderView: View {
             Button("不包含讨论，保存笔记") { Task { await model.saveToObsidian(includeDiscussion: false) } }
             Button("取消", role: .cancel) {}
         }
-        .onChange(of: model.visiblePage) { _, page in if !pageFocused { pageInput = "\(page + 1)" } }
+        .onChange(of: model.visiblePage) { _, page in
+            if !pageFocused { pageInput = "\(page + 1)" }
+            if model.pdfBilingual.isOpen { model.pdfBilingual.loadPage(model) }
+        }
+        .onChange(of: model.mode) { _, mode in
+            if mode != "original" { model.pdfBilingual.close() }
+        }
+        .onDisappear { model.pdfBilingual.close() }
         .onAppear {
             pageInput = "\(model.visiblePage + 1)"
             if libraryAgentPresented { showAssistant = false }
@@ -106,6 +113,7 @@ struct ReaderView: View {
             }
         }
         .onChange(of: model.selectedPaperID) { _, _ in
+            model.pdfBilingual.close()
             question = ""
             pageInput = "\(model.visiblePage + 1)"
         }
@@ -145,29 +153,19 @@ struct ReaderView: View {
             Picker(
                 "阅读模式",
                 selection: Binding(
-                    get: { model.mode },
-                    set: { value in
-                        if value == "original" {
-                            model.readOriginal()
-                        } else if value == "reflow" {
-                            model.readingChoicePresented = false
-                            model.mode = "reflow"
-                        } else if model.paper?.readingPages.isEmpty == false {
-                            model.openRetainedReading(model.retainedReadingID)
-                        } else {
-                            translate()
-                        }
-                    })
+                    get: { model.pdfBilingual.isOpen ? "sentences" : model.mode },
+                    set: { value in setReadingMode(value) })
             ) {
                 Text("原版").tag("original")
+                Text("逐句对照").tag("sentences")
                 if model.paper?.previewPages.isEmpty == false { Text("旧重排").tag("reflow") }
                 if model.paper?.htmlReading != nil || model.paper?.translatedPages.isEmpty == false
                     || model.paper?.onlineSource != nil
                 {
                     Text("双语重排").tag("translated")
                 }
-            }.pickerStyle(.segmented).labelsHidden().frame(
-                width: model.paper?.previewPages.isEmpty == false ? 240 : 174)
+            }.pickerStyle(.segmented).labelsHidden().fixedSize()
+                .accessibilityLabel("阅读模式")
             if model.translating.contains(model.selectedPaperID ?? UUID()) {
                 Button(action: model.pauseTranslation) { Image(systemName: "pause.circle") }
                     .help("暂停重排").accessibilityLabel("暂停重排")
@@ -213,9 +211,34 @@ struct ReaderView: View {
                 toggleAssistant(width: width)
             } label: {
                 Image(systemName: "sidebar.right")
-                    .foregroundStyle(showAssistant || showAssistantSheet ? ReaderTheme.accent : ReaderTheme.muted)
+                    .foregroundStyle(
+                        (showAssistant && !model.pdfBilingual.isOpen) || showAssistantSheet
+                            ? ReaderTheme.accent : ReaderTheme.muted)
             }.help("助读与笔记").accessibilityLabel("助读与笔记")
         }.buttonStyle(.borderless).font(.system(size: 14))
+    }
+
+    private func setReadingMode(_ value: String) {
+        if value == "sentences" {
+            if model.mode != "original" {
+                model.changeMode(to: "original")
+                if model.mode != "original" { model.readOriginal() }
+            }
+            model.readingChoicePresented = false
+            model.pdfBilingual.open(model)
+            return
+        }
+        model.pdfBilingual.close()
+        if value == "original" {
+            if model.mode != "original" || model.readingChoicePresented { model.readOriginal() }
+        } else if value == "reflow" {
+            model.readingChoicePresented = false
+            model.mode = "reflow"
+        } else if model.paper?.readingPages.isEmpty == false {
+            model.openRetainedReading(model.retainedReadingID)
+        } else {
+            translate()
+        }
     }
 
     private func readingBar(width: CGFloat) -> some View {
@@ -261,13 +284,26 @@ struct ReaderView: View {
                 Text(reason).font(.caption).foregroundStyle(ReaderTheme.muted).lineLimit(2)
             }
             if !model.selectionText.isEmpty {
+                if model.mode == "original" {
+                    Button {
+                        model.pdfBilingual.translateSelection(model)
+                    } label: {
+                        Label("翻译选区", systemImage: "character.bubble")
+                    }
+                    .disabled(model.pdfSelectionSpansPages || model.pdfBilingual.isTranslating)
+                    .help(model.pdfSelectionSpansPages ? "跨页选文请逐页翻译" : "只发送所选文字")
+                }
                 if !model.usesHTMLReading {
                     Button(action: model.highlightSelection) { Label("高亮", systemImage: "highlighter") }
                 }
                 Button {
                     libraryAgentPresented = false
                     assistantTab = "chat"
-                    if width < 900 { showAssistantSheet = true } else { showAssistant = true }
+                    if width < 900 || model.pdfBilingual.isOpen {
+                        showAssistantSheet = true
+                    } else {
+                        showAssistant = true
+                    }
                     question = "请结合全文解释选中内容。"
                 } label: {
                     Label("解释", systemImage: "sparkles")
@@ -427,7 +463,7 @@ struct ReaderView: View {
     }
     private func toggleAssistant(width: CGFloat) {
         libraryAgentPresented = false
-        if width < 900 { showAssistantSheet = true } else { showAssistant.toggle() }
+        if width < 900 || model.pdfBilingual.isOpen { showAssistantSheet = true } else { showAssistant.toggle() }
     }
     private func requestSettings() {
         if showAssistantSheet {

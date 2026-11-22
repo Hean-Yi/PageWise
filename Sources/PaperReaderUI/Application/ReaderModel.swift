@@ -39,6 +39,12 @@ public final class ReaderModel {
     public var selectionText = ""
     public var selectionRects: [[Double]] = []
     public var selectionPage = 0
+    var pdfSelectionSpansPages = false
+    var pdfSelectionRanges: [NSRange] = []
+    let pdfBilingual = PDFBilingualSession()
+    let pdfTranslations: PDFSentenceTranslationStore
+    let pdfValidation: PDFTranslationValidationConfiguration?
+    var pdfTranslationSettings: ModelSettings { pdfValidation?.settings ?? modelSettings }
     public var visiblePage = 0
     public var jumpPage: Int?
     public var navigationItems: [PaperNavigationItem] = []
@@ -55,6 +61,7 @@ public final class ReaderModel {
     let outlineService = PDFOutlineService()
     let pageTextLocator: any FixedPageTextLocating
     @ObservationIgnored private var saveQueue: Task<Bool, Never>?
+    @ObservationIgnored var highlightSaveTask: Task<Bool, Never>?
     @ObservationIgnored var workspaceSaveTask: Task<Void, Never>?
     @ObservationIgnored var workspaceRevision = 0
     @ObservationIgnored var savedWorkspaceRevision = 0
@@ -79,6 +86,8 @@ public final class ReaderModel {
             ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("PaperReader", isDirectory: true)
         self.root = location
+        pdfTranslations = PDFSentenceTranslationStore(root: location)
+        pdfValidation = PDFTranslationValidationConfiguration.load(root: location)
         store = try LibraryStore(directory: location)
         importer = PDFImporter(root: location)
         vault = VaultService(root: location)
@@ -138,6 +147,7 @@ public final class ReaderModel {
         Task { await flushReadingNotes() }
         requestedReadingNote = nil
         let changedPaper = selectedPaperID != id
+        if changedPaper { pdfBilingual.close() }
         invalidateSearchNavigation()
         endReading()
         selectedPaperID = id
@@ -250,7 +260,11 @@ public final class ReaderModel {
         paper.translatedBlockCount = publication.translatedBlockCount
     }
 
-    public func captureSelection(text: String, rects: [[Double]], page: Int) {
+    public func captureSelection(
+        text: String, rects: [[Double]], page: Int, spansPages: Bool = false, ranges: [NSRange] = []
+    ) {
+        pdfSelectionRanges = ranges
+        pdfSelectionSpansPages = spansPages
         selectionHTMLRange = nil
         htmlSelection = []
         selectionText = text
@@ -282,7 +296,7 @@ public final class ReaderModel {
             highlight.textRange = selectionHTMLRange
             state.highlights.append(highlight)
         }
-        Task { await save() }
+        highlightSaveTask = Task { await save() }
     }
 
     public func jump(to evidence: Evidence) {
@@ -310,6 +324,7 @@ public final class ReaderModel {
         let changed = modelSettings != result.settings || removeKey || key?.isEmpty == false
         modelSettings = result.settings
         if changed {
+            pdfBilingual.close()
             for task in translationTasks.values { task.cancel() }
         }
         status = result.warning ?? "模型设置已保存，下次模型请求将使用新配置"

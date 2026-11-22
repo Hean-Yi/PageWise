@@ -78,7 +78,10 @@ Swift Package 自动递归发现每个 target 目录下的 Swift 文件。当前
 | 路径 | 职责 |
 | --- | --- |
 | `Infrastructure/PDF/Import/PDFImporter` | 校验并保存原始 PDF，计算哈希和轻量元信息 |
-| `Infrastructure/PDF/{Display,Navigation}` | 原版与历史固定页的展示、目录和定位 |
+| `Infrastructure/PDF/{Display,Navigation}` | 原版与历史固定页的展示、目录、定位，按页提取带原文范围和行框的句子 |
+| `Infrastructure/Models/PDFSentenceTranslator` | 批量逐句翻译并校验来源编号、数字、单位及引用 |
+| `Infrastructure/Persistence/PDFSentenceTranslationStore` | 独立于书库快照的逐页原子写入与续译，按原文件和句子签名隔离缓存版本 |
+| `UI/Application/Reading/PDFBilingualSession` | 原页、译句、选区和暂停/恢复的协调 |
 | `Infrastructure/Discovery/ArxivClient` | 可信候选与同版本 TeX/PDF 下载 |
 | `Infrastructure/TeX` | 有界解包、静态包含/宏展开、语义标记、源码保存和 TeX/HTML 路由 |
 | `Infrastructure/HTML` | HTML 净化、图片本地化、公式处理与最终阅读文件追加 |

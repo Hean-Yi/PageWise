@@ -34,6 +34,7 @@ extension ReaderModel {
             Task { await flushReadingNotes() }
             invalidateSearchNavigation()
             endReading()
+            if suspendTranslation { pdfBilingual.pause() }
             if suspendTranslation, !translationTasks.isEmpty {
                 translationPauseReason = "应用进入后台，翻译已暂停"
                 for task in translationTasks.values { task.cancel() }

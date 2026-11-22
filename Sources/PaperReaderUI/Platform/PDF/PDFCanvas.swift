@@ -9,14 +9,66 @@ import SwiftUI
 struct PDFCanvas: View {
     let model: ReaderModel
     var penEnabled: Bool
+    var acceptsSentenceInput = true
     var body: some View {
-        PlatformPDF(model: model, penEnabled: penEnabled)
+        let session = model.pdfBilingual
+        let focus = PDFSentenceDisplay(
+            sentences: session.matches(model) && acceptsSentenceInput ? session.sentences : [],
+            activeID: session.activeID,
+            focusedID: session.focusedID, revealRevision: session.revealRevision,
+            selectedIDs: session.translationSelectedIDs, scrollID: session.pdfScrollID,
+            scrollRevision: session.pdfScrollRevision)
+        PlatformPDF(model: model, penEnabled: penEnabled, focus: focus)
     }
+}
+
+private struct PDFSentenceDisplay {
+    let sentences: [PDFSourceSentence]
+    let activeID: String?
+    let focusedID: String?
+    let revealRevision: Int
+    let selectedIDs: [String]
+    let scrollID: String?
+    let scrollRevision: Int
 }
 
 @MainActor
 private final class ReaderPDFView: PDFView {
     var copyTextProvider: (() -> String?)?
+
+    #if os(macOS)
+        var sentencePointer: ((CGPoint, Bool) -> Void)?
+        var sentencePointerExited: (() -> Void)?
+        var observesSentenceInput = false
+        private var eventMonitor: Any?
+        private var pointerWasInside = false
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            if let eventMonitor { NSEvent.removeMonitor(eventMonitor) }
+            eventMonitor = nil
+            guard window != nil else { return }
+            // PDFKit's inner document view handles mouse tracking itself. Observe this window's
+            // events without consuming them so text selection, links and scrolling keep working.
+            eventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .mouseMoved]) {
+                [weak self] event in
+                guard let self, self.observesSentenceInput, let window = self.window,
+                    event.window === window, window.attachedSheet == nil
+                else { return event }
+                let point = self.convert(event.locationInWindow, from: nil)
+                let inside = self.visibleRect.contains(point)
+                if inside {
+                    if event.type == .mouseMoved || event.clickCount == 1 {
+                        self.sentencePointer?(point, event.type == .leftMouseDown)
+                    }
+                } else if self.pointerWasInside {
+                    self.sentencePointerExited?()
+                }
+                self.pointerWasInside = inside
+                return event
+            }
+        }
+    #endif
 
     override func copy(_ sender: Any?) {
         guard currentSelection != nil else { return }
@@ -34,18 +86,22 @@ private final class ReaderPDFView: PDFView {
     private struct PlatformPDF: NSViewRepresentable {
         let model: ReaderModel
         let penEnabled: Bool
+        let focus: PDFSentenceDisplay
         func makeCoordinator() -> PDFCoordinator { PDFCoordinator(model: model) }
         func makeNSView(context: Context) -> PDFView { context.coordinator.makeView() }
-        func updateNSView(_ view: PDFView, context: Context) { context.coordinator.update(view, penEnabled: false) }
+        func updateNSView(_ view: PDFView, context: Context) {
+            context.coordinator.update(view, penEnabled: false, focus: focus)
+        }
     }
 #else
     private struct PlatformPDF: UIViewRepresentable {
         let model: ReaderModel
         let penEnabled: Bool
+        let focus: PDFSentenceDisplay
         func makeCoordinator() -> PDFCoordinator { PDFCoordinator(model: model) }
         func makeUIView(context: Context) -> PDFView { context.coordinator.makeView() }
         func updateUIView(_ view: PDFView, context: Context) {
-            context.coordinator.update(view, penEnabled: penEnabled)
+            context.coordinator.update(view, penEnabled: penEnabled, focus: focus)
         }
     }
 #endif
@@ -59,6 +115,9 @@ private final class PDFCoordinator: NSObject, @preconcurrency PDFPageOverlayView
     var keys: [String] = []
     var highlightIDs: Set<UUID> = []
     var penEnabled = false
+    private var displayedSentenceIDs: [String] = []
+    private var scrollRevision = 0
+    private var revealRevision: Int?
     var isUpdating = false
     var paperID: UUID?
     #if os(iOS)
@@ -82,6 +141,23 @@ private final class PDFCoordinator: NSObject, @preconcurrency PDFPageOverlayView
             view.backgroundColor = UIColor.secondarySystemBackground
         #endif
         self.view = view
+        #if os(macOS)
+            view.sentencePointer = { [weak self] point, clicked in
+                guard let self else { return }
+                let hit = self.sentence(at: point)
+                if clicked, let hit {
+                    self.model.pdfBilingual.focusFromPDF(hit.id)
+                } else {
+                    self.model.pdfBilingual.hover(hit?.id)
+                }
+            }
+            view.sentencePointerExited = { [weak self] in self?.model.pdfBilingual.hover(nil) }
+        #else
+            let tap = UITapGestureRecognizer(target: self, action: #selector(tappedPDF(_:)))
+            tap.cancelsTouchesInView = false
+            tap.delegate = self
+            view.addGestureRecognizer(tap)
+        #endif
         NotificationCenter.default.addObserver(
             self, selector: #selector(selectionChanged), name: .PDFViewSelectionChanged, object: view)
         NotificationCenter.default.addObserver(
@@ -89,10 +165,13 @@ private final class PDFCoordinator: NSObject, @preconcurrency PDFPageOverlayView
         return view
     }
 
-    func update(_ view: PDFView, penEnabled: Bool) {
+    func update(_ view: PDFView, penEnabled: Bool, focus: PDFSentenceDisplay) {
         isUpdating = true
         defer { isUpdating = false }
         self.penEnabled = penEnabled
+        #if os(macOS)
+            (view as? ReaderPDFView)?.observesSentenceInput = !focus.sentences.isEmpty
+        #endif
         view.isInMarkupMode = penEnabled
         // SwiftUI may update the old representable once after the reader is dismissed.
         guard model.paper != nil, !model.usesHTMLReading else {
@@ -113,7 +192,9 @@ private final class PDFCoordinator: NSObject, @preconcurrency PDFPageOverlayView
         }
         let newIdentity = model.pageURLs.map(\.path).joined(separator: "|")
         if identity != newIdentity {
-            let oldPage = identity.isEmpty ? 0 : model.visiblePage
+            let oldPage = model.visiblePage
+            displayedSentenceIDs = []
+            revealRevision = nil
             identity = newIdentity
             keys = model.pageKeys
             paperID = model.selectedPaperID
@@ -140,6 +221,20 @@ private final class PDFCoordinator: NSObject, @preconcurrency PDFPageOverlayView
                 return
             }
             view.document = document
+            #if os(macOS)
+                NotificationCenter.default.removeObserver(
+                    self, name: NSScrollView.didLiveScrollNotification, object: nil)
+                if let scroll = view.documentView?.enclosingScrollView {
+                    NotificationCenter.default.addObserver(
+                        self, selector: #selector(originalScrolled), name: NSScrollView.didLiveScrollNotification,
+                        object: scroll)
+                }
+            #else
+                if let scroll = view.documentView?.superview as? UIScrollView {
+                    scroll.panGestureRecognizer.removeTarget(self, action: #selector(originalScrolled))
+                    scroll.panGestureRecognizer.addTarget(self, action: #selector(originalScrolled))
+                }
+            #endif
             highlightIDs = []
             if let page = document.page(at: min(oldPage, max(0, document.pageCount - 1))) { view.go(to: page) }
         }
@@ -171,6 +266,7 @@ private final class PDFCoordinator: NSObject, @preconcurrency PDFPageOverlayView
                 self.model.jumpPage = nil
             }
         }
+        updateSentenceFocus(in: view, display: focus)
         #if os(iOS)
             for canvas in canvases.values { canvas.isUserInteractionEnabled = penEnabled }
             if let current = view.currentPage, let document = view.document {
@@ -183,12 +279,88 @@ private final class PDFCoordinator: NSObject, @preconcurrency PDFPageOverlayView
         #endif
     }
 
+    private func sentence(at point: CGPoint) -> PDFSourceSentence? {
+        guard let view, !penEnabled, model.pdfBilingual.matches(model),
+            let page = view.page(for: point, nearest: false),
+            view.document?.index(for: page) == model.pdfBilingual.pageIndex
+        else { return nil }
+        let location = view.convert(point, to: page)
+        return model.pdfBilingual.sentences.first { sentence in
+            sentence.rects.contains { Self.rectangle($0)?.insetBy(dx: -0.5, dy: -0.5).contains(location) == true }
+        }
+    }
+
+    #if os(iOS)
+        @objc private func tappedPDF(_ gesture: UITapGestureRecognizer) {
+            if gesture.state == .ended, let view, let hit = sentence(at: gesture.location(in: view)) {
+                model.pdfBilingual.focusFromPDF(hit.id)
+            }
+        }
+    #endif
+
+    private static func rectangle(_ values: [Double]) -> CGRect? {
+        guard values.count == 4, values[2] > 0, values[3] > 0 else { return nil }
+        return CGRect(x: values[0], y: values[1], width: values[2], height: values[3])
+    }
+
+    private func updateSentenceFocus(in view: PDFView, display: PDFSentenceDisplay) {
+        let ids = display.selectedIDs.isEmpty ? [display.activeID].compactMap { $0 } : display.selectedIDs
+        let active = ids.isEmpty ? [] : display.sentences.filter { ids.contains($0.id) }
+        let visibleIDs = active.map(\.id)
+        if displayedSentenceIDs != visibleIDs {
+            displayedSentenceIDs = visibleIDs
+            var selections = [PDFSelection]()
+            for sentence in active {
+                guard let page = view.document?.page(at: sentence.pageIndex) else { continue }
+                selections += sentence.characterRanges.compactMap { page.selection(for: $0) }
+            }
+            for selection in selections {
+                #if os(macOS)
+                    selection.color = NSColor(calibratedRed: 0.73, green: 0.41, blue: 0.26, alpha: 0.25)
+                #else
+                    selection.color = UIColor(red: 0.73, green: 0.41, blue: 0.26, alpha: 0.25)
+                #endif
+            }
+            view.highlightedSelections = selections
+        }
+        let newFocus = revealRevision != display.revealRevision
+        let newScroll = scrollRevision != display.scrollRevision
+        revealRevision = display.revealRevision
+        scrollRevision = display.scrollRevision
+        let targetID = newFocus ? display.focusedID : (newScroll ? display.scrollID : nil)
+        if let targetID, let sentence = display.sentences.first(where: { $0.id == targetID }),
+            let page = view.document?.page(at: sentence.pageIndex),
+            let firstRect = sentence.rects.first.flatMap(Self.rectangle),
+            !view.bounds.contains(view.convert(firstRect, from: page))
+        {
+            view.go(to: firstRect.insetBy(dx: -8, dy: -12), on: page)
+        }
+    }
+
+    @objc private func originalScrolled() {
+        let session = model.pdfBilingual
+        guard !isUpdating, session.matches(model), session.followsScroll, let view,
+            let page = view.document?.page(at: session.pageIndex)
+        else { return }
+        let visible = view.convert(view.bounds, to: page)
+        let referenceY = visible.maxY - visible.height * 0.3
+        var nearest: (id: String, distance: CGFloat)?
+        for sentence in session.sentences {
+            for rect in sentence.rects.compactMap(Self.rectangle) where visible.intersects(rect) {
+                let distance = abs(rect.midY - referenceY)
+                if distance < nearest?.distance ?? .infinity { nearest = (sentence.id, distance) }
+            }
+        }
+        if let nearest { session.scrollFromPDF(nearest.id) }
+    }
+
     @objc func selectionChanged() {
         guard !isUpdating, paperID == model.selectedPaperID, keys == model.pageKeys else { return }
         guard let view, let selected = view.currentSelection, let page = selected.pages.first,
             let document = view.document, let text = selected.string,
             !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         else {
+            model.pdfBilingual.selectFromPDF([])
             model.captureSelection(text: "", rects: [], page: model.visiblePage)
             return
         }
@@ -201,10 +373,21 @@ private final class PDFCoordinator: NSObject, @preconcurrency PDFPageOverlayView
         guard let captured = displayedDocument?.text(for: selected, on: pageIndex),
             !captured.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         else {
+            model.pdfBilingual.selectFromPDF([])
             model.captureSelection(text: "", rects: [], page: model.visiblePage)
             return
         }
-        model.captureSelection(text: captured, rects: rects, page: pageIndex)
+        let ranges = (0..<selected.numberOfTextRanges(on: page)).map { selected.range(at: $0, on: page) }
+        if model.pdfBilingual.matches(model), pageIndex == model.pdfBilingual.pageIndex {
+            let matching = model.pdfBilingual.sentences.filter { sentence in
+                sentence.characterRanges.contains { source in
+                    ranges.contains { NSIntersectionRange($0, source).length > 0 }
+                }
+            }
+            model.pdfBilingual.selectFromPDF(matching.map(\.id))
+        }
+        model.captureSelection(
+            text: captured, rects: rects, page: pageIndex, spansPages: selected.pages.count > 1, ranges: ranges)
         if selected.pages.count > 1 { model.status = "跨页选择暂按第一页记录；请逐页划线以保留准确位置" }
     }
 
@@ -289,5 +472,17 @@ private final class PDFCoordinator: NSObject, @preconcurrency PDFPageOverlayView
                 model.touch()
             } catch { model.message = "手写批注保存失败：\(error.localizedDescription)" }
         }
+    }
+#endif
+
+#if os(iOS)
+    extension PDFCoordinator: UIGestureRecognizerDelegate {
+        func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+            model.pdfBilingual.matches(model) && !penEnabled
+        }
+        func gestureRecognizer(
+            _ gestureRecognizer: UIGestureRecognizer,
+            shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
+        ) -> Bool { true }
     }
 #endif

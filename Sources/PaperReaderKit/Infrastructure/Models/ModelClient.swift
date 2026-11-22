@@ -56,7 +56,9 @@ public struct ModelClient: Sendable {
     let transport: any HTTPTransport
     public init(transport: any HTTPTransport = NetworkTransport()) { self.transport = transport }
 
-    public func complete(settings: ModelSettings, key: String, system: String, user: String) async throws -> String {
+    public func complete(settings: ModelSettings, key: String, system: String, user: String, jsonOutput: Bool = false)
+        async throws -> String
+    {
         let settings = try settings.normalized()
         let key = key.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !key.isEmpty else {
@@ -73,7 +75,10 @@ public struct ModelClient: Sendable {
         let body = RequestBody(
             model: settings.model,
             messages: [.init(role: "system", content: system), .init(role: "user", content: user)],
-            temperature: settings.temperature)
+            temperature: settings.temperature,
+            responseFormat: jsonOutput ? ["type": "json_object"] : nil,
+            thinking: jsonOutput && endpoint.host == "api.deepseek.com" && settings.model == "deepseek-flash"
+                ? ["type": "disabled"] : nil)
         request.httpBody = try JSONEncoder().encode(body)
         let (data, response) = try await transport.data(for: request)
         switch response.statusCode {
@@ -98,11 +103,14 @@ public struct ModelClient: Sendable {
         var model: String
         var messages: [Message]
         var temperature: Double
+        var responseFormat: [String: String]?
+        var thinking: [String: String]?
         var stream = false
         let maxTokens = 4096
         enum CodingKeys: String, CodingKey {
-            case model, messages, temperature, stream
+            case model, messages, temperature, stream, thinking
             case maxTokens = "max_tokens"
+            case responseFormat = "response_format"
         }
     }
     private struct Message: Codable {
