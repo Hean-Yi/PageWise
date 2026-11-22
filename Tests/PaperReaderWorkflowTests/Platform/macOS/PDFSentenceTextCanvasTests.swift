@@ -206,6 +206,7 @@
         let initial = canvas(rows: sentences, translations: [:], layout: .paragraph)
         let coordinator = initial.makeCoordinator()
         let web = coordinator.makeView()
+        web.frame = CGRect(x: 0, y: 0, width: 600, height: 440)
         defer { coordinator.stop(web) }
         func evaluate(_ script: String) async throws -> Bool {
             try await web.callAsyncJavaScript(script, arguments: [:], in: nil, contentWorld: .defaultClient) as? Bool
@@ -224,7 +225,7 @@
             const text=document.querySelector('.en[data-sentence=b]').firstChild;
             getSelection().setBaseAndExtent(text,0,text,8);
             return sequence.join(',')==='intro,figure,caption,table' && document.images.length===1 && image.naturalWidth===1
-              && image.closest('button').getAttribute('aria-label')==='在原页查看图 1'
+              && image.closest('button').getAttribute('aria-label')==='放大图 1'
               && blocks[3].textContent==='在原页查看表 2';
             """)
         #expect(placement)
@@ -240,6 +241,15 @@
             _ = try await web.callAsyncJavaScript(
                 "getSelection().removeAllRanges();document.querySelector('[data-illustration='+id+']').click()",
                 arguments: ["id": item.id], in: nil, contentWorld: .defaultClient)
+            if item.id == figure.id {
+                let preview = try await evaluate(
+                    """
+                    const dialog=document.querySelector('[aria-modal=true]');
+                    const original=[...dialog.querySelectorAll('button')].find(b=>b.textContent==='查看原页');
+                    original.click();return true;
+                    """)
+                #expect(preview)
+            }
             for _ in 0..<60 where revealed == nil { try await Task.sleep(for: .milliseconds(10)) }
             #expect(revealed == item)
         }

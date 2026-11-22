@@ -272,6 +272,8 @@ struct PDFBilingualReadingView: View {
                 }
                 Spacer(minLength: 4)
                 switch status.phase {
+                case .needsConfiguration:
+                    Button("设置翻译", action: openSettings)
                 case .running:
                     Button("暂停") { model.pdfDocumentTranslation.pause(paperID) }
                 case .paused:
@@ -295,6 +297,7 @@ struct PDFBilingualReadingView: View {
         let progress = status.progress
         let count = "\(progress.processedPages) / \(progress.pageCount) 页"
         switch status.phase {
+        case .needsConfiguration: return "配置翻译服务后可自动补译"
         case .running:
             if let page = progress.activePageIndex { return "全文 \(count) · 正在处理第 \(page + 1) 页" }
             return "全文 \(count) · 正在准备"

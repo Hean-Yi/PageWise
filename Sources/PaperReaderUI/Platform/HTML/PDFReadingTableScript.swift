@@ -19,10 +19,8 @@ extension PDFSentenceTextCanvas {
             cell.append(text);
           }
         }
-        function makeTable(data,label,sourceButton) {
+        function makeTable(data,label) {
           const table=document.createElement('table');
-          sourceButton.textContent=label;
-          table.createCaption().append(sourceButton);
           table.setAttribute('aria-label',label);
           table.lang='en';
           const grouped=data.headerRows?.length;
@@ -56,11 +54,9 @@ extension PDFSentenceTextCanvas {
         }
         // PDFKit can substitute one font for several publication weights. For complex tables,
         // keep the visible original and fit selectable cell text to the verified PDF boxes.
-        function makeSourceTable(figure,table,item) {
+        function makeSourceTable(table,item) {
           const source=document.createElement('div'), image=document.createElement('img');
           source.className='source-table';source.style.minWidth=(item.sourceWidth/10)+'em';
-          const caption=document.createElement('figcaption');
-          caption.append(...table.caption.childNodes);table.caption.remove();
           image.alt='';image.draggable=false;image.width=item.width;image.height=item.height;
           const measure=document.createElement('canvas').getContext('2d');
           measure.font='100px Georgia';
@@ -85,8 +81,56 @@ extension PDFSentenceTextCanvas {
             source.replaceWith(table);
           },{once:true});
           image.src='data:image/png;base64,'+item.png;
-          source.append(image,table);figure.append(caption,source);
+          source.append(image,table);return source;
         }
+        function showReadingTable(figure,item,title) {
+          const table=makeTable(item.table,item.label);
+          const tools=document.createElement('figcaption'), scroller=document.createElement('div');
+          tools.className='table-tools';scroller.className='table-scroll';
+          title.textContent=item.label;title.className='table-title';tools.append(title);
+          for (const [step,label,mark] of [[-1,'向左查看列','‹'],[1,'向右查看列','›']]) {
+            const arrow=document.createElement('button');
+            arrow.type='button';arrow.className='table-step';arrow.dataset.step=step;arrow.hidden=true;
+            arrow.title=label;arrow.setAttribute('aria-label',label);arrow.textContent=mark;
+            arrow.addEventListener('click',()=>scroller.scrollBy({left:step*scroller.clientWidth*.75,
+              behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'instant':'smooth'}));
+            tools.append(arrow);
+          }
+          const copy=document.createElement('button');
+          copy.type='button';copy.textContent='复制表格';copy.dataset.copyTable=item.id;
+          copy.setAttribute('aria-live','polite');
+          copy.title='复制整张表，保留行列';
+          copy.addEventListener('click',()=>send('copyTable',item.id));tools.append(copy);
+          scroller.append(item.table.cellBounds && item.png ? makeSourceTable(table,item) : table);
+          figure.append(tools,scroller);
+          scroller.addEventListener('scroll',()=>updateTableWidth(scroller),{passive:true});
+        }
+        function tableCopied(id,copied) {
+          const button=main.querySelector('[data-copy-table="'+CSS.escape(id)+'"]');
+          if (!button) return;
+          button.textContent=copied ? '已复制' : '复制失败';
+          clearTimeout(button.resetLabel);
+          button.resetLabel=setTimeout(()=>{button.textContent='复制表格';},1800);
+        }
+        function updateTableWidth(scroller) {
+          const limit=scroller.scrollWidth-scroller.clientWidth, wide=limit>2;
+          const steps=scroller.previousElementSibling.querySelectorAll('.table-step');
+          for (const arrow of steps) {
+            arrow.hidden=!wide;
+            arrow.setAttribute('aria-hidden',String(!wide));
+            arrow.disabled=Number(arrow.dataset.step)<0 ? scroller.scrollLeft<1 : scroller.scrollLeft>=limit-1;
+          }
+          if (wide) {
+            scroller.tabIndex=0;scroller.setAttribute('role','region');
+            scroller.setAttribute('aria-label',scroller.querySelector('table').getAttribute('aria-label')+'，横向滚动');
+          } else {
+            scroller.removeAttribute('tabindex');scroller.removeAttribute('role');scroller.removeAttribute('aria-label');
+          }
+        }
+        function updateTableWidths() {
+          for (const scroller of main.querySelectorAll('.table-scroll')) updateTableWidth(scroller);
+        }
+        new ResizeObserver(updateTableWidths).observe(main);
         function copyTableCells(range) {
           const common=range.commonAncestorContainer;
           const element=common.nodeType===Node.TEXT_NODE ? common.parentElement : common;
@@ -99,7 +143,7 @@ extension PDFSentenceTextCanvas {
             for (const cell of row.cells) {
               if (!range.intersectsNode(cell)) continue;
               const part=selectedText(range,cell);
-              if (!part) continue;
+              if (!part && cell.textContent) continue;
               const column=Number(cell.dataset.column ?? cell.cellIndex);
               const complete=part===cell.textContent;
               first=Math.min(first,column);last=Math.max(last,column+(complete ? cell.colSpan-1 : 0));
@@ -108,7 +152,10 @@ extension PDFSentenceTextCanvas {
             if (fields.length) lines.push(fields);
           }
           return lines.length ? lines.map(fields=>
-            Array.from({length:last-first+1},(_,i)=>fields[first+i] ?? '').join('\t')).join('\n') : null;
+            Array.from({length:last-first+1},(_,i)=>{
+              const value=fields[first+i] ?? '';
+              return /["\t\r\n]/.test(value) ? '"'+value.replaceAll('"','""')+'"' : value;
+            }).join('\t')).join('\n') : null;
         }
         """#
 }

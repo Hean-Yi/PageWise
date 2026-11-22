@@ -5,7 +5,7 @@ import PaperReaderKit
 @MainActor @Observable
 final class PDFDocumentTranslationStatus {
     enum Phase: Equatable {
-        case running, paused
+        case running, paused, needsConfiguration
         case failed(String)
         case completed
     }
@@ -50,7 +50,7 @@ final class PDFDocumentTranslationController {
             jobs[paper.id] = job
         }
         if model.pdfTranslationSettings.model.isEmpty {
-            job.phase = .failed("请先在模型设置中配置翻译服务。")
+            job.phase = .needsConfiguration
         } else if suspended {
             job.resumeOnActivation = true
         } else {

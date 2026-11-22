@@ -73,6 +73,10 @@ extension PDFSentenceTextCanvas {
             const measured=page.section.getBoundingClientRect().height;
             if (measured>0) page.height=measured;
           }
+          if (page.section.classList.contains('untranslated')) {
+            page.section.classList.remove('untranslated');
+            page.section.firstChild.textContent='原页 '+(Number(page.section.dataset.page)+1);
+          }
           page.section.style.minHeight=page.height ? page.height+'px' : 'max(48rem,100vh)';
           const pending=document.createElement('p');
           pending.className='page-loading';
@@ -85,6 +89,10 @@ extension PDFSentenceTextCanvas {
           if (update.figures) page.figures=update.figures.map(makeFigure);
           page.section.style.removeProperty('min-height');
           const ids=update.rows.map(row=>row.id);
+          const untranslated=ids.length>0 && !update.rows.some(row=>row.zh);
+          page.section.classList.toggle('untranslated',untranslated);
+          const marker='原页 '+(update.index+1)+(untranslated ? ' · 暂无译文' : '');
+          if (page.section.firstChild.textContent!==marker) page.section.firstChild.textContent=marker;
           const keep=new Set(ids);
           for (const id of page.ids) if (!keep.has(id)) pairs.delete(id);
           page.ids=ids;

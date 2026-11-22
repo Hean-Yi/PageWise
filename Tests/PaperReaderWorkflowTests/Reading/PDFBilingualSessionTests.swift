@@ -136,7 +136,7 @@ import Testing
     let id = try #require(await model.importURLs([file]).first)
     let session = model.pdfBilingual
     session.open(model, translatingDocument: true)
-    guard case .failed = model.pdfDocumentTranslation.status(for: id)?.phase else {
+    guard case .needsConfiguration = model.pdfDocumentTranslation.status(for: id)?.phase else {
         Issue.record("缺少配置时应保留重排阅读并提供模型设置入口。")
         return
     }

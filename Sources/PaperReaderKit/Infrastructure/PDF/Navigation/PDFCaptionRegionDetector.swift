@@ -22,9 +22,40 @@ enum PDFCaptionRegionDetector {
         }
     }
 
-    private static let marker = try! NSRegularExpression(
-        pattern: #"^\s*(Figure|Fig\.|Table)\s+([A-Z]?\d+(?:\.\d+)*[a-z]?|[IVX]+)\s*[.:|–—](?!\d)"#,
+    private struct Marker {
+        let label: String
+        let range: NSRange
+        let separator: String
+        let title: String
+
+        var looksLikeHeading: Bool {
+            !separator.isEmpty || title.isEmpty || title.first?.isUppercase == true
+                || title.localizedCaseInsensitiveCompare("(continued)") == .orderedSame
+        }
+    }
+
+    private static let number = try! NSRegularExpression(
+        pattern:
+            #"^\s*(Figure|Fig\.?|Table|Tab\.?)\s*([A-Z]?[.]?\d+(?:\.\d+)*[a-z]?|[IVXLCDM]+)(?:\s*([.:|–—-])(?!\d)|(?=\s|$))"#,
         options: .caseInsensitive)
+
+    private static func marker(in line: String) -> Marker? {
+        let text = line as NSString
+        guard let match = number.firstMatch(in: line, range: NSRange(location: 0, length: text.length))
+        else { return nil }
+        let kind = text.substring(with: match.range(at: 1)).lowercased().hasPrefix("tab") ? "表 " : "图 "
+        let punctuation = match.range(at: 3)
+        return Marker(
+            label: kind + text.substring(with: match.range(at: 2)), range: match.range,
+            separator: punctuation.location == NSNotFound ? "" : text.substring(with: punctuation),
+            title: text.substring(from: NSMaxRange(match.range)).trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
+    /// A text-only hint may separate reading paragraphs. Publishing a crop also requires page geometry.
+    static func captionLabel(in line: String) -> String? {
+        guard let marker = marker(in: line), marker.looksLikeHeading else { return nil }
+        return marker.label
+    }
 
     static func regions(on page: PDFPage) throws -> [PDFCaptionRegion] {
         try Task.checkCancellation()
@@ -59,10 +90,8 @@ enum PDFCaptionRegionDetector {
             lines.append(Line(text: text, bounds: bounds, range: range))
         }
 
-        let anchors = lines.compactMap { line -> (Line, NSRange, String)? in
-            let text = line.text as NSString
-            guard let match = marker.firstMatch(in: line.text, range: NSRange(location: 0, length: text.length))
-            else { return nil }
+        let anchors = lines.compactMap { line -> (Line, Marker)? in
+            guard var prefix = marker(in: line.text), prefix.looksLikeHeading else { return nil }
             // A PDF text range can start in the middle of a visual line, including at a prose reference.
             guard
                 !lines.contains(where: {
@@ -72,23 +101,21 @@ enum PDFCaptionRegionDetector {
                 })
             else { return nil }
             // A line-wrapped reference can have exactly the punctuation of a caption.
-            guard
-                !lines.contains(where: { previous in
-                    let gap = previous.bounds.minY - line.bounds.maxY
-                    return gap >= -1 && gap < line.bounds.height * 0.70
-                        && abs(previous.bounds.minX - line.bounds.minX) < line.bounds.height
-                        && abs(previous.bounds.height - line.bounds.height) < 1.3 && previous.isProse
-                        && previous.words.last?.last?.isLowercase == true
-                        && text.substring(with: match.range).hasSuffix(".")
-                })
-            else { return nil }
-            let kind = text.substring(with: match.range(at: 1)).lowercased() == "table" ? "表" : "图"
-            let label = kind + " " + text.substring(with: match.range(at: 2))
-            // A change from bold to regular type can split the marker from the rest of its visual line.
-            // Use the whole heading for column geometry, while retaining the exact marker range for navigation.
-            let suffix = text.substring(from: NSMaxRange(match.range)).trimmingCharacters(in: .whitespacesAndNewlines)
+            if prefix.separator.isEmpty || prefix.separator == "." {
+                guard
+                    !lines.contains(where: { previous in
+                        let gap = previous.bounds.minY - line.bounds.maxY
+                        return gap >= -1 && gap < line.bounds.height * 0.70
+                            && abs(previous.bounds.minX - line.bounds.minX) < line.bounds.height
+                            && abs(previous.bounds.height - line.bounds.height) < 1.3 && previous.isProse
+                            && previous.words.last?.last?.isLowercase == true
+                    })
+                else { return nil }
+            }
+            // PDFKit may split a change of font within one heading. Check the actual title even
+            // when a bare “Table 2” ends at the font switch in a prose reference.
             var caption = line
-            if suffix.isEmpty,
+            if prefix.title.isEmpty,
                 let continuation = lines.filter({
                     abs($0.bounds.midY - line.bounds.midY) < line.bounds.height * 0.35
                         && $0.bounds.minX >= line.bounds.maxX - 1
@@ -98,32 +125,81 @@ enum PDFCaptionRegionDetector {
                 caption = Line(
                     text: line.text + " " + continuation.text, bounds: line.bounds.union(continuation.bounds),
                     range: line.range)
+                guard let joined = marker(in: caption.text), joined.looksLikeHeading else { return nil }
+                // The navigation range must refer only to the original line, even with a joined title.
+                prefix = Marker(
+                    label: prefix.label, range: prefix.range, separator: joined.separator, title: joined.title)
             }
-            return (
-                caption, NSRange(location: line.range.location + match.range.location, length: match.range.length),
-                label
-            )
+            return (caption, prefix)
         }
         guard !anchors.isEmpty else { return [] }
         // Keep work bounded on index pages containing hundreds of figure references.
-        let ink = anchors.count <= 16 ? PDFCaptionInk(page) : nil
-        for stamp in marginStamps { try ink?.excludeIsolatedStamp(stamp) }
-        var results = [PDFCaptionRegion]()
-        for (line, range, label) in anchors {
-            try Task.checkCancellation()
-            var crop: CGRect?
-            if let ink {
-                let lane = column(for: line, lines: lines, box: box)
-                let local = lines.filter { $0.bounds.midX > lane.minX && $0.bounds.midX < lane.maxX }
-                let extent = captionExtent(line, lines: local)
-                let above = try candidate(
-                    above: true, caption: line, extent: extent, lane: lane, lines: local, ink: ink, label: label)
-                let below = try candidate(
-                    above: false, caption: line, extent: extent, lane: lane, lines: local, ink: ink, label: label)
-                if above == nil || below == nil { crop = above ?? below }
+        guard anchors.count <= 16, let ink = PDFCaptionInk(page) else {
+            return anchors.compactMap { line, prefix in
+                guard !prefix.separator.isEmpty else { return nil }
+                let range = NSRange(location: line.range.location + prefix.range.location, length: prefix.range.length)
+                return PDFCaptionRegion(
+                    label: prefix.label, captionBounds: line.bounds, captionRange: range, sourceBounds: nil)
             }
-            results.append(
-                PDFCaptionRegion(label: label, captionBounds: line.bounds, captionRange: range, sourceBounds: crop))
+        }
+        for stamp in marginStamps { try ink.excludeIsolatedStamp(stamp) }
+        let captionOffsets = Set(anchors.map { $0.0.range.location })
+        let headings = try anchors.map { line, prefix in
+            // A bare, centered number can introduce a multi-line title that spans both columns.
+            let detachedTitle =
+                prefix.title.isEmpty
+                ? lines.filter { next in
+                    let gap = line.bounds.minY - next.bounds.maxY
+                    return gap >= -1 && gap < line.bounds.height * 0.75
+                        && abs(next.bounds.midX - line.bounds.midX) < line.bounds.height
+                        && next.bounds.width > line.bounds.width * 1.4 && next.isProse
+                }.max { $0.bounds.midY < $1.bounds.midY } : nil
+            let lane = column(for: detachedTitle ?? line, lines: lines, box: box)
+            let local = lines.filter { $0.bounds.midX > lane.minX && $0.bounds.midX < lane.maxX }
+            let extent = try captionExtent(line, lines: local, captionOffsets: captionOffsets, ink: ink)
+            return (
+                line: line, prefix: prefix, lane: lane, local: local, extent: extent,
+                detachedTitle: detachedTitle != nil
+            )
+        }
+        var choices = [[CGRect]]()
+        for heading in headings {
+            try Task.checkCancellation()
+            let neighbors = headings.filter { $0.line.range != heading.line.range }.map(\.extent)
+            let bounds = try [true, false].compactMap { above in
+                try candidate(
+                    above: above, caption: heading.line, extent: heading.extent, lane: heading.lane,
+                    lines: heading.local, ink: ink, label: heading.prefix.label, otherCaptions: neighbors)
+            }
+            choices.append(bounds)
+        }
+        // Adjacent captions may both see the drawing between them. An unambiguous anchor
+        // rules that drawing out for its neighbor only if both measured the same complete box.
+        for _ in headings {
+            let assigned = choices.compactMap { $0.count == 1 ? $0[0] : nil }
+            var resolved = false
+            for i in choices.indices where choices[i].count == 2 {
+                let free = choices[i].filter { bounds in
+                    !assigned.contains { other in
+                        bounds.insetBy(dx: -2, dy: -2).contains(other) && other.insetBy(dx: -2, dy: -2).contains(bounds)
+                    }
+                }
+                if free.count == 1 {
+                    choices[i] = free
+                    resolved = true
+                }
+            }
+            if !resolved { break }
+        }
+        let results = zip(headings, choices).compactMap { heading, options -> PDFCaptionRegion? in
+            // Without a separator, require an independently measured drawing or a detached title.
+            guard !heading.prefix.separator.isEmpty || !options.isEmpty || heading.detachedTitle else { return nil }
+            let prefix = heading.prefix
+            let range = NSRange(
+                location: heading.line.range.location + prefix.range.location, length: prefix.range.length)
+            return PDFCaptionRegion(
+                label: prefix.label, captionBounds: heading.line.bounds, captionRange: range,
+                sourceBounds: options.count == 1 ? options[0] : nil)
         }
         // Neighbouring captions must never claim the same drawing (stacked floats, subpanels, etc.).
         return results.map { region in
@@ -158,19 +234,32 @@ enum PDFCaptionRegionDetector {
             height: box.height)
     }
 
-    private static func captionExtent(_ caption: Line, lines: [Line]) -> CGRect {
+    private static func captionExtent(_ caption: Line, lines: [Line], captionOffsets: Set<Int>, ink: PDFCaptionInk)
+        throws -> CGRect
+    {
         var extent = caption.bounds
         var previous = caption
         for next in lines.sorted(by: { $0.bounds.midY > $1.bounds.midY }) where next.bounds.midY < caption.bounds.midY {
             let b = next.bounds
             let gap = previous.bounds.minY - b.maxY
             if gap > max(4, caption.bounds.height * 0.55) { break }
-            guard gap >= -1.5, abs(b.height - caption.bounds.height) < max(1.3, caption.bounds.height * 0.14),
-                abs(b.minX - caption.bounds.minX) < 5 || abs(b.midX - caption.bounds.midX) < 5,
-                b.maxX <= caption.bounds.maxX + 12 || previous.range == caption.range && !previous.isProse,
-                marker.firstMatch(in: next.text, range: NSRange(location: 0, length: (next.text as NSString).length))
-                    == nil
+            // A bold or enlarged marker often makes PDFKit's first line box taller than the body
+            // of the caption. Subsequent lines should follow the preceding line's type size and lane.
+            let first = previous.range == caption.range
+            let heightTolerance =
+                first ? max(1.5, previous.bounds.height * 0.28) : max(1.3, previous.bounds.height * 0.16)
+            guard gap >= -1.5, abs(b.height - previous.bounds.height) < heightTolerance,
+                abs(b.minX - extent.minX) < 5 || abs(b.midX - extent.midX) < 5,
+                b.maxX <= extent.maxX + 12 || first && !previous.isProse,
+                !captionOffsets.contains(next.range.location)
             else { continue }
+            if gap > 0.5 {
+                // An underlined word in a caption can paint the entire width of one PDFKit
+                // fragment. A table rule should span a substantial portion of the whole heading.
+                let divider = CGRect(x: extent.minX, y: b.maxY, width: extent.width, height: gap)
+                let ruleWidth = max(30, extent.width * 0.32, b.width * 0.55)
+                if try ink.strips(in: divider).contains(where: { $0.longestStroke > ruleWidth }) { break }
+            }
             extent = extent.union(b)
             previous = next
         }
@@ -178,15 +267,21 @@ enum PDFCaptionRegionDetector {
     }
 
     private static func candidate(
-        above: Bool, caption: Line, extent: CGRect, lane: CGRect, lines: [Line], ink: PDFCaptionInk, label: String
+        above: Bool, caption: Line, extent: CGRect, lane: CGRect, lines: [Line], ink: PDFCaptionInk, label: String,
+        otherCaptions: [CGRect]
     ) throws -> CGRect? {
         let anchor = above ? extent.maxY : extent.minY
         let box = ink.box
         let inDirection = lines.filter { above ? $0.bounds.minY >= anchor : $0.bounds.maxY <= anchor }
+        // A tall marker or superscript can enlarge the first text box even if the adjacent
+        // body is the same type size as the caption's regular continuation lines.
+        let captionHeight =
+            lines.filter { extent.contains($0.bounds) && $0.bounds.width > extent.width * 0.4 }
+            .map(\.bounds.height).min() ?? caption.bounds.height
         let paragraphLines = inDirection.filter {
             $0.isProse && $0.words.count >= 6
                 && $0.words.filter { $0.first?.isLowercase == true }.count >= 3
-                && $0.bounds.width >= lane.width * 0.40 && $0.bounds.height >= caption.bounds.height * 0.86
+                && $0.bounds.width >= lane.width * 0.40 && $0.bounds.height >= captionHeight * 0.86
         }
         let largeLines = paragraphLines.filter { line in
             line.bounds.width >= lane.width * 0.55
@@ -197,6 +292,10 @@ enum PDFCaptionRegionDetector {
                 }
         }
         var far = above ? box.maxY : box.minY
+        for other in otherCaptions where other.midX > lane.minX && other.midX < lane.maxX {
+            if above, other.minY >= anchor { far = min(far, other.minY - 1) }
+            if !above, other.maxY <= anchor { far = max(far, other.maxY + 1) }
+        }
         for line in inDirection {
             let b = line.bounds
             let header =
@@ -206,10 +305,13 @@ enum PDFCaptionRegionDetector {
                 abs($0.bounds.minX - b.minX) < 4 && abs($0.bounds.height - b.height) < 1.2
                     && abs($0.bounds.midY - b.midY) < b.height * 2
             }
-            if header || proseEdge
-                || marker.firstMatch(in: line.text, range: NSRange(location: 0, length: (line.text as NSString).length))
-                    != nil
-            {
+            let startsSection =
+                line.text.prefixMatch(of: /^\s*\d+(?:\.\d+)+\s+\p{Lu}/) != nil
+                && largeLines.contains { next in
+                    let gap = b.minY - next.bounds.maxY
+                    return gap >= -1 && gap < b.height * 1.5 && abs(next.bounds.minX - b.minX) < 4
+                }
+            if header || proseEdge || startsSection {
                 if above { far = min(far, b.minY - (header ? 4 : 0.6)) } else { far = max(far, b.maxY + 1) }
             }
         }

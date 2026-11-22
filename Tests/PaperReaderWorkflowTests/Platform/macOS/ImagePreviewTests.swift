@@ -127,6 +127,73 @@
             ) as? Bool == true)
     }
 
+    @Test @MainActor func pdfImagePreviewZoomsAndPansWithoutLeavingReadingPosition() async throws {
+        let web = imagePreviewFixture()
+        try await previewWait(web, "return document.querySelector('#figure')?.naturalWidth === 200")
+        _ = try await previewJS(
+            web,
+            """
+            window.matchMedia=()=>({matches:true});
+            window.openPDF=()=>{
+              const image=document.querySelector('#figure'), opener=document.querySelector('#before');
+              window.paperImagePreview.open(image,{title:'表 8',details:true,opener,
+                actionLabel:'查看原页',onAction:source=>{window.openedSource=source;window.actions=(window.actions||0)+1;}});
+            };
+            window.y=scrollY;openPDF();
+            """)
+        let opened =
+            try await previewJS(
+                web,
+                """
+                const dialog=document.querySelector('#reader-image-preview'), buttons=[...dialog.querySelectorAll('button')];
+                buttons[0].click();
+                const pane=dialog.querySelector('.preview-viewport');
+                const wheel=new WheelEvent('wheel',{bubbles:true,cancelable:true,deltaX:42});
+                pane.dispatchEvent(wheel);
+                const touch=new Event('touchmove',{bubbles:true,cancelable:true});
+                pane.dispatchEvent(touch);
+                for(const key of ['ArrowRight','PageDown']){
+                  document.dispatchEvent(new KeyboardEvent('keydown',{key,bubbles:true,cancelable:true}));
+                }
+                return dialog.getAttribute('aria-label')==='表 8'
+                  && buttons.map(b=>b.textContent).join('|')==='适合窗口|查看原页|关闭'
+                  && buttons[0].getAttribute('aria-pressed')==='true' && !wheel.defaultPrevented && !touch.defaultPrevented
+                  && pane.scrollWidth>pane.clientWidth && pane.scrollHeight>pane.clientHeight
+                  && pane.scrollLeft>0 && pane.scrollTop>0 && scrollY===window.y;
+                """) as? Bool
+        #expect(opened == true)
+        web.frame = CGRect(x: 0, y: 0, width: 420, height: 620)
+        #expect(
+            try await previewJS(
+                web,
+                """
+                window.dispatchEvent(new Event('resize'));
+                const pane=document.querySelector('.preview-viewport');
+                return !pane.hidden && pane.scrollWidth>pane.clientWidth && scrollY===window.y;
+                """) as? Bool == true)
+        let reset =
+            try await previewJS(
+                web,
+                """
+                const dialog=document.querySelector('#reader-image-preview'), buttons=dialog.querySelectorAll('button');
+                buttons[0].click();buttons[0].focus();
+                document.dispatchEvent(new KeyboardEvent('keydown',{key:'Tab',shiftKey:true,bubbles:true,cancelable:true}));
+                return dialog.querySelector('.preview-viewport').hidden && !dialog.hasAttribute('data-zoomed')
+                  && dialog.querySelector('.preview-image').getBoundingClientRect().width < innerWidth
+                  && document.activeElement===buttons[buttons.length-1];
+                """) as? Bool
+        #expect(reset == true)
+        _ = try await previewJS(web, "document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}))")
+        try await previewWait(
+            web, "return !document.querySelector('#reader-image-preview') && document.activeElement.id==='before'")
+        #expect(try await previewJS(web, "return !window.openedSource && scrollY===window.y") as? Bool == true)
+        _ = try await previewJS(web, "openPDF();document.querySelector('.preview-tools button:nth-child(2)').click()")
+        try await previewWait(
+            web,
+            "return !document.querySelector('#reader-image-preview') && window.openedSource===document.querySelector('#figure') && window.actions===1"
+        )
+    }
+
     @MainActor private func imagePreviewFixture() -> WKWebView {
         let config = WKWebViewConfiguration()
         config.websiteDataStore = .nonPersistent()

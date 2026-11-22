@@ -111,6 +111,24 @@ public struct PDFReadingTable: Equatable, Sendable {
     /// Original PDF text rectangles for each physical cell, grouped header rows followed by body rows.
     public let sourceCellBounds: [[CGRect]]
 
+    /// A spreadsheet row keeps every leaf column, including the empty positions in merged headers.
+    public var tabSeparatedText: String {
+        let titles =
+            headerRows.isEmpty
+            ? [header]
+            : headerRows.map { row in
+                var values = Array(repeating: "", count: header.count)
+                for cell in row where values.indices.contains(cell.column) { values[cell.column] = cell.text }
+                return values
+            }
+        return (titles + rows).map { cells in
+            cells.map { value in
+                guard value.contains(where: { $0 == "\t" || $0.isNewline || $0 == "\"" }) else { return value }
+                return "\"" + value.replacingOccurrences(of: "\"", with: "\"\"") + "\""
+            }.joined(separator: "\t")
+        }.joined(separator: "\n")
+    }
+
     public init(
         header: [String], rows: [[String]], styledCells: [StyledCell] = [], headerRows: [[HeaderCell]] = [],
         sourceCellBounds: [[CGRect]] = []

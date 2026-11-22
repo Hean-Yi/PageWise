@@ -80,7 +80,7 @@ Swift Package 自动递归发现每个 target 目录下的 Swift 文件。当前
 | `Infrastructure/PDF/Import/PDFImporter` | 校验并保存原始 PDF，计算哈希和轻量元信息 |
 | `Infrastructure/PDF/{Display,Navigation}` | 原版与历史固定页的展示、目录、定位，按页提取带原文范围和行框的句子 |
 | `Infrastructure/PDF/Navigation/PDFIllustratedPage` | 按原页题注、栏界及绘制内容定位图表，组合本页正文、表格、原排片段和整页预览，保留原页矩形 |
-| `Infrastructure/PDF/Navigation/{PDFTableExtractor,PDFSourceRemainder}` | 核对单元格文字、格式与墨迹，合并未配对且未被图表覆盖的原排区域 |
+| `Infrastructure/PDF/Navigation/{PDFTableExtractor,PDFTableBitmap,PDFSourceRemainder}` | 核对单元格文字、格式、闭合网格与组标题分隔线，合并未配对且未被图表覆盖的原排区域 |
 | `Infrastructure/PDF/Display/PDFRegionRenderer` | 有尺寸上限的原页区域渲染，输出本机阅读所用的 PNG |
 | `Infrastructure/Models/PDFSentenceTranslator` | 批量逐句翻译并校验来源编号、数字、单位及引用 |
 | `Infrastructure/Persistence/PDFSentenceTranslationStore` | 独立于书库快照的逐页原子写入与续译，按原文件和句子签名隔离缓存版本 |

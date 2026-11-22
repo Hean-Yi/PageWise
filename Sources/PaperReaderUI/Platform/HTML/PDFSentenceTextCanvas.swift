@@ -22,6 +22,15 @@ import WebKit
     let onHover: (String?) -> Void
     var illustrations: [PDFReadingIllustration] = []
     var onRevealIllustration: ((PDFReadingIllustration) -> Void)?
+    var copyTableText: (String) -> Bool = { text in
+        #if os(macOS)
+            NSPasteboard.general.clearContents()
+            return NSPasteboard.general.setString(text, forType: .string)
+        #else
+            UIPasteboard.general.string = text
+            return true
+        #endif
+    }
 
     var continuous: Continuous?
 
@@ -62,7 +71,8 @@ import WebKit
             controller.add(self, contentWorld: .defaultClient, name: "sentence")
             controller.addUserScript(
                 WKUserScript(
-                    source: PDFSentenceTextCanvas.script, injectionTime: .atDocumentEnd,
+                    source: HTMLImagePreviewScript.source + "\n" + PDFSentenceTextCanvas.script,
+                    injectionTime: .atDocumentEnd,
                     forMainFrameOnly: true, in: .defaultClient))
             let view = WKWebView(frame: .zero, configuration: config)
             view.navigationDelegate = self
@@ -243,14 +253,23 @@ import WebKit
             } else if latest.continuous != nil {
                 return
             }
-            if event["action"] as? String == "illustration" {
+            let action = event["action"] as? String
+            if action == "illustration" || action == "copyTable" {
                 if latest.layout == .paragraph, let id = event["id"] as? String,
                     let item = latest.continuous?.pages.values.lazy.compactMap({
                         $0.illustrations.first(where: { $0.id == id })
                     }).first
                         ?? latest.illustrations.first(where: { $0.id == id })
                 {
-                    latest.onRevealIllustration?(item)
+                    if action == "illustration" {
+                        latest.onRevealIllustration?(item)
+                    } else if let table = item.table {
+                        let copied = latest.copyTableText(table.tabSeparatedText)
+                        message.webView?.callAsyncJavaScript(
+                            "window.sentenceReader.tableCopied(id, copied)",
+                            arguments: ["id": id, "copied": copied], in: nil, in: .defaultClient, completionHandler: nil
+                        )
+                    }
                 }
                 return
             }
@@ -319,11 +338,22 @@ extension PDFSentenceTextCanvas {
         .paragraph.continuous main{padding-top:0}
         .continuous main>.source-page{display:flow-root;margin:0;overflow-anchor:none}
         .page-body>*+*{margin-top:1.7em}
+        .untranslated .page-body section>p[lang="zh-Hans"]{display:none}
         .page-marker{display:flex;align-items:center;gap:.8em;margin:2.4em 0 1.4em;color:var(--en);font:500 .75em/1.5 -apple-system,sans-serif}
         .page-marker:after{content:"";height:1px;background:currentColor;opacity:.2;flex:1}
         .page-note,.page-loading{color:var(--en);font:.82em/1.65 -apple-system,sans-serif}
         .page-body>.page-note{margin:0 0 1.2em}
-        .reading-table{max-width:100%;overflow-x:auto}
+        .reading-table{width:max-content;min-width:100%;max-width:max(100%,calc(100vw - 2.5rem));
+          margin-inline-start:50%;transform:translateX(-50%)}
+        .table-scroll{max-width:100%;overflow-x:auto;overscroll-behavior-x:contain}
+        .table-scroll:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+        .table-tools{display:flex;align-items:center;gap:.4em;padding-bottom:.3rem;min-height:2.2rem}
+        .reading-table .table-tools button{min-height:28px;padding:.15rem .35rem;border-radius:.3rem;text-decoration:none;
+          color:var(--en);font:500 .8rem/1.3 -apple-system,sans-serif}
+        .table-tools .table-title{margin-inline-end:auto}.table-tools button:hover{background:var(--active)}
+        .table-tools .table-step{min-width:28px;font-size:1.1rem}
+        .table-tools button:disabled{opacity:.36;cursor:default}.table-tools button[hidden]{display:none}
+        @media(pointer:coarse){.table-tools button{min-width:44px;min-height:44px!important}}
         .reading-table table{width:100%;border-collapse:collapse;text-align:start;font-size:.93em;line-height:1.45;font-variant-numeric:tabular-nums}
         .reading-table :is(caption,figcaption){text-align:start;padding-bottom:.5rem}
         .reading-table :is(caption,figcaption) button{color:var(--en);font-size:.9em;text-decoration:none}
@@ -472,6 +502,13 @@ extension PDFSentenceTextCanvas {
             if (source) {post({action:'original',page:Number(source.dataset.original)});return;}
             const figure=e.target.closest('[data-illustration]');
             if (figure && (e.detail===0 || getSelection().isCollapsed)) {
+              const image=figure.dataset.preview && figure.querySelector('img');
+              if (image?.naturalWidth) {
+                const id=figure.dataset.illustration;
+                window.paperImagePreview.open(image,{title:figure.dataset.preview,details:true,opener:figure,
+                  actionLabel:'查看原页',onAction:()=>send('illustration',id)});
+                return;
+              }
               send('illustration',figure.dataset.illustration); return;
             }
             const el=pairAt(e.target);
@@ -539,9 +576,7 @@ extension PDFSentenceTextCanvas {
             if (item.table) {
               try {
                 node.className='reading-table';
-                const table=makeTable(item.table,item.label,button);
-                if (item.table.cellBounds && item.png) makeSourceTable(node,table,item);
-                else node.append(table);
+                showReadingTable(node,item,button);
                 return {before:item.before,node};
               } catch {
                 // A failure to place selectable cells must not remove the source crop or later figures.
@@ -552,10 +587,15 @@ extension PDFSentenceTextCanvas {
               const image=document.createElement('img');
               image.alt=item.label; image.draggable=false;
               if (item.width>0 && item.height>0) {image.width=item.width;image.height=item.height;}
-              image.addEventListener('error',()=>{button.textContent=action;},{once:true});
+              const previewLabel='放大'+item.label;
+              button.dataset.preview=item.label;button.setAttribute('aria-label',previewLabel);
+              image.addEventListener('error',()=>{
+                delete button.dataset.preview;button.textContent=action;button.setAttribute('aria-label',action);
+                button.title=action;
+              },{once:true});
               if (item.sourceWidth) image.style.width=(item.sourceWidth/10)+'em';
               image.src='data:image/png;base64,'+item.png;
-              button.append(image); button.title=action;
+              button.append(image); button.title=previewLabel;
             } else {
               button.textContent=action;
             }
@@ -622,7 +662,7 @@ extension PDFSentenceTextCanvas {
           }
           \(continuousScript)
           window.sentenceReader={
-            pageWindow,
+            pageWindow,tableCopied,
             render(rows,layout,items) {
               const changingStructure=paragraphMode!==(layout==='paragraph');
               if (flow) {flow=null;figures=[];main.replaceChildren();}
@@ -650,6 +690,7 @@ extension PDFSentenceTextCanvas {
             },
             show(fontSize,id,pinned,scroll) {
               document.documentElement.style.setProperty('--zh-size',fontSize+'px');
+              updateTableWidths();
               for (const el of targets(active)) el.classList.remove('active');
               for (const el of targets(focused)) el.setAttribute('aria-pressed','false');
               active=id; focused=pinned;

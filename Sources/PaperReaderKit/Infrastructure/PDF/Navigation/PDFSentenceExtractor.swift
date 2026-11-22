@@ -101,8 +101,8 @@ public enum PDFSentenceExtractor {
         // page-wide columns, so the sentence beside it can continue onto a full-width line below.
         let possibleFloat = runs.contains { run in
             let text = source.substring(with: run.range)
-            guard text.localizedCaseInsensitiveCompare("Table") == .orderedSame || text.lowercased().hasPrefix("table ")
-            else { return false }
+            let leading = text.prefix { $0.isLetter }.lowercased()
+            guard leading == "table" || leading == "tab" else { return false }
             let b = run.bounds
             return runs.contains {
                 let peer = $0.bounds
@@ -607,16 +607,11 @@ public enum PDFSentenceExtractor {
             let afterTable =
                 previous.bounds.minX - line.bounds.minX > line.bounds.height * 2
                 && previous.bounds.height < line.bounds.height * 0.85
-                && captionLabel(text) != nil
+                && PDFCaptionRegionDetector.captionLabel(in: text) != nil
             if afterSentence || afterTable, let anchor = line.runs.first?.range.location { current = anchor }
             anchors.append(current)
         }
         return anchors
-    }
-
-    private static func captionLabel(_ text: String) -> String? {
-        guard let match = text.prefixMatch(of: /^(Table|Figure|Fig\.?)\s+([0-9]+[a-z]?)\s*[.:|]/) else { return nil }
-        return "\(match.1 == "Table" ? "表" : "图") \(match.2)"
     }
 
     private static func split(
@@ -704,7 +699,7 @@ public enum PDFSentenceExtractor {
                 let intersection = NSIntersectionRange(span.normalized, sentence)
                 guard intersection.length > 0 else { continue }
                 if let readingAnchor, readingAnchor != readingAnchors[span.line] {
-                    let label = captionLabel(content(lines[span.line], source: source))
+                    let label = PDFCaptionRegionDetector.captionLabel(in: content(lines[span.line], source: source))
                     unpairedRegions.insert(label.map { "\($0) 附近" } ?? "段落交界处")
                     return nil
                 }

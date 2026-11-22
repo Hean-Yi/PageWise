@@ -51,7 +51,9 @@
         let startsAtCurrentPage = try await evaluate(
             """
             return Math.abs(document.querySelector('[data-page="1"]').getBoundingClientRect().top)<=2
-              && document.querySelectorAll('.en').length===20;
+              && document.querySelectorAll('.en').length===20
+              && document.querySelector('[data-page="1"] .page-marker').textContent.includes('暂无译文')
+              && !document.querySelector('[data-page="1"] .pending').getClientRects().length;
             """)
         #expect(startsAtCurrentPage)
         // Cross the source-page boundary with a scroll, without sending a native jump command.

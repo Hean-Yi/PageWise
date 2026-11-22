@@ -58,7 +58,7 @@
             first.parentElement.click();
             getSelection().setBaseAndExtent(first,0,last,last.length);
             window.tableEndpoints = [first,last];
-            table.caption.querySelector('button').dispatchEvent(new MouseEvent('click',{bubbles:true,detail:1}));
+            document.querySelector('.table-title').dispatchEvent(new MouseEvent('click',{bubbles:true,detail:1}));
             return !getSelection().isCollapsed;
             """)
         #expect(selected)
@@ -85,7 +85,7 @@
         // The caption is still an explicit source link after the reader clears their selection.
         #expect(revealed.isEmpty)
         _ = try await evaluate(
-            "getSelection().removeAllRanges(); document.querySelector('caption button').click(); return true;")
+            "getSelection().removeAllRanges(); document.querySelector('.table-title').click(); return true;")
         for _ in 0..<60 where revealed.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
         #expect(revealed == [illustration])
         #expect(openedPages.isEmpty)
@@ -186,6 +186,50 @@
         #expect(
             values == "Standard\t0.879\t0.713\t0.553\t0.862\t0.918\t0.326\nMA\t1.000\t0.981\t0.630\t0.950\t1.000\t0.687"
         )
+    }
+
+    @Test @MainActor func overflowingTableCanBeNavigatedAndCopiedWithoutLosingReadingPosition() async throws {
+        let titles = (1...8).map { "Measurement-\($0)" }
+        let values = ["1.00", "", "0.03", "5", "0.00", "A \"score\"", "", ""]
+        let clipboardRow = "1.00\t\t0.03\t5\t0.00\t\"A \"\"score\"\"\"\t\t"
+        let table = PDFReadingTable(header: titles, rows: [values])
+        let figure = PDFReadingIllustration(
+            id: "wide", label: "表 B.2", pageIndex: 0, sourceBounds: .zero,
+            insertBeforeSentenceID: nil, imagePNG: nil, table: table)
+        let page = PDFParagraphPage(index: 0, sentences: [], translations: [:], illustrations: [figure], notice: nil)
+        var copied: String?
+        var canvas = tableCanvas(paperID: UUID(), page: page)
+        canvas.copyTableText = {
+            copied = $0
+            return true
+        }
+        let coordinator = canvas.makeCoordinator()
+        let web = coordinator.makeView()
+        defer { coordinator.stop(web) }
+        web.frame = CGRect(x: 0, y: 0, width: 320, height: 500)
+        try await waitForReadingTable(in: web)
+        let narrow = try await web.callAsyncJavaScript(
+            """
+            const scroller=document.querySelector('.table-scroll'), arrows=document.querySelectorAll('.table-step');
+            const range=document.createRange();range.selectNodeContents(document.querySelector('tbody'));
+            getSelection().removeAllRanges();getSelection().addRange(range);
+            const clip=new DataTransfer();
+            document.dispatchEvent(new ClipboardEvent('copy',{clipboardData:clip,cancelable:true}));
+            const result=[!arrows[1].hidden && !arrows[1].disabled && arrows[0].disabled,
+              scroller.scrollWidth>scroller.clientWidth && document.documentElement.scrollWidth<=innerWidth,
+              clip.getData('text/plain')===expected];
+            getSelection().removeAllRanges();scroller.scrollLeft=scroller.scrollWidth;
+            scroller.dispatchEvent(new Event('scroll'));result.push(arrows[1].disabled && !arrows[0].disabled);
+            document.querySelector('[data-copy-table]').click();
+            return result;
+            """, arguments: ["expected": clipboardRow], in: nil, contentWorld: .defaultClient)
+        #expect(narrow as? [Bool] == [true, true, true, true])
+        for _ in 0..<60 where copied == nil { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(copied == titles.joined(separator: "\t") + "\n" + clipboardRow)
+        let label = try await web.callAsyncJavaScript(
+            "return document.querySelector('[data-copy-table]').textContent",
+            arguments: [:], in: nil, contentWorld: .defaultClient)
+        #expect(label as? String == "已复制")
     }
 
     @MainActor private func tableImage(in bounds: CGRect, contents: [[String]], cellRects: [[CGRect]]) throws -> Data {
