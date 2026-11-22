@@ -14,7 +14,8 @@
         var selection: [String] = []
         func canvas(translations: [String: String], stacked: Bool) -> PDFSentenceTextCanvas {
             PDFSentenceTextCanvas(
-                sentences: sentences, translations: translations, stacked: stacked, fontSize: stacked ? 19 : 16,
+                sentences: sentences, translations: translations, layout: stacked ? .stacked : .split,
+                fontSize: stacked ? 19 : 16,
                 activeID: "b", focusedID: "b",
                 focusRevision: 1, followsScroll: true, sourceScrollID: nil, sourceScrollRevision: 0,
                 pdfSelectedIDs: ["c"],
@@ -85,6 +86,96 @@
         for _ in 0..<60 where chosen == nil { try await Task.sleep(for: .milliseconds(10)) }
         #expect(chosen == "c")
     }
+    @Test @MainActor func pdfParagraphLayoutKeepsWholeParagraphsAndLinksOnlyMatchingSentences() async throws {
+        let sentences = ["Alpha < One.", "Bravo two.", "Charlie three.", "Delta four.", "Echo five."].enumerated().map {
+            PDFSourceSentence(
+                id: "s\($0.offset)", text: $0.element, pageIndex: 0, rects: [], paragraphID: "extraction",
+                readingParagraphID: $0.offset < 4 ? "p1" : "p2"
+            )
+        }
+        var focus: String?
+        var selected: [String] = []
+        func canvas(_ translations: [String: String], layout: PDFSentenceTextCanvas.Layout = .paragraph)
+            -> PDFSentenceTextCanvas
+        {
+            PDFSentenceTextCanvas(
+                sentences: sentences, translations: translations, layout: layout, fontSize: 19, activeID: "s1",
+                focusedID: "s1", focusRevision: 1, followsScroll: true, sourceScrollID: nil, sourceScrollRevision: 0,
+                pdfSelectedIDs: [], onScroll: { _ in }, onSelection: { selected = $0 }, onFocus: { focus = $0 },
+                onHover: { _ in })
+        }
+        let partial = ["s1": "第二句。", "s4": "<img> 是原文。"]
+        let view = canvas(partial)
+        let coordinator = view.makeCoordinator()
+        let web = coordinator.makeView()
+        defer { coordinator.stop(web) }
+        web.frame = CGRect(x: 0, y: 0, width: 560, height: 550)
+        func evaluate(_ script: String) async throws -> Bool {
+            try await web.callAsyncJavaScript(script, arguments: [:], in: nil, contentWorld: .defaultClient) as? Bool
+                == true
+        }
+        for _ in 0..<160 {
+            if (try? await evaluate("return document.querySelectorAll('section').length === 2")) == true { break }
+            try await Task.sleep(for: .milliseconds(25))
+        }
+        let paragraphs = try await evaluate(
+            """
+            const [first, second]=document.querySelectorAll('main section');
+            const [en, zh]=first.children;
+            return en.lang==='en' && zh.lang==='zh-Hans'
+              && en.textContent==='Alpha < One. Bravo two. Charlie three. Delta four.'
+              && zh.textContent==='待译第二句。待译' && zh.querySelectorAll('.pending').length===2
+              && second.firstChild.textContent==='Echo five.' && second.lastChild.textContent==='<img> 是原文。'
+              && document.images.length===0 && document.querySelectorAll('.active').length===2
+              && Array.from(document.querySelectorAll('.active')).every(node=>node.dataset.sentence==='s1');
+            """)
+        #expect(paragraphs)
+        for side in ["en", "zh"] {
+            focus = nil
+            _ = try await evaluate("document.querySelector('.\(side)[data-sentence=s4]').click();return true")
+            for _ in 0..<60 where focus == nil { try await Task.sleep(for: .milliseconds(10)) }
+            #expect(focus == "s4")
+        }
+        _ = try await evaluate(
+            """
+            const node=document.querySelector('.zh[data-sentence=s1]').firstChild;
+            getSelection().setBaseAndExtent(node,1,node,3); return true;
+            """)
+        for _ in 0..<60 where selected != ["s1"] { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(selected == ["s1"])
+        let completed = partial.merging(["s0": "第一句。", "s2": "第三句。", "s3": "第四句。"]) { _, new in new }
+        coordinator.update(canvas(completed), view: web)
+        let preserved = try await evaluate(
+            """
+            const p=document.querySelector('p[lang="zh-Hans"]');
+            return p.textContent==='第一句。第二句。第三句。第四句。' && !document.querySelector('.pending')
+              && getSelection().toString()==='二句' && document.querySelector('.counterpart')?.dataset.sentence==='s1';
+            """)
+        #expect(preserved)
+        // A range spanning both languages copies the selected English characters in paragraph order.
+        let copiesEnglish = try await evaluate(
+            """
+            const en=document.querySelectorAll('.en');
+            getSelection().setBaseAndExtent(en[3].firstChild,6,en[4].firstChild,4);
+            const clipboard=new DataTransfer();
+            document.dispatchEvent(new ClipboardEvent('copy',{clipboardData:clipboard,cancelable:true}));
+            return clipboard.getData('text/plain')==='four.\\n\\nEcho';
+            """)
+        #expect(copiesEnglish)
+        for _ in 0..<60 where selected != ["s3", "s4"] { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(selected == ["s3", "s4"])
+        coordinator.update(canvas(completed, layout: .stacked), view: web)
+        let restored = try await evaluate(
+            """
+            const el=document.querySelector('#s1');
+            return el.classList.contains('active') && el.getAttribute('aria-pressed')==='true'
+              && el.textContent==='Bravo two.第二句。'
+              && getSelection().anchorNode===document.querySelector('#s3 .en').firstChild
+              && getSelection().focusNode===document.querySelector('#s4 .en').firstChild;
+            """)
+        #expect(restored)
+    }
+
     @Test @MainActor func pdfSentenceScrollFollowsUserInputWithoutEchoingProgrammaticJumps() async throws {
         let sentences = (0..<24).map { index in
             PDFSourceSentence(
@@ -94,7 +185,7 @@
         var movements: [String] = []
         func canvas(sourceID: String?, revision: Int) -> PDFSentenceTextCanvas {
             PDFSentenceTextCanvas(
-                sentences: sentences, translations: translations, stacked: false, fontSize: 16, activeID: nil,
+                sentences: sentences, translations: translations, layout: .split, fontSize: 16, activeID: nil,
                 focusedID: nil,
                 focusRevision: 0, followsScroll: true, sourceScrollID: sourceID, sourceScrollRevision: revision,
                 pdfSelectedIDs: [], onScroll: { movements.append($0) }, onSelection: { _ in },

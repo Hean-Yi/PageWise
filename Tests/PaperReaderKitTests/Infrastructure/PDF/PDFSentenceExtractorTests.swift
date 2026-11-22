@@ -112,18 +112,74 @@ import Testing
         ])
 }
 
+@Test func pdfParagraphSpacingSeparatesReadingWithoutChangingCacheAnchors() throws {
+    let url = try sentenceFixture([
+        (50, 680, "Our first sample spans"), (50, 668, "two lines. Another sentence follows."),
+        (50, 651, "The next sample starts on its own."), (50, 639, "A second observation follows."),
+        (50, 627, "The final value is stable."),
+    ])
+    defer { try? FileManager.default.removeItem(at: url) }
+    let pairs = try PDFSentenceExtractor.extract(url: url, pageIndex: 0)
+    try #require(pairs.count == 5)
+    #expect(pairs[0].rects.count == 2)
+    #expect(Set(pairs.map(\.paragraphID)).count == 1)
+    #expect(pairs[0].readingParagraphID == pairs[1].readingParagraphID)
+    #expect(pairs[1].readingParagraphID != pairs[2].readingParagraphID)
+    #expect(Set(pairs[2...].map(\.readingParagraphID)).count == 1)
+    let offset = try #require(pairs[2].characterRanges.first?.location)
+    #expect(pairs[2].id == "p0-s\(offset)")
+    #expect(pairs[2].readingParagraphID == "p0-b\(offset)")
+}
+
+@Test func pdfParagraphSkipsSentenceCrossingFromTableCellIntoCaption() throws {
+    let url = try sentenceFixture(
+        [(185, 664, "Granite and mica]"), (90, 652, "Table 2. Timing summary."), (50, 608, "The trial ended.")],
+        fontSizesByBaseline: [664: 8])
+    defer { try? FileManager.default.removeItem(at: url) }
+    let result = try PDFSentenceExtractor.extractPage(url: url, pageIndex: 0)
+    #expect(result.sentences.map(\.text) == ["Timing summary.", "The trial ended."])
+    #expect(result.notice?.contains("表 2 附近") == true)
+}
+
+@Test func pdfParagraphJoinsVerifiedHangingHeadingAndFlagsAnIncompleteOne() throws {
+    let url = try sentenceFixture(
+        [
+            (50, 670, "3. Measurements in"), (62, 656, "Repeated Trials"),
+            (50, 632, "3.1. Sampling Procedure"), (50, 606, "We record the output."),
+            (50, 558, "4. Changes in"), (62, 544, "Results remain consistent."),
+        ], fontSizesByBaseline: [670: 12, 656: 12, 558: 12, 544: 12])
+    defer { try? FileManager.default.removeItem(at: url) }
+    let result = try PDFSentenceExtractor.extractPage(url: url, pageIndex: 0)
+    #expect(
+        result.sentences.map(\.text) == [
+            "3. Measurements in Repeated Trials", "3.1. Sampling Procedure", "We record the output.",
+            "Results remain consistent.",
+        ])
+    #expect(result.notice?.contains("第 4 节标题处") == true)
+    let heading = try #require(result.sentences.first)
+    #expect(heading.rects.count == 2)
+    let document = try #require(PDFDocument(url: url))
+    defer { withExtendedLifetime(document) {} }
+    let page = try #require(document.page(at: 0))
+    #expect(
+        heading.characterRanges.compactMap { page.selection(for: $0)?.string } == [
+            "3. Measurements in", "Repeated Trials",
+        ])
+}
+
 private func sentenceFixture(
-    _ lines: [(CGFloat, CGFloat, String)], supporting: [(CGFloat, CGFloat, String)]? = nil
+    _ lines: [(CGFloat, CGFloat, String)], supporting: [(CGFloat, CGFloat, String)]? = nil,
+    fontSizesByBaseline: [CGFloat: CGFloat] = [:]
 ) throws -> URL {
     let url = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID()).pdf")
     let consumer = try #require(CGDataConsumer(url: url as CFURL))
     var box = CGRect(x: 0, y: 0, width: 612, height: 792)
     let context = try #require(CGContext(consumer: consumer, mediaBox: &box, nil))
-    let font = CTFontCreateWithName("Helvetica" as CFString, 10, nil)
     for pageLines in [lines, supporting].compactMap({ $0 }) {
         context.beginPDFPage(nil)
         context.stroke(CGRect(x: 45, y: 85, width: 110, height: 50))
         for (x, y, line) in pageLines {
+            let font = CTFontCreateWithName("Helvetica" as CFString, fontSizesByBaseline[y] ?? 10, nil)
             let text = NSAttributedString(string: line, attributes: [.init(kCTFontAttributeName as String): font])
             context.textMatrix = .identity
             context.textPosition = CGPoint(x: x, y: y)

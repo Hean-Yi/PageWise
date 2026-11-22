@@ -82,6 +82,7 @@ Swift Package 自动递归发现每个 target 目录下的 Swift 文件。当前
 | `Infrastructure/Models/PDFSentenceTranslator` | 批量逐句翻译并校验来源编号、数字、单位及引用 |
 | `Infrastructure/Persistence/PDFSentenceTranslationStore` | 独立于书库快照的逐页原子写入与续译，按原文件和句子签名隔离缓存版本 |
 | `UI/Application/Reading/PDFBilingualSession` | 原页、译句、选区和暂停/恢复的协调 |
+| `UI/Platform/HTML/PDFSentenceTextCanvas` | 用同一页的句子和缓存译文呈现并排译栏、逐句上下或段落重排，处理按语言选文与句子定位 |
 | `Infrastructure/Discovery/ArxivClient` | 可信候选与同版本 TeX/PDF 下载 |
 | `Infrastructure/TeX` | 有界解包、静态包含/宏展开、语义标记、源码保存和 TeX/HTML 路由 |
 | `Infrastructure/HTML` | HTML 净化、图片本地化、公式处理与最终阅读文件追加 |
@@ -91,7 +92,7 @@ Swift Package 自动递归发现每个 target 目录下的 Swift 文件。当前
 | `UI/Application/Reading/AIReflowActions` | 保存来源、计划与完整块，协调暂停、恢复和新版本 |
 | `ReaderSmoke/TeXPreviewSmoke` | 原创离线 TeX/HTML、原版完整性与重启验证 |
 
-表内 UI 指 `PaperReaderUI`，其余适配路径位于 `PaperReaderKit`。PDF 目录没有重排生成器。独立 TeX 图件可以使用 PDF 图片格式，由图片解码器处理；这不读取或转换论文原 PDF 正文。
+表内 UI 指 `PaperReaderUI`，其余适配路径位于 `PaperReaderKit`。本地 PDF 的段落重排是按页呈现的阅读视图，使用原文件的字符范围和行框定位。译句缓存的签名使用原段标识，因此调整阅读分段后仍可复用对应的完整译句。独立 TeX 图件可以使用 PDF 图片格式，由图片解码器处理。
 
 `OnlinePaperSource` 保存来源版本、源码路径和哈希；`TeXSourceAnchor` 保存主文件与展开块序号。源码失败后只尝试同版本 HTML，失败交回原版阅读。`ReflowJob` 保存可恢复来源、计划与完成记录；仅 preparing/tex/html 路线可续跑，旧记录继续解码但不进入转换。
 

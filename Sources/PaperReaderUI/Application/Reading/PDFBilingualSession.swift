@@ -23,7 +23,6 @@ final class PDFBilingualSession {
     private(set) var pdfScrollRevision = 0
     private(set) var pdfSelectedIDs: [String] = []
     private(set) var translationSelectedIDs: [String] = []
-    private(set) var serviceName = ""
     private(set) var selectionRequestRevision = 0
     private(set) var selectionSource: String?
     private(set) var selectionTranslation: String?
@@ -95,7 +94,6 @@ final class PDFBilingualSession {
         isLoading = true
         let url = model.root.appendingPathComponent(paper.originalPath)
         let settings = model.pdfTranslationSettings
-        serviceName = settings.model
         let store = model.pdfTranslations
         loadTask = Task {
             defer { if generation == token { isLoading = false } }
@@ -212,7 +210,6 @@ final class PDFBilingualSession {
     private func translate(_ items: [PDFSourceSentence], model: ReaderModel, selection: Bool) {
         guard let paper = model.paper, !items.isEmpty else { return }
         let settings = model.pdfTranslationSettings
-        serviceName = settings.model
         error = nil
         let token = UUID()
         requestID = token

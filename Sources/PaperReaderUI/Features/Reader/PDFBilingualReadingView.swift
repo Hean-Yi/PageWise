@@ -1,16 +1,29 @@
 import PaperReaderKit
 import SwiftUI
 
+enum PDFBilingualLayoutPreference: String {
+    case auto, split, stacked, paragraph
+
+    func resolved(at width: CGFloat) -> PDFSentenceTextCanvas.Layout {
+        switch self {
+        case .auto: width >= 740 ? .split : .stacked
+        case .split: width >= 570 ? .split : .stacked
+        case .stacked: .stacked
+        case .paragraph: .paragraph
+        }
+    }
+}
+
 struct PDFBilingualReadingView: View {
     let model: ReaderModel
     let penEnabled: Bool
     let openSettings: () -> Void
 
-    @AppStorage("PDFBilingualDisplayLayout") private var layout = "auto"
+    @Binding var layout: PDFBilingualLayoutPreference
+    @Binding var peekingAtOriginal: Bool
     @AppStorage("PDFBilingualFontSize") private var fontSize = 16
     @SceneStorage("PDFBilingualOriginalFraction") private var originalFraction = 0.53
     @State private var dragStart: Double?
-    @State private var peekingAtOriginal = false
     @Environment(\.layoutDirection) private var layoutDirection
 
     private var session: PDFBilingualSession { model.pdfBilingual }
@@ -18,12 +31,12 @@ struct PDFBilingualReadingView: View {
     var body: some View {
         GeometryReader { geometry in
             let width = geometry.size.width
-            let split = layout == "split" ? width >= 570 : (layout == "auto" && width >= 740)
-            let spread = split && session.isOpen && !peekingAtOriginal
+            let textLayout = layout.resolved(at: width)
+            let spread = textLayout == .split && session.isOpen && !peekingAtOriginal
             let pdfVisible = !session.isOpen || peekingAtOriginal || spread
             let pdfWidth = spread ? min(width - 268, max(240, width * originalFraction)) : width
             HStack(spacing: 0) {
-                PDFCanvas(model: model, penEnabled: penEnabled, acceptsSentenceInput: pdfVisible)
+                PDFCanvas(model: model, penEnabled: pdfVisible && penEnabled, acceptsSentenceInput: pdfVisible)
                     .frame(maxWidth: session.isOpen ? .infinity : 820)
                     .frame(width: pdfWidth)
                     .frame(width: pdfVisible ? pdfWidth : 0)
@@ -33,7 +46,7 @@ struct PDFBilingualReadingView: View {
                     .accessibilityHidden(!pdfVisible)
                 if session.isOpen && !peekingAtOriginal {
                     if spread { splitter(width: width).frame(width: 8) }
-                    pane(split: spread, allowsSplit: width >= 570)
+                    pane(textLayout: textLayout, allowsSplit: width >= 570)
                 }
             }
             .overlay(alignment: .topTrailing) {
@@ -41,18 +54,20 @@ struct PDFBilingualReadingView: View {
                     Button {
                         peekingAtOriginal = false
                     } label: {
-                        Label("返回逐句对照", systemImage: "arrow.uturn.backward")
+                        Label(layout == .paragraph ? "返回段落重排" : "返回逐句对照", systemImage: "arrow.uturn.backward")
                             .font(.callout.weight(.medium)).padding(.horizontal, 6).padding(.vertical, 4)
                     }
                     .buttonStyle(.borderedProminent).tint(ReaderTheme.accent).padding(16)
                 }
             }
+            .onChange(of: pdfVisible) { _, visible in
+                session.hover(nil)
+                if visible, let id = session.focusedID { session.focus(id) }
+            }
         }
         .onChange(of: session.isOpen) { _, _ in peekingAtOriginal = false }
         .onChange(of: session.selectionRequestRevision) { _, _ in peekingAtOriginal = false }
-        .onChange(of: peekingAtOriginal) { _, visible in
-            if visible, let id = session.focusedID { session.focus(id) }
-        }
+        .onChange(of: layout) { _, _ in peekingAtOriginal = false }
     }
 
     private func splitter(width: CGFloat) -> some View {
@@ -78,15 +93,17 @@ struct PDFBilingualReadingView: View {
             }
     }
 
-    private func pane(split: Bool, allowsSplit: Bool) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
+    private func pane(textLayout: PDFSentenceTextCanvas.Layout, allowsSplit: Bool) -> some View {
+        let split = textLayout == .split
+        let paragraphs = textLayout == .paragraph
+        return VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 10) {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(split ? "简体中文" : "英汉对照").font(.headline)
+                    Text(split ? "简体中文" : (paragraphs ? "英汉段落对照" : "英汉对照")).font(.headline)
                     Text(pageStatus).font(.caption).foregroundStyle(ReaderTheme.muted).monospacedDigit()
                 }
                 Spacer(minLength: 4)
-                if !split && !session.translations.isEmpty {
+                if !split && (paragraphs || !session.translations.isEmpty) {
                     Button {
                         peekingAtOriginal = true
                     } label: {
@@ -95,9 +112,11 @@ struct PDFBilingualReadingView: View {
                 }
                 Menu {
                     Picker("对照布局", selection: $layout) {
-                        Text("随窗口调整").tag("auto")
-                        Label("左右并排", systemImage: "rectangle.split.2x1").tag("split").disabled(!allowsSplit)
-                        Label("逐句上下", systemImage: "rectangle.split.1x2").tag("stacked")
+                        Label("段落重排", systemImage: "text.alignleft").tag(PDFBilingualLayoutPreference.paragraph)
+                        Label("逐句上下", systemImage: "rectangle.split.1x2").tag(PDFBilingualLayoutPreference.stacked)
+                        Label("左右并排", systemImage: "rectangle.split.2x1")
+                            .tag(PDFBilingualLayoutPreference.split).disabled(!allowsSplit)
+                        Text("随窗口调整").tag(PDFBilingualLayoutPreference.auto)
                     }
                     Divider()
                     Menu("译文字号") {
@@ -112,7 +131,9 @@ struct PDFBilingualReadingView: View {
                             "跟随原句", isOn: Binding(get: { session.followsScroll }, set: { session.followsScroll = $0 }))
                     }
                 } label: {
-                    Image(systemName: split ? "rectangle.split.2x1" : "rectangle.split.1x2")
+                    Image(
+                        systemName: paragraphs
+                            ? "text.alignleft" : (split ? "rectangle.split.2x1" : "rectangle.split.1x2"))
                 }.fixedSize().help("对照布局与译文字号").accessibilityLabel("对照布局")
             }
             .buttonStyle(.borderless).padding(.horizontal, 22).padding(.vertical, 14)
@@ -132,12 +153,12 @@ struct PDFBilingualReadingView: View {
             if let source = session.selectionSource {
                 selectionResult(source)
             }
-            if session.translations.isEmpty {
+            if session.translations.isEmpty && (!paragraphs || session.sentences.isEmpty) {
                 emptyPage
             } else {
                 PDFSentenceTextCanvas(
                     sentences: session.sentences, translations: session.translations,
-                    stacked: !split, fontSize: fontSize, activeID: session.activeID, focusedID: session.focusedID,
+                    layout: textLayout, fontSize: fontSize, activeID: session.activeID, focusedID: session.focusedID,
                     focusRevision: session.sourceFocusRevision, followsScroll: session.followsScroll,
                     sourceScrollID: session.sourceScrollID, sourceScrollRevision: session.sourceScrollRevision,
                     pdfSelectedIDs: session.pdfSelectedIDs, onScroll: session.scrollFromTranslation,
@@ -146,7 +167,10 @@ struct PDFBilingualReadingView: View {
                     && (session.isTranslating || session.translations.count < session.sentences.count)
                 {
                     Divider()
-                    translationActions.padding(.horizontal, 20).padding(.vertical, 10)
+                    HStack(spacing: 12) {
+                        translationActions
+                        if !session.isTranslating { serviceDisclosure }
+                    }.padding(.horizontal, 20).padding(.vertical, 10)
                 }
             }
         }
@@ -170,20 +194,24 @@ struct PDFBilingualReadingView: View {
                 Text("正在读取本页文字").font(.callout).foregroundStyle(ReaderTheme.muted)
             } else if session.sentences.isEmpty {
                 Image(systemName: "doc.text.viewfinder").font(.title2).foregroundStyle(ReaderTheme.muted)
-                Text("本页暂无可逐句对照的文字").font(.headline)
-                Button("查看原页") { peekingAtOriginal = true }.buttonStyle(.bordered)
+                Text(layout == .paragraph ? "本页暂无可重排的文字" : "本页暂无可逐句对照的文字").font(.headline)
+                if layout != .paragraph {
+                    Button("查看原页") { peekingAtOriginal = true }.buttonStyle(.bordered)
+                }
             } else {
                 Image(systemName: "text.bubble").font(.system(size: 26, weight: .light)).foregroundStyle(
                     ReaderTheme.accent)
                 translationActions
-                if !session.isTranslating && !session.serviceName.isEmpty {
-                    Text("本页英文将发送至 \(session.serviceName)")
-                        .font(.caption).foregroundStyle(ReaderTheme.muted)
-                        .multilineTextAlignment(.center).textSelection(.enabled)
-                }
+                if !session.isTranslating { serviceDisclosure.multilineTextAlignment(.center) }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity).padding(24)
+    }
+
+    private var serviceDisclosure: some View {
+        let name = model.pdfTranslationSettings.model
+        return Text(name.isEmpty ? "配置模型后可翻译本页英文" : "本页英文将发送至 \(name)")
+            .font(.caption).foregroundStyle(ReaderTheme.muted).textSelection(.enabled)
     }
 
     @ViewBuilder private var translationActions: some View {
@@ -195,11 +223,15 @@ struct PDFBilingualReadingView: View {
             }
         } else {
             Button {
-                model.pdfBilingual.translatePage(model)
+                if model.pdfTranslationSettings.model.isEmpty {
+                    openSettings()
+                } else {
+                    model.pdfBilingual.translatePage(model)
+                }
             } label: {
                 Label(session.translations.isEmpty ? "翻译本页" : "继续翻译本页", systemImage: "character.bubble")
                     .padding(.horizontal, 5).padding(.vertical, 3)
-            }.buttonStyle(.borderedProminent).tint(ReaderTheme.accent)
+            }.buttonStyle(.borderedProminent).tint(ReaderTheme.accent).disabled(session.isLoading)
         }
     }
 

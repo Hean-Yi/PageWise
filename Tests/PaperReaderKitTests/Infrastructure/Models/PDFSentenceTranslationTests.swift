@@ -7,6 +7,7 @@ private actor SentenceReplies: HTTPTransport {
     enum Mode { case correct, reverseIDs, loseUnit, failAfterFirst, missVariable }
     let mode: Mode
     private(set) var counts: [Int] = []
+    private(set) var paragraphGroups: [[Int]] = []
     init(_ mode: Mode = .correct) { self.mode = mode }
 
     func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) {
@@ -19,6 +20,7 @@ private actor SentenceReplies: HTTPTransport {
         let parsed = try #require(try JSONSerialization.jsonObject(with: Data(input.utf8)) as? [String: Any])
         let sources = try #require(parsed["sentences"] as? [[String: Any]])
         counts.append(sources.count)
+        paragraphGroups.append(sources.compactMap { $0["paragraph"] as? Int })
         let status = mode == .failAfterFirst && counts.count > 1 ? 429 : 200
         let url = try #require(request.url)
         let response = try #require(
@@ -89,6 +91,29 @@ private func sampleSentences(_ count: Int) -> [PDFSourceSentence] {
     let changed = PDFSourceSentence(
         id: sentences[0].id, text: "Changed source.", pageIndex: 0, rects: [], paragraphID: "paragraph")
     #expect(try await restarted.cached(documentHash: "original-digest", sentences: [changed]).isEmpty)
+}
+
+@Test func pdfReflowReusesCachedSentencesAndSendsNewOnesInReadingParagraphs() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let original = sampleSentences(4)
+    let store = PDFSentenceTranslationStore(root: root)
+    let replies = SentenceReplies()
+    let client = ModelClient(transport: replies)
+    let settings = sampleSettings()
+    let first = try await store.translate(
+        documentHash: "hash", sentences: [original[0]], settings: settings, client: client, key: { "test-only" })
+    let regrouped = original.enumerated().map { index, sentence in
+        PDFSourceSentence(
+            id: sentence.id, text: sentence.text, pageIndex: sentence.pageIndex,
+            rects: sentence.rects, paragraphID: sentence.paragraphID, characterRanges: sentence.characterRanges,
+            readingParagraphID: index < 2 ? "opening" : "results")
+    }
+    #expect(try await store.cached(documentHash: "hash", sentences: regrouped) == first)
+    let complete = try await store.translate(
+        documentHash: "hash", sentences: regrouped, settings: settings, client: client, key: { "test-only" })
+    #expect(complete.count == 4)
+    #expect(await replies.paragraphGroups == [[1], [1, 2, 2]])
 }
 
 @Test func pdfSentenceTranslationRejectsInvalidAlignmentAndMissingUnits() async throws {

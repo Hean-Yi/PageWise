@@ -6,12 +6,16 @@ public struct PDFSourceSentence: Codable, Hashable, Identifiable, Sendable {
     public let text: String
     public let pageIndex: Int
     public let rects: [[Double]]
+    /// The original extraction group is part of the on-device translation cache signature.
     public let paragraphID: String
     public let characterRanges: [NSRange]
+    private let refinedParagraphID: String?
+
+    public var readingParagraphID: String { refinedParagraphID ?? paragraphID }
 
     public init(
         id: String, text: String, pageIndex: Int, rects: [[Double]], paragraphID: String,
-        characterRanges: [NSRange] = []
+        characterRanges: [NSRange] = [], readingParagraphID: String? = nil
     ) {
         self.id = id
         self.text = text
@@ -19,6 +23,7 @@ public struct PDFSourceSentence: Codable, Hashable, Identifiable, Sendable {
         self.rects = rects
         self.paragraphID = paragraphID
         self.characterRanges = characterRanges
+        self.refinedParagraphID = readingParagraphID == paragraphID ? nil : readingParagraphID
     }
 }
 

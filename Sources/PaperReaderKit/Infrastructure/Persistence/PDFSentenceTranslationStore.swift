@@ -99,7 +99,7 @@ public actor PDFSentenceTranslationStore {
         for sentence in sentences {
             let bytes = sentence.text.utf8.count
             // Keep adjacent sentences of a paragraph together when they fit; cap both input and expected output.
-            let paragraphBreak = batch.last?.paragraphID != sentence.paragraphID
+            let paragraphBreak = batch.last?.readingParagraphID != sentence.readingParagraphID
             if !batch.isEmpty, size + bytes > 3_200 || batch.count >= 10 || (paragraphBreak && size >= 1_100) {
                 result.append(batch)
                 batch = []
@@ -133,6 +133,7 @@ public actor PDFSentenceTranslationStore {
             guard sentence.pageIndex == sentences[0].pageIndex, keys[sentence.id] == nil, !sentence.text.isEmpty else {
                 throw ReaderError.message("本页的原句定位不完整。")
             }
+            // The same source sentence can move to a new display paragraph as layout detection improves.
             let signature = Signature(
                 id: sentence.id, paragraph: sentence.paragraphID, text: sentence.text, rects: sentence.rects)
             keys[sentence.id] = digest(try encoder.encode(signature))

@@ -14,6 +14,8 @@ struct ReaderView: View {
     @State private var pendingNoteSave = false
     @State private var showWarnings = false
     @State private var penEnabled = false
+    @State private var peekingAtOriginal = false
+    @AppStorage("PDFBilingualDisplayLayout") private var pdfLayout = PDFBilingualLayoutPreference.paragraph
     @State private var askSave = false
     @State private var question = ""
 
@@ -48,8 +50,7 @@ struct ReaderView: View {
             if model.paper?.warnings.isEmpty == false {
                 HStack(spacing: 8) {
                     Image(systemName: "doc.text").foregroundStyle(ReaderTheme.muted)
-                    Text(model.paper?.canReflow == true ? "部分内容保留原版或待核对定位" : "原始 PDF · 暂不支持此文档重排").foregroundStyle(
-                        ReaderTheme.muted)
+                    Text("部分内容请在原页核对").foregroundStyle(ReaderTheme.muted)
                     Spacer()
                     Button {
                         showWarnings = true
@@ -73,7 +74,9 @@ struct ReaderView: View {
                                 sidebarOpen: (showAssistant && !libraryAgentPresented && width >= 900)
                                     || showAssistantSheet)
                         } else if !model.showingReflowLoading && !model.readingChoicePresented {
-                            PDFBilingualReadingView(model: model, penEnabled: penEnabled, openSettings: requestSettings)
+                            PDFBilingualReadingView(
+                                model: model, penEnabled: penEnabled, openSettings: requestSettings,
+                                layout: $pdfLayout, peekingAtOriginal: $peekingAtOriginal)
                         }
                         if model.readingChoicePresented {
                             ReadingModeChoiceView(model: model, reflow: translate)
@@ -150,22 +153,10 @@ struct ReaderView: View {
 
     private func controls(width: CGFloat) -> some View {
         HStack(spacing: 14) {
-            Picker(
-                "阅读模式",
-                selection: Binding(
-                    get: { model.pdfBilingual.isOpen ? "sentences" : model.mode },
-                    set: { value in setReadingMode(value) })
-            ) {
-                Text("原版").tag("original")
-                Text("逐句对照").tag("sentences")
-                if model.paper?.previewPages.isEmpty == false { Text("旧重排").tag("reflow") }
-                if model.paper?.htmlReading != nil || model.paper?.translatedPages.isEmpty == false
-                    || model.paper?.onlineSource != nil
-                {
-                    Text("双语重排").tag("translated")
-                }
-            }.pickerStyle(.segmented).labelsHidden().fixedSize()
-                .accessibilityLabel("阅读模式")
+            ViewThatFits(in: .horizontal) {
+                readingModePicker.pickerStyle(.segmented).fixedSize()
+                readingModePicker.pickerStyle(.menu)
+            }.labelsHidden().accessibilityLabel("阅读模式")
             if model.translating.contains(model.selectedPaperID ?? UUID()) {
                 Button(action: model.pauseTranslation) { Image(systemName: "pause.circle") }
                     .help("暂停重排").accessibilityLabel("暂停重排")
@@ -178,8 +169,16 @@ struct ReaderView: View {
                 }
                 .help("AI 双语重排 / 继续")
             }
-            if model.paper?.onlineSource != nil || model.paper?.retainedReadings?.isEmpty == false {
+            if model.paper?.onlineSource != nil || model.paper?.retainedReadings?.isEmpty == false
+                || model.paper?.previewPages.isEmpty == false
+            {
                 Menu {
+                    if model.paper?.previewPages.isEmpty == false {
+                        Button("旧重排") { setReadingMode("reflow") }
+                        if model.mode == "reflow" && hasBilingualEdition {
+                            Button("双语重排") { setReadingMode("translated") }
+                        }
+                    }
                     if model.paper?.onlineSource != nil {
                         Button("重新生成双语版") {
                             if configured { model.startAIReflow(regenerate: true) } else { requestSettings() }
@@ -218,13 +217,37 @@ struct ReaderView: View {
         }.buttonStyle(.borderless).font(.system(size: 14))
     }
 
+    private var hasBilingualEdition: Bool {
+        model.paper?.htmlReading != nil || model.paper?.translatedPages.isEmpty == false
+            || model.paper?.onlineSource != nil
+    }
+
+    private var readingModePicker: some View {
+        Picker(
+            "阅读模式",
+            selection: Binding(
+                get: { model.pdfBilingual.isOpen ? "pdfBilingual" : model.mode },
+                set: { value in setReadingMode(value) })
+        ) {
+            Text("原版").tag("original")
+            Text(pdfLayout == .paragraph ? "段落重排" : "逐句对照").tag("pdfBilingual")
+            if model.mode == "reflow" {
+                Text("旧重排").tag("reflow")
+            } else if hasBilingualEdition {
+                Text("双语重排").tag("translated")
+            }
+        }
+    }
+
     private func setReadingMode(_ value: String) {
-        if value == "sentences" {
+        if value == "pdfBilingual" {
+            peekingAtOriginal = false
             if model.mode != "original" {
                 model.changeMode(to: "original")
                 if model.mode != "original" { model.readOriginal() }
             }
             model.readingChoicePresented = false
+            model.beginReading()
             model.pdfBilingual.open(model)
             return
         }
@@ -242,7 +265,8 @@ struct ReaderView: View {
     }
 
     private func readingBar(width: CGFloat) -> some View {
-        HStack(spacing: 12) {
+        let originalVisible = !model.pdfBilingual.isOpen || peekingAtOriginal || pdfLayout.resolved(at: width) == .split
+        return HStack(spacing: 12) {
             if model.pageKeys.isEmpty {
                 Text("等待正文就绪").font(.caption).foregroundStyle(ReaderTheme.muted)
             } else if model.usesHTMLReading {
@@ -283,7 +307,7 @@ struct ReaderView: View {
             if let reason = model.translationPauseReason {
                 Text(reason).font(.caption).foregroundStyle(ReaderTheme.muted).lineLimit(2)
             }
-            if !model.selectionText.isEmpty {
+            if !model.selectionText.isEmpty && originalVisible {
                 if model.mode == "original" {
                     Button {
                         model.pdfBilingual.translateSelection(model)
@@ -310,7 +334,7 @@ struct ReaderView: View {
                 }
             }
             #if os(iOS)
-                if !model.usesHTMLReading {
+                if !model.usesHTMLReading && originalVisible {
                     Toggle(isOn: $penEnabled) { Image(systemName: "pencil.tip.crop.circle") }
                         .toggleStyle(.button).accessibilityLabel("手写批注")
                 }

@@ -22,8 +22,8 @@ extension ModelClient {
         var paragraph = 0
         var previous: String?
         let input = sentences.enumerated().map { index, sentence in
-            if previous != sentence.paragraphID { paragraph += 1 }
-            previous = sentence.paragraphID
+            if previous != sentence.readingParagraphID { paragraph += 1 }
+            previous = sentence.readingParagraphID
             return Source(id: "s\(index)", paragraph: paragraph, en: sentence.text)
         }
         let payload = String(decoding: try JSONEncoder().encode(Input(sentences: input)), as: UTF8.self)

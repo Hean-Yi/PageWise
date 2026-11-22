@@ -2,11 +2,12 @@ import PaperReaderKit
 import SwiftUI
 import WebKit
 
-/// Both reading layouts share the same DOM nodes and native text selection.
+/// All three layouts use the source sentence IDs for interaction and native text selection.
 @MainActor struct PDFSentenceTextCanvas {
+    enum Layout: String { case split, stacked, paragraph }
     let sentences: [PDFSourceSentence]
     let translations: [String: String]
-    let stacked: Bool
+    let layout: Layout
     let fontSize: Int
     let activeID: String?
     let focusedID: String?
@@ -24,9 +25,9 @@ import WebKit
 
     @MainActor final class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
         private var latest: PDFSentenceTextCanvas
-        private var renderedIDs: [String] = []
+        private var renderedSentences: [PDFSourceSentence] = []
         private var translated: [String: String] = [:]
-        private var displayedStacked: Bool?
+        private var displayedLayout: Layout?
         private var displayedFontSize: Int?
         private var active: String?
         private var focused: String?
@@ -69,18 +70,23 @@ import WebKit
         func update(_ parent: PDFSentenceTextCanvas, view: WKWebView) {
             latest = parent
             guard ready else { return }
-            let ids = parent.sentences.map(\.id)
-            let changed = ids != renderedIDs || translated != parent.translations
-            let layoutChanged = displayedStacked != parent.stacked
-            if changed {
+            let changed = renderedSentences != parent.sentences || translated != parent.translations
+            let layoutChanged = displayedLayout != parent.layout
+            if changed || layoutChanged {
+                let paragraph = parent.layout == .paragraph
                 let rows = parent.sentences.compactMap { sentence -> [String: String]? in
-                    guard let zh = parent.translations[sentence.id] else { return nil }
-                    return ["id": sentence.id, "paragraph": sentence.paragraphID, "en": sentence.text, "zh": zh]
+                    let translation = parent.translations[sentence.id]
+                    guard paragraph || translation != nil else { return nil }
+                    return [
+                        "id": sentence.id, "paragraph": paragraph ? sentence.readingParagraphID : sentence.paragraphID,
+                        "en": sentence.text, "zh": translation ?? "",
+                    ]
                 }
                 view.callAsyncJavaScript(
-                    "window.sentenceReader.render(rows)", arguments: ["rows": rows],
+                    "window.sentenceReader.render(rows, layout)",
+                    arguments: ["rows": rows, "layout": parent.layout.rawValue],
                     in: nil, in: .defaultClient, completionHandler: nil)
-                renderedIDs = ids
+                renderedSentences = parent.sentences
                 translated = parent.translations
             }
             if changed || layoutChanged || displayedFontSize != parent.fontSize || active != parent.activeID
@@ -91,23 +97,23 @@ import WebKit
                     parent.focusedID != nil
                     && (focused != parent.focusedID || layoutChanged || revision != parent.focusRevision)
                 view.callAsyncJavaScript(
-                    "window.sentenceReader.show(stacked, fontSize, active, focused, scroll)",
+                    "window.sentenceReader.show(fontSize, active, focused, scroll)",
                     arguments: [
-                        "stacked": parent.stacked, "fontSize": parent.fontSize, "active": parent.activeID ?? "",
+                        "fontSize": parent.fontSize, "active": parent.activeID ?? "",
                         "focused": parent.focusedID ?? "", "scroll": scroll,
                     ],
                     in: nil, in: .defaultClient, completionHandler: nil)
                 active = parent.activeID
                 focused = parent.focusedID
                 revision = parent.focusRevision
-                displayedStacked = parent.stacked
+                displayedLayout = parent.layout
                 displayedFontSize = parent.fontSize
             }
             if changed || layoutChanged || follow != parent.followsScroll
                 || lastScrollRevision != parent.sourceScrollRevision
                 || lastPDFSelection != parent.pdfSelectedIDs
             {
-                let track = parent.followsScroll && !parent.stacked
+                let track = parent.followsScroll && parent.layout == .split
                 let reveal = track && lastScrollRevision != parent.sourceScrollRevision
                 view.callAsyncJavaScript(
                     "window.sentenceReader.sync(track, reveal, ids)",
@@ -121,21 +127,25 @@ import WebKit
             }
         }
 
+        private func isDisplayed(_ id: String) -> Bool {
+            latest.translations[id] != nil || (latest.layout == .paragraph && latest.sentences.contains { $0.id == id })
+        }
+
         func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
             guard ready, message.frameInfo.isMainFrame, let event = message.body as? [String: Any] else { return }
             if event["action"] as? String == "selection", let ids = event["ids"] as? [String],
-                ids.allSatisfy({ latest.translations[$0] != nil })
+                ids.allSatisfy({ isDisplayed($0) })
             {
                 latest.onSelection(ids)
                 return
             }
-            guard let raw = event["id"] as? String, raw.isEmpty || latest.translations[raw] != nil else { return }
+            guard let raw = event["id"] as? String, raw.isEmpty || isDisplayed(raw) else { return }
             let id = raw.isEmpty ? nil : raw
             switch event["action"] as? String {
             case "focus": latest.onFocus(id)
             case "hover": latest.onHover(id)
             case "scroll":
-                if latest.followsScroll, !latest.stacked, let id { latest.onScroll(id) }
+                if latest.followsScroll, latest.layout == .split, let id { latest.onScroll(id) }
             default: break
             }
         }
@@ -166,11 +176,18 @@ extension PDFSentenceTextCanvas {
         @media(prefers-color-scheme:dark){:root{--paper:#2e2b28;--ink:#f1eee7;--en:#c4beb4;--active:#654634;--focus:#e8a082}}
         *{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font:var(--zh-size,16px)/1.7 -apple-system,"PingFang SC",sans-serif}
         main{max-width:45rem;margin:auto;padding:19px clamp(18px,4vw,38px) 60px;overflow-wrap:anywhere}
-        p{margin:0 0 1em} .pair{border-radius:3px;box-decoration-break:clone;-webkit-box-decoration-break:clone}
-        .pair.active,.pair.related{background:var(--active)}.pair:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+        p{margin:0 0 1em}
+        [role="button"]{border-radius:3px;box-decoration-break:clone;-webkit-box-decoration-break:clone}
+        .active,.related,.counterpart{background:var(--active)}
+        [role="button"]:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
         .en{display:none}.stacked .pair{display:block;padding:4px 6px;margin:0 -6px 12px}
         .stacked .en{display:block;font:16px/1.55 Georgia,"Times New Roman",serif;color:var(--en);margin-bottom:3px}
         .stacked p{margin-bottom:1.5em}.stacked .zh{line-height:1.7}
+        .paragraph main{max-width:48rem;padding:clamp(22px,4vw,44px) clamp(20px,6vw,56px) 60px}
+        .paragraph section+section{margin-top:1.7em}
+        .paragraph p{margin:0}.paragraph p[lang="en"]{font:1.06em/1.55 Georgia,"Times New Roman",serif;color:var(--en)}
+        .paragraph .en{display:inline}.paragraph p[lang="zh-Hans"]{margin-top:.45em;line-height:1.8}
+        .pending{color:var(--en);font:.8em/1.6 -apple-system,sans-serif;margin-inline:.2em;-webkit-user-select:none;user-select:none}
         [data-selecting="zh"] .en,[data-selecting="en"] .zh{-webkit-user-select:none;user-select:none}
         ::selection{background:rgba(160,125,89,.30)}
         </style></head><body><main aria-label="本页逐句译文"></main></body></html>
@@ -180,14 +197,24 @@ extension PDFSentenceTextCanvas {
         (() => {
           const main=document.querySelector('main'), pairs=new Map();
           let hot='', active='', focused='', track=false, userScroll=false, scrollTimer=0, lastScroll='';
-          let lastSelection=[], related=[];
+          let lastSelection=[], related=[], order=[], paragraphMode=false, revealLanguage='en';
           const send=(action,id)=>window.webkit.messageHandlers.sentence.postMessage({action,id});
-          const pairAt=node=>node?.closest?.('.pair');
+          const pairAt=node=>node?.closest?.('[data-sentence]');
+          const sideOf=node=>node?.closest('.en') ? 'en' : 'zh';
           function hover(id) { if (id!==hot) {hot=id; send('hover',id);} }
-          function focus(id) { send('focus', id===focused ? '' : id); }
+          function focus(node) {
+            revealLanguage=sideOf(node)==='en' ? 'zh' : 'en';
+            const id=node.dataset.sentence;
+            send('focus',id===focused ? '' : id);
+          }
+          function targets(id) {
+            const pair=pairs.get(id);
+            return pair ? (paragraphMode ? [pair.en,pair.zh] : [pair.button]) : [];
+          }
           function reveal(id) {
-            const target=pairs.get(id);
-            if (!target) return;
+            const pair=pairs.get(id);
+            if (!pair) return;
+            const target=paragraphMode ? (pair[revealLanguage].isConnected ? pair[revealLanguage] : pair.en) : pair.button;
             const bounds=target.getBoundingClientRect();
             if (bounds.bottom<=0 || bounds.top>=innerHeight) {
               clearTimeout(scrollTimer); scrollTimer=0; userScroll=false;
@@ -214,7 +241,7 @@ extension PDFSentenceTextCanvas {
             if (!selection.rangeCount || selection.isCollapsed) return [];
             const anchor = selection.anchorNode;
             const start = anchor.nodeType === Node.TEXT_NODE ? anchor.parentElement : anchor;
-            const language = main.dataset.selecting || (start.closest('.en') ? 'en' : 'zh');
+            const language = main.dataset.selecting || sideOf(start);
             const range = selection.getRangeAt(0);
             const pieces = [];
             for (const text of main.querySelectorAll('.' + language)) {
@@ -229,17 +256,25 @@ extension PDFSentenceTextCanvas {
                 overlap.setEnd(text, text.childNodes.length);
               }
               const value = overlap.toString();
-              if (value.length) pieces.push({id: text.parentElement.id, text: value, language});
+              if (value.length) pieces.push({id: text.dataset.sentence, text: value, language});
             }
             return pieces;
           }
           main.addEventListener('pointerdown', event => {
             const text = event.target.closest('.en,.zh');
-            if (text) main.dataset.selecting = text.className;
+            if (text) main.dataset.selecting = sideOf(text);
             else delete main.dataset.selecting;
           });
           document.addEventListener('selectionchange', () => {
-            const ids = selectedPieces().map(piece => piece.id);
+            const pieces = selectedPieces();
+            if (paragraphMode) {
+              for (const el of main.querySelectorAll('.counterpart')) el.classList.remove('counterpart');
+              for (const piece of pieces) {
+                const opposite=piece.language==='en' ? 'zh' : 'en';
+                pairs.get(piece.id)?.[opposite].classList.add('counterpart');
+              }
+            }
+            const ids = pieces.map(piece => piece.id);
             if (ids.join('|') !== lastSelection.join('|')) {
               lastSelection = ids;
               window.webkit.messageHandlers.sentence.postMessage({action: 'selection', ids});
@@ -251,7 +286,7 @@ extension PDFSentenceTextCanvas {
             let plain = '';
             let paragraph;
             for (const piece of pieces) {
-              const next = pairs.get(piece.id).parentElement;
+              const next = pairs.get(piece.id).group;
               if (paragraph && paragraph !== next) plain += '\\n\\n';
               else if (plain && piece.language === 'en') plain += ' ';
               plain += piece.text;
@@ -260,67 +295,138 @@ extension PDFSentenceTextCanvas {
             event.clipboardData.setData('text/plain', plain);
             event.preventDefault();
           });
-          main.addEventListener('pointerover',e=>{if(e.pointerType==='mouse') hover(pairAt(e.target)?.id||'');});
+          main.addEventListener('pointerover',e=>{if(e.pointerType==='mouse') hover(pairAt(e.target)?.dataset.sentence||'');});
           main.addEventListener('pointerleave',()=>hover(''));
           main.addEventListener('click',e=>{
             const el=pairAt(e.target);
-            if (el && window.getSelection().isCollapsed) focus(el.id);
+            if (el && window.getSelection().isCollapsed) focus(el);
           });
           main.addEventListener('keydown',e=>{
             const el=pairAt(e.target);
             if (e.key==='Escape') {send('focus','');return;}
             if (!el || e.shiftKey || e.metaKey || e.ctrlKey || e.altKey) return;
-            if (e.key==='Enter' || e.key===' ') {e.preventDefault();focus(el.id);}
+            if (e.key==='Enter' || e.key===' ') {e.preventDefault();focus(el);}
             if (e.key==='ArrowDown' || e.key==='ArrowUp') {
-              e.preventDefault(); const ids=[...main.querySelectorAll('.pair')].map(s=>s.id), target=pairs.get(ids[ids.indexOf(el.id)+(e.key==='ArrowDown'?1:-1)]);
-              if (target) {target.focus();send('focus',target.id);}
+              e.preventDefault();
+              const id=order[order.indexOf(el.dataset.sentence)+(e.key==='ArrowDown'?1:-1)];
+              const pair=pairs.get(id);
+              if (pair) {
+                const side=sideOf(el);
+                const target=paragraphMode ? (pair[side].isConnected ? pair[side] : pair.en) : pair.button;
+                target.focus();send('focus',id);
+              }
             }
           });
-          window.sentenceReader={
-            render(rows) {
-              // Keep existing elements during progressive translation to retain the reader's selection.
-              const incoming=new Set(rows.map(row=>row.id));
-              for (const [id,node] of pairs) if (!incoming.has(id)) {node.remove();pairs.delete(id);}
-              const paragraphs=new Map([...main.children].map(p=>[p.dataset.group,p]));
-              let previous=null, groupIndex=-1, sentenceIndex=0, paragraph;
-              for (const row of rows) {
-                if (previous!==row.paragraph) {
-                  paragraph=paragraphs.get(row.paragraph);
-                  if (!paragraph) {paragraph=document.createElement('p');paragraph.dataset.group=row.paragraph;}
-                  groupIndex++;
-                  if (main.children[groupIndex]!==paragraph) main.insertBefore(paragraph,main.children[groupIndex]||null);
-                  sentenceIndex=0; previous=row.paragraph;
-                }
-                let s=pairs.get(row.id);
-                if (!s) {
-                  s=document.createElement('span'); s.className='pair'; s.id=row.id; s.tabIndex=0;
-                  s.setAttribute('role','button'); s.setAttribute('aria-pressed','false');
-                  const en=document.createElement('span'), zh=document.createElement('span');
-                  en.className='en'; en.lang='en'; zh.className='zh'; s.append(en,zh);
-                  pairs.set(row.id,s);
-                }
-                if (s.firstChild.textContent!==row.en) s.firstChild.textContent=row.en;
-                if (s.lastChild.textContent!==row.zh) s.lastChild.textContent=row.zh;
-                if (paragraph.children[sentenceIndex]!==s) paragraph.insertBefore(s,paragraph.children[sentenceIndex]||null);
-                sentenceIndex++;
+          // Reuse the text nodes, including when a translation arrives before an existing selection.
+          function setChildren(parent,nodes) {
+            const keep=new Set(nodes);
+            for (const child of [...parent.childNodes]) if (!keep.has(child)) child.remove();
+            for (const [index,node] of nodes.entries()) {
+              if (parent.childNodes[index]!==node) parent.insertBefore(node,parent.childNodes[index]||null);
+            }
+          }
+          function makePair(id) {
+            const span=name=>{
+              const node=document.createElement('span');
+              node.className=name; node.dataset.sentence=id;
+              return node;
+            };
+            const button=span('pair'), en=span('en'), zh=span('zh');
+            button.id=id; en.lang='en'; zh.lang='zh-Hans';
+            const pending=document.createElement('span');
+            pending.className='pending'; pending.textContent='待译';
+            return {button,en,zh,pending,space:document.createTextNode(' ')};
+          }
+          function setButton(node,enabled) {
+            if (enabled) {
+              node.tabIndex=0; node.setAttribute('role','button'); node.setAttribute('aria-pressed','false');
+            } else {
+              node.removeAttribute('role');node.removeAttribute('tabindex');node.removeAttribute('aria-pressed');
+            }
+          }
+          function makeGroup(id) {
+            const group=document.createElement(paragraphMode ? 'section' : 'p');
+            group.dataset.group=id;
+            if (paragraphMode) {
+              for (const language of ['en','zh-Hans']) {
+                const p=document.createElement('p'); p.lang=language; group.append(p);
               }
-              for (const p of [...main.children]) if (!p.childElementCount) p.remove();
+            }
+            return group;
+          }
+          window.sentenceReader={
+            render(rows,layout) {
+              const changingStructure=paragraphMode!==(layout==='paragraph');
+              const selection=getSelection();
+              const {anchorNode,anchorOffset,focusNode,focusOffset}=selection;
+              paragraphMode=layout==='paragraph';
+              document.body.className=layout;
+              const previous=changingStructure ? new Map() : new Map([...main.children].map(p=>[p.dataset.group,p]));
+              const groups=new Map();
+              order=rows.map(row=>row.id);
+              const incoming=new Set(order);
+              for (const id of pairs.keys()) if (!incoming.has(id)) pairs.delete(id);
+              for (const row of rows) {
+                if (!groups.has(row.paragraph)) groups.set(row.paragraph,[]);
+                let pair=pairs.get(row.id);
+                if (!pair || changingStructure) {
+                  pair=pair||makePair(row.id);
+                  setButton(pair.button,!paragraphMode);
+                  setButton(pair.en,paragraphMode);setButton(pair.zh,paragraphMode);
+                  pairs.set(row.id,pair);
+                }
+                pair.group=row.paragraph;
+                if (pair.en.textContent!==row.en) pair.en.textContent=row.en;
+                if (pair.zh.textContent!==row.zh) pair.zh.textContent=row.zh;
+                groups.get(row.paragraph).push(pair);
+              }
+              const blocks=[];
+              for (const [id,members] of groups) {
+                const group=previous.get(id)||makeGroup(id);
+                if (paragraphMode) {
+                  const english=[], chinese=[];
+                  let gap=false;
+                  for (const pair of members) {
+                    if (english.length) english.push(pair.space);
+                    english.push(pair.en);
+                    if (pair.zh.textContent) chinese.push(pair.zh);
+                    else if (!gap) chinese.push(pair.pending);
+                    gap=!pair.zh.textContent;
+                  }
+                  setChildren(group.firstChild,english);setChildren(group.lastChild,chinese);
+                } else {
+                  for (const pair of members) setChildren(pair.button,[pair.en,pair.zh]);
+                  setChildren(group,members.map(pair=>pair.button));
+                }
+                blocks.push(group);
+              }
+              setChildren(main,blocks);
+              if (changingStructure) {
+                revealLanguage='en';
+                for (const pair of pairs.values()) {
+                  for (const node of [pair.en,pair.zh,pair.button]) node.classList.remove('active','related','counterpart');
+                }
+                if (anchorNode?.nodeType===Node.TEXT_NODE && focusNode?.nodeType===Node.TEXT_NODE
+                    && anchorNode.isConnected && focusNode.isConnected
+                    && anchorNode.parentElement.getClientRects().length && focusNode.parentElement.getClientRects().length) {
+                  selection.setBaseAndExtent(anchorNode,anchorOffset,focusNode,focusOffset);
+                }
+              }
             },
-            show(stacked,fontSize,id,pinned,scroll) {
+            show(fontSize,id,pinned,scroll) {
               document.documentElement.style.setProperty('--zh-size',fontSize+'px');
-              document.body.classList.toggle('stacked',stacked);
-              pairs.get(active)?.classList.remove('active');
-              pairs.get(focused)?.setAttribute('aria-pressed','false');
+              for (const el of targets(active)) el.classList.remove('active');
+              for (const el of targets(focused)) el.setAttribute('aria-pressed','false');
               active=id; focused=pinned;
-              pairs.get(focused)?.setAttribute('aria-pressed','true');
-              pairs.get(active)?.classList.add('active');
+              for (const el of targets(focused)) el.setAttribute('aria-pressed','true');
+              for (const el of targets(active)) el.classList.add('active');
               if (scroll) reveal(focused);
             },
             sync(enabled,scrollID,selected) {
               track=enabled;
-              for (const id of related) pairs.get(id)?.classList.remove('related');
+              for (const id of related) for (const el of targets(id)) el.classList.remove('related');
               related=selected;
-              for (const id of related) pairs.get(id)?.classList.add('related');
+              for (const id of related) for (const el of targets(id)) el.classList.add('related');
               if (scrollID) {lastScroll=scrollID; reveal(scrollID);}
             }
           };

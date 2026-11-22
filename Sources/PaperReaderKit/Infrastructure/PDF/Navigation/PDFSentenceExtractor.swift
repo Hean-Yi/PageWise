@@ -63,6 +63,7 @@ public enum PDFSentenceExtractor {
         let hasWrappedHyphen = runs.contains { source.character(at: NSMaxRange($0.range) - 1) == 45 }
         let spellings = hasWrappedHyphen ? nearbySpellings(in: document, pageIndex: pageIndex, source: string) : []
         var sentences = [PDFSourceSentence]()
+        var unpairedRegions = Set<String>()
         readingOrder: for column in bands {
             try Task.checkCancellation()
             for group in paragraphs(in: column, source: source) {
@@ -73,10 +74,15 @@ public enum PDFSentenceExtractor {
                     break readingOrder
                 }
                 sentences += split(
-                    group, on: page, source: source, pageIndex: pageIndex, spellings: spellings, omitted: &omitted)
+                    group, on: page, source: source, pageIndex: pageIndex, spellings: spellings, omitted: &omitted,
+                    unpairedRegions: &unpairedRegions)
             }
         }
         if sentences.isEmpty { return uncertain }
+        if !unpairedRegions.isEmpty {
+            let locations = unpairedRegions.sorted().joined(separator: "、")
+            return PDFSentenceExtraction(sentences: sentences, notice: "\(locations)有文字无法可靠配对，请在原页核对。")
+        }
         return PDFSentenceExtraction(
             sentences: sentences, notice: omitted ? "仅展示可定位的横排文字，其他内容请对照原页。" : nil)
     }
@@ -344,6 +350,10 @@ public enum PDFSentenceExtractor {
             && lower.count < 85 && !lower.hasSuffix(".")
     }
 
+    private static func danglingSection(_ text: String) -> Substring? {
+        text.wholeMatch(of: /([0-9]+(?:\.[0-9]+)*)\.?\s+[A-Z].*\s(?:in|of|for|on|with|and|to)/)?.1
+    }
+
     private static func paragraphs(in column: [Line], source: NSString) -> [[Line]] {
         let pitches = zip(column, column.dropFirst()).compactMap { a, b -> CGFloat? in
             let dy = a.bounds.midY - b.bounds.midY
@@ -368,7 +378,30 @@ public enum PDFSentenceExtractor {
             }
             groups.append([line])
         }
-        return groups
+        var joined = [[Line]]()
+        for group in groups {
+            if group.count == 1, let next = group.first, let last = joined.last, last.count == 1,
+                let first = last.first,
+                joinsSectionHeading(first, continuation: next, source: source)
+            {
+                joined[joined.count - 1].append(next)
+            } else {
+                joined.append(group)
+            }
+        }
+        return joined
+    }
+
+    private static func joinsSectionHeading(_ first: Line, continuation: Line, source: NSString) -> Bool {
+        let prefix = content(first, source: source)
+        guard danglingSection(prefix) != nil else { return false }
+        let suffix = content(continuation, source: source)
+        let height = first.bounds.height
+        let indent = continuation.bounds.minX - first.bounds.minX
+        let gap = first.bounds.midY - continuation.bounds.midY
+        return suffix.first?.isUppercase == true && isHeading(prefix + " " + suffix)
+            && abs(height - continuation.bounds.height) <= height * 0.08
+            && (height * 0.5...height * 2).contains(indent) && (height * 0.8...height * 1.6).contains(gap)
     }
 
     private struct Span {
@@ -377,8 +410,40 @@ public enum PDFSentenceExtractor {
         let line: Int
     }
 
+    /// Refine the reading layout while keeping the extraction groups used by existing translation caches.
+    private static func readingParagraphAnchors(in lines: [Line], source: NSString, firstAnchor: Int) -> [Int] {
+        let adjacent = zip(lines, lines.dropFirst())
+        let gaps = adjacent.map { $0.bounds.midY - $1.bounds.midY }.sorted()
+        let pitch = gaps.count >= 3 ? gaps[(gaps.count - 1) / 2] : CGFloat.infinity
+        var current = firstAnchor
+        var anchors = [current]
+        for (previous, line) in adjacent {
+            let gap = previous.bounds.midY - line.bounds.midY
+            let text = content(line, source: source)
+            let afterSentence =
+                gap > pitch * 1.35 && text.first?.isUppercase == true
+                && content(previous, source: source).trimmingCharacters(in: CharacterSet(charactersIn: "\"'’”)]} "))
+                    .last.map { ".!?".contains($0) } == true
+            // A small, inset table cell above a larger caption can share the same baseline pitch as prose.
+            let afterTable =
+                previous.bounds.minX - line.bounds.minX > line.bounds.height * 2
+                && previous.bounds.height < line.bounds.height * 0.85
+                && captionLabel(text) != nil
+            if afterSentence || afterTable, let anchor = line.runs.first?.range.location { current = anchor }
+            anchors.append(current)
+        }
+        return anchors
+    }
+
+    private static func captionLabel(_ text: String) -> String? {
+        guard let match = text.prefixMatch(of: /^(Table|Figure|Fig\.?)\s+([0-9]+[a-z]?)\s*[.:|]/) else { return nil }
+        return "\(match.1 == "Table" ? "表" : "图") \(match.2)"
+    }
+
     private static func split(
-        _ lines: [Line], on page: PDFPage, source: NSString, pageIndex: Int, spellings: Set<String>, omitted: inout Bool
+        _ lines: [Line], on page: PDFPage, source: NSString, pageIndex: Int, spellings: Set<String>,
+        omitted: inout Bool,
+        unpairedRegions: inout Set<String>
     )
         -> [PDFSourceSentence]
     {
@@ -435,8 +500,13 @@ public enum PDFSentenceExtractor {
             && firstLine.bounds.midY > page.bounds(for: .cropBox).midY + page.bounds(for: .cropBox).height * 0.24
             && firstLine.bounds.height >= 11 && !text.contains(". ") && !text.hasSuffix(".")
         let heading = isHeading(text) || title
+        if heading, let section = danglingSection(text) {
+            unpairedRegions.insert("第 \(section) 节标题处")
+            return []
+        }
         if heading { ranges = [NSRange(location: 0, length: ns.length)] }
         let paragraph = "p\(pageIndex)-b\(anchor)"
+        let readingAnchors = readingParagraphAnchors(in: lines, source: source, firstAnchor: anchor)
         return ranges.compactMap { sentence in
             let value = ns.substring(with: sentence)
             // Retain complete prose. A clipped sentence at a page boundary or a diagram label
@@ -450,9 +520,16 @@ public enum PDFSentenceExtractor {
             }
             var bounds = [Int: CGRect]()
             var original = [NSRange]()
+            var readingAnchor: Int?
             for span in spans {
                 let intersection = NSIntersectionRange(span.normalized, sentence)
                 guard intersection.length > 0 else { continue }
+                if let readingAnchor, readingAnchor != readingAnchors[span.line] {
+                    let label = captionLabel(content(lines[span.line], source: source))
+                    unpairedRegions.insert(label.map { "\($0) 附近" } ?? "段落交界处")
+                    return nil
+                }
+                readingAnchor = readingAnchors[span.line]
                 var range = NSRange(
                     location: span.original.location + intersection.location - span.normalized.location,
                     length: intersection.length)
@@ -466,14 +543,15 @@ public enum PDFSentenceExtractor {
                 original.append(range)
                 bounds[span.line] = (bounds[span.line] ?? .null).union(box)
             }
-            guard let first = original.first, !bounds.isEmpty else { return nil }
+            guard let first = original.first, let readingAnchor, !bounds.isEmpty else { return nil }
             let rects = bounds.keys.sorted().compactMap { index -> [Double]? in
                 guard let box = bounds[index] else { return nil }
                 return [box.minX, box.minY, box.width, box.height]
             }
             return PDFSourceSentence(
                 id: "p\(pageIndex)-s\(first.location)", text: value, pageIndex: pageIndex,
-                rects: rects, paragraphID: paragraph, characterRanges: original)
+                rects: rects, paragraphID: paragraph, characterRanges: original,
+                readingParagraphID: "p\(pageIndex)-b\(readingAnchor)")
         }
     }
 

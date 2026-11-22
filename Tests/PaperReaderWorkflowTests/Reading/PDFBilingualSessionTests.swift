@@ -4,6 +4,21 @@ import Testing
 
 @testable import PaperReaderUI
 
+@Test @MainActor func pdfBilingualLayoutsKeepSavedChoicesAcrossWindowSizes() throws {
+    let paragraph = try #require(PDFBilingualLayoutPreference(rawValue: "paragraph"))
+    let automatic = try #require(PDFBilingualLayoutPreference(rawValue: "auto"))
+    let split = try #require(PDFBilingualLayoutPreference(rawValue: "split"))
+    let stacked = try #require(PDFBilingualLayoutPreference(rawValue: "stacked"))
+
+    #expect(paragraph.resolved(at: 420) == .paragraph)
+    #expect(paragraph.resolved(at: 1000) == .paragraph)
+    #expect(automatic.resolved(at: 680) == .stacked)
+    #expect(automatic.resolved(at: 1000) == .split)
+    #expect(split.resolved(at: 420) == .stacked)
+    #expect(split.resolved(at: 680) == .split)
+    #expect(stacked.resolved(at: 1000) == .stacked)
+}
+
 @Test @MainActor func localPDFBilingualReadingRequiresExplicitTranslationAndReopensOffline() async throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
