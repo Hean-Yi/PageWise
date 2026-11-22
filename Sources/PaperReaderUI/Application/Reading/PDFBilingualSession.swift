@@ -48,6 +48,7 @@ final class PDFBilingualSession {
         sourceFocusRevision &+= 1
     }
 
+    private var paragraphLayout = false
     private var paperID: UUID?
     private(set) var pageIndex = -1
     @ObservationIgnored private var loadTask: Task<Void, Never>?
@@ -55,14 +56,40 @@ final class PDFBilingualSession {
     @ObservationIgnored private var generation = UUID()
     @ObservationIgnored private var requestID = UUID()
 
-    func open(_ model: ReaderModel) {
+    func open(_ model: ReaderModel, translatingDocument: Bool = false) {
         guard model.mode == "original", model.paper != nil else { return }
         isOpen = true
+        loadPage(model)
+        if translatingDocument { setParagraphLayout(true, model: model) }
+    }
+
+    func setParagraphLayout(_ enabled: Bool, model: ReaderModel) {
+        guard matches(model), let paper = model.paper else { return }
+        paragraphLayout = enabled
+        if enabled { model.pdfDocumentTranslation.start(model, paper: paper, page: pageIndex) }
+    }
+
+    func resumeDocumentTranslation(_ model: ReaderModel) {
+        guard matches(model), let paper = model.paper else { return }
+        model.pdfDocumentTranslation.start(model, paper: paper, page: pageIndex, resuming: true)
+    }
+
+    func receiveDocumentTranslations(_ values: [String: String], paperID: UUID, page: Int) {
+        guard isOpen, self.paperID == paperID, pageIndex == page else { return }
+        translations.merge(values) { _, new in new }
+    }
+
+    func settingsChanged(_ model: ReaderModel, previous: ModelSettings, credentialRemoved: Bool) {
+        model.pdfDocumentTranslation.settingsChanged(
+            model, previousSettings: previous, resumeVisible: paragraphLayout && !credentialRemoved)
+        guard matches(model) else { return }
+        pageIndex = -1
         loadPage(model)
     }
 
     func close() {
         isOpen = false
+        paragraphLayout = false
         loadTask?.cancel()
         pause()
         isLoading = false
@@ -123,7 +150,10 @@ final class PDFBilingualSession {
                 let cached = try await store.cached(
                     documentHash: paper.digest, sentences: page.sentences,
                     settings: settings.model.isEmpty ? nil : settings)
-                if generation == token, !Task.isCancelled { translations = cached }
+                if generation == token, !Task.isCancelled {
+                    // Whole-document work can publish this page while the actor is reading its cache.
+                    translations.merge(cached) { published, _ in published }
+                }
             } catch {
                 if generation == token, !Task.isCancelled { self.error = error.localizedDescription }
             }

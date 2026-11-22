@@ -83,6 +83,8 @@ Swift Package 自动递归发现每个 target 目录下的 Swift 文件。当前
 | `Infrastructure/PDF/Display/PDFRegionRenderer` | 有尺寸上限的原页区域渲染，输出本机阅读所用的 PNG |
 | `Infrastructure/Models/PDFSentenceTranslator` | 批量逐句翻译并校验来源编号、数字、单位及引用 |
 | `Infrastructure/Persistence/PDFSentenceTranslationStore` | 独立于书库快照的逐页原子写入与续译，按原文件和句子签名隔离缓存版本 |
+| `Application/Reading/PDFDocumentTranslationQueue` | 从当前页开始逐页提取段落、复用译句、处理缺译与无正文页，按阅读位置更新优先级 |
+| `UI/Application/Reading/PDFDocumentTranslationController` | 管理每篇论文的翻译任务与进度、用户暂停和应用生命周期 |
 | `UI/Application/Reading/PDFBilingualSession` | 原页、译句、选区和暂停/恢复的协调 |
 | `UI/Platform/HTML/PDFSentenceTextCanvas` | 用同一页的句子和缓存译文呈现并排译栏、逐句上下或段落重排，处理按语言选文与句子定位 |
 | `Infrastructure/Discovery/ArxivClient` | 可信候选与同版本 TeX/PDF 下载 |

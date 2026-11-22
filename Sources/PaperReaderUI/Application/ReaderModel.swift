@@ -42,10 +42,17 @@ public final class ReaderModel {
     var pdfSelectionSpansPages = false
     var pdfSelectionRanges: [NSRange] = []
     let pdfBilingual = PDFBilingualSession()
+    let pdfDocumentTranslation = PDFDocumentTranslationController()
     let pdfTranslations: PDFSentenceTranslationStore
     let pdfValidation: PDFTranslationValidationConfiguration?
     var pdfTranslationSettings: ModelSettings { pdfValidation?.settings ?? modelSettings }
-    public var visiblePage = 0
+    public var visiblePage = 0 {
+        didSet {
+            if oldValue != visiblePage, mode == "original", let id = selectedPaperID {
+                pdfDocumentTranslation.prioritize(id, page: visiblePage)
+            }
+        }
+    }
     public var jumpPage: Int?
     public var navigationItems: [PaperNavigationItem] = []
     public var navigationLoading = false
@@ -322,9 +329,10 @@ public final class ReaderModel {
     public func saveSettings(_ draft: ModelSettings, key: String?, removeKey: Bool = false) throws -> String? {
         let result = try configurationStore.save(draft, key: key, removeKey: removeKey)
         let changed = modelSettings != result.settings || removeKey || key?.isEmpty == false
+        let previous = pdfTranslationSettings
         modelSettings = result.settings
         if changed {
-            pdfBilingual.close()
+            pdfBilingual.settingsChanged(self, previous: previous, credentialRemoved: removeKey)
             for task in translationTasks.values { task.cancel() }
         }
         status = result.warning ?? "模型设置已保存，下次模型请求将使用新配置"

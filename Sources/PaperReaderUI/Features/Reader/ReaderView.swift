@@ -231,6 +231,7 @@ struct ReaderView: View {
         ) {
             Text("原版").tag("original")
             Text(pdfLayout == .paragraph ? "段落重排" : "逐句对照").tag("pdfBilingual")
+                .help(pdfLayout == .paragraph ? "先译当前页，再自动翻译全文" : "查看本页英汉逐句对照")
             if model.mode == "reflow" {
                 Text("旧重排").tag("reflow")
             } else if hasBilingualEdition {
@@ -248,7 +249,7 @@ struct ReaderView: View {
             }
             model.readingChoicePresented = false
             model.beginReading()
-            model.pdfBilingual.open(model)
+            model.pdfBilingual.open(model, translatingDocument: pdfLayout == .paragraph)
             return
         }
         model.pdfBilingual.close()

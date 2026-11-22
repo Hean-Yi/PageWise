@@ -9,8 +9,14 @@ public actor PDFSentenceTranslationStore {
         var recent: [String] = []
     }
 
+    private struct Waiter {
+        let id: UUID
+        let continuation: CheckedContinuation<Void, any Error>
+    }
+
     private let directory: URL
-    private var active: Set<URL> = []
+    // An entry means a writer holds this page. Other pages can progress independently.
+    private var waiters: [URL: [Waiter]] = [:]
 
     public init(root: URL) {
         directory = root.appendingPathComponent("PDFTranslations", isDirectory: true)
@@ -42,8 +48,9 @@ public actor PDFSentenceTranslationStore {
         let url = pageURL(documentHash: documentHash, page: first.pageIndex)
         let revision = try revision(for: settings)
         let keys = try sourceKeys(sentences)
-        guard active.insert(url).inserted else { throw ReaderError.message("本页正在翻译中。") }
-        defer { active.remove(url) }
+        try await acquire(url)
+        defer { release(url) }
+        try Task.checkCancellation()
 
         var page = try read(url)
         var stored = page.revisions[revision] ?? [:]
@@ -55,7 +62,7 @@ public actor PDFSentenceTranslationStore {
         }
         let eligible = missing.filter { $0.text.utf8.count <= 8_000 }
         guard !eligible.isEmpty else {
-            throw ReaderError.message("未译内容过长，无法可靠分句。可在原页选取较短的文字。")
+            throw ReaderError.pdfTranslationIncomplete("未译内容过长，无法可靠分句。可在原页选取较短的文字。")
         }
         try Task.checkCancellation()
         let credential = try await key()
@@ -85,11 +92,42 @@ public actor PDFSentenceTranslationStore {
             }
         }
         guard result.count == sentences.count else {
-            throw ReaderError.message(
+            throw ReaderError.pdfTranslationIncomplete(
                 "已译 \(result.count) / \(sentences.count) 句。其余 \(sentences.count - result.count) 句未能核对，请参照原页；继续翻译仅重试未完成的句子。"
             )
         }
         return result
+    }
+
+    private func acquire(_ url: URL) async throws {
+        let id = UUID()
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
+                if Task.isCancelled {
+                    continuation.resume(throwing: CancellationError())
+                } else if waiters[url] == nil {
+                    waiters[url] = []
+                    continuation.resume()
+                } else {
+                    waiters[url, default: []].append(Waiter(id: id, continuation: continuation))
+                }
+            }
+        } onCancel: {
+            Task { await self.cancelWaiter(id, for: url) }
+        }
+    }
+
+    private func cancelWaiter(_ id: UUID, for url: URL) {
+        guard let index = waiters[url]?.firstIndex(where: { $0.id == id }) else { return }
+        waiters[url]?.remove(at: index).continuation.resume(throwing: CancellationError())
+    }
+
+    private func release(_ url: URL) {
+        if waiters[url]?.isEmpty == false {
+            waiters[url]?.removeFirst().continuation.resume()
+        } else {
+            waiters[url] = nil
+        }
     }
 
     private func batches(for sentences: [PDFSourceSentence]) -> [[PDFSourceSentence]] {

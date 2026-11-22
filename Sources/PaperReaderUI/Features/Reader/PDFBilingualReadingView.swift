@@ -74,7 +74,10 @@ struct PDFBilingualReadingView: View {
         }
         .onChange(of: session.isOpen) { _, _ in peekingAtOriginal = false }
         .onChange(of: session.selectionRequestRevision) { _, _ in peekingAtOriginal = false }
-        .onChange(of: layout) { _, _ in peekingAtOriginal = false }
+        .onChange(of: layout) { _, newLayout in
+            peekingAtOriginal = false
+            if session.isOpen { session.setParagraphLayout(newLayout == .paragraph, model: model) }
+        }
     }
 
     private func splitter(width: CGFloat) -> some View {
@@ -103,6 +106,8 @@ struct PDFBilingualReadingView: View {
     private func pane(textLayout: PDFSentenceTextCanvas.Layout, allowsSplit: Bool) -> some View {
         let split = textLayout == .split
         let paragraphs = textLayout == .paragraph
+        let documentStatus = model.selectedPaperID.flatMap { model.pdfDocumentTranslation.status(for: $0) }
+        let showsPageAction = !paragraphs && (documentStatus == nil || documentStatus?.phase == .completed)
         let sentences = paragraphs ? session.paragraphSentences : session.sentences
         let cached = session.translations
         let translations =
@@ -172,7 +177,7 @@ struct PDFBilingualReadingView: View {
             if translations.isEmpty
                 && (!paragraphs || (sentences.isEmpty && session.illustrations.isEmpty))
             {
-                emptyPage(hasSentences: !sentences.isEmpty)
+                emptyPage(hasSentences: !sentences.isEmpty, showsPageAction: showsPageAction)
             } else {
                 PDFSentenceTextCanvas(
                     sentences: sentences, translations: translations,
@@ -186,7 +191,7 @@ struct PDFBilingualReadingView: View {
                         session.revealIllustration(item)
                         peekingAtOriginal = true
                     })
-                if session.selectionSource == nil && !sentences.isEmpty
+                if showsPageAction && session.selectionSource == nil && !sentences.isEmpty
                     && (session.isTranslating || translations.count < sentences.count)
                 {
                     Divider()
@@ -196,9 +201,70 @@ struct PDFBilingualReadingView: View {
                     }.padding(.horizontal, 20).padding(.vertical, 10)
                 }
             }
+            if let documentStatus, let paperID = model.selectedPaperID {
+                documentBar(documentStatus, paperID: paperID)
+            } else if paragraphs && session.selectionSource == nil {
+                Divider()
+                Button("翻译全文") { session.setParagraphLayout(true, model: model) }
+                    .buttonStyle(.borderless).padding(.horizontal, 20).padding(.vertical, 10)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(ReaderTheme.surface)
+    }
+
+    private func documentBar(_ status: PDFDocumentTranslationStatus, paperID: UUID) -> some View {
+        let progress = status.progress
+        return VStack(alignment: .leading, spacing: 6) {
+            Divider()
+            HStack(spacing: 10) {
+                Image(
+                    systemName: status.phase == .completed && progress.partialPages == 0
+                        ? "checkmark.circle" : "character.bubble"
+                )
+                .foregroundStyle(ReaderTheme.accent).accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(documentSummary(status)).font(.caption).monospacedDigit()
+                    if case .failed(let reason) = status.phase {
+                        Text(reason).font(.caption).foregroundStyle(ReaderTheme.muted).textSelection(.enabled)
+                    }
+                }
+                Spacer(minLength: 4)
+                switch status.phase {
+                case .running:
+                    Button("暂停") { model.pdfDocumentTranslation.pause(paperID) }
+                case .paused:
+                    Button("继续翻译") { session.resumeDocumentTranslation(model) }
+                case .failed:
+                    if !model.pdfTranslationSettings.model.isEmpty {
+                        Button("重试") { session.resumeDocumentTranslation(model) }
+                    }
+                    Button("模型设置", action: openSettings)
+                case .completed:
+                    if progress.partialPages > 0 {
+                        Button("重试缺译部分") { session.resumeDocumentTranslation(model) }
+                    }
+                }
+            }
+            .buttonStyle(.borderless).padding(.horizontal, 20).padding(.top, 2).padding(.bottom, 8)
+        }
+    }
+
+    private func documentSummary(_ status: PDFDocumentTranslationStatus) -> String {
+        let progress = status.progress
+        let count = "\(progress.processedPages) / \(progress.pageCount) 页"
+        switch status.phase {
+        case .running:
+            if let page = progress.activePageIndex { return "全文 \(count) · 正在处理第 \(page + 1) 页" }
+            return "全文 \(count) · 正在准备"
+        case .paused: return "全文已暂停 · \(count)"
+        case .failed: return "全文翻译中断 · \(count)"
+        case .completed:
+            var parts = ["全文已处理 \(progress.pageCount) 页"]
+            if progress.partialPages > 0 { parts.append("\(progress.partialPages) 页有缺译") }
+            if progress.skippedPages > 0 { parts.append("\(progress.skippedPages) 页保留原版") }
+            return parts.joined(separator: " · ")
+        }
     }
 
     private func pageStatus(total: Int, completed: Int) -> String {
@@ -209,7 +275,7 @@ struct PDFBilingualReadingView: View {
         return "\(page) · 已译 \(completed) / \(total) 句"
     }
 
-    private func emptyPage(hasSentences: Bool) -> some View {
+    private func emptyPage(hasSentences: Bool, showsPageAction: Bool) -> some View {
         VStack(spacing: 14) {
             if session.isLoading {
                 ProgressView().controlSize(.small)
@@ -223,8 +289,12 @@ struct PDFBilingualReadingView: View {
             } else {
                 Image(systemName: "text.bubble").font(.system(size: 26, weight: .light)).foregroundStyle(
                     ReaderTheme.accent)
-                translationActions(continuing: false)
-                if !session.isTranslating { serviceDisclosure.multilineTextAlignment(.center) }
+                if showsPageAction {
+                    translationActions(continuing: false)
+                    if !session.isTranslating { serviceDisclosure.multilineTextAlignment(.center) }
+                } else {
+                    Text("本页译文就绪后会在这里显示").font(.callout).foregroundStyle(ReaderTheme.muted)
+                }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity).padding(24)

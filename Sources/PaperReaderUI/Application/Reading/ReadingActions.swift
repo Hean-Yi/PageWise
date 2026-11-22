@@ -29,12 +29,16 @@ extension ReaderModel {
     public func setActive(_ active: Bool, suspendTranslation: Bool = true) {
         isActive = active
         if active {
+            pdfDocumentTranslation.activate(session: pdfBilingual)
             beginReading()
         } else {
             Task { await flushReadingNotes() }
             invalidateSearchNavigation()
             endReading()
-            if suspendTranslation { pdfBilingual.pause() }
+            if suspendTranslation {
+                pdfBilingual.pause()
+                pdfDocumentTranslation.suspend()
+            }
             if suspendTranslation, !translationTasks.isEmpty {
                 translationPauseReason = "应用进入后台，翻译已暂停"
                 for task in translationTasks.values { task.cancel() }

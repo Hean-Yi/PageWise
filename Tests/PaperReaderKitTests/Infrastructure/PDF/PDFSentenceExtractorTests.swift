@@ -84,6 +84,19 @@ import Testing
     #expect(result.notice != nil)
 }
 
+@Test(arguments: ["References", "Bibliography"])
+func pdfSentenceExtractorExplainsReferencesPageAndReadsFollowingAppendix(_ heading: String) throws {
+    let url = try sentenceFixture(
+        [(54, 650, heading), (54, 624, "[1] A. Reader. A separate publication.")],
+        supporting: [(54, 650, "The appendix describes the measurement.")])
+    defer { try? FileManager.default.removeItem(at: url) }
+    let references = try PDFSentenceExtractor.extractPage(url: url, pageIndex: 0, includingIllustrations: true)
+    #expect(references.paragraphSentences.isEmpty)
+    #expect(references.notice == "本页为参考文献，保留原文。")
+    let appendix = try PDFSentenceExtractor.extractPage(url: url, pageIndex: 1, includingIllustrations: true)
+    #expect(appendix.paragraphSentences.map(\.text) == ["The appendix describes the measurement."])
+}
+
 @Test func pdfSentenceExtractorUsesNearbySpellingsAndKeepsSourceOffsets() throws {
     let url = try sentenceFixture(
         [

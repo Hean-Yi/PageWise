@@ -14,9 +14,12 @@ public enum PDFSentenceExtractor {
         -> PDFSentenceExtraction
     {
         guard let document = PDFDocument(url: url), !document.isLocked,
-            (0..<document.pageCount).contains(pageIndex), let page = document.page(at: pageIndex)
+            (0..<document.pageCount).contains(pageIndex)
         else { throw ReaderError.message("无法读取原始 PDF 的这一页。") }
         defer { withExtendedLifetime(document) {} }
+        guard let page = document.page(at: pageIndex) else {
+            return PDFSentenceExtraction(sentences: [], notice: "本页无法读取，请检查原始 PDF。")
+        }
         let text = try extractText(on: page, document: document, pageIndex: pageIndex)
         guard includingIllustrations else { return text }
         return try PDFIllustratedPage.compose(text: text, on: page, pageIndex: pageIndex)
@@ -74,15 +77,20 @@ public enum PDFSentenceExtractor {
         let spellings = hasWrappedHyphen ? nearbySpellings(in: document, pageIndex: pageIndex, source: string) : []
         var sentences = [PDFSourceSentence]()
         var unpairedRegions = Set<String>()
+        var isFirstGroup = true
         readingOrder: for column in bands {
             try Task.checkCancellation()
             for group in paragraphs(in: column, source: source) {
                 if let line = group.first,
                     ["references", "bibliography"].contains(content(line, source: source).lowercased())
                 {
+                    if isFirstGroup {
+                        return PDFSentenceExtraction(sentences: [], notice: "本页为参考文献，保留原文。")
+                    }
                     omitted = true
                     break readingOrder
                 }
+                isFirstGroup = false
                 sentences += split(
                     group, on: page, source: source, pageIndex: pageIndex, spellings: spellings, omitted: &omitted,
                     unpairedRegions: &unpairedRegions)

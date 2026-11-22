@@ -66,6 +66,172 @@ import Testing
     #expect(try Data(contentsOf: root.appendingPathComponent(stored)) == original)
 }
 
+@Test @MainActor func paragraphTranslationPrioritizesTheOpenPageAndFinishesFromTheLibrary() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let transport = SentenceWorkflowTransport()
+    await transport.holdRequests(true)
+    let model = try ReaderModel(
+        root: root, client: ModelClient(transport: transport), credentials: WorkflowCredentials())
+    await model.load()
+    let file = root.appendingPathComponent("two-pages.pdf")
+    try DemoPaper.write(to: file)
+    let original = try Data(contentsOf: file)
+    let paperID = try #require(await model.importURLs([file]).first)
+    let paper = try #require(model.paper)
+    var settings = ModelSettings()
+    settings.model = "fixture"
+    _ = try model.saveSettings(settings, key: "fixture-key")
+    model.visiblePage = 1
+    let session = model.pdfBilingual
+    session.open(model, translatingDocument: true)
+    let job = try #require(model.pdfDocumentTranslation.status(for: paperID))
+    try await waitForPageSession { !session.isLoading && job.progress.activePageIndex == 1 }
+    try await transport.waitForRequest()
+    let firstSource = try #require(await transport.firstSource)
+    #expect(session.paragraphSentences.contains { $0.text == firstSource })
+    model.visiblePage = 0
+    session.loadPage(model)
+    session.setParagraphLayout(false, model: model)
+    session.setParagraphLayout(true, model: model)
+    model.setActive(false, suspendTranslation: false)
+    model.select(nil)
+    #expect(!session.isOpen && job.phase == .running)
+    await transport.holdRequests(false)
+    try await waitForPageSession { job.phase == .completed }
+    #expect(job.progress.processedPages == paper.pageCount)
+    let calls = await transport.requests
+
+    // A new process with access to the same library, but no credential for the saved account.
+    let reopened = try ReaderModel(
+        root: root, client: ModelClient(transport: transport), credentials: WorkflowCredentials())
+    await reopened.load()
+    reopened.select(paperID)
+    reopened.pdfBilingual.open(reopened, translatingDocument: true)
+    let offline = try #require(reopened.pdfDocumentTranslation.status(for: paperID))
+    try await waitForPageSession { !reopened.pdfBilingual.isLoading && offline.phase == .completed }
+    for page in 0..<paper.pageCount {
+        reopened.visiblePage = page
+        reopened.pdfBilingual.loadPage(reopened)
+        try await waitForPageSession { !reopened.pdfBilingual.isLoading }
+        let shown = reopened.pdfBilingual.paragraphSentences
+        #expect(!shown.isEmpty && shown.allSatisfy { reopened.pdfBilingual.translations[$0.id] != nil })
+    }
+    #expect(await transport.requests == calls)
+    #expect(try Data(contentsOf: root.appendingPathComponent(paper.originalPath)) == original)
+}
+
+@Test @MainActor func paragraphTranslationWaitsForSettingsAndResumesOnlySystemPauses() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let transport = SentenceWorkflowTransport()
+    await transport.holdRequests(true)
+    let model = try ReaderModel(
+        root: root, client: ModelClient(transport: transport), credentials: WorkflowCredentials())
+    await model.load()
+    let file = root.appendingPathComponent("settings.pdf")
+    try DemoPaper.write(to: file)
+    let id = try #require(await model.importURLs([file]).first)
+    let session = model.pdfBilingual
+    session.open(model, translatingDocument: true)
+    guard case .failed = model.pdfDocumentTranslation.status(for: id)?.phase else {
+        Issue.record("缺少配置时应保留重排阅读并提供模型设置入口。")
+        return
+    }
+    #expect(session.isOpen && session.error == nil)
+    var settings = ModelSettings()
+    settings.model = "fixture"
+    _ = try model.saveSettings(settings, key: "fixture-key")
+    let job = try #require(model.pdfDocumentTranslation.status(for: id))
+    try await transport.waitForRequest()
+    model.pdfDocumentTranslation.pause(id)
+    model.setActive(false)
+    model.setActive(true)
+    session.setParagraphLayout(false, model: model)
+    session.setParagraphLayout(true, model: model)
+    #expect(job.phase == .paused)
+    #expect(await transport.requests == 1)
+    session.resumeDocumentTranslation(model)
+    try await transport.waitForRequest(number: 2)
+    model.setActive(false)
+    #expect(job.phase == .paused)
+    session.close()
+    model.setActive(true)
+    try await transport.waitForRequest(number: 3)
+    #expect(job.phase == .running)
+    await transport.holdRequests(false)
+    try await waitForPageSession { job.phase == .completed }
+}
+
+@Test @MainActor func deniedDocumentWaitsForChangedConnectionOrExplicitRetry() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let transport = SentenceWorkflowTransport()
+    await transport.respond(with: 401)
+    let model = try ReaderModel(
+        root: root, client: ModelClient(transport: transport), credentials: WorkflowCredentials())
+    await model.load()
+    let file = root.appendingPathComponent("access.pdf")
+    try DemoPaper.write(to: file)
+    let id = try #require(await model.importURLs([file]).first)
+    var settings = ModelSettings()
+    settings.model = "fixture"
+    _ = try model.saveSettings(settings, key: "old-fixture-key")
+    let session = model.pdfBilingual
+    session.open(model, translatingDocument: true)
+    let denied = try #require(model.pdfDocumentTranslation.status(for: id))
+    try await waitForPageSession {
+        if case .failed = denied.phase { return true }
+        return false
+    }
+    session.close()
+    session.open(model, translatingDocument: true)
+    model.setActive(false)
+    model.setActive(true)
+    settings.temperature = 0.7
+    _ = try model.saveSettings(settings, key: nil)
+    let stillDenied = try #require(model.pdfDocumentTranslation.status(for: id))
+    #expect(stillDenied.phase == denied.phase)
+    #expect(await transport.requests == 1)
+
+    await transport.respond(with: 200)
+    _ = try model.saveSettings(settings, key: "replacement-fixture-key")
+    let resumed = try #require(model.pdfDocumentTranslation.status(for: id))
+    try await waitForPageSession { resumed.phase == .completed }
+    #expect(await transport.requests > 1)
+}
+
+@Test @MainActor func cachedPageLoadPreservesNewerUpdatesAndRejectsOtherPaperUpdates() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let transport = SentenceWorkflowTransport()
+    let model = try ReaderModel(
+        root: root, client: ModelClient(transport: transport), credentials: WorkflowCredentials())
+    await model.load()
+    let file = root.appendingPathComponent("cached-page.pdf")
+    try DemoPaper.write(to: file)
+    let id = try #require(await model.importURLs([file]).first)
+    var settings = ModelSettings()
+    settings.model = "fixture"
+    _ = try model.saveSettings(settings, key: "fixture-key")
+    let session = model.pdfBilingual
+    session.open(model)
+    try await waitForPageSession { !session.isLoading }
+    session.translatePage(model)
+    try await waitForPageSession { !session.isTranslating }
+    let sentence = try #require(session.paragraphSentences.first)
+    #expect(session.translations[sentence.id] != nil)
+    session.close()
+    session.open(model)
+    let fresh = [sentence.id: "较新的完整译句"]
+    session.receiveDocumentTranslations(fresh, paperID: id, page: session.pageIndex)
+    session.receiveDocumentTranslations(["foreign": "其他论文"], paperID: UUID(), page: session.pageIndex)
+    session.receiveDocumentTranslations(["foreign": "其他页面"], paperID: id, page: session.pageIndex + 1)
+    try await waitForPageSession { !session.isLoading }
+    #expect(session.translations[sentence.id] == fresh[sentence.id])
+    #expect(session.translations["foreign"] == nil)
+}
+
 @MainActor private func waitForPageSession(_ done: () -> Bool) async throws {
     let deadline = ContinuousClock.now.advanced(by: .seconds(10))
     while !done() && ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(10)) }
@@ -74,12 +240,27 @@ import Testing
 
 private actor SentenceWorkflowTransport: HTTPTransport {
     private(set) var requests = 0
+    private(set) var firstSource: String?
+    private var holding = false
+    private var responseCode = 200
+
+    func holdRequests(_ hold: Bool) { holding = hold }
+    func respond(with code: Int) { responseCode = code }
+
+    func waitForRequest(number: Int = 1) async throws {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(10))
+        while requests < number, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(10)) }
+        try #require(requests >= number)
+    }
+
     func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) {
         requests += 1
         let body = try JSONSerialization.jsonObject(with: #require(request.httpBody)) as? [String: Any]
         let message = try #require((body?["messages"] as? [[String: String]])?.last?["content"])
         let input = try JSONSerialization.jsonObject(with: Data(message.utf8)) as? [String: Any]
         let sentences = try #require(input?["sentences"] as? [[String: Any]])
+        if firstSource == nil { firstSource = sentences.first?["en"] as? String }
+        while holding { try await Task.sleep(for: .milliseconds(10)) }
         let pairs = try sentences.map { row in
             ["id": try #require(row["id"] as? String), "zh": "测试译句 " + (try #require(row["en"] as? String))]
         }
@@ -89,7 +270,7 @@ private actor SentenceWorkflowTransport: HTTPTransport {
         ]
         let url = try #require(request.url)
         let response = try #require(
-            HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil))
+            HTTPURLResponse(url: url, statusCode: responseCode, httpVersion: nil, headerFields: nil))
         return (try JSONSerialization.data(withJSONObject: ["choices": choices]), response)
     }
 }
