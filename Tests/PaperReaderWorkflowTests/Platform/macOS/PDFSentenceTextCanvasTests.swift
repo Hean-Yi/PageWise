@@ -176,6 +176,83 @@
         #expect(restored)
     }
 
+    @Test @MainActor func pdfParagraphIllustrationsStayAnchoredDuringTranslationAndOpenTheirOriginalRegion()
+        async throws
+    {
+        let pixel = try #require(
+            Data(
+                base64Encoded:
+                    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGOQkFT4DwAB7wFRYQOP7AAAAABJRU5ErkJggg=="))
+        let sentences = [
+            PDFSourceSentence(id: "a", text: "Introduction.", pageIndex: 1, rects: [], paragraphID: "intro"),
+            PDFSourceSentence(id: "b", text: "Figure 1. Comparison.", pageIndex: 1, rects: [], paragraphID: "caption"),
+        ]
+        let figure = PDFReadingIllustration(
+            id: "figure", label: "图 1", pageIndex: 1, sourceBounds: CGRect(x: 5, y: 10, width: 30, height: 18),
+            insertBeforeSentenceID: "b", imagePNG: pixel)
+        let table = PDFReadingIllustration(
+            id: "table", label: "表 2", pageIndex: 1, sourceBounds: CGRect(x: 7, y: 60, width: 90, height: 30),
+            insertBeforeSentenceID: nil, imagePNG: nil)
+        var revealed: PDFReadingIllustration?
+        func canvas(
+            rows: [PDFSourceSentence], translations: [String: String], layout: PDFSentenceTextCanvas.Layout
+        ) -> PDFSentenceTextCanvas {
+            PDFSentenceTextCanvas(
+                sentences: rows, translations: translations, layout: layout, fontSize: 16, activeID: nil,
+                focusedID: nil, focusRevision: 0, followsScroll: false, sourceScrollID: nil, sourceScrollRevision: 0,
+                pdfSelectedIDs: [], onScroll: { _ in }, onSelection: { _ in }, onFocus: { _ in }, onHover: { _ in },
+                illustrations: [figure, table], onRevealIllustration: { revealed = $0 })
+        }
+        let initial = canvas(rows: sentences, translations: [:], layout: .paragraph)
+        let coordinator = initial.makeCoordinator()
+        let web = coordinator.makeView()
+        defer { coordinator.stop(web) }
+        func evaluate(_ script: String) async throws -> Bool {
+            try await web.callAsyncJavaScript(script, arguments: [:], in: nil, contentWorld: .defaultClient) as? Bool
+                == true
+        }
+        for _ in 0..<160 {
+            if (try? await evaluate("return document.images[0]?.naturalWidth===1")) == true { break }
+            try await Task.sleep(for: .milliseconds(25))
+        }
+        let placement = try await evaluate(
+            """
+            const blocks=[...document.querySelector('main').children];
+            const sequence=blocks.map(e=>e.dataset.group || e.querySelector('button').dataset.illustration);
+            const [image]=document.images;
+            window.crop=image;
+            const text=document.querySelector('.en[data-sentence=b]').firstChild;
+            getSelection().setBaseAndExtent(text,0,text,8);
+            return sequence.join(',')==='intro,figure,caption,table' && document.images.length===1 && image.naturalWidth===1
+              && image.closest('button').getAttribute('aria-label')==='在原页查看图 1'
+              && blocks[3].textContent==='在原页查看表 2';
+            """)
+        #expect(placement)
+        coordinator.update(canvas(rows: sentences, translations: ["a": "简介。"], layout: .paragraph), view: web)
+        let preserved = try await evaluate(
+            """
+            return document.images[0]===window.crop && getSelection().toString()==='Figure 1'
+                && document.querySelector('.zh').textContent==='简介。';
+            """)
+        #expect(preserved)
+        for item in [figure, table] {
+            revealed = nil
+            _ = try await web.callAsyncJavaScript(
+                "getSelection().removeAllRanges();document.querySelector('[data-illustration='+id+']').click()",
+                arguments: ["id": item.id], in: nil, contentWorld: .defaultClient)
+            for _ in 0..<60 where revealed == nil { try await Task.sleep(for: .milliseconds(10)) }
+            #expect(revealed == item)
+        }
+        coordinator.update(canvas(rows: [], translations: [:], layout: .paragraph), view: web)
+        let onlyFigures = try await evaluate(
+            "return document.querySelectorAll('main figure').length===2 && !document.querySelector('[data-sentence]')")
+        #expect(onlyFigures)
+        coordinator.update(canvas(rows: sentences, translations: ["b": "图注。"], layout: .stacked), view: web)
+        let sentenceLayout = try await evaluate(
+            "return !document.querySelector('figure') && !!document.querySelector('#b')")
+        #expect(sentenceLayout)
+    }
+
     @Test @MainActor func pdfSentenceScrollFollowsUserInputWithoutEchoingProgrammaticJumps() async throws {
         let sentences = (0..<24).map { index in
             PDFSourceSentence(

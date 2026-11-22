@@ -7,6 +7,9 @@ import PaperReaderKit
 final class PDFBilingualSession {
     private(set) var isOpen = false
     private(set) var sentences: [PDFSourceSentence] = []
+    private(set) var paragraphSentences: [PDFSourceSentence] = []
+    private(set) var illustrations: [PDFReadingIllustration] = []
+    private(set) var sourceIllustration: PDFReadingIllustration?
     private(set) var translations: [String: String] = [:]
     private(set) var isLoading = false
     private(set) var isTranslating = false
@@ -65,6 +68,8 @@ final class PDFBilingualSession {
         isLoading = false
         generation = UUID()
         hoveredID = nil
+        illustrations = []
+        sourceIllustration = nil
         // Invalidate the page so reopening also rereads the persisted translations.
         pageIndex = -1
     }
@@ -86,6 +91,9 @@ final class PDFBilingualSession {
         pdfSelectedIDs = []
         hoveredID = nil
         sentences = []
+        paragraphSentences = []
+        illustrations = []
+        sourceIllustration = nil
         translations = [:]
         selectionSource = nil
         selectionTranslation = nil
@@ -99,7 +107,7 @@ final class PDFBilingualSession {
             defer { if generation == token { isLoading = false } }
             do {
                 let extraction = Task.detached(priority: .userInitiated) {
-                    try PDFSentenceExtractor.extractPage(url: url, pageIndex: index)
+                    try PDFSentenceExtractor.extractPage(url: url, pageIndex: index, includingIllustrations: true)
                 }
                 let page = try await withTaskCancellationHandler {
                     try await extraction.value
@@ -108,6 +116,8 @@ final class PDFBilingualSession {
                 }
                 guard generation == token, !Task.isCancelled else { return }
                 sentences = page.sentences
+                paragraphSentences = page.paragraphSentences
+                illustrations = page.illustrations
                 notice = page.notice
                 if let focusedID, !sentences.contains(where: { $0.id == focusedID }) { self.focusedID = nil }
                 let cached = try await store.cached(
@@ -120,11 +130,12 @@ final class PDFBilingualSession {
         }
     }
 
-    func translatePage(_ model: ReaderModel) {
-        guard matches(model), !isLoading, !isTranslating, !sentences.isEmpty else { return }
+    func translatePage(_ model: ReaderModel, paragraphs: Bool = false) {
+        let sources = paragraphs ? paragraphSentences : sentences
+        guard matches(model), !isLoading, !isTranslating, !sources.isEmpty else { return }
         selectionSource = nil
         selectionTranslation = nil
-        translate(sentences, model: model, selection: false)
+        translate(sources, model: model, selection: false)
     }
 
     func translateSelection(_ model: ReaderModel) {
@@ -166,15 +177,23 @@ final class PDFBilingualSession {
     }
 
     func focus(_ id: String?) {
+        sourceIllustration = nil
         hoveredID = nil
         focusedID = id
         revealRevision &+= 1
     }
 
     func focusFromPDF(_ id: String) {
+        sourceIllustration = nil
         hoveredID = nil
         focusedID = id
         sourceFocusRevision &+= 1
+    }
+
+    func revealIllustration(_ item: PDFReadingIllustration) {
+        guard isOpen, item.pageIndex == pageIndex, illustrations.contains(where: { $0.id == item.id }) else { return }
+        focus(nil)
+        sourceIllustration = item
     }
 
     func scrollFromTranslation(_ id: String) {

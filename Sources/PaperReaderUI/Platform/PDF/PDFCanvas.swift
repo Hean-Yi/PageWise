@@ -17,7 +17,8 @@ struct PDFCanvas: View {
             activeID: session.activeID,
             focusedID: session.focusedID, revealRevision: session.revealRevision,
             selectedIDs: session.translationSelectedIDs, scrollID: session.pdfScrollID,
-            scrollRevision: session.pdfScrollRevision)
+            scrollRevision: session.pdfScrollRevision,
+            illustration: acceptsSentenceInput && session.matches(model) ? session.sourceIllustration : nil)
         PlatformPDF(model: model, penEnabled: penEnabled, focus: focus)
     }
 }
@@ -30,6 +31,7 @@ private struct PDFSentenceDisplay {
     let selectedIDs: [String]
     let scrollID: String?
     let scrollRevision: Int
+    let illustration: PDFReadingIllustration?
 }
 
 @MainActor
@@ -118,6 +120,7 @@ private final class PDFCoordinator: NSObject, @preconcurrency PDFPageOverlayView
     private var displayedSentenceIDs: [String] = []
     private var scrollRevision = 0
     private var revealRevision: Int?
+    private var revealedIllustrationID: String?
     var isUpdating = false
     var paperID: UUID?
     #if os(iOS)
@@ -195,6 +198,7 @@ private final class PDFCoordinator: NSObject, @preconcurrency PDFPageOverlayView
             let oldPage = model.visiblePage
             displayedSentenceIDs = []
             revealRevision = nil
+            revealedIllustrationID = nil
             identity = newIdentity
             keys = model.pageKeys
             paperID = model.selectedPaperID
@@ -327,6 +331,12 @@ private final class PDFCoordinator: NSObject, @preconcurrency PDFPageOverlayView
         let newScroll = scrollRevision != display.scrollRevision
         revealRevision = display.revealRevision
         scrollRevision = display.scrollRevision
+        if let item = display.illustration, revealedIllustrationID != item.id,
+            let page = view.document?.page(at: item.pageIndex)
+        {
+            view.go(to: item.sourceBounds, on: page)
+        }
+        revealedIllustrationID = display.illustration?.id
         let targetID = newFocus ? display.focusedID : (newScroll ? display.scrollID : nil)
         if let targetID, let sentence = display.sentences.first(where: { $0.id == targetID }),
             let page = view.document?.page(at: sentence.pageIndex),

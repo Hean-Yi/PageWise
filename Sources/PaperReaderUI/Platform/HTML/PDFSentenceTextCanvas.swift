@@ -20,12 +20,15 @@ import WebKit
     let onSelection: ([String]) -> Void
     let onFocus: (String?) -> Void
     let onHover: (String?) -> Void
+    var illustrations: [PDFReadingIllustration] = []
+    var onRevealIllustration: ((PDFReadingIllustration) -> Void)?
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
     @MainActor final class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
         private var latest: PDFSentenceTextCanvas
         private var renderedSentences: [PDFSourceSentence] = []
+        private var renderedIllustrations: [PDFReadingIllustration] = []
         private var translated: [String: String] = [:]
         private var displayedLayout: Layout?
         private var displayedFontSize: Int?
@@ -72,8 +75,10 @@ import WebKit
             guard ready else { return }
             let changed = renderedSentences != parent.sentences || translated != parent.translations
             let layoutChanged = displayedLayout != parent.layout
-            if changed || layoutChanged {
-                let paragraph = parent.layout == .paragraph
+            let paragraph = parent.layout == .paragraph
+            let illustrations = paragraph ? parent.illustrations : []
+            let illustrationsChanged = renderedIllustrations != illustrations
+            if changed || layoutChanged || illustrationsChanged {
                 let rows = parent.sentences.compactMap { sentence -> [String: String]? in
                     let translation = parent.translations[sentence.id]
                     guard paragraph || translation != nil else { return nil }
@@ -82,9 +87,18 @@ import WebKit
                         "en": sentence.text, "zh": translation ?? "",
                     ]
                 }
+                var arguments: [String: Any] = ["rows": rows, "layout": parent.layout.rawValue, "figures": NSNull()]
+                if illustrationsChanged {
+                    arguments["figures"] = illustrations.map { item in
+                        [
+                            "id": item.id, "label": item.label, "before": item.insertBeforeSentenceID ?? "",
+                            "png": item.imagePNG?.base64EncodedString() ?? "",
+                        ]
+                    }
+                    renderedIllustrations = illustrations
+                }
                 view.callAsyncJavaScript(
-                    "window.sentenceReader.render(rows, layout)",
-                    arguments: ["rows": rows, "layout": parent.layout.rawValue],
+                    "window.sentenceReader.render(rows, layout, figures)", arguments: arguments,
                     in: nil, in: .defaultClient, completionHandler: nil)
                 renderedSentences = parent.sentences
                 translated = parent.translations
@@ -133,6 +147,14 @@ import WebKit
 
         func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
             guard ready, message.frameInfo.isMainFrame, let event = message.body as? [String: Any] else { return }
+            if event["action"] as? String == "illustration" {
+                if latest.layout == .paragraph, let id = event["id"] as? String,
+                    let item = latest.illustrations.first(where: { $0.id == id })
+                {
+                    latest.onRevealIllustration?(item)
+                }
+                return
+            }
             if event["action"] as? String == "selection", let ids = event["ids"] as? [String],
                 ids.allSatisfy({ isDisplayed($0) })
             {
@@ -170,7 +192,7 @@ extension PDFSentenceTextCanvas {
     fileprivate static let document = """
         <!doctype html><html lang="zh-Hans"><head><meta charset="utf-8">
         <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-        <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'">
+        <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'; base-uri 'none'">
         <style>
         :root{color-scheme:light dark;--paper:#fffefa;--ink:#282724;--en:#605e59;--active:#f5e4d7;--focus:#af6247}
         @media(prefers-color-scheme:dark){:root{--paper:#2e2b28;--ink:#f1eee7;--en:#c4beb4;--active:#654634;--focus:#e8a082}}
@@ -184,7 +206,13 @@ extension PDFSentenceTextCanvas {
         .stacked .en{display:block;font:16px/1.55 Georgia,"Times New Roman",serif;color:var(--en);margin-bottom:3px}
         .stacked p{margin-bottom:1.5em}.stacked .zh{line-height:1.7}
         .paragraph main{max-width:48rem;padding:clamp(22px,4vw,44px) clamp(20px,6vw,56px) 60px}
-        .paragraph section+section{margin-top:1.7em}
+        .paragraph main>*+*{margin-top:1.7em}
+        figure{margin:0}.paragraph figure+section{margin-top:.8em}
+        figure button{display:block;max-width:100%;padding:0;border:0;background:none;color:var(--focus);cursor:pointer;font:inherit}
+        figure button:focus-visible{outline:2px solid var(--focus);outline-offset:3px}
+        figure img{display:block;max-width:100%;height:auto;margin:auto}
+        figure button:has(img){width:100%;cursor:zoom-in}
+        figure button:not(:has(img)){font-size:.9em;text-decoration:underline;text-underline-offset:.2em}
         .paragraph p{margin:0}.paragraph p[lang="en"]{font:1.06em/1.55 Georgia,"Times New Roman",serif;color:var(--en)}
         .paragraph .en{display:inline}.paragraph p[lang="zh-Hans"]{margin-top:.45em;line-height:1.8}
         .pending{color:var(--en);font:.8em/1.6 -apple-system,sans-serif;margin-inline:.2em;-webkit-user-select:none;user-select:none}
@@ -196,6 +224,7 @@ extension PDFSentenceTextCanvas {
     fileprivate static let script = """
         (() => {
           const main=document.querySelector('main'), pairs=new Map();
+          let figures=[];
           let hot='', active='', focused='', track=false, userScroll=false, scrollTimer=0, lastScroll='';
           let lastSelection=[], related=[], order=[], paragraphMode=false, revealLanguage='en';
           const send=(action,id)=>window.webkit.messageHandlers.sentence.postMessage({action,id});
@@ -298,6 +327,10 @@ extension PDFSentenceTextCanvas {
           main.addEventListener('pointerover',e=>{if(e.pointerType==='mouse') hover(pairAt(e.target)?.dataset.sentence||'');});
           main.addEventListener('pointerleave',()=>hover(''));
           main.addEventListener('click',e=>{
+            const figure=e.target.closest('[data-illustration]');
+            if (figure && (e.detail===0 || getSelection().isCollapsed)) {
+              send('illustration',figure.dataset.illustration); return;
+            }
             const el=pairAt(e.target);
             if (el && window.getSelection().isCollapsed) focus(el);
           });
@@ -354,14 +387,34 @@ extension PDFSentenceTextCanvas {
             }
             return group;
           }
+          function makeFigure(item) {
+            const node=document.createElement('figure'), button=document.createElement('button');
+            button.type='button';
+            button.dataset.illustration=item.id;
+            const action='在原页查看'+item.label;
+            button.setAttribute('aria-label',action);
+            if (item.png) {
+              const image=document.createElement('img');
+              image.alt=item.label; image.draggable=false;
+              image.addEventListener('error',()=>{button.textContent=action;},{once:true});
+              image.src='data:image/png;base64,'+item.png;
+              button.append(image); button.title=action;
+            } else {
+              button.textContent=action;
+            }
+            node.append(button);
+            return {before:item.before,node};
+          }
           window.sentenceReader={
-            render(rows,layout) {
+            render(rows,layout,items) {
               const changingStructure=paragraphMode!==(layout==='paragraph');
               const selection=getSelection();
               const {anchorNode,anchorOffset,focusNode,focusOffset}=selection;
               paragraphMode=layout==='paragraph';
               document.body.className=layout;
-              const previous=changingStructure ? new Map() : new Map([...main.children].map(p=>[p.dataset.group,p]));
+              main.setAttribute('aria-label',paragraphMode ? '本页段落对照' : '本页逐句译文');
+              if (items) figures=items.map(makeFigure);
+              const previous=changingStructure ? new Map() : new Map([...main.querySelectorAll('[data-group]')].map(p=>[p.dataset.group,p]));
               const groups=new Map();
               order=rows.map(row=>row.id);
               const incoming=new Set(order);
@@ -380,8 +433,14 @@ extension PDFSentenceTextCanvas {
                 if (pair.zh.textContent!==row.zh) pair.zh.textContent=row.zh;
                 groups.get(row.paragraph).push(pair);
               }
-              const blocks=[];
+              const blocks=[], beforeGroup=new Map();
+              for (const item of figures) {
+                const group=pairs.get(item.before)?.group;
+                if (!beforeGroup.has(group)) beforeGroup.set(group,[]);
+                beforeGroup.get(group).push(item.node);
+              }
               for (const [id,members] of groups) {
+                if (beforeGroup.has(id)) blocks.push(...beforeGroup.get(id));
                 const group=previous.get(id)||makeGroup(id);
                 if (paragraphMode) {
                   const english=[], chinese=[];
@@ -400,6 +459,7 @@ extension PDFSentenceTextCanvas {
                 }
                 blocks.push(group);
               }
+              if (beforeGroup.has(undefined)) blocks.push(...beforeGroup.get(undefined));
               setChildren(main,blocks);
               if (changingStructure) {
                 revealLanguage='en';

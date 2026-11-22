@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 
 /// Original page-space line rectangles and PDFKit character ranges are scoped to the imported PDF digest.
@@ -30,4 +31,42 @@ public struct PDFSourceSentence: Codable, Hashable, Identifiable, Sendable {
 public struct PDFSentenceExtraction: Sendable {
     public let sentences: [PDFSourceSentence]
     public let notice: String?
+    public let illustrations: [PDFReadingIllustration]
+    private let picturedSentenceIDs: Set<String>
+
+    public var paragraphSentences: [PDFSourceSentence] {
+        picturedSentenceIDs.isEmpty ? sentences : sentences.filter { !picturedSentenceIDs.contains($0.id) }
+    }
+
+    init(
+        sentences: [PDFSourceSentence], notice: String?, illustrations: [PDFReadingIllustration] = [],
+        picturedSentenceIDs: Set<String> = []
+    ) {
+        self.sentences = sentences
+        self.notice = notice
+        self.illustrations = illustrations
+        self.picturedSentenceIDs = picturedSentenceIDs
+    }
+}
+
+/// A transient view of one region of the original PDF. An unverified crop links to its caption.
+public struct PDFReadingIllustration: Identifiable, Equatable, Sendable {
+    public let id: String
+    public let label: String
+    public let pageIndex: Int
+    public let sourceBounds: CGRect
+    public let insertBeforeSentenceID: String?
+    public let imagePNG: Data?
+
+    public init(
+        id: String, label: String, pageIndex: Int, sourceBounds: CGRect, insertBeforeSentenceID: String?,
+        imagePNG: Data?
+    ) {
+        self.id = id
+        self.label = label
+        self.pageIndex = pageIndex
+        self.sourceBounds = sourceBounds
+        self.insertBeforeSentenceID = insertBeforeSentenceID
+        self.imagePNG = imagePNG
+    }
 }

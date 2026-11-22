@@ -10,11 +10,21 @@ public enum PDFSentenceExtractor {
     }
 
     /// PDFKit objects stay inside this call. The UI can run extraction off the main actor.
-    public static func extractPage(url: URL, pageIndex: Int) throws -> PDFSentenceExtraction {
+    public static func extractPage(url: URL, pageIndex: Int, includingIllustrations: Bool = false) throws
+        -> PDFSentenceExtraction
+    {
         guard let document = PDFDocument(url: url), !document.isLocked,
             (0..<document.pageCount).contains(pageIndex), let page = document.page(at: pageIndex)
         else { throw ReaderError.message("无法读取原始 PDF 的这一页。") }
         defer { withExtendedLifetime(document) {} }
+        let text = try extractText(on: page, document: document, pageIndex: pageIndex)
+        guard includingIllustrations else { return text }
+        return try PDFIllustratedPage.compose(text: text, on: page, pageIndex: pageIndex)
+    }
+
+    private static func extractText(on page: PDFPage, document: PDFDocument, pageIndex: Int) throws
+        -> PDFSentenceExtraction
+    {
         let empty = PDFSentenceExtraction(sentences: [], notice: "本页没有可提取的正文，请查看原页。")
         let uncertain = PDFSentenceExtraction(sentences: [], notice: "本页文字位置或分栏顺序无法可靠核对，请查看原页或手动选译。")
         guard let string = page.string, !string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
@@ -84,7 +94,7 @@ public enum PDFSentenceExtractor {
             return PDFSentenceExtraction(sentences: sentences, notice: "\(locations)有文字无法可靠配对，请在原页核对。")
         }
         return PDFSentenceExtraction(
-            sentences: sentences, notice: omitted ? "仅展示可定位的横排文字，其他内容请对照原页。" : nil)
+            sentences: sentences, notice: omitted ? "本页有部分内容需在原页核对。" : nil)
     }
 
     private struct Run {

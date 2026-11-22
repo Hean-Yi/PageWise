@@ -44,9 +44,16 @@ struct PDFBilingualReadingView: View {
                     .opacity(pdfVisible ? 1 : 0)
                     .allowsHitTesting(pdfVisible)
                     .accessibilityHidden(!pdfVisible)
-                if session.isOpen && !peekingAtOriginal {
+                if session.isOpen && (!peekingAtOriginal || textLayout == .paragraph) {
                     if spread { splitter(width: width).frame(width: 8) }
                     pane(textLayout: textLayout, allowsSplit: width >= 570)
+                        // Keep the paragraph canvas at its reading width and scroll position during a source peek.
+                        .frame(width: textLayout == .paragraph ? width : nil)
+                        .frame(width: peekingAtOriginal ? 0 : nil)
+                        .clipped()
+                        .opacity(peekingAtOriginal ? 0 : 1)
+                        .allowsHitTesting(!peekingAtOriginal)
+                        .accessibilityHidden(peekingAtOriginal)
                 }
             }
             .overlay(alignment: .topTrailing) {
@@ -96,14 +103,23 @@ struct PDFBilingualReadingView: View {
     private func pane(textLayout: PDFSentenceTextCanvas.Layout, allowsSplit: Bool) -> some View {
         let split = textLayout == .split
         let paragraphs = textLayout == .paragraph
+        let sentences = paragraphs ? session.paragraphSentences : session.sentences
+        let cached = session.translations
+        let translations =
+            paragraphs
+            ? Dictionary(
+                uniqueKeysWithValues: sentences.compactMap { sentence in
+                    cached[sentence.id].map { (sentence.id, $0) }
+                }) : cached
         return VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 10) {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(split ? "简体中文" : (paragraphs ? "英汉段落对照" : "英汉对照")).font(.headline)
-                    Text(pageStatus).font(.caption).foregroundStyle(ReaderTheme.muted).monospacedDigit()
+                    Text(pageStatus(total: sentences.count, completed: translations.count))
+                        .font(.caption).foregroundStyle(ReaderTheme.muted).monospacedDigit()
                 }
                 Spacer(minLength: 4)
-                if !split && (paragraphs || !session.translations.isEmpty) {
+                if !split && (paragraphs || !translations.isEmpty) {
                     Button {
                         peekingAtOriginal = true
                     } label: {
@@ -151,24 +167,31 @@ struct PDFBilingualReadingView: View {
                 .padding(12).background(ReaderTheme.accent.opacity(0.07))
             }
             if let source = session.selectionSource {
-                selectionResult(source)
+                selectionResult(source, sentences: sentences)
             }
-            if session.translations.isEmpty && (!paragraphs || session.sentences.isEmpty) {
-                emptyPage
+            if translations.isEmpty
+                && (!paragraphs || (sentences.isEmpty && session.illustrations.isEmpty))
+            {
+                emptyPage(hasSentences: !sentences.isEmpty)
             } else {
                 PDFSentenceTextCanvas(
-                    sentences: session.sentences, translations: session.translations,
+                    sentences: sentences, translations: translations,
                     layout: textLayout, fontSize: fontSize, activeID: session.activeID, focusedID: session.focusedID,
                     focusRevision: session.sourceFocusRevision, followsScroll: session.followsScroll,
                     sourceScrollID: session.sourceScrollID, sourceScrollRevision: session.sourceScrollRevision,
                     pdfSelectedIDs: session.pdfSelectedIDs, onScroll: session.scrollFromTranslation,
-                    onSelection: session.selectFromTranslation, onFocus: session.focus, onHover: session.hover)
-                if session.selectionSource == nil
-                    && (session.isTranslating || session.translations.count < session.sentences.count)
+                    onSelection: session.selectFromTranslation, onFocus: session.focus, onHover: session.hover,
+                    illustrations: session.illustrations,
+                    onRevealIllustration: { item in
+                        session.revealIllustration(item)
+                        peekingAtOriginal = true
+                    })
+                if session.selectionSource == nil && !sentences.isEmpty
+                    && (session.isTranslating || translations.count < sentences.count)
                 {
                     Divider()
                     HStack(spacing: 12) {
-                        translationActions
+                        translationActions(continuing: !translations.isEmpty)
                         if !session.isTranslating { serviceDisclosure }
                     }.padding(.horizontal, 20).padding(.vertical, 10)
                 }
@@ -178,21 +201,20 @@ struct PDFBilingualReadingView: View {
         .background(ReaderTheme.surface)
     }
 
-    private var pageStatus: String {
+    private func pageStatus(total: Int, completed: Int) -> String {
         let page = "原页 \(model.visiblePage + 1)"
-        guard !session.sentences.isEmpty else { return page }
-        let completed = session.translations.count
-        if completed == 0 { return "\(page) · \(session.sentences.count) 句" }
-        if completed == session.sentences.count { return "\(page) · 已译 \(completed) 句" }
-        return "\(page) · 已译 \(completed) / \(session.sentences.count) 句"
+        guard total > 0 else { return page }
+        if completed == 0 { return "\(page) · \(total) 句" }
+        if completed == total { return "\(page) · 已译 \(completed) 句" }
+        return "\(page) · 已译 \(completed) / \(total) 句"
     }
 
-    private var emptyPage: some View {
+    private func emptyPage(hasSentences: Bool) -> some View {
         VStack(spacing: 14) {
             if session.isLoading {
                 ProgressView().controlSize(.small)
                 Text("正在读取本页文字").font(.callout).foregroundStyle(ReaderTheme.muted)
-            } else if session.sentences.isEmpty {
+            } else if !hasSentences {
                 Image(systemName: "doc.text.viewfinder").font(.title2).foregroundStyle(ReaderTheme.muted)
                 Text(layout == .paragraph ? "本页暂无可重排的文字" : "本页暂无可逐句对照的文字").font(.headline)
                 if layout != .paragraph {
@@ -201,7 +223,7 @@ struct PDFBilingualReadingView: View {
             } else {
                 Image(systemName: "text.bubble").font(.system(size: 26, weight: .light)).foregroundStyle(
                     ReaderTheme.accent)
-                translationActions
+                translationActions(continuing: false)
                 if !session.isTranslating { serviceDisclosure.multilineTextAlignment(.center) }
             }
         }
@@ -214,7 +236,7 @@ struct PDFBilingualReadingView: View {
             .font(.caption).foregroundStyle(ReaderTheme.muted).textSelection(.enabled)
     }
 
-    @ViewBuilder private var translationActions: some View {
+    @ViewBuilder private func translationActions(continuing: Bool) -> some View {
         if session.isTranslating {
             HStack(spacing: 8) {
                 ProgressView().controlSize(.small)
@@ -226,16 +248,16 @@ struct PDFBilingualReadingView: View {
                 if model.pdfTranslationSettings.model.isEmpty {
                     openSettings()
                 } else {
-                    model.pdfBilingual.translatePage(model)
+                    session.translatePage(model, paragraphs: layout == .paragraph)
                 }
             } label: {
-                Label(session.translations.isEmpty ? "翻译本页" : "继续翻译本页", systemImage: "character.bubble")
+                Label(continuing ? "继续翻译本页" : "翻译本页", systemImage: "character.bubble")
                     .padding(.horizontal, 5).padding(.vertical, 3)
             }.buttonStyle(.borderedProminent).tint(ReaderTheme.accent).disabled(session.isLoading)
         }
     }
 
-    private func selectionResult(_ source: String) -> some View {
+    private func selectionResult(_ source: String, sentences: [PDFSourceSentence]) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
                 Text("选区译文").font(.caption.weight(.semibold)).foregroundStyle(ReaderTheme.accent)
@@ -260,7 +282,7 @@ struct PDFBilingualReadingView: View {
                     }
                 }.frame(maxWidth: .infinity, alignment: .leading)
             }.frame(maxHeight: 140).fixedSize(horizontal: false, vertical: true)
-            if session.selectionContextID != nil {
+            if let id = session.selectionContextID, sentences.contains(where: { $0.id == id }) {
                 Button("对照整句") { session.showSelectionContext() }
                     .buttonStyle(.borderless).font(.caption.weight(.medium))
                     .help("查看这一句已保存的英文和译文")
