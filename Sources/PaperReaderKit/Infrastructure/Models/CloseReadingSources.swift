@@ -229,6 +229,30 @@ struct CloseReadingCorpus {
             }
             // Remove the translation and shared objects only from this private parsing tree.
             try element.select(".translation,.pending").remove()
+            // Register equations independently of the prose: selecting text cannot cross a
+            // shared math object. A repeated expression in the same block has no unique locator.
+            var equations: [String] = []
+            var seenEquations: Set<String> = []
+            var repeatedEquations: Set<String> = []
+            for equation in try element.select("math,.paper-equation") {
+                guard
+                    !equation.parents().contains(where: {
+                        ["table", "math", "svg"].contains($0.tagName()) || $0.hasClass("paper-equation")
+                    }),
+                    try !equation.hasClass("paper-equation") || equation.select("math").count <= 1,
+                    let source = try HTMLReadingStore.publishedEquationSource(equation),
+                    !source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, source.count <= 1_490
+                else { continue }
+                let label = "[公式] " + source
+                if !seenEquations.insert(label).inserted {
+                    repeatedEquations.insert(label)
+                    continue
+                }
+                let standalone = try equation.attr("display") == "block" || equation.hasClass("paper-equation")
+                if try standalone || !equation.select("mo,mfrac,msqrt,mroot,munder,mover,munderover,mtable").isEmpty() {
+                    equations.append(label)
+                }
+            }
             let tables = try element.select("table:not(.paper-equation)")
             let matrices = try tables.compactMap { try verifiedRows($0) }
             let hasVisualOnly = try !element.select("img,svg").isEmpty() || matrices.count < tables.count
@@ -242,6 +266,9 @@ struct CloseReadingCorpus {
                 kind: matrices.isEmpty ? (hasVisualOnly ? "captionOnly" : "prose") : "table",
                 table: matrices.isEmpty ? nil : matrices.joined(separator: "\n\n"), paper: paper, page: nil,
                 block: block)
+            for equation in equations where !repeatedEquations.contains(equation) {
+                collection.add(equation, kind: "equation", table: nil, paper: paper, page: nil, block: block)
+            }
             if collection.passages.count == count { collection.unavailable.append(index) }
         }
         return collection.result(unit: "个已发布源码段", total: artifact.sections.count, inspected: positions.count)

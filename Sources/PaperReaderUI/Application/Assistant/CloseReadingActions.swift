@@ -120,44 +120,52 @@ extension ReaderModel {
                 skipped += 1
             }
         }
-        var outline: [String] = []
+        var sections: [String] = []
         var outlineRefs: [LocalPassageCitation] = []
-        var omittedStages = 0
-        for item in analysis.outline {
+        var omittedSections = 0
+        var previousHeading: String?
+        for item in analysis.sections {
             try Task.checkCancellation()
             var references: [LocalPassageCitation] = []
             var links: [String] = []
-            for ref in item.references where ref.evidence.paperID == scope.paperID && ref.evidence.readingNoteID == nil
+            for ref in item.references where ref.evidence.paperID == scope.paperID || ref.evidence.readingNoteID != nil
             {
                 if let source = try? await citation(ref.evidence, ref.quote) {
                     references.append(source)
                     links.append(source.markdown(label: ref.label))
                 }
             }
-            guard !links.isEmpty, links.count == item.references.count else {
-                omittedStages += 1
+            guard !links.isEmpty, links.count == item.references.count,
+                references.contains(where: { $0.paperID == scope.paperID && $0.readingNoteID == nil }),
+                Set((outlineRefs + references).map(\.id)).count <= 16
+            else {
+                omittedSections += 1
                 continue
             }
             for source in references where !outlineRefs.contains(where: { $0.id == source.id }) {
                 outlineRefs.append(source)
             }
-            outline.append("**\(item.stage.title)**　" + item.text + "\n\n" + links.joined(separator: " · "))
+            if item.heading != previousHeading { sections.append("## " + item.heading) }
+            previousHeading = item.heading
+            sections.append(item.markdown + "\n\n" + links.joined(separator: " · "))
         }
         try Task.checkCancellation()
         try validateDiscussionScope(scope)
-        guard !insertions.isEmpty || !outline.isEmpty else {
+        guard !insertions.isEmpty || !sections.isEmpty else {
             throw ReaderError.message("没有批注或论证引文通过原文定位校验。可以选中一段原文，单独询问助读。")
         }
         let coverage =
             analysis.coverage + (skipped == 0 ? "" : " · \(skipped) 条批注未通过原文核对")
-            + (omittedStages == 0 ? "" : " · \(omittedStages) 项总结缺少可定位的依据")
+            + (omittedSections == 0 ? "" : " · \(omittedSections) 节未能完整登记可定位的引文")
         var report = ChatTurn(
             paperID: scope.paperID, question: focus.isEmpty ? "AI 精读" : focus, selection: "",
             answer: coverage, evidence: [])
         report.closeReadingVersion = closeReadingVersion(for: scope)
         report.closeReadingNoteIDs = insertions.map(\.note.id)
-        if let version = outlineRefs.first?.contentVersion {
-            let body = (["# 全文论证骨架"] + outline).joined(separator: "\n\n")
+        if let version = outlineRefs.first(where: { $0.paperID == scope.paperID && $0.readingNoteID == nil })?
+            .contentVersion
+        {
+            let body = sections.joined(separator: "\n\n")
             try await validateNoteCitations(outlineRefs, markdown: body)
             var note = ReadingNote(paperID: scope.paperID, contentVersion: version, anchors: [], markdown: body)
             note.placement = .documentEnd

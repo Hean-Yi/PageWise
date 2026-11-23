@@ -220,7 +220,7 @@ public struct AgentClient: AgentCompleting {
                 ], ["paper_id"]),
             make(
                 "close_read_paper",
-                "Run the reader-requested critical close reading of one registered local paper. Call alone.",
+                "Create passage-linked annotations and an end-of-paper reading note for one registered local paper. The reader's request supplies the focus (e.g. a mechanism, control, or open question). Call alone.",
                 ["paper_id": .init(type: "string", description: "Registered local paper ID")], ["paper_id"]),
             make(
                 "create_reading_note",

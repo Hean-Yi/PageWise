@@ -51,14 +51,20 @@ public struct CloseReadingAnnotation: Sendable {
     public let references: [CloseReadingReference]
 }
 
-public struct CloseReadingOutlineItem: Sendable {
+struct CloseReadingOutlineItem: Sendable {
     public let stage: CloseReadingStage
     public let text: String
     public let references: [CloseReadingReference]
 }
 
+public struct CloseReadingNotebookSection: Sendable {
+    public let heading: String
+    public let markdown: String
+    public let references: [CloseReadingReference]
+}
+
 public struct CloseReadingAnalysis: Sendable {
     public let annotations: [CloseReadingAnnotation]
-    public let outline: [CloseReadingOutlineItem]
+    public let sections: [CloseReadingNotebookSection]
     public let coverage: String
 }

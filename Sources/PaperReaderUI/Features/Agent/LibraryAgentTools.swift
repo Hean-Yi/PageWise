@@ -60,7 +60,8 @@ extension LibraryAgent {
                 guard let note = reader.state.readingNotes.first(where: { $0.id == id && $0.deletedAt == nil }) else {
                     return nil
                 }
-                var item = AgentCard(kind: .navigation, title: note.dimension?.title ?? "全文论证骨架")
+                let title = note.isDocumentSummary ? "文末总结" : note.dimension?.title ?? "阅读笔记"
+                var item = AgentCard(kind: .navigation, title: title)
                 item.paperID = paper.id
                 item.readingNoteID = id
                 item.sourcePage = note.anchors.first?.pdfPageIndex.map { $0 + 1 }

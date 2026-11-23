@@ -23,7 +23,7 @@ public enum CloseReadingEngine {
 
     // Decode each array element independently. An unknown dimension or missing field in one
     // suggestion must not discard its neighbours. Malformed nested references still reject that item.
-    private struct Record<Value: Decodable>: Decodable {
+    struct Record<Value: Decodable>: Decodable {
         let value: Value?
         init(from decoder: Decoder) throws { value = try? Value(from: decoder) }
     }
@@ -33,8 +33,15 @@ public enum CloseReadingEngine {
         let outline: [Record<Stage>]?
     }
 
-    private enum ResponseIssue: Error {
-        case format
+    enum ResponseIssue: Error, CaseIterable {
+        case format, outputLimit
+
+        var description: String {
+            switch self {
+            case .format: "未通过格式或依据核对"
+            case .outputLimit: "达到模型输出长度上限"
+            }
+        }
     }
 
     private struct Input: Encodable {
@@ -77,8 +84,8 @@ public enum CloseReadingEngine {
         var seenAnalyses = Set<String>()
         var stages = [CloseReadingOutlineItem]()
         var rejected = 0
-        var unreadable: [Int] = []
-        var usedWindowOutline = false
+        var skippedWindows: [ResponseIssue: [Int]] = [:]
+        var fallbackReason: ResponseIssue?
         let name = String(paper.title.prefix(360))
         let focus = String(focus.prefix(1_600))
         for (index, passages) in corpus.windows.enumerated() {
@@ -104,14 +111,16 @@ public enum CloseReadingEngine {
                 batch = try await request(
                     prompt: windowPrompt, input: try json(input), progress: progress,
                     retryLabel: "正在重新核对第 \(index + 1) 组的返回格式", complete: complete,
-                    validate: { batch in
+                    accept: { (batch: Batch) in
                         let records = (batch.annotations?.count ?? 0) + (batch.outline?.count ?? 0)
-                        return (batch.annotations != nil || batch.outline != nil)
-                            && (records == 0 || batch.annotations?.contains { $0.value != nil } == true
-                                || batch.outline?.contains { $0.value != nil } == true)
+                        guard batch.annotations != nil || batch.outline != nil,
+                            records == 0 || batch.annotations?.contains(where: { $0.value != nil }) == true
+                                || batch.outline?.contains(where: { $0.value != nil }) == true
+                        else { return nil }
+                        return batch
                     })
-            } catch ResponseIssue.format {
-                unreadable.append(index + 1)
+            } catch let issue as ResponseIssue {
+                skippedWindows[issue, default: []].append(index + 1)
                 continue
             }
             let registry = Dictionary(uniqueKeysWithValues: (passages + memory).map { ($0.evidence.id, $0) })
@@ -170,55 +179,75 @@ public enum CloseReadingEngine {
                     .init(stage: item.stage, text: readerProse(text, citing: refs.map(\.evidence)), references: refs))
             }
         }
-        if corpus.windows.count > 1 && (!notes.isEmpty || !stages.isEmpty) {
-            try Task.checkCancellation()
-            await progress("正在串联全文论证，复核结论的适用范围")
-            do {
-                (notes, stages) = try await synthesize(
-                    notes: notes, stages: stages, paper: name, focus: focus, progress: progress, complete: complete)
-            } catch ResponseIssue.format {
-                usedWindowOutline = true
-            }
-        }
+        let incomplete = ResponseIssue.allCases.compactMap { issue -> String? in
+            guard let windows = skippedWindows[issue] else { return nil }
+            return "第 " + windows.map(String.init).joined(separator: "、") + " 组在重试后仍" + issue.description
+        }.joined(separator: "；")
         guard !notes.isEmpty || !stages.isEmpty else {
-            if !unreadable.isEmpty {
-                throw ReaderError.message(
-                    "第 " + unreadable.map(String.init).joined(separator: "、")
-                        + " 组的模型返回格式在重试后仍不完整，其余材料未产生可定位的精读结果。")
+            if !incomplete.isEmpty {
+                throw ReaderError.message(incomplete + "，其余材料未产生可定位的精读结果。")
             }
             throw ReaderError.message("已检查原文，但模型没有返回能逐字定位的批注或论证依据。")
         }
-        let outline = CloseReadingStage.allCases.compactMap { stage -> CloseReadingOutlineItem? in
-            var texts: [String] = []
-            var refs: [CloseReadingReference] = []
-            // A single window may report the default experiment and its matched control as
-            // separate evidence items. Keep both observations with their witnesses.
-            for item in stages where item.stage == stage && !texts.contains(item.text) {
-                let added = item.references.filter { ref in
-                    !refs.contains(where: { $0.evidence.id == ref.evidence.id && $0.quote == ref.quote })
-                }
-                guard !added.isEmpty, refs.count + added.count <= 3 else { continue }
-                refs += added
-                texts.append(item.text)
-            }
-            guard !texts.isEmpty else { return nil }
-            return .init(stage: stage, text: texts.joined(separator: "\n\n"), references: refs)
+        try Task.checkCancellation()
+        await progress("正在撰写文末阅读笔记，核对方法、证据与解读")
+        let sources = Dictionary(uniqueKeysWithValues: corpus.windows.joined().map { ($0.evidence.id, $0) })
+        let sections: [CloseReadingNotebookSection]
+        var rejectedSections = 0
+        var partialSections = 0
+        var repairDiagnostic: String?
+        do {
+            (notes, sections, rejectedSections, partialSections, repairDiagnostic) = try await synthesize(
+                notes: notes, stages: stages, passages: sources, paper: name, focus: focus, coverage: corpus.coverage,
+                progress: progress, complete: complete)
+        } catch let issue as ResponseIssue {
+            fallbackReason = issue
+            sections = verifiedExcerpts(notes, stages: stages)
         }
         var coverage = corpus.coverage
-        if !unreadable.isEmpty {
+        if !incomplete.isEmpty {
+            let skipped = skippedWindows.values.reduce(0) { $0 + $1.count }
             coverage = coverage.replacingOccurrences(
-                of: "已分析\(corpus.windows.count)/", with: "已分析\(corpus.windows.count - unreadable.count)/")
-            coverage += " · 第 " + unreadable.map(String.init).joined(separator: "、") + " 组返回格式不完整，未计入精读结果"
+                of: "已分析\(corpus.windows.count)/", with: "已分析\(corpus.windows.count - skipped)/")
+            coverage += " · " + incomplete + "，未计入精读结果"
         }
-        if usedWindowOutline { coverage += " · 全文归纳返回格式不完整，采用分组核实的批注和论证环节" }
+        if let fallbackReason {
+            coverage += " · 文末写作重试后仍" + fallbackReason.description + "，采用分组核实的批注和论证环节"
+        }
+        if let repairDiagnostic { coverage += " · " + repairDiagnostic }
+        if partialSections > 0 { coverage += " · \(partialSections) 节仅保留已核对段落" }
+        if rejectedSections > 0 { coverage += " · \(rejectedSections) 节文末解读未通过格式或依据核对" }
         if rejected > 0 { coverage += " · \(rejected)条候选批注未通过原文或格式核对" }
-        return .init(annotations: notes, outline: outline, coverage: coverage)
+        return .init(annotations: notes, sections: sections, coverage: coverage)
+    }
+
+    /// If the provider could not finish the notebook, the already checked commentary
+    /// is still readable. Keep each passage's analysis beside its own evidence.
+    private static func verifiedExcerpts(_ notes: [CloseReadingAnnotation], stages: [CloseReadingOutlineItem])
+        -> [CloseReadingNotebookSection]
+    {
+        var sections = [CloseReadingNotebookSection]()
+        var discussed = Set<String>()
+        for note in notes {
+            let source = CloseReadingReference(evidence: note.source, quote: note.quote, label: "批注原文")
+            sections.append(
+                .init(heading: note.dimension.title, markdown: note.markdown, references: [source] + note.references))
+            discussed.insert(note.source.id)
+        }
+        for stage in stages where stage.references.contains(where: { !discussed.contains($0.evidence.id) }) {
+            sections.append(.init(heading: stage.stage.title, markdown: stage.text, references: stage.references))
+        }
+        return sections
     }
 
     private static func exact(_ raw: String, in passage: CloseReadingPassage) -> String? {
         let quote = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !quote.isEmpty, quote.count <= 1_500, quote.last != "-", quote.last != "\u{00AD}" else { return nil }
         let source = passage.evidence.text
+        if passage.kind == "equation" {
+            // An equation object has one stable anchor; a matching term inside it does not.
+            return quote == source || "[公式] " + quote == source ? source : nil
+        }
         if source.contains(quote) { return quote }
         // Recover the original spelling of whitespace, never the model's paraphrase.
         let pattern = quote.split(whereSeparator: \.isWhitespace).map {
@@ -257,12 +286,12 @@ public enum CloseReadingEngine {
 
     // Links are constructed by the app after checking evidence. Free prose cannot introduce
     // a URL, a Markdown target, or HTML that behaves differently from its displayed label.
-    private static func plain(_ raw: String, limit: Int) -> String? {
+    static func plain(_ raw: String, limit: Int) -> String? {
         let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, text.count <= limit,
             text.range(
                 of:
-                    #"(?i)(?:[a-z][a-z0-9+.\-]*://|mailto:|javascript:|data:|www\.|\]\s*[\(\[]|^\s*\[[^\]]+\]\s*:|<[a-z!/])"#,
+                    #"(?i)(?:[a-z][a-z0-9+.\-]*://|mailto:|javascript:|data:|www\.|\]\s*[\(\[]|^\s*\[[^\]]+\]\s*:|</?[a-z][a-z0-9:-]*(?:\s[^>]*)?/?>|<!|!\[\[)"#,
                 options: [.regularExpression]) == nil
         else { return nil }
         return text
@@ -273,27 +302,72 @@ public enum CloseReadingEngine {
     private static let number = try! NSRegularExpression(
         pattern: #"(?<![A-Za-z\d.])[-+]?\d+(?:[.,]\d+)*(?:[eE][+-]?\d+)?%?(?![A-Za-z\d])"#)
 
-    private static func numbersAreGrounded(_ text: String, in evidence: String) -> Bool {
-        func normalized(_ value: String) -> String {
-            value.replacingOccurrences(of: "％", with: "%").replacingOccurrences(of: "−", with: "-")
+    private static func normalizedNumbers(_ value: String) -> String {
+        value.replacingOccurrences(of: "％", with: "%").replacingOccurrences(of: "\\%", with: "%")
+            .replacingOccurrences(of: "−", with: "-")
+    }
+    private static func canonicalNumber(_ value: String) -> String {
+        let isPercent = value.hasSuffix("%")
+        var digits = (isPercent ? String(value.dropLast()) : value).replacingOccurrences(of: ",", with: "")
+        if let parsed = Decimal(string: digits, locale: Locale(identifier: "en_US_POSIX")) {
+            digits = NSDecimalNumber(decimal: parsed).stringValue
         }
-        func canonical(_ value: String) -> String {
-            let isPercent = value.hasSuffix("%")
-            var digits = (isPercent ? String(value.dropLast()) : value).replacingOccurrences(of: ",", with: "")
-            if let parsed = Decimal(string: digits, locale: Locale(identifier: "en_US_POSIX")) {
-                digits = NSDecimalNumber(decimal: parsed).stringValue
-            }
-            return digits + (isPercent ? "%" : "")
+        return digits + (isPercent ? "%" : "")
+    }
+    private static func numberValues(_ value: String) -> Set<String> {
+        let value = normalizedNumbers(value)
+        return Set(
+            number.matches(in: value, range: NSRange(value.startIndex..., in: value)).map {
+                canonicalNumber((value as NSString).substring(with: $0.range))
+            })
+    }
+
+    private static func numericProse(_ text: String) -> String {
+        // Numbered Markdown steps are note structure; compare only substantive numbers to the source.
+        text.replacingOccurrences(
+            of:
+                #"(?m)^([ \t]*(?:>[ \t]*)*(?:#{1,6}[ \t]+)?(?:\*\*)?)(?:\d{1,3}[.)][ \t]+|第[ \t]*\d{1,3}[ \t]*步[ \t]*[：:、][ \t]*)"#,
+            with: "$1", options: .regularExpression)
+    }
+
+    // A locator may be translated between English and Chinese. Its digits identify an
+    // object, and cannot also substantiate a measurement in the notebook.
+    private static let objectLabel = try! NSRegularExpression(
+        pattern:
+            #"(?i)(?<![a-z])(?:(table|表)|(figure|fig\.?|图))[ \t]*([0-9]+(?:\.[0-9]+)*)(?:[ \t]*[(（]([a-z])[)）]|([a-z]))?(?![a-z0-9])"#
+    )
+
+    private static func separatingObjectLabels(_ text: String) -> (prose: String, labels: Set<String>) {
+        let source = text as NSString
+        let matches = objectLabel.matches(in: text, range: NSRange(location: 0, length: source.length))
+        let prose = NSMutableString(string: text)
+        var labels = Set<String>()
+        for match in matches.reversed() {
+            let kind = match.range(at: 1).location == NSNotFound ? "Figure " : "Table "
+            let suffix =
+                [4, 5].first { match.range(at: $0).location != NSNotFound }
+                .map { source.substring(with: match.range(at: $0)).lowercased() } ?? ""
+            labels.insert(kind + source.substring(with: match.range(at: 3)) + suffix)
+            prose.replaceCharacters(in: match.range, with: " ")
         }
-        func values(_ value: String) -> Set<String> {
-            let value = normalized(value)
-            return Set(
-                number.matches(in: value, range: NSRange(value.startIndex..., in: value)).map {
-                    canonical((value as NSString).substring(with: $0.range))
-                })
-        }
-        let proof = values(evidence)
-        let value = normalized(text)
+        return (prose as String, labels)
+    }
+
+    static func unreportedNumberLiterals(_ text: String, in evidence: String) -> [String] {
+        let requested = separatingObjectLabels(numericProse(text))
+        let cited = separatingObjectLabels(evidence)
+        let missing = numberValues(requested.prose).subtracting(numberValues(cited.prose))
+        return Array(missing.union(requested.labels.subtracting(cited.labels)).sorted().prefix(24))
+    }
+
+    static func numbersAreGrounded(_ text: String, in evidence: String) -> Bool {
+        let requested = separatingObjectLabels(numericProse(text))
+        let cited = separatingObjectLabels(evidence)
+        guard requested.labels.isSubset(of: cited.labels) else { return false }
+        let evidence = cited.prose
+        let proof = numberValues(evidence)
+        let prose = requested.prose
+        let value = normalizedNumbers(prose)
         let mutable = NSMutableString(string: value)
         // A percentage-point difference can be verified when the same sentence states both
         // independently sourced percentages and the exact base-ten subtraction matches.
@@ -301,7 +375,7 @@ public enum CloseReadingEngine {
         {
             let ns = value as NSString
             let operands = (1...3).map { ns.substring(with: match.range(at: $0)) }
-            if proof.contains(canonical(operands[0] + "%")), proof.contains(canonical(operands[1] + "%")),
+            if proof.contains(canonicalNumber(operands[0] + "%")), proof.contains(canonicalNumber(operands[1] + "%")),
                 let a = Decimal(string: operands[0]), let b = Decimal(string: operands[1]),
                 let d = Decimal(string: operands[2]),
                 abs(b - a) == d
@@ -317,18 +391,18 @@ public enum CloseReadingEngine {
         // would also validate unrelated outcomes.
         var pairedDifferences = Set<Decimal>()
         for excerpt in evidence.split(separator: "\n") {
-            let percents = values(String(excerpt)).filter { $0.hasSuffix("%") }
+            let percents = numberValues(String(excerpt)).filter { $0.hasSuffix("%") }
             guard percents.count == 2 else { continue }
             let pair = percents.compactMap {
                 Decimal(string: String($0.dropLast()), locale: Locale(identifier: "en_US_POSIX"))
             }
             if pair.count == 2 { pairedDifferences.insert(abs(pair[0] - pair[1])) }
         }
-        let sources = normalized(evidence) as NSString
+        let sources = normalizedNumbers(evidence) as NSString
         let reported = Set(
             percentagePointValue.matches(in: sources as String, range: NSRange(location: 0, length: sources.length)).map
             {
-                canonical(sources.substring(with: $0.range(at: 1)))
+                canonicalNumber(sources.substring(with: $0.range(at: 1)))
             })
         let remainder = mutable as String
         for match in percentagePointValue.matches(in: remainder, range: NSRange(remainder.startIndex..., in: remainder))
@@ -339,11 +413,11 @@ public enum CloseReadingEngine {
                 pairedDifferences.contains(value)
             {
                 mutable.replaceCharacters(in: match.range(at: 1), with: "")
-            } else if !reported.contains(canonical(digits)) {
+            } else if !reported.contains(canonicalNumber(digits)) {
                 return false
             }
         }
-        return values(mutable as String).isSubset(of: proof)
+        return numberValues(mutable as String).isSubset(of: proof)
     }
 
     private static let percentageDifference = try! NSRegularExpression(
@@ -355,7 +429,7 @@ public enum CloseReadingEngine {
         pattern: #"(?<![\d.])(\d+(?:\.\d+)?)\s*(?:个?百分点|percentage points?)"#, options: [.caseInsensitive])
 
     /// A percent-marked leaf column supplies the unit for each value in that column alone.
-    private static func tableEvidence(_ passage: CloseReadingPassage) -> String {
+    static func tableEvidence(_ passage: CloseReadingPassage) -> String {
         guard let table = passage.table else { return "" }
         let rows = table.components(separatedBy: "\n").map { $0.components(separatedBy: "\t") }
         guard let head = rows.first else { return table }
@@ -369,125 +443,43 @@ public enum CloseReadingEngine {
         return table + "\n" + percentages.joined(separator: " ")
     }
 
-    private struct SynthesisCandidate: Encodable {
-        let id: String
-        let stage: String?
-        let dimension: String?
-        let summary: String
-        let quotes: [String]
-    }
-
-    private struct SynthesisInput: Encodable {
-        let paper: String
-        let focus: String
-        let annotations: [SynthesisCandidate]
-        let outlineEvidence: [SynthesisCandidate]
-    }
-
-    private struct SynthesisOutput: Decodable {
-        struct Item: Decodable {
-            let stage: CloseReadingStage
-            let text: String
-            let witnesses: [String]
-        }
-        let keep: [String]?
-        let outline: [Record<Item>]?
-
-    }
-
-    private static func synthesize(
-        notes: [CloseReadingAnnotation], stages: [CloseReadingOutlineItem], paper: String,
-        focus: String, progress: @Sendable (String) async -> Void,
-        complete: @Sendable (String, String) async throws -> String
-    ) async throws
-        -> ([CloseReadingAnnotation], [CloseReadingOutlineItem])
-    {
-        // Give short papers room to carry both sides of a comparison, while bounding the
-        // synthesis request for a book-length corpus with hundreds of verified witnesses.
-        let noteLength = min(400, 32_000 / max(notes.count, 1))
-        let stageLength = min(320, 24_000 / max(stages.count, 1))
-        let quoteCount = notes.count + stages.reduce(0) { $0 + $1.references.count }
-        let quoteLength = min(240, 36_000 / max(quoteCount, 1))
-        let candidates = notes.enumerated().map { i, note in
-            SynthesisCandidate(
-                id: "N\(i + 1)", stage: nil, dimension: note.dimension.rawValue,
-                summary: String(note.markdown.prefix(noteLength)), quotes: [String(note.quote.prefix(quoteLength))])
-        }
-        let witnesses = stages.enumerated().map { i, stage in
-            SynthesisCandidate(
-                id: "W\(i + 1)", stage: stage.stage.rawValue, dimension: nil,
-                summary: String(stage.text.prefix(stageLength)),
-                quotes: stage.references.map { String($0.quote.prefix(quoteLength)) })
-        }
-        let input = SynthesisInput(paper: paper, focus: focus, annotations: candidates, outlineEvidence: witnesses)
-        let known = Set(candidates.map(\.id))
-        let result: SynthesisOutput = try await request(
-            prompt: synthesisPrompt, input: try json(input), progress: progress, retryLabel: "正在重新核对全文归纳格式",
-            complete: complete,
-            validate: { result in
-                let selected = result.keep ?? []
-                return (result.keep != nil || result.outline != nil)
-                    && (known.isEmpty || selected.contains(where: known.contains)
-                        || (selected.isEmpty && !stages.isEmpty && result.outline?.contains { $0.value != nil } == true))
-            })
-        let ids = Set((result.keep ?? []).prefix(24))
-        let selected = zip(notes, candidates).filter { ids.contains($0.1.id) }.map { $0.0 }
-        let lookup = Dictionary(uniqueKeysWithValues: zip(witnesses.map(\.id), stages))
-        let outline = (result.outline ?? []).prefix(10).compactMap { record -> CloseReadingOutlineItem? in
-            guard let item = record.value else { return nil }
-            let supporting = item.witnesses.prefix(3).compactMap { lookup[$0] }
-            guard supporting.count == item.witnesses.count, !supporting.isEmpty,
-                supporting.allSatisfy({ $0.stage == item.stage }), let text = plain(item.text, limit: 720),
-                numbersAreGrounded(
-                    text,
-                    in: supporting.map { $0.text + " " + $0.references.map(\.quote).joined(separator: " ") }.joined(
-                        separator: " "))
-            else { return nil }
-            var refs: [CloseReadingReference] = []
-            for ref in supporting.flatMap(\.references)
-            where !refs.contains(where: { $0.evidence.id == ref.evidence.id && $0.quote == ref.quote }) {
-                refs.append(ref)
-            }
-            guard refs.count <= 3 else { return nil }
-            return .init(stage: item.stage, text: text, references: refs)
-        }
-        // Fall back only to an already verified account of that stage, never to unregistered witnesses.
-        return (selected, outline + stages.filter { local in !outline.contains { $0.stage == local.stage } })
-    }
-
-    private static func json<T: Encodable>(_ object: T) throws -> String {
+    static func json<T: Encodable>(_ object: T) throws -> String {
         String(decoding: try JSONEncoder().encode(object), as: UTF8.self)
     }
 
-    private static func request<T: Decodable>(
+    static func request<T: Decodable, Output>(
         prompt: String, input: String, progress: @Sendable (String) async -> Void, retryLabel: String,
-        complete: @Sendable (String, String) async throws -> String, validate: (T) -> Bool
-    ) async throws -> T {
-        for attempt in 0...1 {
+        attempts: Int = 2,
+        complete: @Sendable (String, String) async throws -> String, accept: (T) -> Output?
+    ) async throws -> Output {
+        var issue = ResponseIssue.format
+        for attempt in 0..<attempts {
             try Task.checkCancellation()
-            if attempt == 1 { await progress(retryLabel) }
+            if attempt > 0 { await progress(retryLabel) }
             let instruction =
                 attempt == 0
                 ? prompt
                 : prompt + """
 
-                    上一次返回的结构未通过本地 JSON 校验。请按同一协议用双引号输出单个完整 JSON 对象，每个数组最多三项，只选关键证据，缩短引文与说明。省略缺少依据的条目，务必闭合所有括号，不要附加 Markdown。
+                    上一次\(issue.description)。请按同一协议用双引号输出单个完整 JSON 对象，精简重复引文与重复解读，优先保留有依据的关键方法、实验和边界。务必闭合所有括号，Markdown 内容只写在指定字符串中。
                     """
             let raw: String
             do {
                 raw = try await complete(instruction, input)
             } catch is ModelClient.TruncatedCompletion {
+                issue = .outputLimit
                 try Task.checkCancellation()
                 continue
             }
             try Task.checkCancellation()
+            issue = .format
             if raw.utf8.count <= 180_000, let start = raw.firstIndex(of: "{"), let end = raw.lastIndex(of: "}"),
                 start <= end, let decoded = try? JSONDecoder().decode(T.self, from: Data(raw[start...end].utf8)),
-                validate(decoded)
+                let result = accept(decoded)
             {
-                return decoded
+                return result
             }
         }
-        throw ResponseIssue.format
+        throw issue
     }
 }

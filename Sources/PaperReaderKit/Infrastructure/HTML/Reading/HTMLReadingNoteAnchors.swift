@@ -36,13 +36,15 @@ extension HTMLReadingStore {
             let reader = try document.getElementById("reader")
         else { throw unavailable }
         var streams: [String: PublishedText] = [:]
+        let citesEquation = evidence.text.hasPrefix("[公式] ")
         for element in reader.children() where element.tagName() == "section" {
             let key = try element.attr("data-key")
             guard keys.contains(key) else { continue }
             guard element.id() == "block-" + key, streams[key] == nil else { throw unavailable }
             streams[key] = try PublishedText(
                 element: element, key: key,
-                includesSelectedObjects: selection.contains { $0.key == key && $0.target.hasPrefix("object:") }
+                includesSelectedObjects: citesEquation
+                    || selection.contains { $0.key == key && $0.target.hasPrefix("object:") }
                     || (evidence.blockID != nil && !(try element.select("table:not(.paper-equation)").isEmpty())))
         }
         guard streams.count == keys.count else { throw unavailable }
@@ -70,11 +72,31 @@ extension HTMLReadingStore {
             let tables = stream.objects.filter { $0.text.hasPrefix("[表格] ") }
                 .map { AnchorFragment(anchor: $0, boundary: .object) }
             matches += try verifiedMatches(in: tables, expression: expression)
+            if citesEquation {
+                let equations = stream.sourceEquations.filter { $0.text == evidence.text }
+                    .map { AnchorFragment(anchor: $0, boundary: .object) }
+                matches += try verifiedMatches(in: equations, expression: expression)
+            }
             if matches.count > 1 { throw ambiguous }
         }
         guard let match = matches.first else { throw unavailable }
         return match
     }
+
+    /// Read the expression preserved by the publisher or by the local TeX compiler.
+    /// Flattened presentation MathML can lose fractions, exponents and operator grouping.
+    static func publishedEquationSource(_ element: Element) throws -> String? {
+        let alt = try element.attr("alttext")
+        if !alt.isEmpty { return alt }
+        guard let annotation = try element.select("annotation[encoding=application/x-tex]").first() else { return nil }
+        let tex = objectTextNodes(annotation).joined()
+        return tex.isEmpty ? nil : tex
+    }
+}
+
+private func objectTextNodes(_ node: Node) -> [String] {
+    if let text = node as? TextNode { return [text.getWholeText()] }
+    return node.getChildNodes().flatMap(objectTextNodes)
 }
 
 private struct AnchorFragment {
@@ -98,6 +120,7 @@ private struct PublishedText {
     var source: [AnchorFragment] = []
     var translation: [AnchorFragment] = []
     var objects: [NoteAnchor] = []
+    var sourceEquations: [NoteAnchor] = []
 
     init(element: Element, key: String, includesSelectedObjects: Bool) throws {
         var boundary = [AnchorFragment.Boundary.joined, .joined]
@@ -115,8 +138,10 @@ private struct PublishedText {
                     if includesSelectedObjects {
                         let number = objects.count
                         let label = try Self.objectLabel(element, index: number)
-                        objects.append(
-                            .init(key: key, target: "object:\(number)", text: label, start: 0, end: label.utf16.count))
+                        let anchor = NoteAnchor(
+                            key: key, target: "object:\(number)", text: label, start: 0, end: label.utf16.count)
+                        objects.append(anchor)
+                        if !language && label.hasPrefix("[公式] ") { sourceEquations.append(anchor) }
                     }
                     boundary[index] = .object
                     return
@@ -159,10 +184,6 @@ private struct PublishedText {
     // Match the labels of whole objects produced by HTMLSelectionScript. DOM textContent
     // concatenates text nodes without the extra whitespace SwiftSoup's text() may introduce.
     private static func objectLabel(_ element: Element, index: Int) throws -> String {
-        func nodes(_ node: Node) -> [String] {
-            if let text = node as? TextNode { return [text.getWholeText()] }
-            return node.getChildNodes().flatMap(nodes)
-        }
         switch element.tagName() {
         case "img", "svg": return "[图片 \(index + 1)]"
         case "table" where !element.hasClass("paper-equation"):
@@ -173,22 +194,20 @@ private struct PublishedText {
             let rows = groups.flatMap { $0.tagName() == "tr" ? [$0] : $0.children().filter { $0.tagName() == "tr" } }
             let lines = try rows.map { row in
                 try row.children().filter { ["td", "th"].contains($0.tagName()) }.map { cell in
-                    let value = nodes(cell).joined().split(whereSeparator: \.isWhitespace).joined(separator: " ")
+                    let value = objectTextNodes(cell).joined().split(whereSeparator: \.isWhitespace).joined(
+                        separator: " ")
                     return try value.isEmpty && !cell.select("img,svg").isEmpty() ? "[图片]" : value
                 }.joined(separator: "\t")
             }
             let caption = children.first { $0.tagName() == "caption" }
             return "[表格] "
-                + (caption.map { nodes($0).joined().trimmingCharacters(in: .whitespacesAndNewlines) + "\n" } ?? "")
+                + (caption.map { objectTextNodes($0).joined().trimmingCharacters(in: .whitespacesAndNewlines) + "\n" }
+                    ?? "")
                 + lines.joined(separator: "\n")
         default:
-            let alt = try element.attr("alttext")
-            if !alt.isEmpty { return "[公式] " + alt }
-            if let annotation = try element.select("annotation[encoding=application/x-tex]").first() {
-                let tex = nodes(annotation).joined()
-                if !tex.isEmpty { return "[公式] " + tex }
-            }
-            return "[公式] " + nodes(element).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.joined()
+            if let tex = try HTMLReadingStore.publishedEquationSource(element) { return "[公式] " + tex }
+            return "[公式] "
+                + objectTextNodes(element).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.joined()
         }
     }
 

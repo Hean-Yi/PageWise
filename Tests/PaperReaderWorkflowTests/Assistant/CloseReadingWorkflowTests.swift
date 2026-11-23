@@ -13,6 +13,16 @@ private let closeReadingSources: [(dimension: CloseReadingDimension, quote: Stri
     (.method, "Check which positions may interact and which are masked."),
 ]
 
+private func notebookHeading(_ kind: String) -> String {
+    switch kind {
+    case "question": "为什么要跟踪输入？"
+    case "thesis": "加权混合能说明什么？"
+    case "evidence": "如何检查输出是否符合解释？"
+    case "rebuttal": "什么观察会动摇结论？"
+    default: "哪些限制值得带走？"
+    }
+}
+
 private actor CloseReadingTransport: HTTPTransport {
     private struct Request: Decodable {
         struct Message: Decodable { let content: String }
@@ -40,6 +50,25 @@ private actor CloseReadingTransport: HTTPTransport {
         requests += 1
         let body = try JSONDecoder().decode(Request.self, from: request.httpBody ?? Data())
         let payload = try #require(body.messages.last?.content)
+        if body.messages.first?.content.contains("最终综合") == true {
+            struct Inputs: Decodable {
+                struct Lead: Decodable {
+                    let id: String
+                    let kind: String
+                    let sources: [String]
+                }
+                let annotations: [Lead]
+                let outlineEvidence: [Lead]
+            }
+            let input = try JSONDecoder().decode(Inputs.self, from: Data(payload.utf8))
+            let sections: [[String: Any]] = input.outlineEvidence.map { lead in
+                [
+                    "heading": notebookHeading(lead.kind), "markdown": "从给定输入追踪关键操作。\n\n> 尚待核查的是对照条件是否一致。",
+                    "sources": lead.sources,
+                ]
+            }
+            return try response(["keep": input.annotations.map(\.id), "sections": sections], to: request)
+        }
         let input = try JSONDecoder().decode(Window.self, from: Data(payload.utf8))
         let comparison = try #require(input.readingNotes.first { $0.anchorText.contains(comparisonText) })
         #expect(comparison.source == "L1" && input.passages.first?.source == "P1")
@@ -62,10 +91,11 @@ private actor CloseReadingTransport: HTTPTransport {
             ])
         }
         await onRequest?()
-        let data = try JSONSerialization.data(withJSONObject: [
-            "annotations": output == .outlineOnly ? [] : annotations, "outline": stages,
-        ])
-        let content = String(decoding: data, as: UTF8.self)
+        return try response(["annotations": output == .outlineOnly ? [] : annotations, "outline": stages], to: request)
+    }
+
+    private func response(_ object: [String: Any], to request: URLRequest) throws -> (Data, HTTPURLResponse) {
+        let content = String(decoding: try JSONSerialization.data(withJSONObject: object), as: UTF8.self)
         let url = try #require(request.url)
         return (
             try JSONSerialization.data(withJSONObject: [
@@ -118,8 +148,10 @@ private actor CloseReadingTransport: HTTPTransport {
     let snapshot = try await reader.store.load()
     #expect(snapshot.chats.map(\.id) == [report.id] && report.closeReadingVersion != nil)
     let overview = try #require(snapshot.readingNotes.first { $0.id == report.readingNoteID })
-    #expect(overview.markdown.contains("全文论证骨架"))
-    for stage in CloseReadingStage.allCases { #expect(overview.markdown.contains("**" + stage.title + "**")) }
+    #expect(overview.markdown.contains("> 尚待核查"))
+    for stage in CloseReadingStage.allCases {
+        #expect(overview.markdown.contains("## " + notebookHeading(stage.rawValue)))
+    }
     let ids = try #require(report.closeReadingNoteIDs)
     #expect(Set(ids).count == 5 && snapshot.readingNotes.count == 7)
     let notes = try ids.map { id in try #require(snapshot.readingNotes.first { $0.id == id }) }
@@ -149,7 +181,7 @@ private actor CloseReadingTransport: HTTPTransport {
     await restored.load()
     restored.select(id)
     let reopened = try await restored.runCloseReading(id)
-    #expect(await api.requests == 1)
+    #expect(await api.requests == 2)
     #expect(reopened.id == report.id && reopened.closeReadingNoteIDs == ids)
     #expect(
         restored.currentReadingNotes.count == 6
@@ -182,7 +214,9 @@ private actor CloseReadingTransport: HTTPTransport {
     await reader.flushReadingNotes()
     #expect(
         try await reader.store.load().readingNotes.first { $0.id == overview.id }?.markdown.hasSuffix("个人补充。") == true)
-    for stage in CloseReadingStage.allCases { #expect(overview.markdown.contains("**" + stage.title + "**")) }
+    for stage in CloseReadingStage.allCases {
+        #expect(overview.markdown.contains("## " + notebookHeading(stage.rawValue)))
+    }
     let source = try #require(citations.last)
     let preview = try await reader.previewLocalPassage(noteID: overview.id, citationID: source.id)
     #expect(preview.quote == source.quote)
@@ -209,7 +243,8 @@ private func closeReadingWorkflowFailuresLeaveNoPartialNotesOrReport(
         reader.state.version = LibraryState.currentVersion + 1
         await #expect(throws: ReaderError.self) { try await reader.runCloseReading(id) }
     }
-    #expect(await api.requests == 1 && !reader.busyAI && reader.closeReadingTask == nil)
+    #expect(
+        await api.requests == (failure == .rejectedSave ? 2 : 1) && !reader.busyAI && reader.closeReadingTask == nil)
     let disk = try await reader.store.load()
     for snapshot in [reader.state, disk] {
         #expect(
@@ -255,7 +290,7 @@ private func closeReadingWorkflowFailuresLeaveNoPartialNotesOrReport(
     await reader.flushReadingNotes()
     #expect(reader.inlineReadingNotes.contains { $0.id == removed })
     #expect(try await reader.store.load().readingNotes.first { $0.id == removed }?.deletedAt == nil)
-    #expect(await api.requests == 2)
+    #expect(await api.requests == 4)
 }
 
 @Test @MainActor func explicitPaperSummarySavesClickableSourcesWithoutMarkingAParagraph() async throws {
