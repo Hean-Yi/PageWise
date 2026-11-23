@@ -50,7 +50,7 @@ final class PDFDocumentTranslationController {
             job = makeJob(model, paper: paper, page: page)
             jobs[paper.id] = job
         }
-        if model.translationSettings.model.isEmpty {
+        if model.modelSettings.model.isEmpty {
             job.phase = .needsConfiguration
         } else if suspended {
             job.resumeOnActivation = true
@@ -97,7 +97,7 @@ final class PDFDocumentTranslationController {
     }
 
     func settingsChanged(_ model: ReaderModel, previousSettings: ModelSettings, resumeVisible: Bool) {
-        let settings = model.translationSettings
+        let settings = model.modelSettings
         let connectionChanged =
             previousSettings.model != settings.model || previousSettings.baseURL != settings.baseURL
             || previousSettings.credentialID != settings.credentialID
@@ -121,13 +121,13 @@ final class PDFDocumentTranslationController {
     }
 
     private func makeJob(_ model: ReaderModel, paper: Paper, page: Int) -> PDFDocumentTranslationStatus {
-        let settings = model.translationSettings
+        let settings = model.modelSettings
         let queue = PDFDocumentTranslationQueue(
             url: model.root.appendingPathComponent(paper.originalPath), documentHash: paper.digest,
             pageCount: paper.pageCount, store: model.pdfTranslations, settings: settings, client: model.client,
             key: { [weak model] in
                 guard let model else { throw CancellationError() }
-                return try await model.translationKey(for: settings)
+                return try await model.modelKey(for: settings)
             })
         return PDFDocumentTranslationStatus(queue, pageCount: paper.pageCount, preferredPage: page)
     }

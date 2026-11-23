@@ -2,20 +2,18 @@ import Foundation
 import PaperReaderKit
 
 extension ReaderModel {
-    func usesLocalTranslationKey(for settings: ModelSettings) -> Bool {
+    func usesLocalModelKey(for settings: ModelSettings) -> Bool {
         translationValidation?.key(for: settings) != nil
     }
 
-    func translationKey(for settings: ModelSettings) async throws -> String {
-        if let key = translationValidation?.key(for: settings) { return key }
-        return try await modelKey(for: settings)
-    }
-
     func modelKey(for settings: ModelSettings) async throws -> String {
-        try await configurationStore.keyForRequest(settings)
+        if let key = translationValidation?.key(for: settings) { return key }
+        return try await configurationStore.keyForRequest(settings)
     }
 
-    public func hasSavedAPIKey() async throws -> Bool { try await !modelKey(for: modelSettings).isEmpty }
+    public func hasSavedAPIKey() async throws -> Bool {
+        try await !configurationStore.keyForDraftRequest(modelSettings).isEmpty
+    }
 
     public func testModelConnection(_ draft: ModelSettings, key: String, removeKey: Bool = false) async throws {
         let settings = try draft.normalized()

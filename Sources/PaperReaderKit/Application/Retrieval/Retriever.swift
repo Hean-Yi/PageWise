@@ -4,7 +4,7 @@ import NaturalLanguage
 public enum Retriever {
     public static func context(
         question: String, selection: String, current: Paper, others: [Paper], notes: [Evidence],
-        selectedBlockIDs: Set<UUID> = []
+        selectedBlockIDs: Set<UUID> = [], originalPages: [Evidence] = []
     ) -> [Evidence] {
         let terms = tokens(question + " " + selection)
         func rank(_ text: String) -> Double {
@@ -55,6 +55,13 @@ public enum Retriever {
                     id: "", title: current.title, text: text, paperID: current.id, blockID: block.id,
                     sourcePage: block.sourcePage >= 0 ? block.sourcePage : nil))
             used += text.count
+        }
+        if result.isEmpty {
+            for var page in originalPages where page.paperID == current.id && used < 18_000 {
+                page.text = String(page.text.prefix(18_000 - used))
+                result.append(page)
+                used += page.text.count
+            }
         }
         var support =
             others.filter { $0.id != current.id }.flatMap { paper in

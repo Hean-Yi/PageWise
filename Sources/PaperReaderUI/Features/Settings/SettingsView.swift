@@ -31,7 +31,7 @@ struct SettingsView: View {
 
     init(model: ReaderModel) {
         self.model = model
-        let settings = model.translationSettings
+        let settings = model.modelSettings
         _draft = State(initialValue: Self.initialDraft(settings))
         _savedSettings = State(initialValue: settings)
         _provider = State(initialValue: ModelServicePreset.matching(settings))
@@ -52,7 +52,7 @@ struct SettingsView: View {
         return endpoint == (try? savedSettings.endpointURL())
     }
 
-    private var usesLocalTranslationKey: Bool { model.usesLocalTranslationKey(for: draft) }
+    private var usesLocalModelKey: Bool { model.usesLocalModelKey(for: draft) }
     private var canReuseKey: Bool { hasSavedKey && sameEndpoint && !removeKey }
 
     var body: some View {
@@ -80,7 +80,7 @@ struct SettingsView: View {
         #endif
         .onAppear { refreshKeyStatus() }
         .onChange(of: draft) { _, _ in feedback = nil }
-        .onChange(of: usesLocalTranslationKey) { _, usesLocal in
+        .onChange(of: usesLocalModelKey) { _, usesLocal in
             if usesLocal {
                 key = ""
                 removeKey = false
@@ -151,15 +151,9 @@ struct SettingsView: View {
         VStack(spacing: 0) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 23) {
-                    VStack(alignment: .leading, spacing: 7) {
-                        Text(category.rawValue)
-                            .font(ReaderTheme.editorial(32, weight: .medium))
-                            .accessibilityAddTraits(.isHeader)
-                        if category == .model {
-                            Text(usesLocalTranslationKey ? "为论文双语阅读配置翻译服务。" : "为论文翻译、问答和书库助理选择服务。")
-                                .font(.subheadline).foregroundStyle(ReaderTheme.muted)
-                        }
-                    }
+                    Text(category.rawValue)
+                        .font(ReaderTheme.editorial(32, weight: .medium))
+                        .accessibilityAddTraits(.isHeader)
                     if category == .model { modelForm.disabled(isTesting) } else { notesForm }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -217,9 +211,10 @@ struct SettingsView: View {
 
     @ViewBuilder private var credentials: some View {
         VStack(alignment: .leading, spacing: 7) {
-            if usesLocalTranslationKey {
+            if usesLocalModelKey {
                 fieldLabel("API 密钥")
-                Label("已读取本机 .env 翻译密钥", systemImage: "key")
+                Label("本机 .env", systemImage: "checkmark.circle")
+                    .accessibilityLabel("密钥已从本机 .env 载入")
                     .font(.callout).foregroundStyle(ReaderTheme.muted).padding(.vertical, 6)
             } else {
                 HStack {
@@ -340,7 +335,7 @@ struct SettingsView: View {
     }
 
     private func refreshKeyStatus() {
-        if model.usesLocalTranslationKey(for: savedSettings) {
+        if model.usesLocalModelKey(for: savedSettings) {
             hasSavedKey = false
             return
         }

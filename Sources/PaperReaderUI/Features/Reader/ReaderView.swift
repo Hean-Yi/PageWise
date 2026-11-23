@@ -3,72 +3,38 @@ import SwiftUI
 
 struct ReaderView: View {
     @Bindable var model: ReaderModel
-    @Binding var libraryAgentPresented: Bool
+    let sidebarOpen: Bool
+    let explainSelection: () -> Void
+    let requestNoteSave: () -> Void
     let openSettings: () -> Void
-    @State private var showAssistant = false
-    @State private var assistantTab = "chat"
     @State private var pageInput = "1"
     @FocusState private var pageFocused: Bool
-    @State private var showAssistantSheet = false
-    @State private var pendingSettings = false
-    @State private var pendingNoteSave = false
     @State private var showWarnings = false
     @State private var penEnabled = false
     @State private var peekingAtOriginal = false
     @AppStorage("PDFBilingualDisplayLayout") private var pdfLayout = PDFBilingualLayoutPreference.paragraph
-    @State private var askSave = false
-    @State private var question = ""
 
     var body: some View {
         GeometryReader { proxy in content(width: proxy.size.width) }
-            .sheet(
-                isPresented: $showAssistantSheet,
-                onDismiss: {
-                    if pendingSettings {
-                        pendingSettings = false
-                        openSettings()
-                    } else if pendingNoteSave {
-                        pendingNoteSave = false
-                        askSave = true
-                    }
-                }, content: { assistant.frame(minWidth: 300, minHeight: 400) })
     }
 
     private func content(width: CGFloat) -> some View {
         VStack(spacing: 0) {
             header(width: width)
             Divider()
-            HStack(spacing: 0) {
-                VStack(spacing: 0) {
-                    ZStack {
-                        if model.usesHTMLReading {
-                            HTMLCanvas(
-                                model: model,
-                                sidebarOpen: (showAssistant && !libraryAgentPresented && width >= 900)
-                                    || showAssistantSheet)
-                        } else if model.showsPDFCanvas, isLocalPDF {
-                            PDFBilingualReadingView(
-                                model: model, penEnabled: penEnabled, openSettings: requestSettings,
-                                layout: $pdfLayout, peekingAtOriginal: $peekingAtOriginal)
-                        } else if model.showsPDFCanvas {
-                            PDFCanvas(model: model, penEnabled: penEnabled)
-                        }
-                        if model.showingReflowLoading {
-                            ReflowLoadingView(model: model)
-                        }
-                    }.frame(maxWidth: .infinity, maxHeight: .infinity)
-                    if !model.showingReflowLoading { readingBar(width: width) }
+            ZStack {
+                if model.usesHTMLReading {
+                    HTMLCanvas(model: model, sidebarOpen: sidebarOpen)
+                } else if model.showsPDFCanvas, isLocalPDF {
+                    PDFBilingualReadingView(
+                        model: model, penEnabled: penEnabled, openSettings: openSettings,
+                        layout: $pdfLayout, peekingAtOriginal: $peekingAtOriginal)
+                } else if model.showsPDFCanvas {
+                    PDFCanvas(model: model, penEnabled: penEnabled)
                 }
-                if showAssistant && !model.pdfBilingual.isOpen && !libraryAgentPresented && width >= 900 {
-                    Divider()
-                    assistant.frame(width: 312)
-                }
-            }
-        }
-        .confirmationDialog("将本次讨论整理到笔记？", isPresented: $askSave, titleVisibility: .visible) {
-            Button("包含讨论，保存笔记") { Task { await model.saveToObsidian(includeDiscussion: true) } }
-            Button("不包含讨论，保存笔记") { Task { await model.saveToObsidian(includeDiscussion: false) } }
-            Button("取消", role: .cancel) {}
+                if model.showingReflowLoading { ReflowLoadingView(model: model) }
+            }.frame(maxWidth: .infinity, maxHeight: .infinity)
+            if !model.showingReflowLoading { readingBar(width: width) }
         }
         .onChange(of: model.visiblePage) { _, page in
             if !pageFocused { pageInput = "\(page + 1)" }
@@ -78,25 +44,11 @@ struct ReaderView: View {
             if mode != "original" { model.pdfBilingual.close() }
         }
         .onDisappear { model.pdfBilingual.close() }
-        .onAppear {
-            pageInput = "\(model.visiblePage + 1)"
-            if libraryAgentPresented { showAssistant = false }
-        }
-        .onChange(of: libraryAgentPresented) { _, presented in
-            if presented {
-                showAssistant = false
-                showAssistantSheet = false
-            }
-        }
+        .onAppear { pageInput = "\(model.visiblePage + 1)" }
         .onChange(of: model.selectedPaperID) { _, _ in
             model.pdfBilingual.close()
-            question = ""
             pageInput = "\(model.visiblePage + 1)"
         }
-    }
-
-    private var displayedChats: [ChatTurn] {
-        model.currentChats + (model.assistantDraft.flatMap { $0.paperID == model.selectedPaperID ? [$0] : nil } ?? [])
     }
 
     private var isLocalPDF: Bool { model.currentEdition?.usesSourceReflow == false }
@@ -122,14 +74,6 @@ struct ReaderView: View {
                 Text("原版").tag(false)
                 Text("双语重排").tag(true)
             }.pickerStyle(.segmented).controlSize(.regular).labelsHidden().fixedSize().accessibilityLabel("阅读模式")
-            Button {
-                toggleAssistant(width: width)
-            } label: {
-                Label("助读与笔记", systemImage: "sidebar.right")
-            }.labelStyle(.iconOnly).help("助读与笔记")
-                .foregroundStyle(
-                    (showAssistant && !libraryAgentPresented && width >= 900) || showAssistantSheet
-                        ? ReaderTheme.accent : ReaderTheme.muted)
             readingMenu(width: width)
         }
         .buttonStyle(.borderless).padding(.horizontal, width < 520 ? 12 : 22).frame(height: 56)
@@ -144,7 +88,7 @@ struct ReaderView: View {
     private func setBilingualReading(_ bilingual: Bool) {
         peekingAtOriginal = false
         if bilingual {
-            if !model.openBilingualReading(translatingDocument: pdfLayout == .paragraph) { requestSettings() }
+            if !model.openBilingualReading(translatingDocument: pdfLayout == .paragraph) { openSettings() }
         } else {
             model.pdfBilingual.close()
             if model.mode != "original" {
@@ -257,7 +201,7 @@ struct ReaderView: View {
                 .keyboardShortcut("d")
             Spacer()
             if model.pdfBilingual.isOpen && isLocalPDF && (model.selectionText.isEmpty || !originalVisible) {
-                PDFTranslationStatusControl(model: model, layout: pdfLayout, openSettings: requestSettings)
+                PDFTranslationStatusControl(model: model, layout: pdfLayout, openSettings: openSettings)
             } else if model.mode == "translated", model.retainedReadingID == nil, let paper = model.currentEdition,
                 paper.usesSourceReflow
             {
@@ -284,18 +228,12 @@ struct ReaderView: View {
                 if !model.usesHTMLReading {
                     Button(action: model.highlightSelection) { Label("高亮", systemImage: "highlighter") }
                 }
-                Button {
-                    libraryAgentPresented = false
-                    assistantTab = "chat"
-                    if width < 900 || model.pdfBilingual.isOpen {
-                        showAssistantSheet = true
-                    } else {
-                        showAssistant = true
-                    }
-                    question = "请结合全文解释选中内容。"
-                } label: {
-                    Label("解释", systemImage: "sparkles")
-                }
+            }
+            if !model.assistantSelectionText.isEmpty {
+                Button(action: explainSelection) {
+                    Label("解释选文", systemImage: "text.bubble")
+                        .labelStyle(.iconOnly)
+                }.help("解释选文").accessibilityLabel("解释选文")
             }
             #if os(iOS)
                 if !model.usesHTMLReading && originalVisible {
@@ -317,152 +255,11 @@ struct ReaderView: View {
         pageFocused = false
     }
 
-    private var assistant: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                Picker("阅读工具", selection: $assistantTab) {
-                    Label("助读", systemImage: "sparkles").tag("chat")
-                    Label("笔记", systemImage: "square.and.pencil").tag("notes")
-                }.pickerStyle(.segmented).labelsHidden()
-                Spacer(minLength: 10)
-                if model.busyAI { ProgressView().controlSize(.small) }
-                Button {
-                    showAssistant = false
-                    showAssistantSheet = false
-                } label: {
-                    Image(systemName: "xmark")
-                }
-                .buttonStyle(.plain).font(.caption).foregroundStyle(ReaderTheme.muted)
-                .help("关闭助读与笔记").accessibilityLabel("关闭助读与笔记")
-            }.padding(.horizontal, 16).padding(.vertical, 18)
-            Divider()
-            if assistantTab == "notes" {
-                ReaderNotesView(
-                    model: model,
-                    summarize: {
-                        if configured { Task { await model.summarize() } } else { requestSettings() }
-                    }, saveNote: requestNoteSave, didNavigate: { showAssistantSheet = false })
-            } else {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 24) {
-                        if displayedChats.isEmpty {
-                            VStack(alignment: .leading, spacing: 14) {
-                                Text("问这篇论文").font(ReaderTheme.editorial(26))
-                                    .foregroundStyle(ReaderTheme.ink).padding(.top, 12)
-                                VStack(spacing: 0) {
-                                    prompt("核心贡献", icon: "lightbulb", question: "这篇论文主要解决什么问题，有哪些核心贡献？")
-                                    prompt(
-                                        "方法思路", icon: "point.3.connected.trianglepath.dotted",
-                                        question: "这篇论文的方法是如何工作的？")
-                                    prompt("局限与不足", icon: "scope", question: "这项方法有哪些局限？")
-                                }
-                            }
-                        }
-                        ForEach(displayedChats) { turn in
-                            VStack(alignment: .leading, spacing: 14) {
-                                Text(turn.question).font(.callout.weight(.medium)).padding(12).frame(
-                                    maxWidth: .infinity, alignment: .leading
-                                )
-                                .background(ReaderTheme.elevated, in: RoundedRectangle(cornerRadius: 12))
-                                Text(turn.answer).font(.callout).textSelection(.enabled).lineSpacing(5)
-                                DisclosureGroup("来源 · \(turn.evidence.count)") {
-                                    ForEach(turn.evidence) { source in
-                                        Button {
-                                            model.jump(to: source)
-                                        } label: {
-                                            Text(
-                                                "[\(source.id)] \(source.title)\(source.sourcePage.map { " · p.\($0 + 1)" } ?? "")"
-                                            )
-                                            .font(.caption).lineLimit(2).multilineTextAlignment(.leading)
-                                        }.buttonStyle(.plain).padding(.vertical, 5)
-                                    }
-                                }.font(.caption).foregroundStyle(ReaderTheme.muted)
-                            }
-                        }
-                    }.padding(20)
-                }
-                composer
-            }
-        }.background(ReaderTheme.canvas)
-    }
-
-    private func prompt(_ title: String, icon: String, question value: String) -> some View {
-        AssistantSuggestion(title: title, systemImage: icon) { question = value }
-    }
-
-    private var composer: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            if !model.selectionText.isEmpty {
-                HStack(alignment: .top, spacing: 8) {
-                    Rectangle().fill(ReaderTheme.accent).frame(width: 2)
-                    Text(model.selectionText).font(.caption).foregroundStyle(ReaderTheme.muted).lineLimit(3)
-                    Button {
-                        model.selectionText = ""
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                    }
-                    .buttonStyle(.plain).foregroundStyle(ReaderTheme.muted).accessibilityLabel("移除选文")
-                }.fixedSize(horizontal: false, vertical: true)
-            }
-            TextField("问这篇论文…", text: $question, axis: .vertical).lineLimit(2...6).textFieldStyle(.plain).font(.callout)
-            HStack {
-                Button(action: requestSettings) {
-                    Label(
-                        model.modelSettings.model.isEmpty ? "配置模型" : model.modelSettings.model,
-                        systemImage: "slider.horizontal.3"
-                    ).font(.system(size: 10)).lineLimit(1)
-                }.buttonStyle(.plain).foregroundStyle(ReaderTheme.muted).help("模型设置")
-                Spacer()
-                Button(action: send) {
-                    Image(systemName: "arrow.up").font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(ReaderTheme.surface).frame(width: 30, height: 30)
-                        .background(ReaderTheme.ink, in: Circle())
-                }.buttonStyle(.plain).accessibilityLabel("发送问题")
-                    .opacity(question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? 0.4 : 1)
-                    .disabled(question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || model.busyAI)
-            }
-        }.padding(16).background(ReaderTheme.surface, in: RoundedRectangle(cornerRadius: 16))
-            .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(ReaderTheme.line)).padding(14)
-    }
-
-    private var configured: Bool {
-        (try? model.modelSettings.normalized()) != nil
-    }
     private func translate(regenerate: Bool = false) {
-        if (try? model.translationSettings.normalized()) != nil {
+        if (try? model.modelSettings.normalized()) != nil {
             model.startAIReflow(regenerate: regenerate)
         } else {
-            requestSettings()
-        }
-    }
-    private func send() {
-        guard configured else {
-            requestSettings()
-            return
-        }
-        let text = question
-        question = ""
-        Task { await model.ask(text) }
-    }
-    private func toggleAssistant(width: CGFloat) {
-        libraryAgentPresented = false
-        if width < 900 || model.pdfBilingual.isOpen { showAssistantSheet = true } else { showAssistant.toggle() }
-    }
-    private func requestSettings() {
-        if showAssistantSheet {
-            pendingSettings = true
-            showAssistantSheet = false
-        } else {
             openSettings()
-        }
-    }
-
-    private func requestNoteSave() {
-        if showAssistantSheet {
-            pendingNoteSave = true
-            showAssistantSheet = false
-        } else {
-            askSave = true
         }
     }
 }

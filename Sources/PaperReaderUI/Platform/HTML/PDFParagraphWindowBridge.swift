@@ -1,6 +1,33 @@
 import PaperReaderKit
 import WebKit
 
+extension PDFParagraphPage {
+    func outlineElement(for item: PaperNavigationItem) -> String? {
+        guard item.sourcePage == index else { return nil }
+        if let range = item.sourceRange,
+            let sentence = sentences.first(where: {
+                $0.characterRanges.contains { NSIntersectionRange($0, range).length > 0 }
+            })
+        {
+            return sentence.id
+        }
+        guard let point = item.sourcePoint else { return nil }
+        // A heading may be a selectable source fragment or part of a crop. Use the closest
+        // visible element in original page coordinates, including the column position.
+        func distance(to rect: CGRect) -> CGFloat {
+            hypot(max(rect.minX - point.x, 0, point.x - rect.maxX), max(rect.minY - point.y, 0, point.y - rect.maxY))
+        }
+        var candidates = illustrations.map { (id: $0.id, distance: distance(to: $0.sourceBounds)) }
+        for sentence in sentences {
+            for box in sentence.rects where box.count == 4 {
+                candidates.append(
+                    (sentence.id, distance(to: CGRect(x: box[0], y: box[1], width: box[2], height: box[3]))))
+            }
+        }
+        return candidates.min { $0.distance < $1.distance }?.id
+    }
+}
+
 /// Send only page deltas to the shared reading surface. In particular, new translations do not resend PNGs.
 @MainActor struct PDFParagraphWindowBridge {
     private(set) var paperID: UUID?
@@ -29,11 +56,13 @@ import WebKit
             reset || !removed.isEmpty || !updates.isEmpty || jumpRevision != window.jumpRevision
                 || self.fontSize != fontSize
         else { return false }
+        let element = window.outlineItem.flatMap { window.pages[window.targetPage]?.outlineElement(for: $0) }
         view.callAsyncJavaScript(
-            "window.sentenceReader.pageWindow(paper, count, updates, removed, target, revision, size)",
+            "window.sentenceReader.pageWindow(paper, count, updates, removed, target, revision, size, element)",
             arguments: [
                 "paper": window.paperID.uuidString, "count": window.pageCount, "updates": updates, "removed": removed,
                 "target": window.targetPage, "revision": window.jumpRevision, "size": fontSize,
+                "element": element ?? "",
             ], in: nil, in: .defaultClient, completionHandler: nil)
         pages = window.pages
         paperID = window.paperID
@@ -170,7 +199,7 @@ extension PDFSentenceTextCanvas {
         function scheduleViewport() {
           if (flow && !flow.frame) flow.frame=setTimeout(reportViewport,45);
         }
-        function pageWindow(paper,count,updates,removed,target,revision,size) {
+        function pageWindow(paper,count,updates,removed,target,revision,size,element) {
           const reset=!flow || flow.paper!==paper || flow.articles.length!==count;
           if (reset) {
             if (flow) clearTimeout(flow.frame);
@@ -196,9 +225,15 @@ extension PDFSentenceTextCanvas {
             flow.loaded.add(update.index);
           }
           order=[...flow.loaded].sort((a,b)=>a-b).flatMap(i=>flow.articles[i].ids);
-          if (jump) {
-            const page=flow.articles[target];
-            if (page) page.section.scrollIntoView({block:'start',inline:'nearest'});
+          if (jump) flow.outlineRevealed=false;
+          const canReveal=jump || (flow.previousPage===target && flow.ignoredY!==null && Math.abs(startY-flow.ignoredY)<1);
+          const page=flow.articles[target];
+          const heading=element && !flow.outlineRevealed && canReveal && page &&
+            (pairs.get(element)?.en || page.figures.find(f=>f.id===element)?.node);
+          if (jump || heading) {
+            const node=heading || page?.section;
+            if (node) node.scrollIntoView({block:'start',inline:'nearest'});
+            flow.outlineRevealed=!!heading;
             flow.previousPage=target;
             flow.previousSentence='';
             flow.ignoredY=scrollY;

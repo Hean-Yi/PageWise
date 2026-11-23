@@ -44,10 +44,6 @@ public final class ReaderModel {
     let pdfDocumentTranslation = PDFDocumentTranslationController()
     let pdfTranslations: PDFSentenceTranslationStore
     let translationValidation: PDFTranslationValidationConfiguration?
-    var translationSettings: ModelSettings {
-        if modelSettings.model.isEmpty, let translationValidation { return translationValidation.settings }
-        return modelSettings
-    }
     public var visiblePage = 0 {
         didSet {
             if oldValue != visiblePage, mode == "original", let id = selectedPaperID {
@@ -55,8 +51,12 @@ public final class ReaderModel {
             }
         }
     }
-    public var jumpPage: Int?
+    public var jumpPage: Int? {
+        didSet { jumpOutlineItem = nil }
+    }
+    var jumpOutlineItem: PaperNavigationItem?
     public var navigationItems: [PaperNavigationItem] = []
+    var loadedNavigationDocumentID: String?
     public var navigationLoading = false
     public var vaultName = "未选择目录"
     public var loaded = false
@@ -102,7 +102,8 @@ public final class ReaderModel {
         importer = PDFImporter(root: location)
         vault = VaultService(root: location)
         configurationStore = ModelConfigurationStore(directory: location, credentials: credentials)
-        modelSettings = try configurationStore.load()
+        let saved = try configurationStore.load()
+        modelSettings = saved.model.isEmpty ? self.translationValidation?.settings ?? saved : saved
     }
 
     var currentEdition: Paper? { state.papers.first(where: { $0.id == selectedPaperID }) }
@@ -182,6 +183,7 @@ public final class ReaderModel {
         visiblePage = 0
         jumpPage = nil
         if changedPaper {
+            loadedNavigationDocumentID = nil
             navigationRequestID = nil
             navigationLoading = false
             navigationItems = []
@@ -283,6 +285,7 @@ public final class ReaderModel {
     public func captureSelection(
         text: String, rects: [[Double]], page: Int, spansPages: Bool = false, ranges: [NSRange] = []
     ) {
+        if mode == "original", !text.isEmpty { pdfBilingual.selectFromTranslation([]) }
         pdfSelectionRanges = ranges
         pdfSelectionSpansPages = spansPages
         selectionHTMLRange = nil
@@ -342,7 +345,7 @@ public final class ReaderModel {
     public func saveSettings(_ draft: ModelSettings, key: String?, removeKey: Bool = false) throws -> String? {
         let result = try configurationStore.save(draft, key: key, removeKey: removeKey)
         let changed = modelSettings != result.settings || removeKey || key?.isEmpty == false
-        let previous = translationSettings
+        let previous = modelSettings
         modelSettings = result.settings
         if changed {
             pdfBilingual.settingsChanged(self, previous: previous, credentialRemoved: removeKey)

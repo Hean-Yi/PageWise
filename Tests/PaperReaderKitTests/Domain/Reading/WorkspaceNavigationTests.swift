@@ -1,3 +1,4 @@
+import CoreText
 import Foundation
 import PDFKit
 import Testing
@@ -137,8 +138,16 @@ import Testing
     let nested = PDFOutline()
     nested.label = "Actual nested title"
     nested.action = PDFActionGoTo(destination: PDFDestination(page: try #require(document.page(at: 1)), at: .zero))
+    let third = PDFOutline()
+    third.label = "Nested detail"
+    third.destination = first.destination
+    nested.insertChild(third, at: 0)
     first.insertChild(nested, at: 0)
-    outline.insertChild(first, at: 0)
+    let titleWrapper = PDFOutline()
+    titleWrapper.label = navigationPaper().title
+    titleWrapper.destination = first.destination
+    titleWrapper.insertChild(first, at: 0)
+    outline.insertChild(titleWrapper, at: 0)
     document.outlineRoot = outline
     #expect(document.write(to: file))
     let bytes = try Data(contentsOf: file)
@@ -149,8 +158,51 @@ import Testing
     #expect(items.map(\.title) == ["Actual first title", "Actual nested title"])
     #expect(items.map(\.sourcePage) == [0, 1])
     #expect(items.map(\.depth) == [0, 1])
-    #expect(items.allSatisfy { $0.isOutline })
+    #expect(items.allSatisfy { $0.isOutline && $0.sourcePoint != nil })
     #expect(try Data(contentsOf: file) == bytes)
+}
+
+@Test func printedOutlineUsesRealTwoLevelHeadingsAndDistinctAnchorsOnOnePage() throws {
+    let data = NSMutableData()
+    var box = CGRect(x: 0, y: 0, width: 500, height: 700)
+    let consumer = try #require(CGDataConsumer(data: data))
+    let context = try #require(CGContext(consumer: consumer, mediaBox: &box, nil))
+    context.beginPDFPage(nil)
+    let lines: [(String, CGFloat, CGFloat)] = [
+        ("A Generic Document Title", 18, 680), ("1. Novel methods for", 14, 650), ("layered inference", 14, 634),
+        ("This is a regular line of text describing the approach in further detail.", 10, 595),
+        ("1.1. Evaluation", 11, 560), ("1.1.1. Third-level detail", 10, 530),
+        ("1. Choose a method for each group.", 10, 510), ("5.2. Orphaned item", 11, 485),
+        ("1.2. Accuracy in practice.", 11, 452), ("2. Results", 14, 405),
+        ("I. Supplementary analyses", 14, 365), ("A. Measurements", 10, 325),
+        ("II. Further results", 14, 285), ("A. Limit cases", 10, 245),
+    ]
+    for (text, size, y) in lines {
+        let string = NSAttributedString(
+            string: text,
+            attributes: [
+                .init(kCTFontAttributeName as String): CTFontCreateWithName("Helvetica" as CFString, size, nil)
+            ])
+        context.textPosition = CGPoint(x: 48, y: y)
+        CTLineDraw(CTLineCreateWithAttributedString(string), context)
+    }
+    context.endPDFPage()
+    context.closePDF()
+    let document = try #require(PDFDocument(data: data as Data))
+    let page = try #require(document.page(at: 0))
+    let items = try PDFPrintedOutline.items(in: document, paperID: UUID(), pageCount: 1)
+    #expect(
+        items.map(\.title) == [
+            "1. Novel methods for layered inference", "1.1. Evaluation", "1.2. Accuracy in practice.", "2. Results",
+            "I. Supplementary analyses", "A. Measurements", "II. Further results", "A. Limit cases",
+        ])
+    #expect(items.map(\.depth) == [0, 1, 1, 0, 0, 1, 0, 1])
+    for item in items {
+        let range = try #require(item.sourceRange)
+        let text = try #require(page.selection(for: range)?.string)
+        #expect(text.split(whereSeparator: \.isWhitespace).joined(separator: " ") == item.title)
+    }
+    #expect(try #require(items[1].sourcePoint).y > #require(items[2].sourcePoint).y)
 }
 
 private func navigationPaper() -> Paper {

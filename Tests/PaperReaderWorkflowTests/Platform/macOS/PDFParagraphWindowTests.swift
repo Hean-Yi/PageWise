@@ -12,12 +12,13 @@
         var originalPage: Int?
         var target = 1
         var revision = 0
+        var outline: PaperNavigationItem?
         func page(_ index: Int, count: Int) -> PDFParagraphPage {
             let rows = (0..<count).map { number in
                 let id = "p\(index)s\(number)"
                 return PDFSourceSentence(
                     id: id, text: "A sentence about the figures in the appendix.", pageIndex: index,
-                    rects: [], paragraphID: id)
+                    rects: [], paragraphID: id, characterRanges: [NSRange(location: number * 100, length: 40)])
             }
             return PDFParagraphPage(
                 index: index, sentences: rows, translations: [:], illustrations: [],
@@ -30,6 +31,7 @@
                 pdfSelectedIDs: [], onScroll: { _ in }, onSelection: { _ in }, onFocus: { _ in }, onHover: { _ in },
                 continuous: .init(
                     paperID: paperID, pageCount: 6, pages: pages, targetPage: target, jumpRevision: revision,
+                    outlineItem: outline,
                     onVisiblePage: { visiblePages.append($0) }, onOpenOriginalPage: { originalPage = $0 }))
         }
         pages[0] = page(0, count: 8)
@@ -107,5 +109,23 @@
         #expect(visiblePages.last == 5)
         #expect(!visiblePages.contains(0))
         #expect(originalPage == 5)
+
+        // Select a subsection before its PDF page has been extracted, then another on the same page.
+        target = 3
+        for number in [5, 9] {
+            outline = PaperNavigationItem(
+                id: "chapter-\(number)", title: "Methods", sourcePage: target, depth: 1, isOutline: true,
+                sourceRange: NSRange(location: number * 100 + 2, length: 7))
+            revision += 1
+            coordinator.update(canvas(), view: web)
+            if pages[target] == nil {
+                pages[target] = page(target, count: 18)
+                coordinator.update(canvas(), view: web)
+            }
+            #expect(
+                try await evaluate(
+                    "return Math.abs(document.querySelector('.en[data-sentence=p3s\(number)]').getBoundingClientRect().top)<3"
+                ))
+        }
     }
 #endif

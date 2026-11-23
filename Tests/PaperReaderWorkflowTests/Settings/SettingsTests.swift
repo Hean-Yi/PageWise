@@ -1,16 +1,78 @@
 import Foundation
-import PaperReaderKit
-import PaperReaderUI
 import Testing
+
+@testable import PaperReaderKit
+@testable import PaperReaderUI
 
 private actor ConnectionTransport: HTTPTransport {
     var requests: [URLRequest] = []
+    func stream(for request: URLRequest, onData: @Sendable (Data) async throws -> Void) async throws -> HTTPURLResponse
+    {
+        requests.append(request)
+        try await onData(
+            Data(
+                "data: {\"choices\":[{\"delta\":{\"content\":\"Answer [S1]\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n"
+                    .utf8))
+        return HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+    }
     func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) {
         requests.append(request)
         return (
             Data(#"{"choices":[{"message":{"content":"OK"},"finish_reason":"stop"}]}"#.utf8),
             HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
         )
+    }
+}
+
+@Test @MainActor func sidebarUsesTheTranslationAccountAndFollowsSavedServiceChanges() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    var approved = ModelSettings()
+    approved.baseURL = "https://api.deepseek.com"
+    approved.model = "deepseek-flash"
+    let credentials = WorkflowCredentials()
+    credentials.values = [:]
+    let transport = ConnectionTransport()
+    let model = try ReaderModel(
+        root: root, client: ModelClient(transport: transport), credentials: credentials,
+        translationValidation: .init(settings: approved, key: "local-fixture"))
+    await model.load()
+    let paper = Paper(
+        title: "Shared service", digest: "fixture", originalPath: "paper.pdf", pageCount: 1,
+        blocks: [.init(sourcePage: 0, text: "A source paragraph.")], warnings: [], canReflow: true)
+    model.state.papers = [paper]
+    model.select(paper.id)
+    let agent = LibraryAgent(reader: model, client: AgentClient(transport: transport))
+
+    #expect(model.modelSettings == approved)
+    var next = approved
+    next.baseURL = "https://example.invalid/v1"
+    next.model = "second-fixture-model"
+    for (settings, key) in [(approved, "local-fixture"), (next, "saved-fixture")] {
+        if settings == next {
+            #expect(!model.usesLocalModelKey(for: next))
+            await #expect(throws: (any Error).self) { try await model.testModelConnection(next, key: "") }
+            try model.saveSettings(next, key: key)
+        }
+        let start = await transport.requests.count
+        await model.ask("Question")
+        await model.summarize()
+        agent.send("Library question")
+        for _ in 0..<500 where agent.isRunning { try await Task.sleep(for: .milliseconds(10)) }
+        let requests = await transport.requests.dropFirst(start)
+        #expect(requests.count == 4)  // Paper Q&A, memory extraction, summary, library Q&A.
+        #expect(model.state.chats.last?.answer == "Answer [S1]")
+        #expect(model.paper?.summary == "OK")
+        #expect(agent.turns.last?.answer == "Answer [S1]")
+        let endpoint = try settings.endpointURL()
+        for request in requests {
+            #expect(request.url == endpoint)
+            #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer " + key)
+            let data = try #require(request.httpBody)
+            let body = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+            #expect(body["model"] as? String == settings.model)
+        }
+        if settings == approved { #expect(credentials.values.isEmpty) }
     }
 }
 

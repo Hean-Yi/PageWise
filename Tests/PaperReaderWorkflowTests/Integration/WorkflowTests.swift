@@ -1,7 +1,8 @@
 import Foundation
 import PaperReaderKit
-import PaperReaderUI
 import Testing
+
+@testable import PaperReaderUI
 
 private struct FakeModelTransport: HTTPTransport {
     func stream(for request: URLRequest, onData: @Sendable (Data) async throws -> Void) async throws -> HTTPURLResponse
@@ -50,4 +51,53 @@ private struct FakeModelTransport: HTTPTransport {
     await model.ask("attention")
     #expect(model.state.chats.isEmpty)
     #expect(model.message?.contains("没有可读取的文字") == true)
+}
+
+@Test @MainActor func importedPDFAnswersWithSelectedOrVisibleOriginalPageCitations() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let model = try ReaderModel(
+        root: root, client: ModelClient(transport: FakeModelTransport()), credentials: WorkflowCredentials())
+    await model.load()
+    var settings = model.modelSettings
+    settings.model = "fixture"
+    try model.saveSettings(settings, key: nil)
+    let pdf = root.appendingPathComponent("example.pdf")
+    try DemoPaper.write(to: pdf)
+    let id = try #require(await model.importURLs([pdf]).first)
+    #expect(model.paper?.blocks.isEmpty == true)
+    model.recordVisiblePage(1)
+    await model.ask("What does this page say?")
+    let page = try #require(model.state.chats.last?.evidence.first)
+    #expect(page.paperID == id && page.sourcePage == 1 && page.id == "S1")
+    #expect(page.text.contains("identify the source"))
+    #expect(!page.text.contains("Imagine a notebook"))
+
+    let selected = "Imagine a notebook containing observations about several experiments."
+    model.captureSelection(text: selected, rects: [], page: 0)
+    await model.ask("Explain the selected text")
+    let excerpt = try #require(model.state.chats.last?.evidence.first)
+    #expect(excerpt.text == selected && excerpt.paperID == id && excerpt.sourcePage == 0 && excerpt.blockID == nil)
+    model.jump(to: excerpt)
+    #expect(model.visiblePage == 0)
+    model.clearAssistantSelection()
+    #expect(model.openBilingualReading(translatingDocument: false))
+    model.pdfBilingual.prepareParagraphReading(model)
+    for _ in 0..<500 where model.pdfBilingual.paragraphPages.count < 2 {
+        try await Task.sleep(for: .milliseconds(10))
+    }
+    let first = try #require(model.pdfBilingual.paragraphPages[0]?.sentences.first)
+    let second = try #require(model.pdfBilingual.paragraphPages[1]?.sentences.first)
+    model.selectBilingualSentences([first.id, second.id])
+    #expect(model.assistantSelectionText == first.text + " " + second.text)
+    await model.ask("Explain both sentences")
+    let evidence = try #require(model.state.chats.last?.evidence)
+    #expect(evidence.map(\.sourcePage) == [0, 1])
+    #expect(evidence.map(\.text) == [first.text, second.text])
+    model.captureSelection(text: selected, rects: [], page: 0)
+    #expect(model.assistantSelectionText == selected)
+    model.selectBilingualSentences([second.id])
+    #expect(model.selectionText.isEmpty)
+    model.clearAssistantSelection()
+    #expect(model.assistantSelectionText.isEmpty)
 }

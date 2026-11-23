@@ -7,12 +7,22 @@ public struct PaperNavigationItem: Identifiable, Sendable, Equatable {
     public let depth: Int
     public let isOutline: Bool
 
-    public init(id: String, title: String, sourcePage: Int, depth: Int, isOutline: Bool) {
+    public let sourceRange: NSRange?
+    public let sourcePoint: CGPoint?
+    public let readingSectionID: UUID?
+
+    public init(
+        id: String, title: String, sourcePage: Int, depth: Int, isOutline: Bool,
+        sourceRange: NSRange? = nil, sourcePoint: CGPoint? = nil, readingSectionID: UUID? = nil
+    ) {
         self.id = id
         self.title = title
         self.sourcePage = sourcePage
         self.depth = depth
         self.isOutline = isOutline
+        self.sourceRange = sourceRange
+        self.sourcePoint = sourcePoint
+        self.readingSectionID = readingSectionID
     }
 
     public static func pages(for paper: Paper) -> [PaperNavigationItem] {

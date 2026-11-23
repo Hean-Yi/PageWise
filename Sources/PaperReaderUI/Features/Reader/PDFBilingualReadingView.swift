@@ -158,7 +158,7 @@ struct PDFBilingualReadingView: View {
                             session.scrollFromTranslation(id)
                         }
                     },
-                    onSelection: session.selectFromTranslation,
+                    onSelection: model.selectBilingualSentences,
                     onFocus: { id in
                         if paragraphs {
                             if paragraphVisible { session.focusParagraphSentence(id, model: model) }
@@ -186,6 +186,7 @@ struct PDFBilingualReadingView: View {
         return PDFSentenceTextCanvas.Continuous(
             paperID: paper.id, pageCount: paper.pageCount, pages: session.paragraphPages,
             targetPage: session.paragraphJumpPage, jumpRevision: session.paragraphJumpRevision,
+            outlineItem: session.paragraphJumpItem,
             onVisiblePage: { page in
                 if paragraphVisible { session.paragraphDidScroll(to: page, model: model) }
             },
@@ -222,7 +223,7 @@ struct PDFBilingualReadingView: View {
     }
 
     private var serviceDisclosure: some View {
-        let name = model.translationSettings.model
+        let name = model.modelSettings.model
         return Text(name.isEmpty ? "配置模型后可翻译本页英文" : "本页英文将发送至 \(name)")
             .font(.caption).foregroundStyle(ReaderTheme.muted).textSelection(.enabled)
     }

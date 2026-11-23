@@ -179,7 +179,7 @@ private actor JointReflowTransport: HTTPTransport {
         root: root, client: ModelClient(transport: transport), credentials: credentials, translationValidation: local)
     await model.load()
     if saved { try model.saveSettings(approved, key: nil) }
-    #expect(try await model.modelKey(for: model.translationSettings).isEmpty)
+    #expect(try await !model.hasSavedAPIKey())
     var paper = Paper(
         title: "Source fixture", digest: "fixture", originalPath: "unused.pdf", pageCount: 1, blocks: [],
         warnings: [], canReflow: true)

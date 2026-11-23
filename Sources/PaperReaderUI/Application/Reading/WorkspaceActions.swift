@@ -165,27 +165,65 @@ extension ReaderModel {
         searchNavigationTask = nil
     }
 
+    public var navigationDocumentID: String? {
+        guard let paper else { return nil }
+        if usesHTMLReading, let html = paper.htmlReading { return paper.id.uuidString + "/" + html.relativePath }
+        return paper.id.uuidString
+    }
+
+    public var displayedNavigationItems: [PaperNavigationItem] {
+        loadedNavigationDocumentID == navigationDocumentID ? navigationItems : []
+    }
+
+    public func navigationIndex(for item: PaperNavigationItem) -> Int? {
+        if let id = item.readingSectionID {
+            return usesHTMLReading ? activePages.firstIndex(where: { $0.id == id }) : nil
+        }
+        return item.sourcePage >= 0 ? item.sourcePage : nil
+    }
+
+    public func navigate(to item: PaperNavigationItem) {
+        guard displayedNavigationItems.contains(where: { $0.id == item.id }), let index = navigationIndex(for: item)
+        else { return }
+        if item.readingSectionID != nil {
+            navigateToPage(index)
+        } else {
+            navigateToSourcePage(index)
+            if mode == "original", jumpPage == item.sourcePage { jumpOutlineItem = item }
+        }
+    }
+
     public func loadNavigation() async {
-        guard let paper else {
+        guard let paper, let documentID = navigationDocumentID else {
+            loadedNavigationDocumentID = nil
             navigationItems = []
             navigationLoading = false
             return
         }
+        guard loadedNavigationDocumentID != documentID else { return }
         let request = UUID()
+        let html = usesHTMLReading ? paper.htmlReading : nil
         navigationRequestID = request
         navigationLoading = true
         defer {
             if navigationRequestID == request { navigationLoading = false }
         }
         do {
-            let items = try await outlineService.items(for: paper, root: root)
-            guard !Task.isCancelled, selectedPaperID == paper.id, navigationRequestID == request else { return }
+            let items: [PaperNavigationItem]
+            if let html {
+                items = try await HTMLReadingStore().navigationItems(for: html, root: root)
+            } else {
+                items = try await outlineService.items(for: paper, root: root)
+            }
+            guard !Task.isCancelled, navigationDocumentID == documentID, navigationRequestID == request else { return }
             navigationItems = items
+            loadedNavigationDocumentID = documentID
         } catch is CancellationError {
             return
         } catch {
-            guard selectedPaperID == paper.id, navigationRequestID == request else { return }
-            navigationItems = PaperNavigationItem.pages(for: paper)
+            guard navigationDocumentID == documentID, navigationRequestID == request else { return }
+            navigationItems = html == nil ? PaperNavigationItem.pages(for: paper) : []
+            loadedNavigationDocumentID = documentID
             status = error.localizedDescription
         }
     }

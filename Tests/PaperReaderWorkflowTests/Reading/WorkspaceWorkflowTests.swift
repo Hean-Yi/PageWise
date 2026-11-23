@@ -1,9 +1,9 @@
 import CoreText
 import Foundation
 import PDFKit
-import PaperReaderKit
 import Testing
 
+@testable import PaperReaderKit
 @testable import PaperReaderUI
 
 @Test @MainActor func readingWorkspaceRestoresStablePositionAcrossRestart() async throws {
@@ -187,6 +187,50 @@ import Testing
     #expect(model.selectedPaperID == paper.id)
     #expect(model.selectedSection == "library")
     #expect(model.navigationItems == items)
+    model.select(nil)
+    await model.flushReadingPosition()
+}
+
+@Test @MainActor func sourceOutlineFollowsPublishedSectionAnchorsAndReadingEdition() async throws {
+    let root = workspaceDirectory()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let model = try ReaderModel(root: root)
+    await model.load()
+    var paper = workspacePaper()
+    let tags = ["h1", "h2", "p", "h3", "h4", "h2"]
+    let blocks = tags.enumerated().map { index, tag in
+        var block = TextBlock(sourcePage: -1, text: "Passage \(index)")
+        block.richContent = RichContent(
+            html: "<span id='anchor-\(index)'></span><\(tag)>\(block.text)</\(tag)>",
+            translationInput: block.text, mathematics: [:], mathDescriptions: [:])
+        return block
+    }
+    let pairs = blocks.map { BilingualBlock(block: $0, translation: "已译") }
+    let store = HTMLReadingStore()
+    let first = try await store.append(Array(pairs.prefix(4)), to: nil, paper: paper, root: root)
+    paper.blocks = blocks
+    paper.htmlReading = first
+    model.state.papers = [paper]
+    model.select(paper.id)
+    await model.loadNavigation()
+    let initialItems = model.displayedNavigationItems
+    #expect(initialItems.map(\.readingSectionID) == [blocks[1].id, blocks[3].id])
+    let next = try await store.append(Array(pairs.suffix(2)), to: first, paper: paper, root: root)
+    model.state.papers[0].htmlReading = next
+    #expect(model.displayedNavigationItems.isEmpty)
+    await model.loadNavigation()
+    let items = model.displayedNavigationItems
+    #expect(items.prefix(2).map(\.id) == initialItems.map(\.id))
+    #expect(items.map(\.depth) == [0, 1, 0])
+    let subsection = try #require(items.first { $0.depth == 1 })
+    #expect(subsection.sourcePage == -1)
+    #expect(model.navigationIndex(for: subsection) == 3)
+    model.navigate(to: subsection)
+    #expect(model.mode == "translated" && model.visiblePage == 3 && model.jumpPage == 3)
+    model.changeMode(to: "original")
+    #expect(model.displayedNavigationItems.isEmpty)
+    model.navigate(to: subsection)
+    #expect(model.mode == "original" && model.visiblePage == 0)
     model.select(nil)
     await model.flushReadingPosition()
 }

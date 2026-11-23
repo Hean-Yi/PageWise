@@ -267,10 +267,19 @@ final class PDFCoordinator: NSObject, @preconcurrency PDFPageOverlayViewProvider
             highlightIDs.insert(mark.id)
         }
         if isVisible, let index = model.jumpPage, let page = view.document?.page(at: index) {
+            let outline = model.jumpOutlineItem
             view.clearSelection()
-            view.go(to: page)
+            if model.mode == "original", var point = outline?.sourcePoint {
+                if outline?.sourceRange != nil {
+                    point.y = min(page.bounds(for: view.displayBox).maxY, point.y + 10 / max(view.scaleFactor, 0.1))
+                }
+                view.go(to: PDFDestination(page: page, at: point))
+            } else {
+                view.go(to: page)
+            }
             Task { @MainActor [weak self] in
                 guard let self, self.isVisible, self.displayedURLs == urls, self.model.jumpPage == index,
+                    self.model.jumpOutlineItem == outline,
                     self.paperID == self.model.selectedPaperID, self.keys == self.model.pageKeys
                 else { return }
                 self.model.recordVisiblePage(index)

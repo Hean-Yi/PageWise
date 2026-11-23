@@ -64,6 +64,7 @@ final class PDFBilingualSession {
     private(set) var pageIndex = -1
     private(set) var paragraphJumpPage = 0
     private(set) var paragraphJumpRevision = 0
+    private(set) var paragraphJumpItem: PaperNavigationItem?
     private struct LoadedPage {
         let originalSentences: [PDFSourceSentence]
         let originalNotice: String?
@@ -71,6 +72,14 @@ final class PDFBilingualSession {
     }
     private var loadedPages: [Int: LoadedPage] = [:]
     var paragraphPages: [Int: PDFParagraphPage] { loadedPages.mapValues(\.paragraph) }
+
+    var selectedSourceSentences: [PDFSourceSentence] {
+        guard isOpen, !translationSelectedIDs.isEmpty else { return [] }
+        let selected = Set(translationSelectedIDs)
+        return loadedPages.keys.sorted().flatMap { index in
+            loadedPages[index]?.originalSentences.filter { selected.contains($0.id) } ?? []
+        }
+    }
 
     @ObservationIgnored private var loadTasks: [Int: Task<Void, Never>] = [:]
     @ObservationIgnored private var pendingTranslations: [Int: [String: String]] = [:]
@@ -150,12 +159,13 @@ final class PDFBilingualSession {
             let index = model.jumpPage, model.visiblePage == index
         else { return }
         activatePage(model, scrolling: true)
-        requestParagraphJump(index)
+        requestParagraphJump(index, item: model.jumpOutlineItem)
         model.jumpPage = nil
     }
 
-    private func requestParagraphJump(_ index: Int) {
+    private func requestParagraphJump(_ index: Int, item: PaperNavigationItem? = nil) {
         paragraphJumpPage = index
+        paragraphJumpItem = item
         paragraphJumpRevision &+= 1
     }
 
@@ -218,6 +228,7 @@ final class PDFBilingualSession {
         if readingParagraphs {
             // A recreated canvas opens on the visible page. An existing canvas moves only on a new revision.
             paragraphJumpPage = index
+            paragraphJumpItem = nil
             if !scrolling && model.jumpPage == nil { paragraphJumpRevision &+= 1 }
         }
         show(loadedPages[index])
@@ -260,7 +271,7 @@ final class PDFBilingualSession {
 
     private func load(_ index: Int, paper: Paper, model: ReaderModel) {
         let url = model.root.appendingPathComponent(paper.originalPath)
-        let settings = model.translationSettings
+        let settings = model.modelSettings
         let store = model.pdfTranslations
         let priority: TaskPriority = index == pageIndex ? .userInitiated : .utility
         loadTasks[index] = Task {
@@ -405,7 +416,7 @@ final class PDFBilingualSession {
 
     private func translate(_ items: [PDFSourceSentence], model: ReaderModel, selection: Bool) {
         guard let paper = model.paper, !items.isEmpty else { return }
-        let settings = model.translationSettings
+        let settings = model.modelSettings
         error = nil
         let token = UUID()
         requestID = token
@@ -423,7 +434,7 @@ final class PDFBilingualSession {
             do {
                 let result = try await model.pdfTranslations.translate(
                     documentHash: paper.digest, sentences: items, settings: settings, client: model.client,
-                    key: { try await model.translationKey(for: settings) },
+                    key: { try await model.modelKey(for: settings) },
                     onUpdate: { values in await update(values) })
                 update(result)
             } catch {

@@ -40,6 +40,7 @@ import WebKit
         let pages: [Int: PDFParagraphPage]
         let targetPage: Int
         let jumpRevision: Int
+        var outlineItem: PaperNavigationItem? = nil
         let onVisiblePage: (Int) -> Void
         let onOpenOriginalPage: (Int) -> Void
     }
@@ -603,7 +604,7 @@ extension PDFSentenceTextCanvas {
                 const p=document.createElement('p');p.textContent=value;p.className='source-line';
                 p.dataset.sourceGroup=item.id+'-'+index;node.append(p);
               }
-              return {before:item.before,node};
+              return {id:item.id,before:item.before,node};
             }
             const node=document.createElement('figure'), button=document.createElement('button');
             button.type='button';
@@ -614,7 +615,7 @@ extension PDFSentenceTextCanvas {
               try {
                 node.className='reading-table';
                 showReadingTable(node,item,button);
-                return {before:item.before,node};
+                return {id:item.id,before:item.before,node};
               } catch {
                 // A failure to place selectable cells must not remove the source crop or later figures.
                 node.className='';node.replaceChildren();button.replaceChildren();
@@ -642,7 +643,7 @@ extension PDFSentenceTextCanvas {
               summary.textContent=item.label;
               details.append(summary,button);node.append(details);
             } else node.append(button);
-            return {before:item.before,node};
+            return {id:item.id,before:item.before,node};
           }
           function renderRows(root,rows,pageFigures,changingStructure,note=null) {
             const previous=changingStructure ? new Map() : new Map([...root.querySelectorAll('[data-group]')].map(p=>[p.dataset.group,p]));

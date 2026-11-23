@@ -125,7 +125,7 @@ struct PDFTranslationStatusControl: View {
                 Button("继续翻译", action: resume)
             case .failed(let reason):
                 Text(reason).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
-                if !model.translationSettings.model.isEmpty { Button("重试", action: resume) }
+                if !model.modelSettings.model.isEmpty { Button("重试", action: resume) }
                 Button("模型设置", action: settings)
             case .needsConfiguration:
                 Button("设置翻译", action: settings)
@@ -161,7 +161,7 @@ struct PDFPageTranslationAction: View {
             }
         } else {
             Button {
-                if model.translationSettings.model.isEmpty { openSettings() } else { session.translatePage(model) }
+                if model.modelSettings.model.isEmpty { openSettings() } else { session.translatePage(model) }
             } label: {
                 Label(session.translations.isEmpty ? "翻译本页" : "继续翻译本页", systemImage: "character.bubble")
             }

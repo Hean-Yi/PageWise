@@ -14,7 +14,9 @@ struct ReaderNotesView: View {
                     readingNotes
                     bookmarks
                     highlights
-                    summary
+                    if let paper = model.paper, !paper.summary.isEmpty || !paper.blocks.isEmpty {
+                        summary
+                    }
                 }.padding(20)
             }
             Divider()
@@ -29,9 +31,6 @@ struct ReaderNotesView: View {
     private var readingNotes: some View {
         VStack(alignment: .leading, spacing: 12) {
             heading("阅读笔记", icon: "note.text", count: model.currentReadingNotes.count)
-            if model.currentReadingNotes.isEmpty {
-                Text("点击划线，或选文后添加笔记。").font(.system(size: 12)).foregroundStyle(ReaderTheme.muted)
-            }
             ForEach(model.currentReadingNotes) { note in
                 Button {
                     model.openReadingNote(note)
@@ -89,28 +88,24 @@ struct ReaderNotesView: View {
     private var highlights: some View {
         VStack(alignment: .leading, spacing: 12) {
             heading("划线", icon: "highlighter", count: model.currentHighlights.count)
-            if model.currentHighlights.isEmpty {
-                Text("选中正文，留下重点。").font(.system(size: 12)).foregroundStyle(ReaderTheme.muted)
-            } else {
-                ForEach(model.currentHighlights.reversed()) { mark in
-                    Button {
-                        model.navigate(to: mark)
-                        didNavigate()
-                    } label: {
-                        HStack(alignment: .top, spacing: 10) {
-                            RoundedRectangle(cornerRadius: 1).fill(ReaderTheme.accent.opacity(0.5)).frame(width: 2)
-                            VStack(alignment: .leading, spacing: 9) {
-                                Text(mark.text).font(.system(size: 12)).lineSpacing(4).lineLimit(7)
-                                    .multilineTextAlignment(.leading)
-                                HStack {
-                                    Text("第 \(mark.pageIndex + 1) 页")
-                                    Spacer()
-                                    Image(systemName: "arrow.up.right")
-                                }.font(.system(size: 10)).foregroundStyle(ReaderTheme.muted)
-                            }
-                        }.fixedSize(horizontal: false, vertical: true).padding(.vertical, 6).contentShape(Rectangle())
-                    }.buttonStyle(.plain)
-                }
+            ForEach(model.currentHighlights.reversed()) { mark in
+                Button {
+                    model.navigate(to: mark)
+                    didNavigate()
+                } label: {
+                    HStack(alignment: .top, spacing: 10) {
+                        RoundedRectangle(cornerRadius: 1).fill(ReaderTheme.accent.opacity(0.5)).frame(width: 2)
+                        VStack(alignment: .leading, spacing: 9) {
+                            Text(mark.text).font(.system(size: 12)).lineSpacing(4).lineLimit(7)
+                                .multilineTextAlignment(.leading)
+                            HStack {
+                                Text("第 \(mark.pageIndex + 1) 页")
+                                Spacer()
+                                Image(systemName: "arrow.up.right")
+                            }.font(.system(size: 10)).foregroundStyle(ReaderTheme.muted)
+                        }
+                    }.fixedSize(horizontal: false, vertical: true).padding(.vertical, 6).contentShape(Rectangle())
+                }.buttonStyle(.plain)
             }
         }
     }
@@ -121,10 +116,12 @@ struct ReaderNotesView: View {
             if let text = model.paper?.summary, !text.isEmpty {
                 Text(text).font(.system(size: 13)).lineSpacing(5).textSelection(.enabled)
             }
-            Button(action: summarize) {
-                Label(model.paper?.summary.isEmpty == false ? "重新生成" : "生成论文总结", systemImage: "sparkles")
-                    .font(.system(size: 12))
-            }.buttonStyle(.borderless).disabled(model.busyAI)
+            if model.paper?.blocks.isEmpty == false {
+                Button(action: summarize) {
+                    Label(model.paper?.summary.isEmpty == false ? "重新生成" : "生成论文总结", systemImage: "sparkles")
+                        .font(.system(size: 12))
+                }.buttonStyle(.borderless).disabled(model.busyAI)
+            }
         }
     }
 

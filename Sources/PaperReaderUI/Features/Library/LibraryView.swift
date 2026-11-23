@@ -5,9 +5,10 @@ import UniformTypeIdentifiers
 public struct LibraryView: View {
     @Bindable var model: ReaderModel
     @State private var agent: LibraryAgent
-    @State private var showAgent = false
+    @State private var assistantTab: AssistantTab?
+    @State private var paperQuestion = ""
+    @State private var askSave = false
     @State private var agentDraft = ""
-    @State private var pendingAgentSettings = false
     @State private var showImporter = false
     @State private var showSettings = false
     @State private var onlineSearch: OnlinePaperSearch
@@ -59,7 +60,11 @@ public struct LibraryView: View {
                     toast = nil
                 } catch {}
             }
-            .onChange(of: model.selectedPaperID) { _, id in if id != nil { preferredColumn = .detail } }
+            .onChange(of: model.selectedPaperID) { _, id in
+                if id != nil { preferredColumn = .detail }
+                paperQuestion = ""
+                if assistantTab != nil { assistantTab = isReading ? .paper : .library }
+            }
             .onChange(of: scenePhase) { _, phase in
                 #if os(macOS)
                     model.setActive(phase == .active, suspendTranslation: false)
@@ -121,30 +126,30 @@ public struct LibraryView: View {
 
     private var detailContent: some View {
         GeometryReader { proxy in
-            let inline = proxy.size.width >= 900
-            HStack(spacing: 0) {
-                workspaceContent.frame(maxWidth: .infinity, maxHeight: .infinity)
-                if showAgent && inline {
-                    Divider()
-                    agentPanel(inline: true).frame(width: 360)
-                }
-            }
-            .sheet(
-                isPresented: Binding(get: { showAgent && !inline }, set: { showAgent = $0 }),
-                onDismiss: {
-                    if pendingAgentSettings {
-                        pendingAgentSettings = false
-                        showSettings = true
+            let width = proxy.size.width
+            let inline = width >= 840
+            let sidebarWidth = min(340, max(1, width - 36))
+            workspaceContent
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding(.trailing, inline && assistantTab != nil ? sidebarWidth : 0)
+                .overlay(alignment: .trailing) {
+                    if let assistantTab {
+                        WorkspaceAssistantSidebar(
+                            model: model, agent: agent, isReading: isReading, tab: isReading ? assistantTab : .library,
+                            select: { self.assistantTab = $0 }, question: $paperQuestion, agentDraft: $agentDraft,
+                            openSettings: { showSettings = true }, saveNote: { askSave = true },
+                            didNavigate: { if !inline { self.assistantTab = nil } }
+                        )
+                        .frame(width: sidebarWidth)
+                        .shadow(color: inline ? .clear : .black.opacity(0.1), radius: 8, x: -3)
+                        .accessibilityAction(.escape) { self.assistantTab = nil }
                     }
                 }
-            ) {
-                agentPanel(inline: false)
-                    #if os(macOS)
-                        .frame(width: 400, height: 650)
-                    #else
-                        .presentationSizing(.form)
-                    #endif
-            }
+        }
+        .confirmationDialog("将本次讨论整理到笔记？", isPresented: $askSave, titleVisibility: .visible) {
+            Button("包含讨论，保存笔记") { Task { await model.saveToObsidian(includeDiscussion: true) } }
+            Button("不包含讨论，保存笔记") { Task { await model.saveToObsidian(includeDiscussion: false) } }
+            Button("取消", role: .cancel) {}
         }
         .background(ReaderTheme.canvas)
         .task { HTMLWebViewPool.prewarm() }
@@ -158,12 +163,16 @@ public struct LibraryView: View {
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Button {
-                    showAgent.toggle()
+                    assistantTab = assistantTab == nil ? (isReading ? .paper : .library) : nil
                 } label: {
-                    Label("书库助理", systemImage: "sparkle")
-                }.help("书库助理").accessibilityLabel("书库助理")
-                    .foregroundStyle(showAgent ? ReaderTheme.accent : ReaderTheme.muted)
-                    .disabled(!model.loaded || model.loadFailure != nil)
+                    Label(
+                        "助读侧栏", systemImage: assistantTab == nil ? "sidebar.right" : "rectangle.righthalf.inset.filled")
+                }
+                .keyboardShortcut("i", modifiers: [.command, .option])
+                .help(assistantTab == nil ? "打开助读侧栏" : "收起助读侧栏")
+                .accessibilityLabel(assistantTab == nil ? "打开助读侧栏" : "收起助读侧栏")
+                .foregroundStyle(assistantTab != nil ? ReaderTheme.accent : ReaderTheme.muted)
+                .disabled(!model.loaded || model.loadFailure != nil)
             }
         }
         .overlay(alignment: .bottom) {
@@ -189,21 +198,6 @@ public struct LibraryView: View {
         }
     }
 
-    private func agentPanel(inline: Bool) -> some View {
-        LibraryAgentView(
-            agent: agent, model: model, draft: $agentDraft,
-            openSettings: {
-                if inline {
-                    showSettings = true
-                } else {
-                    pendingAgentSettings = true
-                    showAgent = false
-                }
-            },
-            close: { showAgent = false },
-            didNavigate: { if !inline { showAgent = false } })
-    }
-
     private var workspaceContent: some View {
         Group {
             if let failure = model.loadFailure {
@@ -216,7 +210,12 @@ public struct LibraryView: View {
             } else if model.selectedSection == "memory" {
                 MemoryView(model: model)
             } else if model.paper != nil {
-                ReaderView(model: model, libraryAgentPresented: $showAgent, openSettings: { showSettings = true })
+                ReaderView(
+                    model: model, sidebarOpen: assistantTab != nil,
+                    explainSelection: {
+                        paperQuestion = "请结合全文解释选中内容。"
+                        assistantTab = .paper
+                    }, requestNoteSave: { askSave = true }, openSettings: { showSettings = true })
             } else {
                 LibraryWorkspaceView(
                     model: model, collection: $collection, selectedShelfID: $selectedShelfID,

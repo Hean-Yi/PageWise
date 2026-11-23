@@ -6,7 +6,6 @@ struct LibraryAgentView: View {
     @Bindable var model: ReaderModel
     @Binding var draft: String
     let openSettings: () -> Void
-    let close: () -> Void
     let didNavigate: () -> Void
     @FocusState private var composerFocused: Bool
 
@@ -16,8 +15,6 @@ struct LibraryAgentView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            header
-            Divider()
             ScrollViewReader { proxy in
                 ScrollView {
                     VStack(alignment: .leading, spacing: 28) {
@@ -43,33 +40,10 @@ struct LibraryAgentView: View {
         .background(ReaderTheme.canvas).foregroundStyle(ReaderTheme.ink)
     }
 
-    private var header: some View {
-        HStack(spacing: 10) {
-            Text("书库助理").font(ReaderTheme.editorial(20))
-            Spacer()
-            Button {
-                agent.reset()
-                draft = ""
-                composerFocused = true
-            } label: {
-                Image(systemName: "square.and.pencil")
-            }.buttonStyle(.plain).help("新对话 · 当前会话仅在本次运行保留").accessibilityLabel("新对话")
-            Button(action: close) {
-                Image(systemName: "xmark").font(.system(size: 11, weight: .medium)).frame(width: 25, height: 25)
-            }.buttonStyle(.plain).foregroundStyle(ReaderTheme.muted).help("关闭 Agent").accessibilityLabel("关闭 Agent")
-        }.padding(.horizontal, 20).padding(.vertical, 16)
-    }
-
     private var welcome: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("你想找什么？").font(ReaderTheme.editorial(26)).padding(.top, 12)
-            VStack(spacing: 0) {
-                suggestion("在书库中找知识点", icon: "text.magnifyingglass", prompt: "我的书库中，哪些段落解释了注意力机制？")
-                suggestion("在线查找论文", icon: "globe", prompt: "帮我在线查找 Attention Is All You Need")
-                if let paper = model.paper {
-                    suggestion("理解当前论文", icon: "book", prompt: "请查找《\(paper.title)》，结合原文解释主要方法并标注来源页。")
-                }
-            }
+        VStack(spacing: 0) {
+            suggestion("在书库中找知识点", icon: "text.magnifyingglass", prompt: "我的书库中，哪些段落解释了注意力机制？")
+            suggestion("在线查找论文", icon: "globe", prompt: "帮我在线查找 Attention Is All You Need")
         }.frame(maxWidth: .infinity, alignment: .leading)
     }
 
@@ -118,11 +92,16 @@ struct LibraryAgentView: View {
                 .textFieldStyle(.plain).lineLimit(2...5).font(.system(size: 13))
                 .focused($composerFocused).onSubmit(send).accessibilityLabel("向书库 Agent 提问")
             HStack {
-                Button(action: openSettings) {
-                    Label(isConfigured ? model.modelSettings.model : "配置模型", systemImage: "slider.horizontal.3")
-                        .lineLimit(1)
-                }.buttonStyle(.plain).font(.system(size: 10)).foregroundStyle(ReaderTheme.muted)
-                    .help("模型服务设置")
+                if !agent.turns.isEmpty {
+                    Button {
+                        agent.reset()
+                        draft = ""
+                        composerFocused = true
+                    } label: {
+                        Image(systemName: "square.and.pencil").frame(minWidth: 30, minHeight: 30)
+                    }.buttonStyle(.plain).foregroundStyle(ReaderTheme.muted)
+                        .help("新对话").accessibilityLabel("新对话")
+                }
                 Spacer(minLength: 6)
                 if agent.isRunning {
                     Button(action: agent.cancel) { Image(systemName: "stop.fill").font(.system(size: 11)) }
