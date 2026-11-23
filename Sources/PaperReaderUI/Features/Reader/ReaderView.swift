@@ -109,8 +109,8 @@ struct ReaderView: View {
                 Label("返回书库", systemImage: "chevron.left")
             }
             .labelStyle(.iconOnly).help("返回书库").keyboardShortcut("l", modifiers: [.command, .shift])
-            Text(model.paper?.title ?? "").font(.system(size: 14, weight: .semibold))
-                .lineLimit(1).truncationMode(.tail)
+            Text(model.paper?.title ?? "").font(ReaderTheme.editorial(18, weight: .medium))
+                .foregroundStyle(ReaderTheme.ink).lineLimit(1).truncationMode(.tail)
             Spacer(minLength: 0)
             Picker(
                 "阅读模式",
@@ -121,7 +121,7 @@ struct ReaderView: View {
             ) {
                 Text("原版").tag(false)
                 Text("双语重排").tag(true)
-            }.pickerStyle(.segmented).labelsHidden().fixedSize().accessibilityLabel("阅读模式")
+            }.pickerStyle(.segmented).controlSize(.regular).labelsHidden().fixedSize().accessibilityLabel("阅读模式")
             Button {
                 toggleAssistant(width: width)
             } label: {
@@ -132,7 +132,7 @@ struct ReaderView: View {
                         ? ReaderTheme.accent : ReaderTheme.muted)
             readingMenu(width: width)
         }
-        .buttonStyle(.borderless).padding(.horizontal, width < 520 ? 12 : 20).frame(height: 48)
+        .buttonStyle(.borderless).padding(.horizontal, width < 520 ? 12 : 22).frame(height: 56)
         .background(ReaderTheme.canvas)
         .alert("阅读提示", isPresented: $showWarnings) {
             Button("好") {}
@@ -303,8 +303,9 @@ struct ReaderView: View {
                         .toggleStyle(.button).accessibilityLabel("手写批注")
                 }
             #endif
-        }.buttonStyle(.borderless).font(.caption).padding(.horizontal, 22).frame(height: 46)
+        }.buttonStyle(.borderless).font(.caption).padding(.horizontal, 22).frame(height: 42)
             .background(ReaderTheme.canvas)
+            .overlay(alignment: .top) { Rectangle().fill(ReaderTheme.line).frame(height: 0.5) }
     }
 
     private func jumpToPage() {
@@ -345,13 +346,10 @@ struct ReaderView: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 24) {
                         if displayedChats.isEmpty {
-                            VStack(alignment: .leading, spacing: 20) {
-                                Image(systemName: "sparkles").font(.system(size: 26, weight: .light)).foregroundStyle(
-                                    ReaderTheme.accent
-                                )
-                                .padding(.top, 16)
-                                Text("从一个问题开始").font(.system(size: 20, weight: .medium, design: .serif))
-                                VStack(spacing: 8) {
+                            VStack(alignment: .leading, spacing: 14) {
+                                Text("问这篇论文").font(ReaderTheme.editorial(26))
+                                    .foregroundStyle(ReaderTheme.ink).padding(.top, 12)
+                                VStack(spacing: 0) {
                                     prompt("核心贡献", icon: "lightbulb", question: "这篇论文主要解决什么问题，有哪些核心贡献？")
                                     prompt(
                                         "方法思路", icon: "point.3.connected.trianglepath.dotted",
@@ -365,7 +363,7 @@ struct ReaderView: View {
                                 Text(turn.question).font(.callout.weight(.medium)).padding(12).frame(
                                     maxWidth: .infinity, alignment: .leading
                                 )
-                                .background(ReaderTheme.accent.opacity(0.07), in: RoundedRectangle(cornerRadius: 10))
+                                .background(ReaderTheme.elevated, in: RoundedRectangle(cornerRadius: 12))
                                 Text(turn.answer).font(.callout).textSelection(.enabled).lineSpacing(5)
                                 DisclosureGroup("来源 · \(turn.evidence.count)") {
                                     ForEach(turn.evidence) { source in
@@ -385,20 +383,11 @@ struct ReaderView: View {
                 }
                 composer
             }
-        }.background(ReaderTheme.surface)
+        }.background(ReaderTheme.canvas)
     }
 
     private func prompt(_ title: String, icon: String, question value: String) -> some View {
-        Button {
-            question = value
-        } label: {
-            HStack(spacing: 10) {
-                Image(systemName: icon).frame(width: 16).foregroundStyle(ReaderTheme.accent)
-                Text(title)
-                Spacer()
-                Image(systemName: "arrow.up.left").font(.caption2).foregroundStyle(ReaderTheme.muted)
-            }.font(.system(size: 12)).padding(12).background(ReaderTheme.canvas, in: RoundedRectangle(cornerRadius: 8))
-        }.buttonStyle(.plain)
+        AssistantSuggestion(title: title, systemImage: icon) { question = value }
     }
 
     private var composer: some View {
@@ -426,14 +415,14 @@ struct ReaderView: View {
                 Spacer()
                 Button(action: send) {
                     Image(systemName: "arrow.up").font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(.white).frame(width: 28, height: 28)
-                        .background(ReaderTheme.accent, in: RoundedRectangle(cornerRadius: 8))
+                        .foregroundStyle(ReaderTheme.surface).frame(width: 30, height: 30)
+                        .background(ReaderTheme.ink, in: Circle())
                 }.buttonStyle(.plain).accessibilityLabel("发送问题")
                     .opacity(question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? 0.4 : 1)
                     .disabled(question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || model.busyAI)
             }
-        }.padding(14).background(ReaderTheme.canvas, in: RoundedRectangle(cornerRadius: 12))
-            .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(ReaderTheme.line)).padding(16)
+        }.padding(16).background(ReaderTheme.surface, in: RoundedRectangle(cornerRadius: 16))
+            .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(ReaderTheme.line)).padding(14)
     }
 
     private var configured: Bool {

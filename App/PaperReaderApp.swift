@@ -21,6 +21,7 @@ struct PaperReaderApp: App {
             Window("PaperReader", id: "main") {
                 content.frame(minWidth: 1000, minHeight: 640)
             }.defaultSize(width: 1320, height: 860)
+                .commands { ReaderSettingsCommands() }
         #else
             WindowGroup { content }
         #endif

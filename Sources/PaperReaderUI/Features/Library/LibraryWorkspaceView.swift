@@ -27,29 +27,36 @@ struct LibraryWorkspaceView: View {
 
     var body: some View {
         GeometryReader { geometry in
-            let inset: CGFloat = geometry.size.width < 650 ? 28 : 44
+            let compact = geometry.size.width < 650
+            let inset: CGFloat = compact ? 22 : 42
             let available = max(150, geometry.size.width - inset * 2)
             let count = max(1, Int((available + 36) / 226))
             let columns = Array(
                 repeating: GridItem(.flexible(minimum: 150, maximum: 236), spacing: 36, alignment: .top), count: count)
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
-                    header(compact: geometry.size.width < 650)
-                    Divider().padding(.top, 20).padding(.bottom, 26)
+                    header(compact: compact).padding(.bottom, compact ? 22 : 30)
                     if collection == .all && selectedShelfID == nil && query.isEmpty, let recent {
-                        continueReading(recent).padding(.bottom, 30)
+                        continueReading(recent).padding(.bottom, 22)
                     }
-                    if collection == .all {
-                        TopicShelvesView(
-                            model: model, selectedShelfID: $selectedShelfID, dragActive: arrangement.sourceID != nil
-                        ).padding(.bottom, 24)
+                    HStack(alignment: .top, spacing: 12) {
+                        if collection == .all {
+                            TopicShelvesView(
+                                model: model, selectedShelfID: $selectedShelfID, dragActive: arrangement.sourceID != nil
+                            )
+                        }
+                        if !query.isEmpty && collection != .all {
+                            Text("搜索结果").font(.callout).foregroundStyle(ReaderTheme.muted).frame(height: 44)
+                        }
+                        Spacer(minLength: 0)
+                        sortMenu.frame(height: 44)
                     }
+                    Rectangle().fill(ReaderTheme.line).frame(height: 1).padding(.bottom, 24)
                     if onlineSearch.isExpanded {
                         SearchView(search: onlineSearch, targetName: onlineTargetName)
                             .transition(reduceMotion ? .opacity : .opacity.combined(with: .move(edge: .top)))
                             .padding(.bottom, 26)
                     }
-                    filters.padding(.bottom, 24)
                     LazyVGrid(columns: columns, alignment: .leading, spacing: 32) {
                         if collection != .reading && collection != .finished {
                             AddPaperCover { onlineSearch.open(shelfID: collection == .all ? selectedShelfID : nil) }
@@ -73,7 +80,7 @@ struct LibraryWorkspaceView: View {
                             if !query.isEmpty { Button("清除搜索") { query = "" }.buttonStyle(.plain) }
                         }.font(.system(size: 12)).padding(.top, 22)
                     }
-                }.padding(.horizontal, inset).padding(.top, 28).padding(.bottom, 44)
+                }.padding(.horizontal, inset).padding(.top, compact ? 24 : 32).padding(.bottom, 44)
             }
         }.onChange(of: query) { _, _ in arrangement.end() }
             .onChange(of: collection) { _, _ in arrangement.end() }
@@ -162,10 +169,11 @@ struct LibraryWorkspaceView: View {
 
     private var heading: some View {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
-            Text(collection.title).font(.system(size: 28, weight: .semibold))
+            Text(collection.title).font(ReaderTheme.editorial(36))
+                .foregroundStyle(ReaderTheme.ink).accessibilityAddTraits(.isHeader)
             Text(
-                "\(collection == .all && query.isEmpty ? model.state.papers.count : papers.count)"
-            ).font(.system(size: 12)).foregroundStyle(ReaderTheme.muted)
+                "\(collection == .all && query.isEmpty ? model.state.papers.count : papers.count) 篇"
+            ).font(.callout).foregroundStyle(ReaderTheme.muted)
         }
     }
 
@@ -187,58 +195,64 @@ struct LibraryWorkspaceView: View {
                     Text("⌘ F").font(.system(size: 10)).foregroundStyle(ReaderTheme.muted)
                 #endif
             }
-        }.font(.system(size: 12)).padding(.horizontal, 12).padding(.vertical, 10)
-            .background(ReaderTheme.ink.opacity(0.035), in: RoundedRectangle(cornerRadius: 8))
+        }.font(.callout).padding(.horizontal, 12).frame(minHeight: 36)
+            .background(ReaderTheme.surface, in: RoundedRectangle(cornerRadius: 10))
+            .overlay {
+                RoundedRectangle(cornerRadius: 10)
+                    .strokeBorder(searchFocused ? ReaderTheme.accent : ReaderTheme.line)
+                    .allowsHitTesting(false)
+            }
     }
 
     private func continueReading(_ paper: Paper) -> some View {
         Button {
             model.select(paper.id)
         } label: {
-            HStack(spacing: 18) {
-                BookCoverView(paper: paper).frame(width: 43)
-                    .shadow(color: .black.opacity(0.1), radius: 4, x: 0, y: 3)
-                VStack(alignment: .leading, spacing: 7) {
-                    Text("继续阅读").font(.system(size: 10, weight: .medium)).foregroundStyle(ReaderTheme.accent)
-                    Text(paper.title).font(.system(size: 18, weight: .medium, design: .serif))
-                        .lineLimit(1).multilineTextAlignment(.leading)
-                    if let position = model.workspace(for: paper.id).position {
-                        Text("\(readingModeTitle(position.mode)) · 第 \(position.pageIndex + 1) 页")
-                            .font(.system(size: 11)).foregroundStyle(ReaderTheme.muted)
+            HStack(spacing: 16) {
+                BookCoverView(paper: paper).frame(width: 42)
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack {
+                        Text("继续阅读").font(.caption.weight(.semibold)).foregroundStyle(ReaderTheme.accent)
+                        if let position = model.workspace(for: paper.id).position {
+                            Text(positionLabel(position, in: paper)).font(.caption).foregroundStyle(ReaderTheme.muted)
+                        }
                     }
+                    Text(paper.title).font(ReaderTheme.editorial(20, weight: .medium))
+                        .foregroundStyle(ReaderTheme.ink).lineLimit(2).multilineTextAlignment(.leading)
                 }
                 Spacer(minLength: 0)
                 Image(systemName: "arrow.right").font(.system(size: 15, weight: .regular))
                     .foregroundStyle(ReaderTheme.accent).frame(width: 34, height: 34)
-                    .background(ReaderTheme.surface.opacity(0.7), in: Circle())
-            }.padding(.horizontal, 20).padding(.vertical, 16)
+            }.padding(.horizontal, 18).padding(.vertical, 13)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(ReaderTheme.elevated.opacity(0.65), in: RoundedRectangle(cornerRadius: 12))
+                .background(ReaderTheme.surface, in: RoundedRectangle(cornerRadius: 12))
+                .overlay { RoundedRectangle(cornerRadius: 12).strokeBorder(ReaderTheme.line) }
                 .contentShape(RoundedRectangle(cornerRadius: 12))
         }.buttonStyle(.plain).accessibilityLabel("继续阅读 \(paper.title)")
     }
 
-    private var filters: some View {
-        HStack {
-            if !query.isEmpty {
-                Text("搜索结果").font(.system(size: 12, weight: .medium)).foregroundStyle(ReaderTheme.muted)
-            }
-            Spacer()
-            Menu {
-                Picker(
-                    "排序",
-                    selection: Binding(
-                        get: { sort },
-                        set: { value in
-                            Task { await model.selectLibrarySort(value) }
-                        })
-                ) {
-                    ForEach(LibrarySort.allCases) { item in Text(item.title).tag(item) }
-                }
-            } label: {
-                Label(sort.title, systemImage: "arrow.up.arrow.down").font(.system(size: 11))
-            }.menuStyle(.borderlessButton).fixedSize().foregroundStyle(ReaderTheme.muted)
-        }
+    private func positionLabel(_ position: ReaderPosition, in paper: Paper) -> String {
+        let isSection =
+            paper.htmlReading?.sections.contains { $0.id.uuidString == position.pageKey } == true
+            || paper.retainedReadings?.contains { version in
+                version.html?.sections.contains { $0.id.uuidString == position.pageKey } == true
+            } == true
+        return "\(readingModeTitle(position.mode)) · 第 \(position.pageIndex + 1) \(isSection ? "段" : "页")"
+    }
+
+    private var sortMenu: some View {
+        Menu {
+            Picker(
+                "排序",
+                selection: Binding(
+                    get: { sort },
+                    set: { value in Task { await model.selectLibrarySort(value) } })
+            ) {
+                ForEach(LibrarySort.allCases) { item in Text(item.title).tag(item) }
+            }.pickerStyle(.inline).labelsHidden()
+        } label: {
+            Label(sort.title, systemImage: "arrow.up.arrow.down").font(.caption)
+        }.menuStyle(.borderlessButton).fixedSize().foregroundStyle(ReaderTheme.muted)
     }
 }
 

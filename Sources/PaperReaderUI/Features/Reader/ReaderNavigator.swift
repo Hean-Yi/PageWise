@@ -30,11 +30,27 @@ struct ReaderNavigator: View {
                     }.buttonStyle(.plain).padding(.horizontal, 16).padding(.top, 12)
                 }
             #endif
-            Picker("论文导航", selection: $tab) {
-                Label("目录", systemImage: "list.bullet.indent").tag("outline")
-                Label("查找", systemImage: "magnifyingglass").tag("search")
-            }.pickerStyle(.segmented).labelsHidden().padding(.horizontal, 12).frame(height: 48)
-            Divider()
+            HStack {
+                Text(tab == "outline" ? "目录" : "文内查找")
+                    .font(ReaderTheme.editorial(21)).accessibilityAddTraits(.isHeader)
+                Spacer()
+                Button {
+                    if tab == "outline" {
+                        tab = "search"
+                        searchFocused = true
+                    } else {
+                        tab = "outline"
+                    }
+                } label: {
+                    Label(
+                        tab == "outline" ? "查找正文或译文" : "返回目录",
+                        systemImage: tab == "outline" ? "magnifyingglass" : "list.bullet.indent"
+                    ).labelStyle(.iconOnly).frame(minWidth: 32, minHeight: 32)
+                }
+                .buttonStyle(.borderless).foregroundStyle(ReaderTheme.muted)
+                .help(tab == "outline" ? "文内查找（⌘F）" : "返回目录")
+            }
+            .padding(.horizontal, 18).frame(height: 56)
             if tab == "outline" { outline } else { search }
             Spacer(minLength: 0)
         }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading).background(ReaderTheme.sidebar)
@@ -61,17 +77,20 @@ struct ReaderNavigator: View {
                                 didNavigate()
                             } label: {
                                 HStack(alignment: .firstTextBaseline, spacing: 12) {
-                                    Text(item.title).font(.system(size: 12)).lineLimit(item.isOutline ? 2 : 3)
+                                    Text(item.title)
+                                        .font(.system(size: 13, weight: item.depth == 0 ? .medium : .regular))
+                                        .foregroundStyle(item.depth == 0 ? ReaderTheme.ink : ReaderTheme.muted)
+                                        .lineLimit(item.isOutline ? 2 : 3)
                                         .multilineTextAlignment(.leading).padding(
                                             .leading, CGFloat(min(4, item.depth)) * 10)
                                     Spacer(minLength: 0)
-                                    Text("\(item.sourcePage + 1)").font(.system(size: 10, design: .monospaced))
+                                    Text("\(item.sourcePage + 1)").font(.caption.monospacedDigit())
                                         .foregroundStyle(ReaderTheme.muted)
-                                }.padding(.horizontal, 12).padding(.vertical, 12).frame(
+                                }.padding(.horizontal, 12).padding(.vertical, 10).frame(
                                     maxWidth: .infinity, alignment: .leading
                                 )
                                 .background(
-                                    sourcePage == item.sourcePage ? ReaderTheme.ink.opacity(0.065) : .clear,
+                                    sourcePage == item.sourcePage ? ReaderTheme.elevated : .clear,
                                     in: RoundedRectangle(cornerRadius: 8)
                                 ).contentShape(Rectangle())
                             }.buttonStyle(.plain).id(item.id)

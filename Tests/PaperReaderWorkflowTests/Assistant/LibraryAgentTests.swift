@@ -118,6 +118,32 @@ private func onlineScript(_ messages: [AgentMessage], _ count: Int) throws -> Ag
     Issue.record("Expected asynchronous operation to finish")
 }
 
+@Test(arguments: [true, false]) @MainActor
+func changingAgentServiceOrModelStartsFreshWireHistoryAndKeepsDisplayedTurns(changeService: Bool) async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let reader = try await makeAgentReader(root)
+    let client = ScriptedLibraryModel { _, count in
+        .init(role: "assistant", content: "Answer " + String(count), reasoningContent: "provider-specific-reasoning")
+    }
+    let agent = LibraryAgent(reader: reader, client: client, discovery: AgentDiscoveryFixture())
+    agent.send("First question")
+    try await eventually { !agent.isRunning }
+    var settings = reader.modelSettings
+    if changeService {
+        settings.baseURL = ModelServicePreset.gemini.baseURL
+    } else {
+        settings.model = "a-different-model"
+    }
+    try reader.saveSettings(settings, key: changeService ? "fixture-only" : nil)
+    agent.send("Second question")
+    try await eventually { !agent.isRunning }
+    let second = try #require(await client.requests.last)
+    #expect(second.map(\.role) == ["system", "user"])
+    #expect(second.last?.content == "Second question")
+    #expect(agent.turns.map(\.answer) == ["Answer 1", "Answer 2"])
+}
+
 @Test @MainActor func libraryAgentSearchReadAndOpenUseRealRegisteredSourcePages() async throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: root) }

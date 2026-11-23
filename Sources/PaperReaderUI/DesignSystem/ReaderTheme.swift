@@ -1,3 +1,4 @@
+import CoreText
 import SwiftUI
 
 #if os(macOS)
@@ -7,28 +8,47 @@ import SwiftUI
 #endif
 
 enum ReaderTheme {
-    static let accent = adaptive(light: (0.64, 0.30, 0.20), dark: (0.88, 0.57, 0.43))
-    static let canvas = adaptive(light: (0.98, 0.975, 0.96), dark: (0.14, 0.135, 0.125))
-    static let surface = adaptive(light: (1, 0.995, 0.985), dark: (0.18, 0.17, 0.155))
-    static let sidebar = adaptive(light: (0.945, 0.935, 0.91), dark: (0.115, 0.11, 0.10))
-    static let elevated = adaptive(light: (0.955, 0.94, 0.905), dark: (0.22, 0.20, 0.175))
-    static let ink = Color.primary
-    static let muted = Color.secondary
-    static let line = Color.primary.opacity(0.09)
+    static let accent = adaptive(light: 0x9F503A, dark: 0xE8A086)
+    static let canvas = adaptive(light: 0xF9F8F3, dark: 0x23221E)
+    static let surface = adaptive(light: 0xFFFDF8, dark: 0x2C2B26)
+    static let sidebar = adaptive(light: 0xF1EFE8, dark: 0x1E1D1A)
+    static let elevated = adaptive(light: 0xEDE8DD, dark: 0x35322B)
+    static let ink = adaptive(light: 0x292822, dark: 0xF0EEE7)
+    static let muted = adaptive(light: 0x69665E, dark: 0xB6B2A7)
+    static let line = adaptive(light: 0xDFDDD3, dark: 0x44413A)
 
-    private static func adaptive(light: (Double, Double, Double), dark: (Double, Double, Double)) -> Color {
+    @MainActor static func editorial(_ size: CGFloat, weight: Font.Weight = .regular) -> Font {
+        Font(CTFontCreateWithFontDescriptor(editorialDescriptor, size, nil)).weight(weight)
+    }
+
+    @MainActor private static let editorialDescriptor: CTFontDescriptor = {
+        #if os(macOS)
+            let system = NSFont.systemFont(ofSize: 17).fontDescriptor
+        #else
+            let system = UIFont.systemFont(ofSize: 17).fontDescriptor
+        #endif
+        let serif = (system.withDesign(.serif) ?? system) as CTFontDescriptor
+        let songti = CTFontDescriptorCreateWithNameAndSize("STSongti-SC-Regular" as CFString, 0)
+        return CTFontDescriptorCreateCopyWithAttributes(serif, [kCTFontCascadeListAttribute: [songti]] as CFDictionary)
+    }()
+
+    private static func adaptive(light: UInt32, dark: UInt32) -> Color {
         #if os(macOS)
             Color(
                 nsColor: NSColor(name: nil) { appearance in
-                    let c = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? dark : light
-                    return NSColor(srgbRed: c.0, green: c.1, blue: c.2, alpha: 1)
+                    let rgb = components(appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? dark : light)
+                    return NSColor(srgbRed: rgb.red, green: rgb.green, blue: rgb.blue, alpha: 1)
                 })
         #else
             Color(
                 uiColor: UIColor { traits in
-                    let c = traits.userInterfaceStyle == .dark ? dark : light
-                    return UIColor(red: c.0, green: c.1, blue: c.2, alpha: 1)
+                    let rgb = components(traits.userInterfaceStyle == .dark ? dark : light)
+                    return UIColor(red: rgb.red, green: rgb.green, blue: rgb.blue, alpha: 1)
                 })
         #endif
+    }
+
+    private static func components(_ hex: UInt32) -> (red: CGFloat, green: CGFloat, blue: CGFloat) {
+        (CGFloat((hex >> 16) & 255) / 255, CGFloat((hex >> 8) & 255) / 255, CGFloat(hex & 255) / 255)
     }
 }

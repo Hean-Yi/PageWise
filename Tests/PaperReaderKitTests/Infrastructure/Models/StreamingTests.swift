@@ -23,7 +23,7 @@ private actor StreamCapture {
 @Test func streamingToolArgumentsAreJoinedBeforeExecution() async throws {
     let decoder = ChatCompletionStreamDecoder(allowTools: true) { _ in }
     let events = [
-        #"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-a","type":"function","function":{"name":"search_library","arguments":"{\"query\":"}}]}}]}"#,
+        #"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-a","type":"function","extra_content":{"google":{"thought_signature":"saved-signature"}},"function":{"name":"search_library","arguments":"{\"query\":"}}]}}]}"#,
         #"{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"attention\"}"}}]},"finish_reason":"tool_calls"}]}"#,
     ]
     try await decoder.consume(Data(("data: " + events[0] + "\n\n").utf8))
@@ -31,5 +31,9 @@ private actor StreamCapture {
     try await decoder.consume(Data(("data: " + events[1] + "\n\ndata: [DONE]\n\n").utf8))
     let (message, reason) = try await decoder.finishMessage()
     #expect(reason == "tool_calls")
+    let roundTrip = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(message)) as? [String: Any])
+    let tool = try #require((roundTrip["tool_calls"] as? [[String: Any]])?.first)
+    let extra = try #require(tool["extra_content"] as? [String: [String: String]])
+    #expect(extra["google"]?["thought_signature"] == "saved-signature")
     #expect(message.toolCalls?.first?.function.arguments == #"{"query":"attention"}"#)
 }

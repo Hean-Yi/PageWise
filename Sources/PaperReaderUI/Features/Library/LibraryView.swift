@@ -37,6 +37,9 @@ public struct LibraryView: View {
                 }
             }
             .sheet(isPresented: $showSettings) { SettingsView(model: model) }
+            #if os(macOS)
+                .focusedSceneValue(\.readerSettingsPresentation, $showSettings)
+            #endif
             .alert(
                 "PaperReader",
                 isPresented: Binding(get: { model.message != nil }, set: { if !$0 { model.message = nil } })
@@ -145,13 +148,20 @@ public struct LibraryView: View {
         }
         .background(ReaderTheme.canvas)
         .task { HTMLWebViewPool.prewarm() }
+        #if os(macOS)
+            .toolbarBackground(ReaderTheme.canvas, for: .windowToolbar)
+            .toolbarBackgroundVisibility(.visible, for: .windowToolbar)
+        #else
+            .toolbar(removing: .title)
+            .toolbarBackground(ReaderTheme.canvas, for: .navigationBar)
+        #endif
         .toolbar {
-            ToolbarItem {
+            ToolbarItem(placement: .primaryAction) {
                 Button {
                     showAgent.toggle()
                 } label: {
-                    Label("Agent", systemImage: "sparkle")
-                }.help("书库 Agent").accessibilityLabel("书库 Agent")
+                    Label("书库助理", systemImage: "sparkle")
+                }.help("书库助理").accessibilityLabel("书库助理")
                     .foregroundStyle(showAgent ? ReaderTheme.accent : ReaderTheme.muted)
                     .disabled(!model.loaded || model.loadFailure != nil)
             }
@@ -226,10 +236,11 @@ public struct LibraryView: View {
 
     private var sidebar: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 9) {
-                Image(systemName: "book.pages").foregroundStyle(ReaderTheme.accent)
-                Text("PaperReader").font(.system(size: 19, weight: .medium, design: .serif))
-            }.padding(.horizontal, 20).padding(.top, 24).padding(.bottom, 28)
+            HStack(spacing: 10) {
+                Image(systemName: "book.pages.fill").font(.system(size: 20, weight: .regular))
+                    .foregroundStyle(ReaderTheme.accent).accessibilityHidden(true)
+                Text("PaperReader").font(ReaderTheme.editorial(24, weight: .medium)).foregroundStyle(ReaderTheme.ink)
+            }.padding(.horizontal, 21).padding(.top, 17).padding(.bottom, 27)
             VStack(spacing: 3) {
                 ForEach([LibraryCollection.all, .finished, .favorites]) { item in
                     navigation(
@@ -243,7 +254,7 @@ public struct LibraryView: View {
                         preferredColumn = .detail
                     }
                 }
-                Divider().padding(.vertical, 14).padding(.horizontal, 10)
+                Rectangle().fill(ReaderTheme.line).frame(height: 1).padding(.vertical, 12).padding(.horizontal, 12)
                 navigation("阅读日历", icon: "calendar", selected: model.selectedSection == "calendar") {
                     model.endReading()
                     model.selectedSection = "calendar"
@@ -256,8 +267,8 @@ public struct LibraryView: View {
                 }
             }.padding(.horizontal, 10)
             if !recentPapers.isEmpty {
-                Text("最近打开").font(.system(size: 11)).foregroundStyle(ReaderTheme.muted)
-                    .padding(.horizontal, 22).padding(.top, 30).padding(.bottom, 12)
+                Text("最近打开").font(.caption.weight(.medium)).foregroundStyle(ReaderTheme.muted)
+                    .padding(.horizontal, 23).padding(.top, 28).padding(.bottom, 9)
                 ScrollView {
                     VStack(spacing: 2) {
                         ForEach(recentPapers.prefix(8)) { paper in
@@ -266,30 +277,39 @@ public struct LibraryView: View {
                                 preferredColumn = .detail
                             } label: {
                                 HStack(alignment: .top, spacing: 9) {
-                                    Image(systemName: "doc.text").foregroundStyle(ReaderTheme.muted).padding(.top, 2)
-                                    Text(paper.title).lineLimit(2).multilineTextAlignment(.leading)
+                                    Image(systemName: "doc.text").foregroundStyle(ReaderTheme.muted)
+                                        .frame(width: 18).padding(.top, 1)
+                                    Text(paper.title).foregroundStyle(ReaderTheme.ink).lineLimit(2)
+                                        .multilineTextAlignment(.leading)
                                     Spacer(minLength: 0)
-                                }.font(.system(size: 12)).padding(.horizontal, 12).padding(.vertical, 9)
+                                }.font(.callout).padding(.horizontal, 12).padding(.vertical, 8)
                                     .contentShape(Rectangle())
                             }.buttonStyle(.plain)
                         }
                     }.padding(.horizontal, 10)
                 }
             }
-            Spacer(minLength: 20)
-            Button {
-                showImporter = true
-            } label: {
-                Label("导入 PDF", systemImage: "plus").frame(maxWidth: .infinity).padding(.vertical, 10)
-                    .background(ReaderTheme.ink.opacity(0.05), in: RoundedRectangle(cornerRadius: 9))
-            }.buttonStyle(.plain).font(.system(size: 12, weight: .medium)).padding(.horizontal, 18)
-            Button {
-                showSettings = true
-            } label: {
-                Label("设置", systemImage: "slider.horizontal.3").font(.system(size: 12))
-                    .foregroundStyle(ReaderTheme.muted).frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(22).contentShape(Rectangle())
-            }.buttonStyle(.plain).keyboardShortcut(",")
+            Spacer(minLength: 14)
+            Rectangle().fill(ReaderTheme.line).frame(height: 1).padding(.horizontal, 19)
+            HStack(spacing: 8) {
+                Button {
+                    showImporter = true
+                } label: {
+                    Label("导入 PDF", systemImage: "plus").font(.callout.weight(.medium))
+                        .frame(maxWidth: .infinity).frame(minHeight: 40)
+                        .background(ReaderTheme.surface, in: RoundedRectangle(cornerRadius: 10))
+                        .overlay { RoundedRectangle(cornerRadius: 10).strokeBorder(ReaderTheme.line) }
+                }
+                Button {
+                    showSettings = true
+                } label: {
+                    Label("设置", systemImage: "gearshape").labelStyle(.iconOnly)
+                        .frame(width: 42, height: 42).contentShape(Rectangle())
+                }.help("设置")
+                    #if os(iOS)
+                        .keyboardShortcut(",")
+                    #endif
+            }.buttonStyle(.plain).foregroundStyle(ReaderTheme.ink).padding(.horizontal, 17).padding(.vertical, 12)
         }.frame(maxHeight: .infinity).background(ReaderTheme.sidebar)
     }
 
@@ -299,15 +319,18 @@ public struct LibraryView: View {
         Button(action: action) {
             HStack(spacing: 11) {
                 Image(systemName: icon).font(.system(size: 14)).frame(width: 18)
-                Text(title).font(.system(size: 13, weight: selected ? .medium : .regular))
+                    .foregroundStyle(selected ? ReaderTheme.accent : ReaderTheme.muted)
+                Text(title).font(.system(size: 13, weight: selected ? .semibold : .regular))
                 Spacer()
                 if let count, count > 0 {
-                    Text("\(count)").font(.system(size: 11)).foregroundStyle(ReaderTheme.muted)
+                    Text("\(count)").font(.caption.monospacedDigit()).foregroundStyle(ReaderTheme.muted)
                 }
-            }.foregroundStyle(ReaderTheme.ink.opacity(selected ? 1 : 0.75))
-                .padding(.horizontal, 12).padding(.vertical, 10)
-                .background(selected ? ReaderTheme.ink.opacity(0.065) : .clear, in: RoundedRectangle(cornerRadius: 8))
+            }.foregroundStyle(ReaderTheme.ink)
+                .padding(.horizontal, 12).frame(minHeight: 38)
+                .background(
+                    selected ? ReaderTheme.accent.opacity(0.095) : .clear, in: RoundedRectangle(cornerRadius: 9)
+                )
                 .contentShape(Rectangle())
-        }.buttonStyle(.plain)
+        }.buttonStyle(.plain).accessibilityAddTraits(selected ? .isSelected : [])
     }
 }

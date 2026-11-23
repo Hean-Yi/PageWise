@@ -317,8 +317,8 @@ extension PDFSentenceTextCanvas {
         <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
         <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'; base-uri 'none'">
         <style>
-        :root{color-scheme:light dark;--paper:#fffefa;--ink:#282724;--en:#605e59;--active:#f5e4d7;--focus:#af6247}
-        @media(prefers-color-scheme:dark){:root{--paper:#2e2b28;--ink:#f1eee7;--en:#c4beb4;--active:#654634;--focus:#e8a082}}
+        :root{color-scheme:light dark;--paper:#fffdf8;--ink:#292822;--en:#504d46;--active:#f2dfd2;--focus:#9f503a}
+        @media(prefers-color-scheme:dark){:root{--paper:#2c2b26;--ink:#f0eee7;--en:#c9c4b9;--active:#594038;--focus:#e8a086}}
         *{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font:var(--zh-size,16px)/1.7 -apple-system,"PingFang SC",sans-serif}
         main{max-width:45rem;margin:auto;padding:19px clamp(18px,4vw,38px) 60px;overflow-wrap:anywhere}
         p{margin:0 0 1em}

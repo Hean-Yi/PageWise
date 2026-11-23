@@ -66,6 +66,15 @@ public struct AgentLimits: Sendable {
 }
 
 public struct AgentToolCall: Codable, Sendable, Equatable {
+    // The Gemini compatibility endpoint attaches a signed continuation to individual tool calls.
+    struct ExtraContent: Codable, Sendable, Equatable {
+        struct Google: Codable, Sendable, Equatable {
+            let thoughtSignature: String
+            enum CodingKeys: String, CodingKey { case thoughtSignature = "thought_signature" }
+        }
+        let google: Google?
+    }
+
     public struct Function: Codable, Sendable, Equatable {
         public var name: String
         public var arguments: String
@@ -77,6 +86,11 @@ public struct AgentToolCall: Codable, Sendable, Equatable {
     public var id: String
     public var type: String
     public var function: Function
+    var extraContent: ExtraContent?
+    enum CodingKeys: String, CodingKey {
+        case id, type, function
+        case extraContent = "extra_content"
+    }
     public init(id: String, name: String, arguments: String) {
         self.id = id
         type = "function"

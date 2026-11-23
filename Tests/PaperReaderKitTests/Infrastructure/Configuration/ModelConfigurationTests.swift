@@ -76,6 +76,23 @@ import Testing
     #expect(credentials.values.isEmpty)
 }
 
+@Test @MainActor func presetDraftsOnlyReadCredentialsForTheExactSavedEndpoint() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let store = ModelConfigurationStore(directory: root, credentials: MemoryCredentials())
+    var settings = ModelSettings()
+    settings.baseURL = ModelServicePreset.deepSeek.baseURL
+    settings.model = ModelServicePreset.deepSeek.defaultModel
+    let saved = try store.save(settings, key: "fixture-only").settings
+    for provider in ModelServicePreset.allCases where provider != .custom {
+        var draft = saved
+        draft.baseURL = provider.baseURL
+        let key = try await store.keyForDraftRequest(draft)
+        #expect(key == (provider == .deepSeek ? "fixture-only" : ""))
+    }
+}
+
 @Test @MainActor func configurationReplacesRetainsAndRemovesCredentials() throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)

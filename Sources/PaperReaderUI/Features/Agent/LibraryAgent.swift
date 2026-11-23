@@ -20,6 +20,7 @@ public final class LibraryAgent {
     @ObservationIgnored var importTasks: [String: Task<Void, Never>] = [:]
     @ObservationIgnored var importTokens: [String: UUID] = [:]
     @ObservationIgnored private var history: [[AgentMessage]] = []
+    @ObservationIgnored private var historySettings: ModelSettings?
     @ObservationIgnored private var runTask: Task<Void, Never>?
     @ObservationIgnored private var activeTurnID: UUID?
 
@@ -143,6 +144,13 @@ public final class LibraryAgent {
         let settings = reader.modelSettings
         let key = try await reader.modelKey(for: settings)
         guard !key.isEmpty, !settings.model.isEmpty else { throw ReaderError.message("请先在设置中填写模型名称并保存 API Key。") }
+        // Tool transcripts may contain provider- and model-specific signed continuations.
+        if historySettings?.baseURL != settings.baseURL || historySettings?.model != settings.model
+            || historySettings?.credentialID != settings.credentialID
+        {
+            history.removeAll()
+        }
+        historySettings = settings
         let system = AgentMessage(role: "system", content: Self.instructions)
         let user = AgentMessage(role: "user", content: question)
         var prior = Array(history.suffix(max(0, limits.maxHistoryTurns)))

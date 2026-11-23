@@ -45,11 +45,7 @@ struct LibraryAgentView: View {
 
     private var header: some View {
         HStack(spacing: 10) {
-            Image(systemName: "sparkle").foregroundStyle(ReaderTheme.accent)
-            Text("Agent").font(.system(size: 14, weight: .medium))
-            Text("书库").font(.system(size: 10)).foregroundStyle(ReaderTheme.muted)
-                .padding(.horizontal, 7).padding(.vertical, 4)
-                .background(ReaderTheme.ink.opacity(0.045), in: Capsule())
+            Text("书库助理").font(ReaderTheme.editorial(20))
             Spacer()
             Button {
                 agent.reset()
@@ -65,16 +61,11 @@ struct LibraryAgentView: View {
     }
 
     private var welcome: some View {
-        VStack(alignment: .leading, spacing: 22) {
-            Image(systemName: "sparkle").font(.system(size: 30, weight: .ultraLight))
-                .foregroundStyle(ReaderTheme.accent).padding(.top, 32)
-            VStack(alignment: .leading, spacing: 9) {
-                Text("让阅读彼此连接").font(.system(size: 23, weight: .regular, design: .serif))
-                Text("查论文，找线索，回到原文。").font(.system(size: 12)).foregroundStyle(ReaderTheme.muted)
-            }
-            VStack(spacing: 10) {
-                suggestion("找一个知识点", icon: "text.magnifyingglass", prompt: "我的书库中，哪些段落解释了注意力机制？")
-                suggestion("查找一篇论文", icon: "globe", prompt: "帮我在线查找 Attention Is All You Need")
+        VStack(alignment: .leading, spacing: 14) {
+            Text("你想找什么？").font(ReaderTheme.editorial(26)).padding(.top, 12)
+            VStack(spacing: 0) {
+                suggestion("在书库中找知识点", icon: "text.magnifyingglass", prompt: "我的书库中，哪些段落解释了注意力机制？")
+                suggestion("在线查找论文", icon: "globe", prompt: "帮我在线查找 Attention Is All You Need")
                 if let paper = model.paper {
                     suggestion("理解当前论文", icon: "book", prompt: "请查找《\(paper.title)》，结合原文解释主要方法并标注来源页。")
                 }
@@ -83,27 +74,17 @@ struct LibraryAgentView: View {
     }
 
     private func suggestion(_ label: String, icon: String, prompt: String) -> some View {
-        Button {
+        AssistantSuggestion(title: label, systemImage: icon) {
             draft = prompt
             composerFocused = true
-        } label: {
-            HStack(spacing: 10) {
-                Image(systemName: icon).frame(width: 16).foregroundStyle(ReaderTheme.muted)
-                Text(label)
-                Spacer()
-                Image(systemName: "arrow.up.left").font(.system(size: 10)).foregroundStyle(ReaderTheme.muted)
-            }.font(.system(size: 12)).padding(13)
-                .background(ReaderTheme.surface.opacity(0.5), in: RoundedRectangle(cornerRadius: 9))
-                .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(ReaderTheme.line))
-                .contentShape(Rectangle())
-        }.buttonStyle(.plain)
+        }
     }
 
     private func conversation(_ turn: AgentTurn) -> some View {
         VStack(alignment: .leading, spacing: 16) {
             Text(turn.question).font(.system(size: 13)).lineSpacing(4).textSelection(.enabled)
                 .padding(13).frame(maxWidth: .infinity, alignment: .leading)
-                .background(ReaderTheme.ink.opacity(0.045), in: RoundedRectangle(cornerRadius: 10))
+                .background(ReaderTheme.elevated, in: RoundedRectangle(cornerRadius: 12))
             if !turn.activities.isEmpty { AgentActivityLog(activities: turn.activities) }
             if !turn.answer.isEmpty {
                 Text(answerText(turn.answer)).font(.system(size: 13)).lineSpacing(5).textSelection(.enabled)
@@ -154,9 +135,9 @@ struct LibraryAgentView: View {
                         .help("发送问题").accessibilityLabel("发送给 Agent")
                 }
             }
-        }.padding(14).background(ReaderTheme.surface, in: RoundedRectangle(cornerRadius: 13))
+        }.padding(16).background(ReaderTheme.surface, in: RoundedRectangle(cornerRadius: 16))
             .overlay(
-                RoundedRectangle(cornerRadius: 13).strokeBorder(
+                RoundedRectangle(cornerRadius: 16).strokeBorder(
                     composerFocused ? ReaderTheme.accent.opacity(0.35) : ReaderTheme.line))
     }
 
@@ -188,7 +169,6 @@ private struct AgentSendStyle: ButtonStyle {
         configuration.label.foregroundStyle(ReaderTheme.surface)
             .frame(width: 30, height: 30)
             .background(
-                ReaderTheme.accent.opacity(enabled ? (configuration.isPressed ? 0.7 : 1) : 0.25),
-                in: RoundedRectangle(cornerRadius: 8))
+                ReaderTheme.ink.opacity(enabled ? (configuration.isPressed ? 0.7 : 1) : 0.25), in: Circle())
     }
 }

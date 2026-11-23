@@ -21,22 +21,12 @@ public struct AgentClient: AgentCompleting {
         onPartial: (@Sendable (String) async throws -> Void)?
     ) async throws -> AgentMessage {
         try Task.checkCancellation()
-        let settings = try settings.normalized()
-        let key = key.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !key.isEmpty, !key.contains(where: \.isWhitespace) else {
-            throw ReaderError.message("请先在设置中保存有效 API Key。")
-        }
         try Self.validateHistory(messages)
         guard try JSONEncoder().encode(messages).count <= limits.maxContextBytes else {
             throw ReaderError.message("本次上下文已达到上限，请新建对话或缩小查找范围。")
         }
-        var request = URLRequest(url: try settings.endpointURL())
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
-        request.httpBody = try JSONEncoder().encode(
-            Request(
-                model: settings.model, messages: messages, temperature: settings.temperature, stream: onPartial != nil))
+        let request = try ChatCompletionRequest.make(
+            settings: settings, key: key, messages: messages, stream: onPartial != nil, tools: true)
         let data: Data
         let response: HTTPURLResponse
         do {
@@ -120,20 +110,6 @@ public struct AgentClient: AgentCompleting {
         guard pending.isEmpty else { throw ReaderError.message("工具结果尚未完整，已停止请求。") }
     }
 
-    private struct Request: Encodable {
-        var model: String
-        var messages: [AgentMessage]
-        var temperature: Double
-        var stream = false
-        let maxTokens = 4_096
-        let toolChoice = "auto"
-        let tools = Tool.definitions
-        enum CodingKeys: String, CodingKey {
-            case model, messages, temperature, stream, tools
-            case maxTokens = "max_tokens"
-            case toolChoice = "tool_choice"
-        }
-    }
     private struct Response: Codable {
         struct Choice: Codable {
             var message: AgentMessage
@@ -145,7 +121,7 @@ public struct AgentClient: AgentCompleting {
         }
         var choices: [Choice]
     }
-    private struct Tool: Encodable {
+    struct Tool: Encodable {
         struct Property: Encodable {
             var type: String
             var description: String

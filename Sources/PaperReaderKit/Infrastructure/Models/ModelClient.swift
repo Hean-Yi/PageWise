@@ -59,27 +59,10 @@ public struct ModelClient: Sendable {
     public func complete(settings: ModelSettings, key: String, system: String, user: String, jsonOutput: Bool = false)
         async throws -> String
     {
-        let settings = try settings.normalized()
-        let key = key.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !key.isEmpty else {
-            throw ReaderError.message("请先在设置中保存 API Key。")
-        }
-        guard !key.contains(where: { $0.isWhitespace }) else {
-            throw ReaderError.message("API Key 中不能包含空格或换行。")
-        }
-        let endpoint = try settings.endpointURL()
-        var request = URLRequest(url: endpoint)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
-        let body = RequestBody(
-            model: settings.model,
+        let request = try ChatCompletionRequest.make(
+            settings: settings, key: key,
             messages: [.init(role: "system", content: system), .init(role: "user", content: user)],
-            temperature: settings.temperature,
-            responseFormat: jsonOutput ? ["type": "json_object"] : nil,
-            thinking: jsonOutput && endpoint.host == "api.deepseek.com" && settings.model == "deepseek-flash"
-                ? ["type": "disabled"] : nil)
-        request.httpBody = try JSONEncoder().encode(body)
+            jsonOutput: jsonOutput)
         let (data, response) = try await transport.data(for: request)
         switch response.statusCode {
         case 200...299: break
@@ -99,24 +82,6 @@ public struct ModelClient: Sendable {
         return text
     }
 
-    private struct RequestBody: Encodable {
-        var model: String
-        var messages: [Message]
-        var temperature: Double
-        var responseFormat: [String: String]?
-        var thinking: [String: String]?
-        var stream = false
-        let maxTokens = 4096
-        enum CodingKeys: String, CodingKey {
-            case model, messages, temperature, stream, thinking
-            case maxTokens = "max_tokens"
-            case responseFormat = "response_format"
-        }
-    }
-    private struct Message: Codable {
-        var role: String
-        var content: String
-    }
     private struct ResponseBody: Decodable {
         struct Choice: Decodable {
             struct Content: Decodable { var content: String? }

@@ -16,34 +16,10 @@ extension ModelClient {
         reflow: Bool, reflowPlainText: Bool = false,
         onPartial: @escaping @Sendable (String) async throws -> Void
     ) async throws -> String {
-        let settings = try settings.normalized()
-        let key = key.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !key.isEmpty, !key.contains(where: \.isWhitespace) else {
-            throw ReaderError.message("请先在设置中保存有效的 API Key。")
-        }
-        var request = URLRequest(url: try settings.endpointURL())
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
-        request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
-        var body: [String: Any] = [
-            "model": settings.model, "temperature": settings.temperature, "stream": true,
-            "max_tokens": maxOutputTokens,
-            "messages": [["role": "system", "content": system], ["role": "user", "content": user]],
-        ]
-        if reflow, !reflowPlainText {
-            // Native JSON mode constrains the envelope; semantic/schema validation remains local.
-            body["response_format"] = ["type": "json_object"]
-        }
-        // Verified on 2026-11-15 for this model and official endpoint. The service still
-        // reported reasoning tokens; requesting disabled does not guarantee zero thinking.
-        if reflow, settings.model.lowercased() == "glm-5.3-flash",
-            request.url?.host == "open.bigmodel.cn", request.url?.port == nil,
-            request.url?.path == "/api/paas/v4/chat/completions"
-        {
-            body["thinking"] = ["type": "disabled"]
-        }
-        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        let request = try ChatCompletionRequest.make(
+            settings: settings, key: key,
+            messages: [.init(role: "system", content: system), .init(role: "user", content: user)], stream: true,
+            maxOutputTokens: maxOutputTokens, jsonOutput: reflow && !reflowPlainText, reflow: reflow)
         let decoder = ChatCompletionStreamDecoder(onPartial: onPartial)
         let response = try await transport.stream(for: request) { data in try await decoder.consume(data) }
         switch response.statusCode {
@@ -103,6 +79,7 @@ actor ChatCompletionStreamDecoder {
                 var call = calls[part.index] ?? AgentToolCall(id: "", name: "", arguments: "")
                 if let id = part.id { call.id += id }
                 if let type = part.type { call.type = type }
+                if let extra = part.extraContent { call.extraContent = extra }
                 call.function.name += part.function?.name ?? ""
                 call.function.arguments += part.function?.arguments ?? ""
                 calls[part.index] = call
@@ -158,6 +135,11 @@ actor ChatCompletionStreamDecoder {
                     let id: String?
                     let type: String?
                     let function: Function?
+                    let extraContent: AgentToolCall.ExtraContent?
+                    enum CodingKeys: String, CodingKey {
+                        case index, id, type, function
+                        case extraContent = "extra_content"
+                    }
                 }
                 let content: String?
                 let reasoningContent: String?
