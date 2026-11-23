@@ -399,7 +399,7 @@ extension PDFSentenceTextCanvas {
         <style>
         :root{color-scheme:light dark;--paper:#fffdf8;--ink:#292822;--en:#504d46;--active:#f2dfd2;--focus:#9f503a}
         @media(prefers-color-scheme:dark){:root{--paper:#2c2b26;--ink:#f0eee7;--en:#c9c4b9;--active:#594038;--focus:#e8a086}}
-        *{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font:var(--zh-size,16px)/1.7 -apple-system,"PingFang SC",sans-serif}
+        *{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font:var(--zh-size,16px)/1.7 \(ReadingPageTypography.pdfChinese)}
         main{max-width:45rem;margin:auto;padding:19px clamp(18px,4vw,38px) 60px;overflow-wrap:anywhere}
         p{margin:0 0 1em}
         [role="button"]{border-radius:3px;box-decoration-break:clone;-webkit-box-decoration-break:clone}
@@ -408,7 +408,7 @@ extension PDFSentenceTextCanvas {
         .en{display:none}.stacked .pair{display:block;padding:4px 6px;margin:0 -6px 12px}
         .stacked .en{display:block;font:16px/1.55 Georgia,"Times New Roman",serif;color:var(--en);margin-bottom:3px}
         .stacked p{margin-bottom:1.5em}.stacked .zh{line-height:1.7}
-        .paragraph main{max-width:48rem;padding:clamp(22px,4vw,44px) clamp(20px,6vw,56px) 60px}
+        .paragraph main{\(ReadingPageTypography.pdfColumn)}
         .paragraph main>*+*{margin-top:1.7em}
         figure{margin:0}.paragraph figure+section{margin-top:.8em}
         figure button{display:block;max-width:100%;padding:0;border:0;background:none;color:var(--focus);cursor:pointer;font:inherit}

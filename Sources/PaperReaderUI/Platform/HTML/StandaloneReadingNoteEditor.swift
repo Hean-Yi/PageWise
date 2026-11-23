@@ -9,6 +9,7 @@ import WebKit
     var readOnly = false
     var onDone: (() -> Void)?
     var citationRequest = 0
+    var summaryPDFFontSize: Int?
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -45,7 +46,7 @@ import WebKit
             let view = WKWebView(frame: .zero, configuration: config)
             self.view = view
             view.navigationDelegate = self
-            view.loadHTMLString(Self.document, baseURL: nil)
+            view.loadHTMLString(document, baseURL: nil)
             return view
         }
 
@@ -57,10 +58,8 @@ import WebKit
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             let js = """
                 const send = message => window.webkit.messageHandlers.pdfNote.postMessage(message);
-                const host = document.querySelector('.note-editor');
-                document.body.classList.toggle('summary-page', summary);
+                const host = document.querySelector('[data-note-host]');
                 if (readOnly) {
-                    host.className = 'note-content';
                     host.style.whiteSpace = 'pre-wrap';
                     host.textContent = source;
                 } else {
@@ -72,7 +71,7 @@ import WebKit
                 """
             webView.callAsyncJavaScript(
                 js,
-                arguments: ["source": source, "readOnly": editor.readOnly, "summary": editor.note.isDocumentSummary],
+                arguments: ["source": source, "readOnly": editor.readOnly],
                 in: nil, in: .defaultClient
             ) {
                 [weak self] result in
@@ -142,7 +141,7 @@ import WebKit
             previewTask = Task { [weak self] in
                 guard let self else { return }
                 do {
-                    try await Task.sleep(for: .milliseconds(100))
+                    if !editor.readOnly { try await Task.sleep(for: .milliseconds(100)) }
                     let ids =
                         editor.model.currentReadingNotes.first { $0.id == editor.note.id }?.citations?.map(\.id)
                         ?? []
@@ -152,7 +151,7 @@ import WebKit
                     view.callAsyncJavaScript(
                         """
                         if (window.pdfEditor) window.pdfEditor.preview(source, html);
-                        else { const body = document.querySelector('.note-content'); body.innerHTML = html; body.style.whiteSpace = 'normal'; }
+                        else { const body = document.querySelector('[data-note-host]'); body.innerHTML = html; body.style.whiteSpace = 'normal'; }
                         """, arguments: ["source": expected, "html": html],
                         in: nil, in: .defaultClient, completionHandler: nil)
                 } catch {}
@@ -165,17 +164,29 @@ import WebKit
                 forName: "pdfNote", contentWorld: .defaultClient)
         }
 
-        private static let document = """
-            <!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-            <meta http-equiv="Content-Security-Policy" content="default-src 'none';style-src 'unsafe-inline';base-uri 'none';form-action 'none'">
-            <style>html,body{margin:0;height:100%;overflow:hidden;color-scheme:light dark}
-            body article.reader-note-card.active{position:static;border:0;box-shadow:none;border-radius:0;width:100%;max-width:none;max-height:none;height:100%;transform:none}
-            .note-editor{height:100%}
-            .summary-page article.reader-note-card.active{background:transparent}
-            .summary-page article.reader-note-card .note-content,.summary-page article.reader-note-card .cm-scroller{box-sizing:border-box;padding:32px max(24px,calc((100vw - 660px)/2)) 64px;font:17px/1.8 system-ui}
-            .summary-page .note-content h1{font:600 1.65em/1.35 ui-serif,serif;margin:0 0 1.2em}
-            .summary-page .note-content p{margin:0 0 1.15em}</style></head><body><article class="reader-note-card active"><div class="note-editor"></div></article></body></html>
-            """
+        private var document: String {
+            let isSummary = editor.note.isDocumentSummary
+            let pdfSize = editor.summaryPDFFontSize
+            let pageClass = isSummary ? (pdfSize == nil ? "summary-page" : "summary-page pdf-summary") : ""
+            let articleID = isSummary ? #"id="reader-document-summary" aria-label="文末总结""# : ""
+            let articleClass = editor.readOnly ? "" : "reader-note-card active"
+            let contentClass = editor.readOnly ? "note-prose" : "note-editor"
+            return """
+                <!doctype html><html lang="zh-Hans"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+                <meta http-equiv="Content-Security-Policy" content="default-src 'none';style-src 'unsafe-inline';base-uri 'none';form-action 'none'">
+                <style>html,body{margin:0;height:100%;color-scheme:light dark}
+                body:not(.summary-page){overflow:hidden}
+                body:not(.summary-page) article.reader-note-card.active{position:static;border:0;box-shadow:none;border-radius:0;width:100%;max-width:none;max-height:none;height:100%;transform:none}
+                .note-editor{height:100%}
+                body.summary-page{background:light-dark(#faf9f5,#24221f);color:light-dark(#252320,#e4e1da)}
+                body.pdf-summary{background:light-dark(#fffdf8,#2c2b26);color:light-dark(#292822,#f0eee7);--zh-size:\(pdfSize ?? 16)px}
+                .summary-page #reader-document-summary.reader-note-card{position:static;width:100%;height:100%;max-height:none;
+                  border:0;box-shadow:none;border-radius:0;transform:none;background:transparent;color:inherit}
+                .summary-page #reader-document-summary .note-editor{min-height:0;font:inherit}
+                .summary-page #reader-document-summary .cm-scroller{font:inherit;padding:0}
+                </style></head><body class="\(pageClass)"><article \(articleID) class="\(articleClass)"><div class="\(contentClass)" data-note-host></div></article></body></html>
+                """
+        }
     }
 }
 

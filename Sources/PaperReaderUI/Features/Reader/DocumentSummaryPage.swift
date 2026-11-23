@@ -6,6 +6,7 @@ struct DocumentSummaryPage: View {
     let model: ReaderModel
     let note: ReadingNote
     @State private var citationRequest = 0
+    @AppStorage("PDFBilingualFontSize") private var pdfFontSize = 16
 
     var body: some View {
         VStack(spacing: 0) {
@@ -13,8 +14,8 @@ struct DocumentSummaryPage: View {
                 Button(action: model.closeDocumentSummary) {
                     Label("返回正文", systemImage: "chevron.backward")
                 }
-                Divider().frame(height: 14)
-                Text("文末总结").font(.headline).accessibilityAddTraits(.isHeader)
+                Text("文末总结").font(ReaderTheme.editorial(16, weight: .semibold)).foregroundStyle(ReaderTheme.ink)
+                    .accessibilityAddTraits(.isHeader)
                 Spacer()
                 if model.editingDocumentSummary {
                     Button {
@@ -35,11 +36,13 @@ struct DocumentSummaryPage: View {
                         Image(systemName: "ellipsis.circle")
                     }.menuIndicator(.hidden).accessibilityLabel("更多总结选项")
                 }
-            }.buttonStyle(.borderless).padding(.horizontal, 20).frame(minHeight: 46)
+            }.buttonStyle(.borderless).tint(ReaderTheme.accent)
+                .padding(.horizontal, 20).frame(minHeight: 44).background(ReaderTheme.canvas)
             Divider()
             StandaloneReadingNoteEditor(
                 model: model, note: note, readOnly: !model.editingDocumentSummary,
-                onDone: finishEditing, citationRequest: citationRequest
+                onDone: finishEditing, citationRequest: citationRequest,
+                summaryPDFFontSize: model.usesHTMLReading ? nil : pdfFontSize
             ).id(model.editingDocumentSummary)
             if model.noteSaveFailed {
                 Button("保存失败，重试") { Task { await model.flushReadingNotes() } }.padding(8)

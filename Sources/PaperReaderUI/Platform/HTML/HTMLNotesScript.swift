@@ -221,10 +221,10 @@ enum HTMLNotesScript {
           const summary=(id,source,html)=>{
             if(!id){appendix?.remove();appendix=null;appendixBody=null;return;}
             if(!appendix){
-              appendix=document.createElement('article');appendix.id='reader-document-summary';appendix.setAttribute('aria-label','文末总结');
+              appendix=document.createElement('article');appendix.id='reader-document-summary';appendix.lang='zh-Hans';appendix.setAttribute('aria-label','文末总结');
               const head=document.createElement('header'),title=document.createElement('strong');title.textContent='文末总结';
               head.append(title,button('编辑',()=>send({kind:'noteEditSummary',id:appendix.dataset.noteId}),'编辑文末总结'));
-              appendixBody=document.createElement('div');appendix.append(head,appendixBody);root.after(appendix);
+              appendixBody=document.createElement('div');appendixBody.className='note-prose';appendix.append(head,appendixBody);root.after(appendix);
               PaperNoteEditor.bindPassages(appendix,passage=>send({kind:'notePreviewPassage',id:appendix.dataset.noteId,passage}));
             }
             appendix.dataset.noteId=id;appendixSource=source;

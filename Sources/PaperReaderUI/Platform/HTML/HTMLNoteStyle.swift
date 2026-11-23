@@ -4,11 +4,7 @@ enum HTMLNoteStyle {
     static let source = #"""
         (()=>{
           const style=document.createElement('style');style.textContent=`
-          #reader-document-summary{box-sizing:border-box;max-width:740px;min-height:85vh;margin:64px auto 0;padding:30px clamp(16px,4vw,42px) 80px;border-top:1px solid #baae9d;font:17px/1.8 system-ui;overflow-wrap:anywhere;break-before:page}
-          #reader-document-summary header{display:flex;align-items:center;justify-content:space-between;margin-bottom:30px;font:600 14px system-ui}
-          #reader-document-summary button{font:inherit;color:inherit;cursor:pointer;border:1px solid #b8ac9a;border-radius:7px;background:transparent;padding:5px 12px}
-          #reader-document-summary h1{font:600 1.65em/1.35 ui-serif,serif;margin:0 0 1em}#reader-document-summary p{margin:0 0 1.1em}
-          #reader-document-summary a[data-passage]{cursor:pointer;color:inherit;text-underline-offset:.2em;text-decoration:underline dotted}
+          \#(DocumentSummaryStyle.css)
           #reader-note-layer{position:absolute;top:0;left:0;width:100%;height:0;pointer-events:none;z-index:800}
           .reader-note-card{position:absolute;box-sizing:border-box;pointer-events:auto;width:240px;max-width:calc(100vw - 32px);max-height:min(420px,calc(100vh - 32px));display:flex;flex-direction:column;background:#faf8f3;color:#39352f;border:1px solid #ddd5c7;border-radius:14px;box-shadow:0 4px 16px #332d2818;font:15px/1.55 system-ui;overflow:hidden;transition:box-shadow .16s ease,opacity .12s ease;transform:translateY(0)}
           .reader-note-card.compact.active{overflow-y:auto}.reader-note-card.compact.active .note-editor{min-height:80px}

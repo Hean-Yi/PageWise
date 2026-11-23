@@ -597,8 +597,23 @@
         paper.htmlReading = html
         paper.translatedBlockCount = 1
         let version = try #require(html.readingNoteVersion(digest: paper.digest))
-        var summary = ReadingNote(
-            paperID: paper.id, contentVersion: version, anchors: [], markdown: "# Budget comparison")
+        let markdown = """
+            # Budget comparison
+
+            ## 怎样比较？
+
+            先检查两个实验的**计算预算**。
+
+            > 现有对照支持哪种解释？
+
+            1. 比较相同预算下的 $x^2$。
+            2. 检查控制变量。
+
+            | 条件 | 得分 |
+            | --- | --- |
+            | 等预算 | 42 |
+            """
+        var summary = ReadingNote(paperID: paper.id, contentVersion: version, anchors: [], markdown: markdown)
         summary.placement = .documentEnd
         model.state.papers = [paper]
         model.state.readingNotes = [summary]
@@ -617,6 +632,38 @@
                 web,
                 "return document.querySelectorAll('#reader > section').length===1 && !document.querySelector('.reader-note-card')"
             ) as? Bool == true)
+        web.frame = CGRect(x: 0, y: 0, width: 1100, height: 780)
+        let verifyProse = """
+            const note=document.querySelector('#reader-document-summary'),prose=note?.querySelector('.note-prose');
+            return !!prose?.querySelector('h2') && !!prose.querySelector('blockquote p') && prose.querySelectorAll('ol li').length===2
+                && !!prose.querySelector('math') && !!prose.querySelector('table td') && !!prose.querySelector('strong');
+            """
+        #expect(try await noteJS(web, verifyProse) as? Bool == true)
+        #expect(
+            try await noteJS(
+                web,
+                """
+                const note=document.querySelector('#reader-document-summary .note-prose'),printed=document.querySelector('#reader section');
+                const rect=note.getBoundingClientRect(),other=printed.getBoundingClientRect();
+                return Math.abs(rect.left-other.left)<1 && Math.abs(rect.width-other.width)<1
+                    && getComputedStyle(note).fontFamily===getComputedStyle(printed.querySelector('.translation')).fontFamily;
+                """) as? Bool == true)
+        for size in [nil, 19] as [Int?] {
+            let standalone = StandaloneReadingNoteEditor(
+                model: model, note: summary, readOnly: true, summaryPDFFontSize: size
+            ).makeCoordinator()
+            let view = standalone.makeView()
+            defer { standalone.stop() }
+            view.frame = web.frame
+            try await noteWait { (try? await noteJS(view, verifyProse)) as? Bool == true }
+            #expect(
+                try await noteJS(
+                    view,
+                    """
+                    const p=document.querySelector('.note-prose');
+                    return !p.closest('.reader-note-card') && parseFloat(getComputedStyle(p).fontSize)===size;
+                    """, ["size": size ?? 17]) as? Bool == true)
+        }
         _ = try await noteJS(web, "document.querySelector('#reader-document-summary button').click()")
         try await noteWait { model.presentedDocumentSummary?.id == summary.id && model.editingDocumentSummary }
         #expect(model.updateDocumentSummary(id: summary.id, markdown: "**Edited**"))
