@@ -25,13 +25,19 @@ public struct AgentClient: AgentCompleting {
         guard try JSONEncoder().encode(messages).count <= limits.maxContextBytes else {
             throw ReaderError.message("本次上下文已达到上限，请新建对话或缩小查找范围。")
         }
+        // Keeping definitions preserves DeepSeek's tool-mode reasoning history. Other compatible
+        // endpoints can disable tools simply by omitting them, including those that only accept auto.
+        let endpoint = try settings.endpointURL()
+        let finalToolChoice: ChatCompletionRequest.ToolChoice? =
+            endpoint.host == "api.deepseek.com" && endpoint.port == nil ? .disabled : nil
         let request = try ChatCompletionRequest.make(
-            settings: settings, key: key, messages: messages, stream: onPartial != nil, tools: true)
+            settings: settings, key: key, messages: messages, stream: onPartial != nil,
+            toolChoice: limits.maxToolCalls > 0 ? .auto : finalToolChoice)
         let data: Data
         let response: HTTPURLResponse
         do {
             if let onPartial {
-                let decoder = ChatCompletionStreamDecoder(allowTools: true, onPartial: onPartial)
+                let decoder = ChatCompletionStreamDecoder(maxToolCalls: limits.maxToolCalls, onPartial: onPartial)
                 response = try await transport.stream(for: request) { chunk in try await decoder.consume(chunk) }
                 if (200...299).contains(response.statusCode) {
                     let (message, reason) = try await decoder.finishMessage()
@@ -44,6 +50,8 @@ public struct AgentClient: AgentCompleting {
             }
         } catch is CancellationError {
             throw CancellationError()
+        } catch let error as AgentToolBudgetError {
+            throw error
         } catch {
             try Task.checkCancellation()
             throw ReaderError.message("模型网络请求未完成，请检查连接后重试；没有自动重复请求。")
@@ -66,9 +74,8 @@ public struct AgentClient: AgentCompleting {
                 let text = message.content?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty
             else { throw ReaderError.message("模型未返回完整回答，结果未保存。") }
         case "tool_calls":
-            guard let calls = message.toolCalls, !calls.isEmpty, calls.count <= limits.maxToolCalls else {
-                throw ReaderError.message("模型工具调用为空或超过次数上限。")
-            }
+            guard let calls = message.toolCalls, !calls.isEmpty else { throw ReaderError.message("模型工具调用为空。") }
+            guard calls.count <= limits.maxToolCalls else { throw AgentToolBudgetError.batchExceedsRemainingCalls }
             let priorIDs = Set(messages.flatMap { $0.toolCalls ?? [] }.map(\.id))
             var ids = priorIDs
             for call in calls {

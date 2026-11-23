@@ -9,11 +9,13 @@ private actor ScriptedLibraryModel: AgentCompleting {
     typealias Script = @Sendable ([AgentMessage], Int) throws -> AgentMessage
     private let script: Script
     private(set) var requests: [[AgentMessage]] = []
+    private(set) var callBudgets: [Int] = []
     init(_ script: @escaping Script) { self.script = script }
     func respond(settings: ModelSettings, key: String, messages: [AgentMessage], limits: AgentLimits) async throws
         -> AgentMessage
     {
         requests.append(messages)
+        callBudgets.append(limits.maxToolCalls)
         return try script(messages, requests.count)
     }
 }
@@ -513,13 +515,14 @@ func changingAgentServiceOrModelStartsFreshWireHistoryAndKeepsDisplayedTurns(cha
     let agent = LibraryAgent(reader: reader, client: client, discovery: AgentDiscoveryFixture(), limits: limits)
     agent.send("q")
     try await eventually { !agent.isRunning }
-    #expect(await client.requests.count == 2)
+    #expect(await client.requests.count == 3)
+    #expect(agent.turns[0].activities.count == 2)
     #expect(agent.turns[0].error != nil)
     limits.maxQuestionBytes = 2
     let bounded = LibraryAgent(reader: reader, client: client, discovery: AgentDiscoveryFixture(), limits: limits)
     bounded.send("too long")
     try await eventually { !bounded.isRunning }
-    #expect(await client.requests.count == 2)
+    #expect(await client.requests.count == 3)
     #expect(bounded.turns[0].error != nil)
     limits.maxQuestionBytes = 8_000
     limits.maxToolCalls = 0
@@ -528,6 +531,51 @@ func changingAgentServiceOrModelStartsFreshWireHistoryAndKeepsDisplayedTurns(cha
     try await eventually { !noTools.isRunning }
     #expect(noTools.turns[0].activities.isEmpty)
     #expect(noTools.turns[0].error != nil)
+}
+
+@Test(arguments: [false, true]) @MainActor func toolBudgetIsAnnouncedAndReservesAnAnswerAfterABatch(overdraw: Bool)
+    async throws
+{
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let reader = try await makeAgentReader(root)
+    let client = ScriptedLibraryModel { messages, count in
+        let prompt = try #require(messages.first?.content)
+        switch count {
+        case 1:
+            #expect(prompt.contains("工具预算为 2 轮、3 次调用"))
+            #expect(prompt.contains("当前剩余 2 轮工具、3 次调用"))
+            return .init(
+                role: "assistant",
+                toolCalls: (1...2).map {
+                    .init(id: "query-\($0)", name: "search_library", arguments: #"{"query":"attention"}"#)
+                })
+        case 2:
+            #expect(prompt.contains("当前剩余 1 轮工具、1 次调用"))
+            let queries = overdraw ? ["third", "fourth"] : ["third"]
+            return .init(
+                role: "assistant",
+                toolCalls: queries.map { .init(id: $0, name: "search_library", arguments: #"{"query":"memory"}"#) })
+        case 3:
+            #expect(prompt.contains("工具已关闭"))
+            #expect(prompt.contains("上批调用超过剩余额度") == overdraw)
+            #expect(
+                messages.filter { $0.role == "tool" }.compactMap(\.toolCallID)
+                    == (overdraw ? ["query-1", "query-2"] : ["query-1", "query-2", "third"]))
+            return .init(role: "assistant", content: "已完成的检索没有命中。")
+        default: throw ReaderError.message("意外请求。")
+        }
+    }
+    var limits = AgentLimits()
+    limits.maxRounds = 2
+    limits.maxToolCalls = 3
+    let agent = LibraryAgent(reader: reader, client: client, discovery: AgentDiscoveryFixture(), limits: limits)
+    agent.send("请查找本地候选")
+    try await eventually { !agent.isRunning }
+    #expect(await client.callBudgets == [3, 1, 0])
+    #expect(agent.turns[0].activities.count == (overdraw ? 2 : 3))
+    #expect(agent.turns[0].answer == "已完成的检索没有命中。")
+    #expect(agent.turns[0].error == nil)
 }
 
 @Test @MainActor func cancelledImportCannotLeakIntoAConcurrentWorkspaceSave() async throws {
@@ -832,6 +880,10 @@ private func repeatedOnlineScript(_ messages: [AgentMessage], _ count: Int) thro
     limits.maxContextBytes =
         try JSONEncoder().encode(firstCompleteGroup + [.init(role: "user", content: followup)]).count + 32
     let client = ScriptedLibraryModel { messages, count in
+        if messages.first?.content?.contains("未纳入本次总结") == true {
+            #expect(messages.filter { $0.role == "tool" }.compactMap(\.toolCallID) == ["budget_search"])
+            return .init(role: "assistant", content: "检索有结果，未能进一步核对。")
+        }
         if messages.last?.content == followup {
             #expect(messages.compactMap(\.toolCalls).flatMap { $0 }.map(\.id) == ["budget_search"])
             #expect(messages.filter { $0.role == "tool" }.compactMap(\.toolCallID) == ["budget_search"])
@@ -844,9 +896,10 @@ private func repeatedOnlineScript(_ messages: [AgentMessage], _ count: Int) thro
     let agent = LibraryAgent(reader: reader, client: client, discovery: AgentDiscoveryFixture(), limits: limits)
     agent.send(initialQuestion)
     try await eventually { !agent.isRunning }
-    #expect(agent.turns[0].error != nil)
+    #expect(agent.turns[0].error == nil)
+    #expect(agent.turns[0].answer == "检索有结果，未能进一步核对。")
     #expect(agent.turns[0].cards.count == 2)
-    #expect(await client.requests.count == 2)
+    #expect(await client.requests.count == 3)
     agent.send(followup)
     try await eventually { !agent.isRunning }
     #expect(agent.turns[1].error == nil)

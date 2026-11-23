@@ -272,7 +272,6 @@ public final class LibraryAgent {
         _ question: String, turnID: UUID, epoch: UUID, noteRequest: AgentNoteRequest?, reference: AgentCard?
     ) async throws {
         guard reader.loaded else { throw ReaderError.message("书库尚未成功打开。") }
-        guard limits.maxRounds > 0 else { throw ReaderError.message("工具执行轮数已达上限。") }
         let settings = reader.modelSettings
         let key = try await reader.modelKey(for: settings)
         guard !key.isEmpty, !settings.model.isEmpty else { throw ReaderError.message("请先在设置中填写模型名称并保存 API Key。") }
@@ -308,35 +307,64 @@ public final class LibraryAgent {
                     "\n本轮目标论文的登记 paper_id 为 \(id.uuidString)，共有 \(doc.pageCount) 个 PDF 原页，可从第 \(firstPage) 页核对。"
             }
         }
-        let system = AgentMessage(role: "system", content: instructions)
+        var remainingRounds = max(0, limits.maxRounds)
+        var remainingCalls = max(0, limits.maxToolCalls)
+        instructions +=
+            "\n每个问题的工具预算为 \(remainingRounds) 轮、\(remainingCalls) 次调用。一次回复可以请求多个工具，每项分别计数。预算用尽后另有一次只作答的机会。先规划检索、核对及交付所需的调用，合并相互独立的查询，结果充分即可作答。需要推荐或引用时，给 present_results 预留一轮和一次调用；写笔记等需要单独执行的工具也要预留。剩余两轮或两次调用时优先交付已核实的结果。工具关闭后只根据当前可见的证据作答，交代尚未核实或完成的部分。"
         let user = AgentMessage(role: "user", content: question)
         var prior = Array(history.suffix(max(0, limits.maxHistoryTurns)))
-        while !prior.isEmpty,
-            try JSONEncoder().encode([system] + prior.flatMap { $0 } + [user]).count > limits.maxContextBytes
-        {
-            prior.removeFirst()
-        }
-        var messages = [system] + prior.flatMap { $0 } + [user]
         var current = [user]
-        var callCount = 0
+        var finalReason: String?
         var explicitlyPresented = false
         let endpoint = try settings.endpointURL()
         let displaysProviderThinking = endpoint.host == "api.deepseek.com" && endpoint.port == nil
-        var callIDs = Set(messages.flatMap { $0.toolCalls ?? [] }.map(\.id))
-        for _ in 0..<limits.maxRounds {
+        var callIDs = Set(prior.flatMap { $0 }.flatMap { $0.toolCalls ?? [] }.map(\.id))
+        toolLoop: while true {
             try check(epoch)
             try checkNoteContext()
-            guard try JSONEncoder().encode(messages).count <= limits.maxContextBytes else {
-                throw ReaderError.message("上下文达到上限，请缩小范围或新建对话。")
+            let answerOnly = finalReason != nil || remainingRounds == 0 || remainingCalls == 0
+            let budget =
+                answerOnly
+                ? "\(finalReason ?? "工具预算已用完。")工具已关闭。"
+                : "当前剩余 \(remainingRounds) 轮工具、\(remainingCalls) 次调用（含本轮）。"
+            let system = AgentMessage(role: "system", content: instructions + "\n" + budget)
+            var messages = [system] + prior.flatMap { $0 } + current
+            while try JSONEncoder().encode(messages).count > limits.maxContextBytes {
+                if !prior.isEmpty {
+                    prior.removeFirst()
+                } else if let lastGroup = current.lastIndex(where: { $0.toolCalls?.isEmpty == false }) {
+                    // Discard complete tool exchanges so no reply loses its matching call.
+                    // Result cards remain available in the UI. The model only summarizes evidence it sees.
+                    current.removeSubrange(lastGroup...)
+                    finalReason = "部分工具结果超过上下文容量，未纳入本次总结。"
+                    continue toolLoop
+                } else {
+                    throw ReaderError.message("上下文达到上限，请缩小范围或新建对话。")
+                }
+                messages = [system] + prior.flatMap { $0 } + current
             }
             let drafts = AssistantDraftCadence()
-            let response = try await client.respondStreaming(
-                settings: settings, key: key, messages: messages, limits: limits
-            ) { [weak self] text in
-                try Task.checkCancellation()
-                guard drafts.shouldPublish(text) else { return }
-                guard let self else { throw CancellationError() }
-                if noteRequest == nil { try await self.receiveDraft(text, turnID: turnID, epoch: epoch) }
+            var requestLimits = limits
+            requestLimits.maxToolCalls = answerOnly ? 0 : remainingCalls
+            let response: AgentMessage
+            do {
+                response = try await client.respondStreaming(
+                    settings: settings, key: key, messages: messages, limits: requestLimits
+                ) { [weak self] text in
+                    try Task.checkCancellation()
+                    guard drafts.shouldPublish(text) else { return }
+                    guard let self else { throw CancellationError() }
+                    if noteRequest == nil { try await self.receiveDraft(text, turnID: turnID, epoch: epoch) }
+                }
+                if (response.toolCalls?.count ?? 0) > requestLimits.maxToolCalls {
+                    throw AgentToolBudgetError.batchExceedsRemainingCalls
+                }
+            } catch AgentToolBudgetError.batchExceedsRemainingCalls {
+                try check(epoch)
+                updateTurn(turnID) { $0.answer = "" }
+                guard !answerOnly else { throw ReaderError.message("工具已关闭，模型仍请求调用。已有结果可在工具记录中查看。") }
+                finalReason = "上批调用超过剩余额度，整批未执行。"
+                continue
             }
             try check(epoch)
             try checkNoteContext()
@@ -367,9 +395,8 @@ public final class LibraryAgent {
                 try retainCompletedHistory(current, after: prior, system: system, epoch: epoch)
                 return
             }
-            guard callCount + calls.count <= limits.maxToolCalls else {
-                throw ReaderError.message("本次工具调用次数达到上限，请缩小查找范围。")
-            }
+            remainingRounds -= 1
+            remainingCalls -= calls.count
             for call in calls {
                 guard call.type == "function", !call.id.isEmpty, call.id.utf8.count <= 128,
                     callIDs.insert(call.id).inserted
@@ -381,11 +408,9 @@ public final class LibraryAgent {
                 turn.recordProcess(response, displaysThinking: displaysProviderThinking, toolRound: true)
                 if !turn.answer.isEmpty { turn.answer = "" }
             }
-            messages.append(response)
             current.append(response)
             for call in calls {
                 try check(epoch)
-                callCount += 1
                 let activity = AgentActivity(toolName: call.function.name)
                 updateTurn(turnID) { $0.activities.append(activity) }
                 let content: String
@@ -454,7 +479,6 @@ public final class LibraryAgent {
                         maxBytes: limits.maxToolResultBytes)
                 }
                 let result = AgentMessage(role: "tool", content: content, toolCallID: call.id)
-                messages.append(result)
                 current.append(result)
             }
             // Checkpoint only after every tool reply matches this assistant message. Later
@@ -466,7 +490,6 @@ public final class LibraryAgent {
                 return
             }
         }
-        throw ReaderError.message("本次工具执行轮数达到上限；已有结果已保留，可继续提问。")
     }
 
     private func receiveDraft(_ text: String, turnID: UUID, epoch: UUID) throws {

@@ -43,10 +43,10 @@ actor ChatCompletionStreamDecoder {
     private var calls: [Int: AgentToolCall] = [:]
     private var reasoning = ""
     private var finishReason: String?
-    private let allowTools: Bool
+    private let maxToolCalls: Int?
     private let onPartial: @Sendable (String) async throws -> Void
-    init(allowTools: Bool = false, onPartial: @escaping @Sendable (String) async throws -> Void) {
-        self.allowTools = allowTools
+    init(maxToolCalls: Int? = nil, onPartial: @escaping @Sendable (String) async throws -> Void) {
+        self.maxToolCalls = maxToolCalls
         self.onPartial = onPartial
     }
 
@@ -73,9 +73,10 @@ actor ChatCompletionStreamDecoder {
             guard let choice = event.choices.first(where: { ($0.index ?? 0) == 0 }) else { continue }
             if let value = choice.delta?.reasoningContent { reasoning += value }
             for part in choice.delta?.toolCalls ?? [] {
-                guard allowTools, !stopped, (0..<16).contains(part.index) else {
+                guard let maxToolCalls, !stopped, part.index >= 0 else {
                     throw ReaderError.message("流式工具调用无效，未执行。")
                 }
+                guard part.index < maxToolCalls else { throw AgentToolBudgetError.batchExceedsRemainingCalls }
                 var call = calls[part.index] ?? AgentToolCall(id: "", name: "", arguments: "")
                 if let id = part.id { call.id += id }
                 if let type = part.type { call.type = type }
@@ -92,7 +93,7 @@ actor ChatCompletionStreamDecoder {
                 try await onPartial(text)
             }
             if let reason = choice.finishReason {
-                guard reason == "stop" || (allowTools && reason == "tool_calls") else {
+                guard reason == "stop" || (maxToolCalls != nil && reason == "tool_calls") else {
                     if reason == "length" { throw ModelStreamFailure.outputLimit }
                     if reason == "content_filter" { throw ModelStreamFailure.contentFilter }
                     throw ModelStreamFailure.unexpectedFinish

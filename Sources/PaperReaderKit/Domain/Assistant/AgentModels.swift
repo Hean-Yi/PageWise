@@ -107,8 +107,9 @@ public struct AgentTurn: Identifiable, Sendable {
 }
 
 public struct AgentLimits: Sendable {
-    public var maxRounds = 6
-    public var maxToolCalls = 16
+    /// Rounds in which the model may request tools. One answer-only request may follow.
+    public var maxRounds = 16
+    public var maxToolCalls = 48
     public var maxArgumentBytes = 4_096
     public var maxResponseBytes = 1_000_000
     public var maxContextBytes = 80_000
@@ -117,6 +118,10 @@ public struct AgentLimits: Sendable {
     public var maxQuestionBytes = 8_000
     public var maxHistoryTurns = 6
     public init() {}
+}
+
+public enum AgentToolBudgetError: Error {
+    case batchExceedsRemainingCalls
 }
 
 public struct AgentToolCall: Codable, Sendable, Equatable {

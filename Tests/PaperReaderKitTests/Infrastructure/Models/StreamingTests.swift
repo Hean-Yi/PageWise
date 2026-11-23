@@ -21,7 +21,7 @@ private actor StreamCapture {
 }
 
 @Test func streamingToolArgumentsAreJoinedBeforeExecution() async throws {
-    let decoder = ChatCompletionStreamDecoder(allowTools: true) { _ in }
+    let decoder = ChatCompletionStreamDecoder(maxToolCalls: 1) { _ in }
     let events = [
         #"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-a","type":"function","extra_content":{"google":{"thought_signature":"saved-signature"}},"function":{"name":"search_library","arguments":"{\"query\":"}}]}}]}"#,
         #"{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"attention\"}"}}]},"finish_reason":"tool_calls"}]}"#,

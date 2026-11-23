@@ -2,9 +2,14 @@ import Foundation
 
 /// Builds the same provider-compatible request for testing, translation, chat and tool calls.
 enum ChatCompletionRequest {
+    enum ToolChoice: String {
+        case auto
+        case disabled = "none"
+    }
+
     static func make(
         settings: ModelSettings, key: String, messages: [AgentMessage], stream: Bool = false,
-        maxOutputTokens: Int = 4_096, jsonOutput: Bool = false, reflow: Bool = false, tools: Bool = false
+        maxOutputTokens: Int = 4_096, jsonOutput: Bool = false, reflow: Bool = false, toolChoice: ToolChoice? = nil
     ) throws -> URLRequest {
         let settings = try settings.normalized()
         let key = key.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -29,7 +34,7 @@ enum ChatCompletionRequest {
             // Claude's compatibility API rejects json_object. The prompts and local schema checks still require JSON.
             responseFormat: jsonOutput && provider != .anthropic ? ["type": "json_object"] : nil,
             thinking: disableThinking ? ["type": "disabled"] : nil,
-            tools: tools ? AgentClient.Tool.definitions : nil, toolChoice: tools ? "auto" : nil)
+            tools: toolChoice == nil ? nil : AgentClient.Tool.definitions, toolChoice: toolChoice?.rawValue)
         var request = URLRequest(url: try settings.endpointURL())
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")

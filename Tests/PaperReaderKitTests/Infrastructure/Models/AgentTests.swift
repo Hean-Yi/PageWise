@@ -57,6 +57,60 @@ private actor AgentWireTransport: HTTPTransport {
     #expect(requests[1].value(forHTTPHeaderField: "Authorization") == "Bearer test-only")
 }
 
+@Test func agentStreamingBatchUsesTheRequestBudgetBeyondSixteenCalls() async throws {
+    let events =
+        (0..<17).map { index in
+            #"data: {"choices":[{"delta":{"tool_calls":[{"index":\#(index),"id":"call_\#(index)","type":"function","function":{"name":"search_library","arguments":"{}"}}]}}]}"#
+        } + [#"data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}"#, "data: [DONE]"]
+    let transport = AgentWireTransport([events.joined(separator: "\n\n") + "\n\n"])
+    let client = AgentClient(transport: transport)
+    let messages = [AgentMessage(role: "user", content: "检索")]
+    var limits = AgentLimits()
+    limits.maxToolCalls = 17
+    let reply = try await client.respondStreaming(
+        settings: agentSettings(), key: "fixture", messages: messages, limits: limits
+    ) { _ in }
+    #expect(reply.toolCalls?.count == 17)
+    limits.maxToolCalls = 16
+    await #expect(throws: AgentToolBudgetError.self) {
+        try await client.respondStreaming(settings: agentSettings(), key: "fixture", messages: messages, limits: limits)
+        { _ in }
+    }
+}
+
+@Test(arguments: [ModelServicePreset.deepSeek.baseURL, ModelServicePreset.glm.baseURL])
+func agentFinalRequestDisablesToolsAndRetainsTheLastEvidence(baseURL: String) async throws {
+    let transport = AgentWireTransport([
+        #"{"choices":[{"message":{"role":"assistant","content":"完成"},"finish_reason":"stop"}]}"#,
+        #"{"choices":[{"message":{"role":"assistant","tool_calls":[{"id":"another","type":"function","function":{"name":"search_library","arguments":"{}"}}]},"finish_reason":"tool_calls"}]}"#,
+    ])
+    var settings = agentSettings()
+    settings.baseURL = baseURL
+    let client = AgentClient(transport: transport)
+    let messages: [AgentMessage] = [
+        .init(role: "user", content: "查找"),
+        .init(role: "assistant", toolCalls: [.init(id: "last", name: "search_library", arguments: "{}")]),
+        .init(role: "tool", content: "[]", toolCallID: "last"),
+    ]
+    var limits = AgentLimits()
+    limits.maxToolCalls = 0
+    let answer = try await client.respond(settings: settings, key: "fixture", messages: messages, limits: limits)
+    #expect(answer.content == "完成")
+    let request = try #require(await transport.requests.first)
+    let body = try #require(try JSONSerialization.jsonObject(with: request.httpBody!) as? [String: Any])
+    let wireMessages = try #require(body["messages"] as? [[String: Any]])
+    #expect(wireMessages.last?["tool_call_id"] as? String == "last")
+    if baseURL == ModelServicePreset.deepSeek.baseURL {
+        #expect(body["tool_choice"] as? String == "none")
+        #expect(body["tools"] != nil)
+    } else {
+        #expect(body["tool_choice"] == nil && body["tools"] == nil)
+    }
+    await #expect(throws: AgentToolBudgetError.self) {
+        try await client.respond(settings: settings, key: "fixture", messages: messages, limits: limits)
+    }
+}
+
 @Test(arguments: [
     #"{"choices":[{"message":{"role":"assistant","content":"partial"},"finish_reason":"length"}]}"#,
     #"{"choices":[{"message":{"role":"assistant","content":"partial"},"finish_reason":"future"}]}"#,
