@@ -443,26 +443,6 @@ import Testing
     #expect(substring.preview(of: unmatched + " Video shopping requires recall.") == "Video shopping requires recall.")
 }
 
-@Test func inlineCitationsLinkOnlyCompleteMarkersInTheirOwnTurn() throws {
-    let evidence = ["S1", "S2", "S10"].map { Evidence(id: $0, title: "Source", text: "Passage") }
-    let answer = "实验 [S10] / [S1][S10]；[S100]。[link](https://example.org) [S2"
-    var turn = ChatTurn(paperID: UUID(), question: "Why?", selection: "", answer: answer, evidence: evidence)
-    let display = CitedAssistantAnswer(turn)
-    #expect(String(display.text.characters) == answer)
-    #expect(display.cited.map(\.id) == ["S10", "S1"])
-    #expect(display.related.map(\.id) == ["S2"])
-    #expect(display.links.count == 2)
-    let markers = display.text.runs.compactMap { run in
-        run.link.map { (String(display.text[run.range].characters), display.links[$0]?.id) }
-    }
-    #expect(markers.map { $0.0 } == ["[S10]", "[S1]", "[S10]"])
-    #expect(markers.map { $0.1 } == ["S10", "S1", "S10"])
-    turn.answer += "]"
-    #expect(CitedAssistantAnswer(turn).cited.map(\.id) == ["S10", "S1", "S2"])
-    let persisted = try JSONDecoder().decode(ChatTurn.self, from: JSONEncoder().encode(turn))
-    #expect(Set(CitedAssistantAnswer(persisted).links.keys) == Set(CitedAssistantAnswer(turn).links.keys))
-}
-
 @Test @MainActor func leavingPaperFlushesLatestVisiblePageWithoutWaitingForDebounce() async throws {
     let root = workspaceDirectory()
     defer { try? FileManager.default.removeItem(at: root) }

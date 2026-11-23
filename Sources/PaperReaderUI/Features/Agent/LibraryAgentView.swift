@@ -8,7 +8,6 @@ struct LibraryAgentView: View {
     let openSettings: () -> Void
     let didNavigate: () -> Void
     @FocusState private var composerFocused: Bool
-    @State private var hasMoreBelow = false
 
     private var isConfigured: Bool {
         (try? model.modelSettings.normalized()) != nil
@@ -16,48 +15,17 @@ struct LibraryAgentView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            ScrollViewReader { proxy in
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 28) {
-                        if agent.turns.isEmpty {
-                            welcome
-                        } else {
-                            ForEach(agent.turns) { turn in conversation(turn).id(turn.id) }
-                            if agent.isRunning, agent.turns.last?.activities.last?.status != .running,
-                                agent.turns.last?.answer.isEmpty == true
-                            {
-                                HStack(spacing: 8) {
-                                    ProgressView().controlSize(.mini)
-                                    Text("正在思考…").font(.system(size: 11)).foregroundStyle(ReaderTheme.muted)
-                                }
-                            }
-                        }
-                        Color.clear.frame(height: 1).id("agent-bottom")
-                    }.padding(20)
-                }
-                .onScrollGeometryChange(for: Bool.self) { geometry in
-                    geometry.contentSize.height - geometry.visibleRect.maxY > 48
-                } action: { _, hasMore in
-                    hasMoreBelow = hasMore
-                }
-                .overlay(alignment: .bottomTrailing) {
-                    if hasMoreBelow, !agent.turns.isEmpty {
-                        Button {
-                            proxy.scrollTo("agent-bottom", anchor: .bottom)
-                        } label: {
-                            Image(systemName: "arrow.down")
-                                .font(.callout.weight(.medium))
-                                .frame(width: 34, height: 34).background(ReaderTheme.surface, in: Circle())
-                                .overlay { Circle().strokeBorder(ReaderTheme.line) }
-                        }
-                        .buttonStyle(.plain).foregroundStyle(ReaderTheme.ink)
-                        .help("前往最新消息").accessibilityLabel("前往最新消息")
-                        .padding(.trailing, 15).padding(.bottom, 6)
-                    }
-                }
-                .onChange(of: agent.turns.last?.id) { _, id in
-                    if let id { proxy.scrollTo(id, anchor: .top) }
-                }
+            if agent.turns.isEmpty {
+                ScrollView { welcome.padding(20) }
+            } else {
+                AgentTranscriptView(
+                    agent: agent, didNavigate: didNavigate, followUp: prepareFollowUp,
+                    retry: { turn in
+                        agent.clearFollowUp()
+                        if let id = turn.referencedCardID { _ = agent.prepareFollowUp(cardID: id) }
+                        draft = turn.question
+                        composerFocused = true
+                    })
             }
             composer.padding(16)
         }
@@ -78,44 +46,36 @@ struct LibraryAgentView: View {
         }
     }
 
-    private func conversation(_ turn: AgentTurn) -> some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text(turn.question).font(.system(size: 13)).lineSpacing(4).textSelection(.enabled)
-                .padding(13).frame(maxWidth: .infinity, alignment: .leading)
-                .background(ReaderTheme.elevated, in: RoundedRectangle(cornerRadius: 12))
-            if !turn.activities.isEmpty {
-                VStack(spacing: 7) {
-                    ForEach(turn.activities) { activity in
-                        AgentActivityCard(
-                            activity: activity, cards: turn.cards(for: activity), agent: agent, didNavigate: didNavigate
-                        )
-                    }
-                }
-            }
-            if !turn.answer.isEmpty {
-                Text(answerText(turn.answer)).font(.system(size: 13)).lineSpacing(5).textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            if let error = turn.error {
-                VStack(alignment: .leading, spacing: 8) {
-                    Label(error, systemImage: "exclamationmark.circle")
-                        .font(.system(size: 12)).foregroundStyle(ReaderTheme.muted)
-                    Button("重新提问") {
-                        draft = turn.question
-                        composerFocused = true
-                    }.buttonStyle(.plain).font(.system(size: 11)).foregroundStyle(ReaderTheme.accent)
-                }
-            } else if turn.isCancelled, turn.activities.last?.status != .cancelled {
-                Text("已停止").font(.system(size: 11)).foregroundStyle(ReaderTheme.muted)
-            }
+    private func prepareFollowUp(_ card: AgentCard) {
+        guard agent.prepareFollowUp(cardID: card.id) else { return }
+        if draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            draft = card.kind == .evidence ? "这段原文如何支持上面的回答？" : "这篇论文与我的问题有什么关联？"
         }
+        composerFocused = true
     }
 
     private var composer: some View {
         VStack(alignment: .leading, spacing: 14) {
-            TextField("问一个问题，或找一篇论文…", text: $draft, axis: .vertical)
-                .textFieldStyle(.plain).lineLimit(2...5).font(.system(size: 13))
-                .focused($composerFocused).onSubmit(send).accessibilityLabel("向书库 Agent 提问")
+            if let source = agent.followUpCard {
+                HStack(spacing: 6) {
+                    Image(systemName: "text.quote").foregroundStyle(ReaderTheme.accent).accessibilityHidden(true)
+                    Text(source.title).lineLimit(1)
+                    Spacer(minLength: 2)
+                    Button {
+                        agent.clearFollowUp()
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                    }
+                    .buttonStyle(.plain).accessibilityLabel("移除追问来源").help("移除追问来源")
+                }
+                .font(.caption).foregroundStyle(ReaderTheme.muted)
+                .padding(.vertical, 5).padding(.horizontal, 8).background(ReaderTheme.elevated, in: Capsule())
+            }
+            TextField(
+                agent.pendingClarificationTurnID == nil ? "问一个问题，或找一篇论文…" : "输入你的偏好…", text: $draft, axis: .vertical
+            )
+            .textFieldStyle(.plain).lineLimit(2...5).font(.system(size: 13))
+            .focused($composerFocused).onSubmit(send).accessibilityLabel("向书库 Agent 提问")
             HStack {
                 if !agent.turns.isEmpty {
                     Button {
@@ -152,18 +112,10 @@ struct LibraryAgentView: View {
             openSettings()
             return
         }
-        draft = ""
-        agent.send(question)
+        agent.send(question, referencing: agent.followUpCard?.id)
+        if agent.isRunning { draft = "" }
     }
 
-    /// Tool cards are the navigation surface; generated prose cannot supply action links.
-    private func answerText(_ text: String) -> AttributedString {
-        var result =
-            (try? AttributedString(markdown: text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
-            ?? AttributedString(text)
-        for run in result.runs where run.link != nil { result[run.range].link = nil }
-        return result
-    }
 }
 
 private struct AgentSendStyle: ButtonStyle {

@@ -1,0 +1,201 @@
+import PaperReaderKit
+import SwiftUI
+
+/// Give the lazy stack one stable, independently measured row per message part, including each selected result.
+private struct TranscriptRow: Identifiable {
+    enum Part: Hashable {
+        case question, process, answer
+        case result(UUID)
+        case clarification, status
+    }
+
+    struct ID: Hashable {
+        let turn: UUID
+        let part: Part
+    }
+
+    let id: ID
+    let turn: AgentTurn
+    let spacingBefore: CGFloat
+
+    static func rows(for turns: [AgentTurn]) -> [Self] {
+        var rows: [Self] = []
+        for turn in turns {
+            func append(_ part: Part, spacing: CGFloat = 16) {
+                rows.append(Self(id: ID(turn: turn.id, part: part), turn: turn, spacingBefore: spacing))
+            }
+            append(.question, spacing: rows.isEmpty ? 0 : 28)
+            if !turn.activities.isEmpty || !turn.processNotes.isEmpty { append(.process) }
+            if !turn.answer.isEmpty { append(.answer) }
+            for (index, result) in turn.presentedResults.enumerated() {
+                append(.result(result.id), spacing: index == 0 ? 16 : 8)
+            }
+            if turn.clarification != nil { append(.clarification) }
+            if turn.error != nil || (turn.isCancelled && turn.activities.last?.status != .cancelled) { append(.status) }
+        }
+        return rows
+    }
+}
+
+struct AgentTranscriptView: View {
+    let agent: LibraryAgent
+    let didNavigate: () -> Void
+    let followUp: (AgentCard) -> Void
+    let retry: (AgentTurn) -> Void
+
+    var body: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    ForEach(TranscriptRow.rows(for: agent.turns)) { row in
+                        content(row)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.top, row.spacingBefore)
+                    }
+                    if agent.isRunning, let last = agent.turns.last, last.activities.isEmpty,
+                        last.processNotes.isEmpty, last.answer.isEmpty
+                    {
+                        HStack(spacing: 8) {
+                            ProgressView().controlSize(.mini)
+                            Text("正在准备回答…").font(.system(size: 11)).foregroundStyle(ReaderTheme.muted)
+                        }.padding(.top, 16)
+                    }
+                    Color.clear.frame(height: 1).id("agent-bottom")
+                }.padding(20)
+            }
+            .modifier(
+                JumpToLatest(
+                    target: .init(turn: agent.turns.last?.id, awaitsReply: agent.pendingClarificationTurnID != nil)
+                ) { proxy.scrollTo("agent-bottom", anchor: .bottom) })
+        }
+    }
+
+    @ViewBuilder private func content(_ row: TranscriptRow) -> some View {
+        let turn = row.turn
+        switch row.id.part {
+        case .question:
+            VStack(alignment: .leading, spacing: 5) {
+                if let title = turn.referencedCardTitle {
+                    Label(title, systemImage: "text.quote").font(.caption).foregroundStyle(ReaderTheme.muted)
+                        .lineLimit(2)
+                }
+                Text(turn.question).font(.callout).lineSpacing(4)
+            }
+            .padding(13).frame(maxWidth: .infinity, alignment: .leading)
+            .background(ReaderTheme.elevated, in: RoundedRectangle(cornerRadius: 12))
+            .contextMenu { AgentCopyButton(text: turn.question) }
+        case .process:
+            AgentProcessView(turn: turn, isRunning: agent.isRunning && agent.turns.last?.id == turn.id)
+        case .answer:
+            AssistantMarkdownText(markdown: turn.answer)
+        case .result(let id):
+            if let result = turn.presentedResults.first(where: { $0.id == id }),
+                let card = turn.cards.first(where: { $0.id == id })
+            {
+                AgentResultCard(result: result, card: card, agent: agent, didNavigate: didNavigate) { followUp(card) }
+            }
+        case .clarification:
+            if let clarification = turn.clarification { clarify(clarification, in: turn) }
+        case .status:
+            if let error = turn.error {
+                VStack(alignment: .leading, spacing: 8) {
+                    Label(error, systemImage: "exclamationmark.circle")
+                        .font(.system(size: 12)).foregroundStyle(ReaderTheme.muted)
+                    Button("重新提问") { retry(turn) }
+                        .buttonStyle(.plain).font(.system(size: 11)).foregroundStyle(ReaderTheme.accent)
+                }
+            } else {
+                Text("已停止").font(.system(size: 11)).foregroundStyle(ReaderTheme.muted)
+            }
+        }
+    }
+
+    private func clarify(_ clarification: AgentClarification, in turn: AgentTurn) -> some View {
+        VStack(alignment: .leading, spacing: 9) {
+            Label(clarification.question, systemImage: "questionmark.bubble")
+                .font(.callout.weight(.medium)).fixedSize(horizontal: false, vertical: true)
+            if agent.pendingClarificationTurnID == turn.id {
+                ViewThatFits(in: .horizontal) {
+                    HStack { choices(clarification.options) }.fixedSize(horizontal: true, vertical: false)
+                    VStack(alignment: .leading, spacing: 5) { choices(clarification.options) }
+                }
+                .disabled(agent.isRunning)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func choices(_ options: [String]) -> some View {
+        ForEach(options, id: \.self) { option in
+            Button {
+                agent.send(option)
+            } label: {
+                Text(option).multilineTextAlignment(.leading).fixedSize(horizontal: false, vertical: true)
+            }.buttonStyle(.bordered).controlSize(.small).tint(ReaderTheme.accent)
+        }
+    }
+
+}
+
+private struct JumpToLatest: ViewModifier {
+    struct Target: Equatable {
+        let turn: UUID?
+        let awaitsReply: Bool
+    }
+
+    let target: Target
+    let jump: () -> Void
+    @State private var hasMoreBelow = false
+    @State private var readerScrolled = false
+
+    func body(content: Content) -> some View {
+        content
+            .onScrollPhaseChange { _, phase in
+                if phase == .interacting { readerScrolled = true }
+            }
+            .onChange(of: target) { previous, current in
+                guard current.turn != nil else { return }
+                if previous.turn != current.turn {
+                    readerScrolled = false
+                    jump()
+                } else if current.awaitsReply && !readerScrolled {
+                    jump()
+                }
+            }
+            .onScrollGeometryChange(for: Bool.self) { geometry in
+                geometry.contentSize.height - geometry.visibleRect.maxY > 48
+            } action: { _, hasMore in
+                hasMoreBelow = hasMore
+            }
+            .overlay(alignment: .bottomTrailing) {
+                if hasMoreBelow {
+                    Button {
+                        readerScrolled = false
+                        jump()
+                    } label: {
+                        Image(systemName: "arrow.down")
+                            .font(.callout.weight(.medium))
+                            .frame(width: 34, height: 34).background(ReaderTheme.surface, in: Circle())
+                            .overlay { Circle().strokeBorder(ReaderTheme.line) }
+                    }
+                    .buttonStyle(.plain).foregroundStyle(ReaderTheme.ink)
+                    .help("前往最新消息").accessibilityLabel("前往最新消息")
+                    .padding(.trailing, 15).padding(.bottom, 6)
+                }
+            }
+    }
+}
+
+struct AgentCopyButton: View {
+    let text: String
+    var body: some View {
+        Button("复制", systemImage: "doc.on.doc") {
+            #if os(macOS)
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(text, forType: .string)
+            #else
+                UIPasteboard.general.string = text
+            #endif
+        }
+    }
+}

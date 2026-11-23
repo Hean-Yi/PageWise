@@ -73,3 +73,55 @@ import Testing
     let incomplete = try await renderer.render("尚未完成 $x +")
     #expect(incomplete.contains("$x +"))
 }
+
+@Test func assistantMarkdownRendersBlockStructureAndOnlyLinksRegisteredCitationsInProse() async throws {
+    let renderer = NoteMarkdownRenderer()
+    let source = #"""
+        ## 比较
+
+        > **结果** [S10] 和 [S1][S10]。[S99] [S2
+
+        1. Inline \(a^2+b^2\)
+        2. Price $5 and $10.
+
+        \[
+        \frac{1}{2}
+        \]
+
+        | x | y |
+        | - | - |
+        | $x$ | 2 |
+
+        `\([S2]\)` and `$document$`
+
+        \(\NotAKnownCommand{[S2]}\)
+
+        ```swift
+        "[S2]"
+        ```
+
+        [普通链接](https://example.org) <a href="paperreader-citation://foo" data-citation="S2">[S2]</a>
+        <img src="https://example.org/a.png">
+        """#
+    let rendered = try await renderer.renderAssistant(source, citationIDs: ["S1", "S2", "S10"])
+    #expect(rendered.citations == ["S10", "S1"])
+    #expect(rendered.html.contains("<h2>"))
+    #expect(rendered.html.contains("<blockquote>"))
+    #expect(rendered.html.contains("<ol>"))
+    #expect(rendered.html.contains("<table>"))
+    #expect(rendered.html.contains("<pre>"))
+    #expect(rendered.html.components(separatedBy: "<math").count == 4)
+    #expect(rendered.html.contains("$5 and $10"))
+    #expect(rendered.html.contains("普通链接"))
+    #expect(!rendered.html.contains("example.org"))
+    #expect(!rendered.html.contains("paperreader-citation"))
+    #expect(rendered.html.components(separatedBy: #"data-citation="S10""#).count == 3)
+    #expect(rendered.html.contains("[S99]"))
+    #expect(rendered.html.contains(#"\(\NotAKnownCommand{[S2]}\)"#))
+    #expect(!rendered.html.contains(#"data-citation="S2""#))
+    let streamed = try await renderer.renderAssistant(source + "\n[S2]", citationIDs: ["S1", "S2", "S10"])
+    #expect(streamed.citations == ["S10", "S1", "S2"])
+    let otherTurn = try await renderer.renderAssistant(source)
+    #expect(otherTurn.citations.isEmpty)
+    #expect(!otherTurn.html.contains("href="))
+}

@@ -123,8 +123,20 @@ public struct AgentClient: AgentCompleting {
     }
     struct Tool: Encodable {
         struct Property: Encodable {
+            struct Items: Encodable {
+                var type: String
+                var properties: [String: Property]?
+                var required: [String]?
+                var additionalProperties: Bool?
+            }
             var type: String
             var description: String
+            var items: Items?
+            var choices: [String]?
+            enum CodingKeys: String, CodingKey {
+                case type, description, items
+                case choices = "enum"
+            }
         }
         struct Parameters: Encodable {
             let type = "object"
@@ -141,6 +153,22 @@ public struct AgentClient: AgentCompleting {
         var function: Function
         static let definitions: [Tool] = [
             make(
+                "present_results",
+                "Choose the exact ordered subset of registered results to display as interactive cards. Replaces the previous selection for this answer. Use after searching and before your final answer.",
+                [
+                    "purpose": .init(
+                        type: "string", description: "How the selected sources are used",
+                        choices: ["recommendation", "citation", "match"]),
+                    "items": .init(
+                        type: "array", description: "Chosen results in display order; omit all other candidates",
+                        items: .init(
+                            type: "object",
+                            properties: [
+                                "result_id": .init(type: "string", description: "Exact result_id from tool output"),
+                                "reason": .init(type: "string", description: "Optional short reader-facing reason"),
+                            ], required: ["result_id"], additionalProperties: false)),
+                ], ["purpose", "items"]),
+            make(
                 "search_library",
                 "Search local titles and extracted text. Rewrite or translate keywords when needed. Only real matches are returned.",
                 ["query": .init(type: "string", description: "Short keywords in Chinese or English")], ["query"]),
@@ -153,7 +181,12 @@ public struct AgentClient: AgentCompleting {
                 ], ["paper_id", "source_page"]),
             make(
                 "search_online", "Search arXiv for verified paper candidates; does not download.",
-                ["query": .init(type: "string", description: "Paper title keywords")], ["query"]),
+                [
+                    "query": .init(type: "string", description: "Paper title keywords"),
+                    "limit": .init(
+                        type: "integer",
+                        description: "Optional number of search hits when the reader specifies a quantity"),
+                ], ["query"]),
             make(
                 "prepare_import",
                 "Prepare a confirmation card for a registered candidate. Only the user's click can download or import.",
@@ -166,6 +199,15 @@ public struct AgentClient: AgentCompleting {
                     "paper_id": .init(type: "string", description: "Registered paper ID"),
                     "source_page": .init(type: "integer", description: "Optional one-based original page"),
                 ], ["paper_id"]),
+            make(
+                "ask_user",
+                "Ask one necessary clarification with a few short choices. Call this tool by itself and wait for the reader. Free text is also supported.",
+                [
+                    "question": .init(type: "string", description: "A concise question in the reader's language"),
+                    "options": .init(
+                        type: "array", description: "Two to four distinct short answers", items: .init(type: "string")),
+                ],
+                ["question", "options"]),
         ]
         static func make(_ name: String, _ description: String, _ properties: [String: Property], _ required: [String])
             -> Tool

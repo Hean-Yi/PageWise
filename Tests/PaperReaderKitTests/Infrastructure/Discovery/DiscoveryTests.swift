@@ -4,9 +4,11 @@ import Testing
 @testable import PaperReaderKit
 
 private struct FeedTransport: HTTPTransport {
+    var expectedLimit = 8
     func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) {
         let components = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)
         #expect(components?.queryItems?.first?.value?.contains(" AND ") == true)
+        #expect(components?.queryItems?.first { $0.name == "max_results" }?.value == String(expectedLimit))
         let xml = """
             <feed xmlns="http://www.w3.org/2005/Atom"><entry>
             <id>http://arxiv.org/abs/0000.00000v1</id><title>Attention Is All You Need</title>
@@ -19,6 +21,12 @@ private struct FeedTransport: HTTPTransport {
             Data(xml.utf8), HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
         )
     }
+}
+
+@Test func arxivAcceptsTheAgentSearchBudgetThroughTheDiscoveryProtocol() async throws {
+    let client: any PaperDiscovery = ArxivClient(transport: FeedTransport(expectedLimit: 13))
+    let results = try await client.search("attention memory", limit: 13)
+    #expect(results.count == 1)
 }
 
 @Test func partialTitleUsesTermsAndParsesVerifiedCandidate() async throws {

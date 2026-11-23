@@ -151,7 +151,14 @@ public struct LibraryView: View {
                         }
                     )
                     .frame(width: sidebarWidth)
-                    .shadow(color: inline ? .clear : .black.opacity(0.1), radius: 8, x: -3)
+                    .background(alignment: .leading) {
+                        if !inline {
+                            LinearGradient(
+                                colors: [.clear, .black.opacity(0.09)], startPoint: .leading, endPoint: .trailing
+                            )
+                            .frame(width: 8).offset(x: -8).allowsHitTesting(false).accessibilityHidden(true)
+                        }
+                    }
                     .accessibilityAction(.escape) { self.assistantTab = nil }
                 }
             }

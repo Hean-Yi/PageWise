@@ -10,7 +10,7 @@ struct ReaderNotesView: View {
     var body: some View {
         VStack(spacing: 0) {
             ScrollView {
-                VStack(alignment: .leading, spacing: 26) {
+                LazyVStack(alignment: .leading, spacing: 12) {
                     readingNotes
                     bookmarks
                     highlights
@@ -29,9 +29,9 @@ struct ReaderNotesView: View {
     }
 
     private var readingNotes: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            heading("阅读笔记", icon: "note.text", count: model.currentReadingNotes.count)
-            ForEach(model.currentReadingNotes) { note in
+        let notes = model.currentReadingNotes
+        return Section {
+            ForEach(notes) { note in
                 Button {
                     model.openReadingNote(note)
                     didNavigate()
@@ -48,18 +48,20 @@ struct ReaderNotesView: View {
             if model.lastDeletedNoteID != nil {
                 Button("撤销删除笔记", action: model.undoReadingNoteDeletion).font(.system(size: 12))
             }
+        } header: {
+            heading("阅读笔记", icon: "note.text", count: notes.count)
         }
     }
 
     private var bookmarks: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            heading("书签", icon: "bookmark", count: model.currentBookmarks.count)
-            if model.currentBookmarks.isEmpty {
+        let marks = model.currentBookmarks
+        return Section {
+            if marks.isEmpty {
                 Button(action: model.toggleBookmark) {
                     Label("标记当前页", systemImage: "plus").font(.system(size: 12))
                 }.buttonStyle(.borderless).foregroundStyle(ReaderTheme.muted).disabled(model.pageKeys.isEmpty)
             } else {
-                ForEach(model.currentBookmarks) { mark in
+                ForEach(marks) { mark in
                     HStack(spacing: 10) {
                         Button {
                             model.navigate(to: mark)
@@ -82,13 +84,15 @@ struct ReaderNotesView: View {
                         .background(ReaderTheme.canvas, in: RoundedRectangle(cornerRadius: 8))
                 }
             }
+        } header: {
+            heading("书签", icon: "bookmark", count: marks.count).padding(.top, 14)
         }
     }
 
     private var highlights: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            heading("划线", icon: "highlighter", count: model.currentHighlights.count)
-            ForEach(model.currentHighlights.reversed()) { mark in
+        let marks = model.currentHighlights
+        return Section {
+            ForEach(marks.reversed()) { mark in
                 Button {
                     model.navigate(to: mark)
                     didNavigate()
@@ -107,12 +111,14 @@ struct ReaderNotesView: View {
                     }.fixedSize(horizontal: false, vertical: true).padding(.vertical, 6).contentShape(Rectangle())
                 }.buttonStyle(.plain)
             }
+        } header: {
+            heading("划线", icon: "highlighter", count: marks.count).padding(.top, 14)
         }
     }
 
     private var summary: some View {
         VStack(alignment: .leading, spacing: 12) {
-            heading("总结", icon: "text.alignleft", count: nil)
+            heading("总结", icon: "text.alignleft", count: nil).padding(.top, 14)
             if let text = model.paper?.summary, !text.isEmpty {
                 Text(text).font(.system(size: 13)).lineSpacing(5).textSelection(.enabled)
             }

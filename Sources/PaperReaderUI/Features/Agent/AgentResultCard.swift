@@ -1,135 +1,53 @@
 import PaperReaderKit
 import SwiftUI
 
-/// One surface per executed call. Its actions address only the records returned by that call.
-struct AgentActivityCard: View {
-    let activity: AgentActivity
-    let cards: [AgentCard]
-    let agent: LibraryAgent
-    let didNavigate: () -> Void
-    @State private var expanded = false
-
-    private var tool: (name: String, icon: String) {
-        switch activity.toolName {
-        case "search_library": ("检索书库", "books.vertical")
-        case "read_paper": ("阅读原文", "text.viewfinder")
-        case "search_online": ("检索 arXiv", "globe")
-        case "prepare_import": ("准备导入", "arrow.down.doc")
-        case "open_paper": ("定位论文", "location")
-        default: ("工具调用", "wrench")
-        }
-    }
-
-    var body: some View {
-        if activity.status == .succeeded, let first = cards.first {
-            if cards.count == 1 {
-                result(first, grouped: false)
-            } else {
-                VStack(spacing: 0) {
-                    Button {
-                        expanded.toggle()
-                    } label: {
-                        AssistantToolTile(
-                            tool: tool.name, systemImage: tool.icon, title: activity.subject ?? first.title,
-                            metadata: "\(cards.count) 项结果", accessory: expanded ? "chevron.up" : "chevron.down")
-                    }
-                    .buttonStyle(AssistantToolButtonStyle(embedded: true))
-                    .accessibilityValue(expanded ? "已展开" : "已收起")
-                    if expanded {
-                        ForEach(cards) { card in
-                            Divider().padding(.horizontal, 12)
-                            result(card, grouped: true)
-                        }
-                    }
-                }
-                .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous)).assistantToolSurface()
-            }
-        } else {
-            status
-        }
-    }
-
-    private func result(_ card: AgentCard, grouped: Bool) -> some View {
-        AgentResultCard(
-            tool: tool.name, icon: tool.icon, card: card, grouped: grouped,
-            excerptFirst: grouped && activity.toolName == "read_paper", agent: agent, didNavigate: didNavigate)
-    }
-
-    private var status: some View {
-        let state: String =
-            switch activity.status {
-            case .running: "进行中"
-            case .succeeded: activity.isTruncated ? "达到结果上限" : "无结果"
-            case .failed: "调用失败"
-            case .cancelled: "已停止"
-            }
-        let title = activity.subject ?? activity.message ?? state
-        let detail = activity.message.flatMap { $0 == title || $0 == state ? nil : $0 }
-        return VStack(alignment: .leading, spacing: 0) {
-            AssistantToolTile(
-                tool: tool.name, systemImage: tool.icon, title: title,
-                detail: detail, metadata: title == state ? nil : state)
-            if activity.status == .running {
-                ProgressView().progressViewStyle(.linear).controlSize(.mini)
-                    .padding(.horizontal, 12).padding(.bottom, 8)
-                    .accessibilityHidden(true)
-            }
-        }.assistantToolSurface()
-    }
-}
-
-private struct AgentResultCard: View {
-    let tool: String
-    let icon: String
+/// A selected result always keeps the identity and actions of its registered source.
+struct AgentResultCard: View {
+    let result: AgentPresentedResult
     let card: AgentCard
-    let grouped: Bool
-    let excerptFirst: Bool
     let agent: LibraryAgent
     let didNavigate: () -> Void
+    let followUp: () -> Void
     @Environment(\.openURL) private var openURL
     @State private var showsExcerpt = false
 
-    private var metadata: String? {
-        if card.kind == .onlineCandidate { return card.year }
-        if let page = card.sourcePage { return "第 \(page) 页" }
-        return nil
+    private var purpose: (title: String, icon: String) {
+        switch result.purpose {
+        case .recommendation: ("推荐论文", "bookmark")
+        case .citation: ("引用原文", "quote.opening")
+        case .match: ("检索结果", card.kind == .onlineCandidate ? "globe" : "books.vertical")
+        case .navigation: ("定位论文", "location")
+        case .importAction: ("导入论文", "arrow.down.doc")
+        }
     }
 
-    private var detail: String {
-        card.kind == .onlineCandidate ? card.authors ?? "" : card.excerpt
+    private var metadata: String? {
+        if card.kind == .onlineCandidate {
+            return ["arXiv", card.year].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
+        }
+        return card.sourcePage.map { "第 \($0) 页" }
     }
 
     var body: some View {
-        if grouped {
-            content
-        } else {
-            content
-                .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
-                .assistantToolSurface()
-        }
-    }
-
-    private var content: some View {
         VStack(alignment: .leading, spacing: 0) {
-            if grouped && card.kind == .onlineCandidate {
-                HStack(spacing: 0) {
-                    primaryAction
-                    importAction.labelStyle(.iconOnly).padding(.trailing, 8)
-                }
-            } else {
-                primaryAction
-            }
+            primaryAction
             if let error = card.importError {
                 Text(error).font(.caption).foregroundStyle(ReaderTheme.muted)
-                    .padding(.horizontal, 12).padding(.bottom, 8).fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, 12).padding(.bottom, 7).fixedSize(horizontal: false, vertical: true)
             }
-            if !grouped && card.kind == .onlineCandidate {
-                HStack {
-                    Spacer()
-                    importAction
-                }.font(.caption).padding(.horizontal, 12).padding(.bottom, 9)
+            HStack(spacing: 12) {
+                Button(action: followUp) {
+                    Label("追问", systemImage: "bubble.left")
+                }
+                .buttonStyle(.borderless).foregroundStyle(ReaderTheme.muted)
+                .help("基于这项结果追问").accessibilityLabel("基于《\(card.title)》追问")
+                .disabled(agent.isRunning)
+                Spacer(minLength: 4)
+                if card.kind == .onlineCandidate { importAction }
             }
+            .font(.caption).padding(.horizontal, 12).padding(.bottom, 9)
         }
+        .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous)).assistantToolSurface()
     }
 
     @ViewBuilder private var primaryAction: some View {
@@ -162,35 +80,20 @@ private struct AgentResultCard: View {
         }
     }
 
-    @ViewBuilder private func label(accessory: String?) -> some View {
-        if grouped {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(excerptFirst ? card.excerpt : card.title)
-                        .font(.callout.weight(excerptFirst ? .regular : .medium)).lineLimit(2)
-                    if !excerptFirst {
-                        let summary = [metadata, showsExcerpt ? nil : detail].compactMap { $0 }.filter { !$0.isEmpty }
-                            .joined(
-                                separator: " · ")
-                        if !summary.isEmpty {
-                            Text(summary).font(.caption).foregroundStyle(ReaderTheme.muted).lineLimit(2)
-                        }
-                    }
-                }.fixedSize(horizontal: false, vertical: true)
-                Spacer(minLength: 0)
-                if let accessory {
-                    Image(systemName: accessory).font(.caption2).foregroundStyle(ReaderTheme.muted)
-                        .accessibilityHidden(true)
-                }
-            }
-            .multilineTextAlignment(.leading).padding(.horizontal, 12).padding(.vertical, 10)
-            .frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
-            .accessibilityElement(children: .combine)
-        } else {
+    private func label(accessory: String?) -> some View {
+        let detail = card.kind == .onlineCandidate ? card.authors : (showsExcerpt ? nil : card.excerpt)
+        return VStack(alignment: .leading, spacing: 0) {
             AssistantToolTile(
-                tool: tool, systemImage: icon, title: card.title, detail: showsExcerpt ? nil : detail,
+                tool: purpose.title, systemImage: purpose.icon, title: card.title, detail: detail,
                 metadata: metadata, accessory: accessory)
+            if let reason = result.reason, !reason.isEmpty {
+                Text(reason).font(.caption).lineSpacing(2).foregroundStyle(ReaderTheme.ink)
+                    .fixedSize(horizontal: false, vertical: true).multilineTextAlignment(.leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 12).padding(.bottom, 9)
+            }
         }
+        .contentShape(Rectangle()).accessibilityElement(children: .combine)
     }
 
     private func open() {
@@ -201,9 +104,7 @@ private struct AgentResultCard: View {
         switch card.importState {
         case .downloading, .importing:
             ProgressView().controlSize(.mini)
-            if !grouped {
-                Text(card.importState == .downloading ? "下载中" : "整理中").foregroundStyle(ReaderTheme.muted)
-            }
+            Text(card.importState == .downloading ? "下载中" : "整理中").foregroundStyle(ReaderTheme.muted)
             Button {
                 agent.cancelImport(cardID: card.id)
             } label: {

@@ -13,11 +13,12 @@ struct PaperAssistantView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        let chats = displayedChats
+        return VStack(alignment: .leading, spacing: 0) {
             ScrollViewReader { scroll in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 24) {
-                        if displayedChats.isEmpty {
+                        if chats.isEmpty {
                             VStack(spacing: 0) {
                                 prompt("核心贡献", icon: "lightbulb", question: "这篇论文主要解决什么问题，有哪些核心贡献？")
                                 prompt(
@@ -26,7 +27,7 @@ struct PaperAssistantView: View {
                                 prompt("局限与不足", icon: "scope", question: "这项方法有哪些局限？")
                             }
                         }
-                        ForEach(displayedChats) { turn in
+                        ForEach(chats) { turn in
                             VStack(alignment: .leading, spacing: 14) {
                                 Text(turn.question).font(.callout.weight(.medium)).padding(12).frame(
                                     maxWidth: .infinity, alignment: .leading

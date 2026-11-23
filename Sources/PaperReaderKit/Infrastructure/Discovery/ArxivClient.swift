@@ -17,12 +17,17 @@ public struct PaperCandidate: Identifiable, Sendable {
 
 public protocol PaperDiscovery: Sendable {
     func search(_ query: String) async throws -> [PaperCandidate]
+    func search(_ query: String, limit: Int) async throws -> [PaperCandidate]
     func download(_ candidate: PaperCandidate) async throws -> URL
     func structuredContent(_ candidate: PaperCandidate) async throws -> [TextBlock]?
     func downloadPublication(_ candidate: PaperCandidate) async throws -> DownloadedPublication
 }
 
 extension PaperDiscovery {
+    public func search(_ query: String, limit: Int) async throws -> [PaperCandidate] {
+        guard limit > 0 else { return [] }
+        return Array(try await search(query).prefix(limit))
+    }
     public func structuredContent(_ candidate: PaperCandidate) async throws -> [TextBlock]? { nil }
     public func downloadPublication(_ candidate: PaperCandidate) async throws -> DownloadedPublication {
         DownloadedPublication(pdfURL: try await download(candidate), candidate: candidate)
@@ -113,6 +118,12 @@ public actor ArxivClient: PaperDiscovery {
         return try await HTMLPaperParser(transport: transport).parse(data, at: url)
     }
     public func search(_ query: String) async throws -> [PaperCandidate] {
+        try await search(query, limit: 8)
+    }
+
+    public func search(_ query: String, limit: Int) async throws -> [PaperCandidate] {
+        let limit = min(limit, 40)
+        guard limit > 0 else { return [] }
         let clean = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !clean.isEmpty else { return [] }
         let words = clean.split { !$0.isLetter && !$0.isNumber }.prefix(16)
@@ -121,7 +132,7 @@ public actor ArxivClient: PaperDiscovery {
         var components = URLComponents(string: "https://export.arxiv.org/api/query")!
         components.queryItems = [
             .init(name: "search_query", value: titleQuery),
-            .init(name: "max_results", value: "8"),
+            .init(name: "max_results", value: String(limit)),
         ]
         let (data, response) = try await transport.data(for: URLRequest(url: components.url!))
         try Task.checkCancellation()
@@ -133,7 +144,7 @@ public actor ArxivClient: PaperDiscovery {
         parser.delegate = delegate
         parser.shouldResolveExternalEntities = false
         guard parser.parse() else { throw ReaderError.message("无法解析 arXiv 搜索结果。") }
-        return Array(delegate.results.prefix(8))
+        return Array(delegate.results.prefix(limit))
     }
     public func download(_ candidate: PaperCandidate) async throws -> URL {
         guard let candidate = Self.verified(candidate) else { throw ReaderError.message("论文下载来源无效。") }

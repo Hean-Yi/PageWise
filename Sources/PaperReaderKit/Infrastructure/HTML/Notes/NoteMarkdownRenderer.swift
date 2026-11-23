@@ -8,6 +8,10 @@ public actor NoteMarkdownRenderer {
     private var mathCompiler: LatexMathCompiler?
     public init() {}
     public func render(_ markdown: String) throws -> String {
+        try markdownDocument(markdown).body()?.html() ?? ""
+    }
+
+    func markdownDocument(_ markdown: String) throws -> Document {
         if engine == nil {
             guard let context = JSContext(),
                 let url = Bundle.module.url(forResource: "marked.umd", withExtension: "js", subdirectory: "Marked")
@@ -79,22 +83,32 @@ public actor NoteMarkdownRenderer {
                 try element.html(rendered)
                 try element.attr("class", "note-math")
             } catch {
-                try element.text(
-                    (math[index]["display"] as? Bool == true ? "$$" : "$") + source
-                        + (math[index]["display"] as? Bool == true ? "$$" : "$"))
+                try element.text(math[index]["raw"] as? String ?? source)
                 try element.attr("class", "note-math-error")
                 try element.attr("title", "公式暂无法编译，源码已保留")
             }
             try element.removeAttr("data-note-math")
         }
-        return try document.body()?.html() ?? ""
+        return document
     }
 
     private static let extensions = #"""
         var noteMath=[];
+        function recordMath(t) {
+          const i=noteMath.push({text:t.text,raw:t.raw.trimEnd(),display:!!t.display})-1;
+          return '<span data-note-math="'+i+'"></span>';
+        }
         marked.use({extensions:[
-          {name:'noteBlockMath',level:'block',start(src){return src.indexOf('$$');},tokenizer(src){const m=/^\$\$\s*\n?([\s\S]+?)\$\$(?:\n|$)/.exec(src);if(m)return {type:'noteBlockMath',raw:m[0],text:m[1],display:true};},renderer(t){const i=noteMath.push({text:t.text,display:true})-1;return '<p><span data-note-math="'+i+'"></span></p>'; }},
-          {name:'noteInlineMath',level:'inline',start(src){return src.indexOf('$');},tokenizer(src){const m=/^\$(?!\$)((?:\\.|[^$\n])+?)\$(?!\$)/.exec(src);if(m)return {type:'noteInlineMath',raw:m[0],text:m[1]};},renderer(t){const i=noteMath.push({text:t.text,display:false})-1;return '<span data-note-math="'+i+'"></span>';}}
+          {name:'noteBlockMath',level:'block',start(src){return src.search(/(?:\$\$|\\\[)/);},
+           tokenizer(src){const m=/^\$\$\s*([\s\S]+?)\$\$[ \t]*(?:\n|$)/.exec(src)||/^\\\[\s*([\s\S]+?)\\\][ \t]*(?:\n|$)/.exec(src);
+             if(m)return {type:'noteBlockMath',raw:m[0],text:m[1],display:true};},
+           renderer(t){return '<p>'+recordMath(t)+'</p>';}},
+          {name:'noteInlineMath',level:'inline',start(src){return src.search(/(?:\$|\\[\[(])/);},
+           tokenizer(src){
+             const display=/^\$\$([\s\S]+?)\$\$/.exec(src)||/^\\\[([\s\S]+?)\\\]/.exec(src);
+             const m=display||/^\\\(([\s\S]+?)\\\)/.exec(src)||/^\$(?![\s$])((?:\\.|[^$\n])+?)(?<!\s)\$(?![\d$])/.exec(src);
+             if(m)return {type:'noteInlineMath',raw:m[0],text:m[1],display:!!display};},
+           renderer:recordMath}
         ]});
         """#
 }

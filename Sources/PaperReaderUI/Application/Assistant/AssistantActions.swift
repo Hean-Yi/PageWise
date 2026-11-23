@@ -72,6 +72,8 @@ extension ReaderModel {
             var turn = ChatTurn(
                 paperID: paper.id, question: question, selection: selection, answer: "", evidence: evidence)
             assistantDraft = turn
+            let turnID = turn.id
+            let drafts = AssistantDraftCadence()
             let answer = try await client.completeStream(
                 settings: config, key: key,
                 system:
@@ -80,7 +82,8 @@ extension ReaderModel {
                     "当前论文：\(paper.title)\n读者背景（非学术证据）：\(memory)\n选中文字：\(selection)\n问题：\(question)\n\n检索证据（\(scope)）：\n\(context)"
             ) { [weak self] text in
                 try Task.checkCancellation()
-                await self?.receiveAssistantDraft(text, paperID: paper.id)
+                guard drafts.shouldPublish(text) else { return }
+                await self?.receiveAssistantDraft(text, turnID: turnID)
             }
             let valid = Set(evidence.map(\.id))
             let expression = try NSRegularExpression(pattern: #"\[(S\d+)\]"#)
@@ -118,8 +121,8 @@ extension ReaderModel {
         } catch { message = error.localizedDescription }
     }
 
-    private func receiveAssistantDraft(_ text: String, paperID: UUID) {
-        guard assistantDraft?.paperID == paperID else { return }
+    private func receiveAssistantDraft(_ text: String, turnID: UUID) {
+        guard assistantDraft?.id == turnID, assistantDraft?.answer != text else { return }
         assistantDraft?.answer = text
     }
 

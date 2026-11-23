@@ -6,6 +6,27 @@ struct AgentToolOutcome {
     var cards: [AgentCard]
     var truncated: Bool
     var message: String?
+    var clarification: AgentClarification?
+    var presentation: [AgentPresentedResult]?
+}
+
+enum AgentSourceTarget: Hashable {
+    case candidate(String)
+    case block(UUID, UUID)
+    case paper(UUID, Int?)
+    case card(UUID)
+
+    init(_ card: AgentCard) {
+        if let candidate = card.candidateID {
+            self = .candidate(candidate)
+        } else if let paper = card.paperID, let block = card.blockID {
+            self = .block(paper, block)
+        } else if let paper = card.paperID {
+            self = .paper(paper, card.sourcePage)
+        } else {
+            self = .card(card.id)
+        }
+    }
 }
 
 extension LibraryAgent {
@@ -14,6 +35,30 @@ extension LibraryAgent {
             name: call.function.name, json: call.function.arguments, limits: limits)
         try check(epoch)
         switch arguments {
+        case .presentResults(let purpose, let items):
+            var seen = Set<AgentSourceTarget>()
+            var selected: [AgentPresentedResult] = []
+            var cards: [AgentCard] = []
+            for item in items {
+                guard let card = card(item.id) else {
+                    throw ReaderError.message("展示项中有未登记的结果，请使用工具返回的 result_id 重新选择。")
+                }
+                if seen.insert(AgentSourceTarget(card)).inserted {
+                    selected.append(.init(id: card.id, purpose: purpose, reason: item.reason))
+                    cards.append(card)
+                }
+            }
+            var outcome = try result([], message: "已选出 \(selected.count) 项。")
+            outcome.cards = cards
+            outcome.presentation = selected
+            return outcome
+        case .askUser(let clarification):
+            onSubject(clarification.question)
+            let content = #"{"ok":true,"awaiting_user":true}"#
+            guard content.utf8.count <= limits.maxToolResultBytes else { throw ReaderError.message("工具结果超出长度上限。") }
+            return AgentToolOutcome(
+                content: content, cards: [], truncated: false,
+                clarification: clarification)
         case .searchLibrary(let query):
             onSubject(query)
             let limit = min(max(0, limits.maxResults), 20)
@@ -49,14 +94,15 @@ extension LibraryAgent {
             return try result(
                 pairs, truncated: blocks.count > pairs.count || blocks.contains { $0.text.count > 2_000 },
                 message: blocks.isEmpty ? "这一页暂无已索引的正文。" : nil)
-        case .searchOnline(let query):
+        case .searchOnline(let query, let requestedCount):
             onSubject(query)
-            guard limits.maxResults > 0 else { return try result([], truncated: true) }
-            let found = try await discovery.search(query)
+            let limit = min(requestedCount ?? limits.maxResults, 20)
+            guard limit > 0 else { return try result([], truncated: true) }
+            let found = try await discovery.search(query, limit: limit + 1)
             try check(epoch)
             var seen: Set<String> = []
             let verified = found.prefix(40).compactMap(ArxivClient.verified).filter { seen.insert($0.id).inserted }
-            let pairs = verified.prefix(min(limits.maxResults, 20)).map { candidate -> (ToolRecord, AgentCard) in
+            let pairs = verified.prefix(limit).map { candidate -> (ToolRecord, AgentCard) in
                 let id = candidateIDs[candidate.id] ?? UUID().uuidString
                 var card = candidateCard(candidate, id: id)
                 if let paperID = importedPapers[id], reader.state.papers.contains(where: { $0.id == paperID }) {
@@ -172,6 +218,7 @@ private struct ToolPayload: Encodable {
 }
 
 private struct ToolRecord: Encodable {
+    var resultID: UUID
     var paperID: String?
     var candidateID: String?
     var title: String
@@ -184,6 +231,7 @@ private struct ToolRecord: Encodable {
     var sourceURL: String?
     var importStatus: String?
     init(card: AgentCard, pageCount: Int? = nil, authors: String? = nil, year: String? = nil) {
+        resultID = card.id
         self.authors = authors
         self.year = year
         paperID = card.paperID?.uuidString
@@ -198,6 +246,7 @@ private struct ToolRecord: Encodable {
     }
     enum CodingKeys: String, CodingKey {
         case title, text, authors, year
+        case resultID = "result_id"
         case paperID = "paper_id"
         case candidateID = "candidate_id"
         case sourcePage = "source_page"

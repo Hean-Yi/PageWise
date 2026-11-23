@@ -37,7 +37,18 @@ private actor AgentWireTransport: HTTPTransport {
     let requests = await transport.requests
     let body = try #require(try JSONSerialization.jsonObject(with: requests[1].httpBody!) as? [String: Any])
     #expect(body["tool_choice"] as? String == "auto")
-    #expect((body["tools"] as? [[String: Any]])?.count == 5)
+    let definitions = try #require(body["tools"] as? [[String: Any]]).compactMap { $0["function"] as? [String: Any] }
+    #expect(
+        Set(definitions.compactMap { $0["name"] as? String }) == [
+            "search_library", "read_paper", "search_online", "prepare_import", "open_paper", "present_results",
+            "ask_user",
+        ])
+    let presentation = try #require(definitions.first { $0["name"] as? String == "present_results" })
+    let parameters = try #require(presentation["parameters"] as? [String: Any])
+    let properties = try #require(parameters["properties"] as? [String: [String: Any]])
+    let selection = try #require(properties["items"]?["items"] as? [String: Any])
+    #expect(selection["required"] as? [String] == ["result_id"])
+    #expect(selection["additionalProperties"] as? Bool == false)
     let wireMessages = try #require(body["messages"] as? [[String: Any]])
     #expect(wireMessages[2]["role"] as? String == "assistant")
     #expect(wireMessages[2]["reasoning_content"] as? String == "fixture reasoning")
@@ -113,6 +124,28 @@ func agentRejectsIncompleteOrInconsistentResponse(_ body: String) async throws {
 ])
 func agentArgumentsRejectUnknownExtraAndInvalidTypes(_ tool: String, _ json: String) {
     #expect(throws: (any Error).self) { try AgentToolArguments.parse(name: tool, json: json, limits: .init()) }
+}
+
+@Test func resultSelectionRejectsMalformedIDsUnknownFieldsAndOversizedLists() throws {
+    let id = UUID().uuidString
+    let row = ["result_id": id]
+    let invalid: [[String: Any]] = [
+        ["purpose": "navigation", "items": [row]],
+        ["purpose": "citation", "items": []],
+        ["purpose": "match", "items": [row, row]],
+        ["purpose": "recommendation", "items": [["result_id": "not-a-registered-id"]]],
+        ["purpose": "match", "items": [["result_id": id, "url": "https://example.invalid"]]],
+        ["purpose": "citation", "items": [["result_id": id, "reason": String(repeating: "a", count: 201)]]],
+    ]
+    var limits = AgentLimits()
+    limits.maxResults = 1
+    for payload in invalid {
+        let data = try JSONSerialization.data(withJSONObject: payload)
+        let arguments = String(decoding: data, as: UTF8.self)
+        #expect(throws: ReaderError.self) {
+            try AgentToolArguments.parse(name: "present_results", json: arguments, limits: limits)
+        }
+    }
 }
 
 private func agentSettings() -> ModelSettings {

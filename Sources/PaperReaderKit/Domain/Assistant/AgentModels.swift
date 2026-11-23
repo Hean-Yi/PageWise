@@ -44,11 +44,53 @@ public struct AgentActivity: Identifiable, Sendable {
     public init(toolName: String) { self.toolName = toolName }
 }
 
+public struct AgentPresentedResult: Identifiable, Sendable {
+    public enum Purpose: String, Sendable { case recommendation, citation, match, navigation, importAction }
+    /// The identifier of the registered card, which owns the source and any subsequent import state.
+    public let id: UUID
+    public let purpose: Purpose
+    public let reason: String?
+    public init(id: UUID, purpose: Purpose, reason: String? = nil) {
+        self.id = id
+        self.purpose = purpose
+        self.reason = reason
+    }
+}
+
+public struct AgentProcessNote: Identifiable, Sendable {
+    public enum Kind: Sendable { case progress, thinking }
+    public let id = UUID()
+    public let beforeActivityCount: Int
+    public let kind: Kind
+    public let text: String
+    public init(beforeActivityCount: Int, kind: Kind, text: String) {
+        self.beforeActivityCount = beforeActivityCount
+        self.kind = kind
+        self.text = text
+    }
+}
+
+public struct AgentClarification: Sendable, Equatable {
+    public let question: String
+    public let options: [String]
+    public var reply: String?
+
+    public init(question: String, options: [String]) {
+        self.question = question
+        self.options = options
+    }
+}
+
 public struct AgentTurn: Identifiable, Sendable {
     public var id = UUID()
     public var question: String
+    public var referencedCardID: UUID?
+    public var referencedCardTitle: String?
+    public var clarification: AgentClarification?
     public var answer = ""
     public var activities: [AgentActivity] = []
+    public var processNotes: [AgentProcessNote] = []
+    public var presentedResults: [AgentPresentedResult] = []
     public var cards: [AgentCard] = []
     public var error: String?
     public var isCancelled = false
@@ -56,8 +98,7 @@ public struct AgentTurn: Identifiable, Sendable {
 
     /// Cards remain owned by the turn so later imports update every appearance of a candidate.
     public func cards(for activity: AgentActivity) -> [AgentCard] {
-        let ids = Set(activity.cardIDs)
-        return cards.filter { ids.contains($0.id) }
+        activity.cardIDs.compactMap { id in cards.first { $0.id == id } }
     }
 }
 
@@ -68,7 +109,7 @@ public struct AgentLimits: Sendable {
     public var maxResponseBytes = 1_000_000
     public var maxContextBytes = 80_000
     public var maxToolResultBytes = 12_000
-    public var maxResults = 8
+    public var maxResults = 12
     public var maxQuestionBytes = 8_000
     public var maxHistoryTurns = 6
     public init() {}

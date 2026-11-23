@@ -6,41 +6,6 @@ struct AssistantCitationAnchor: Hashable {
     let source: String
 }
 
-/// Creates links only for reference markers matched against this answer's saved evidence.
-/// The rest of the answer is plain text, including any URL returned by the model.
-struct CitedAssistantAnswer {
-    let text: AttributedString
-    let cited: [Evidence]
-    let related: [Evidence]
-    let links: [URL: Evidence]
-
-    init(_ turn: ChatTurn) {
-        let sources = Dictionary(turn.evidence.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        var result = AttributedString()
-        var cited: [Evidence] = []
-        var links: [URL: Evidence] = [:]
-        var cursor = turn.answer.startIndex
-        for match in turn.answer.matches(of: /\[(S[0-9]+)\]/) {
-            let id = String(match.1)
-            guard let source = sources[id],
-                let url = URL(string: "paperreader-citation://source/\(turn.id.uuidString)/\(id)")
-            else { continue }
-            result.append(AttributedString(turn.answer[cursor..<match.range.lowerBound]))
-            var reference = AttributedString(String(match.0))
-            reference.link = url
-            result.append(reference)
-            cursor = match.range.upperBound
-            if links.updateValue(source, forKey: url) == nil { cited.append(source) }
-        }
-        result.append(AttributedString(turn.answer[cursor...]))
-        let ids = Set(cited.map(\.id))
-        self.text = result
-        self.links = links
-        self.cited = cited
-        related = turn.evidence.filter { !ids.contains($0.id) }
-    }
-}
-
 struct PaperAssistantCitations: View {
     let turn: ChatTurn
     let model: ReaderModel
@@ -50,36 +15,36 @@ struct PaperAssistantCitations: View {
     @State private var showsRelated = false
     @State private var previews: [String: String] = [:]
 
+    @State private var citedIDs: [String] = []
+
     var body: some View {
-        let answer = CitedAssistantAnswer(turn)
+        let sources = Dictionary(turn.evidence.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let cited = citedIDs.compactMap { sources[$0] }
         VStack(alignment: .leading, spacing: 9) {
-            if !turn.answer.isEmpty {
-                Text(answer.text).font(.callout).textSelection(.enabled).lineSpacing(5)
-                    .tint(ReaderTheme.accent)
-                    .environment(
-                        \.openURL,
-                        OpenURLAction { url in
-                            guard let source = answer.links[url] else { return .discarded }
-                            if model.jump(to: source) {
-                                didNavigate()
-                            } else {
-                                expandedExcerpts.insert(source.id)
-                                revealCard(source.id)
-                            }
-                            return .handled
-                        }
-                    )
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.bottom, answer.cited.isEmpty ? 0 : 3)
-            }
-            ForEach(answer.cited) { source in card(source, cited: true) }
-            if !answer.related.isEmpty {
-                DisclosureGroup("检索资料 · \(answer.related.count)", isExpanded: $showsRelated) {
-                    VStack(spacing: 8) {
-                        ForEach(answer.related) { source in card(source, cited: false) }
+            if !turn.evidence.isEmpty {
+                DisclosureGroup("检索资料 · \(turn.evidence.count)", isExpanded: $showsRelated) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(turn.evidence) { source in processRow(source) }
                     }.padding(.top, 6)
                 }.font(.caption).foregroundStyle(ReaderTheme.muted).tint(ReaderTheme.muted)
             }
+            if !turn.answer.isEmpty {
+                AssistantMarkdownText(
+                    markdown: turn.answer, citationIDs: Set(sources.keys),
+                    onCitations: { if citedIDs != $0 { citedIDs = $0 } },
+                    onCitation: { id in
+                        guard let source = sources[id] else { return }
+                        if model.jump(to: source) {
+                            didNavigate()
+                        } else {
+                            expandedExcerpts.insert(id)
+                            revealCard(id)
+                        }
+                    }
+                )
+                .padding(.bottom, cited.isEmpty ? 0 : 3)
+            }
+            ForEach(cited) { source in card(source) }
         }
         .task(id: turn.id) {
             // A streaming answer changes many times; its evidence and original question are fixed.
@@ -89,7 +54,34 @@ struct PaperAssistantCitations: View {
         }
     }
 
-    private func card(_ source: Evidence, cited: Bool) -> some View {
+    private func processRow(_ source: Evidence) -> some View {
+        let canNavigate = model.evidencePageKey(for: source) != nil
+        let key = "process-" + source.id
+        let expanded = expandedExcerpts.contains(key)
+        return VStack(alignment: .leading, spacing: 4) {
+            Button {
+                if canNavigate, model.jump(to: source) {
+                    didNavigate()
+                } else if expanded {
+                    expandedExcerpts.remove(key)
+                } else {
+                    expandedExcerpts.insert(key)
+                }
+            } label: {
+                HStack(alignment: .firstTextBaseline, spacing: 5) {
+                    Text(source.id).monospacedDigit()
+                    Text(source.title).foregroundStyle(ReaderTheme.ink).lineLimit(2)
+                    Spacer(minLength: 0)
+                    Image(systemName: canNavigate ? "arrow.up.forward" : (expanded ? "chevron.up" : "chevron.down"))
+                        .imageScale(.small).accessibilityHidden(true)
+                }.contentShape(Rectangle())
+            }
+            .buttonStyle(.plain).disabled(!canNavigate && source.text.isEmpty)
+            if expanded { Text(source.text).textSelection(.enabled) }
+        }
+    }
+
+    private func card(_ source: Evidence) -> some View {
         let key = model.evidencePageKey(for: source)
         let isNote = source.notePath != nil && source.paperID == nil
         let excerpt = source.text
@@ -100,7 +92,7 @@ struct PaperAssistantCitations: View {
             ? source.sourcePage.map { "第 \($0 + 1) 页" } : nil
         let metadata = [source.id, marker].compactMap { $0 }.joined(separator: " · ")
         let subject = isNote ? "笔记" : (key == nil ? "摘录" : "原文")
-        let tool = (cited ? "引用" : "检索") + subject
+        let tool = "引用" + subject
         let tile = AssistantToolTile(
             tool: tool, systemImage: isNote ? "note.text" : "quote.opening", title: source.title,
             detail: expanded || excerpt.isEmpty ? nil : previews[source.id],

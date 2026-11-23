@@ -27,18 +27,22 @@ private actor AgentDiscoveryFixture: PaperDiscovery {
     let source: URL?
     let holdDownload: Bool
     let failDownload: Bool
-    init(source: URL? = nil, holdDownload: Bool = false, failDownload: Bool = false) {
+    let candidateCount: Int
+    init(source: URL? = nil, holdDownload: Bool = false, failDownload: Bool = false, candidateCount: Int = 1) {
         self.source = source
         self.holdDownload = holdDownload
         self.failDownload = failDownload
+        self.candidateCount = candidateCount
     }
     func search(_ query: String) async throws -> [PaperCandidate] {
         searchCount += 1
-        return [
-            PaperCandidate(
-                id: "https://arxiv.org/abs/2401.00001v1", title: "Fixture Attention", authors: "Original Fixture",
-                year: "2024", pdfURL: URL(string: "https://arxiv.org/pdf/2401.00001v1")!)
-        ]
+        return (0..<candidateCount).map { index in
+            let arxivID = String(format: "2401.%05dv1", index + 1)
+            return PaperCandidate(
+                id: "https://arxiv.org/abs/\(arxivID)",
+                title: index == 0 ? "Fixture Attention" : "Fixture \(index + 1)",
+                authors: "Original Fixture", year: "2024", pdfURL: URL(string: "https://arxiv.org/pdf/\(arxivID)")!)
+        }
     }
     func download(_ candidate: PaperCandidate) async throws -> URL {
         downloadCount += 1
@@ -101,6 +105,56 @@ private func onlineScript(_ messages: [AgentMessage], _ count: Int) throws -> Ag
     return .init(role: "assistant", content: "已准备候选，请点击导入。")
 }
 
+@Test func sidebarDraftCadencePublishesTheFirstSnapshotAndKeepsUpdatingDuringAnUnbrokenStream() {
+    let cadence = AssistantDraftCadence()
+    let start = ContinuousClock.now
+    #expect(!cadence.shouldPublish("", at: start))
+    var text = ""
+    var published: [Int] = []
+    for tick in 0...250 {
+        text += "字"
+        if cadence.shouldPublish(text, at: start.advanced(by: .milliseconds(tick))) {
+            published.append(tick)
+        }
+    }
+    #expect(published == [0, 100, 200])
+    // A repeated snapshot after an idle gap must not consume the next publication.
+    let resumed = start.advanced(by: .seconds(2))
+    #expect(!cadence.shouldPublish(String(repeating: "字", count: 201), at: resumed))
+    #expect(cadence.shouldPublish(text, at: resumed))
+}
+
+private struct StreamEndingFixture: AgentCompleting {
+    let fails: Bool
+    func respond(settings: ModelSettings, key: String, messages: [AgentMessage], limits: AgentLimits) async throws
+        -> AgentMessage
+    {
+        .init(role: "assistant", content: "最后一块也在这里。")
+    }
+    func respondStreaming(
+        settings: ModelSettings, key: String, messages: [AgentMessage], limits: AgentLimits,
+        onPartial: @escaping @Sendable (String) async throws -> Void
+    ) async throws -> AgentMessage {
+        try await onPartial("首块")
+        try await onPartial("首块")
+        if fails { throw URLError(.networkConnectionLost) }
+        return try await respond(settings: settings, key: key, messages: messages, limits: limits)
+    }
+}
+
+@Test(arguments: [false, true]) @MainActor
+func sidebarStreamingCommitsTheCompleteAnswerOrKeepsTheDisplayedDraftOnError(fails: Bool) async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let reader = try await makeAgentReader(root)
+    let agent = LibraryAgent(reader: reader, client: StreamEndingFixture(fails: fails))
+    agent.send("检查增量回答")
+    try await eventually { !agent.isRunning }
+    let turn = try #require(agent.turns.first)
+    #expect(turn.answer == (fails ? "首块" : "最后一块也在这里。"))
+    #expect((turn.error != nil) == fails)
+}
+
 @MainActor private func makeAgentReader(_ root: URL) async throws -> ReaderModel {
     let reader = try ReaderModel(root: root, credentials: WorkflowCredentials())
     await reader.load()
@@ -116,6 +170,97 @@ private func onlineScript(_ messages: [AgentMessage], _ count: Int) throws -> Ag
         try await Task.sleep(for: .milliseconds(10))
     }
     Issue.record("Expected asynchronous operation to finish")
+}
+
+private func candidateResultIDs(in messages: [AgentMessage], callID: String) throws -> [String] {
+    let body = try #require(messages.first { $0.toolCallID == callID }?.content)
+    let payload = try #require(try JSONSerialization.jsonObject(with: Data(body.utf8)) as? [String: Any])
+    let rows = try #require(payload["results"] as? [[String: Any]])
+    return try rows.map { try #require($0["result_id"] as? String) }
+}
+
+private func present(_ ids: [String], id: String) throws -> AgentMessage {
+    let items = ids.enumerated().map { ["result_id": $0.element, "reason": "选择理由 \($0.offset + 1)"] }
+    let body = try JSONSerialization.data(withJSONObject: ["purpose": "recommendation", "items": items])
+    return tool("present_results", String(decoding: body, as: UTF8.self), id: id)
+}
+
+@Test @MainActor func presentationSelectsEightOfTenByIDAndPreservesOrderAcrossTurnsAndRetries() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let reader = try await makeAgentReader(root)
+    let order = [8, 2, 5, 0, 6, 4, 3, 9]
+    let client = ScriptedLibraryModel { messages, count in
+        if count == 1 { return tool("search_online", #"{"query":"fixture","limit":10}"#, id: "online") }
+        let ids = try candidateResultIDs(in: messages, callID: "online")
+        #expect(ids.count == 10)
+        switch count {
+        case 2: return try present(order.map { ids[$0] } + [ids[8]], id: "ranked")
+        case 3: return try present([ids[1], UUID().uuidString], id: "forged")
+        case 4: return .init(role: "assistant", content: "推荐以下论文。")
+        case 5: return try present([ids[6], ids[2]], id: "second")
+        case 6: return try present([ids[0]], id: "replace")
+        default: return .init(role: "assistant", content: "另选一篇。")
+        }
+    }
+    let discovery = AgentDiscoveryFixture(candidateCount: 13)
+    let agent = LibraryAgent(reader: reader, client: client, discovery: discovery)
+    agent.send("推荐八篇")
+    try await eventually { !agent.isRunning }
+    let first = try #require(agent.turns.first)
+    #expect(first.error == nil)
+    #expect(first.cards.count == 10)
+    let raw = try #require(first.activities.first?.cardIDs)
+    #expect(first.activities.map(\.status) == [.succeeded, .succeeded, .failed])
+    #expect(first.activities.map(\.resultCount) == [10, 8, nil])
+    #expect(first.activities[0].isTruncated)
+    #expect(first.presentedResults.map(\.id) == order.map { raw[$0] })
+    #expect(first.presentedResults.allSatisfy { $0.purpose == .recommendation })
+    #expect(first.presentedResults[0].reason == "选择理由 1")
+    #expect(!agent.prepareFollowUp(cardID: raw[1]))
+    agent.send("改为推荐一篇")
+    try await eventually { !agent.isRunning }
+    let next = try #require(agent.turns.last)
+    #expect(next.error == nil && next.presentedResults.map(\.id) == [raw[0]])
+    #expect(next.cards.contains { $0.id == raw[0] && $0.sourceURL == first.cards[0].sourceURL })
+    #expect(await discovery.searchCount == 1)
+    #expect(await discovery.downloadCount == 0)
+}
+
+@Test(arguments: ["https://api.deepseek.com/v1", "https://api.deepseek.com.example.invalid/v1"])
+@MainActor func processNotesKeepPublicProgressOncePerRoundAndOfficialThinkingThroughFinalAnswer(_ base: String)
+    async throws
+{
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let reader = try await makeAgentReader(root)
+    var settings = reader.modelSettings
+    settings.baseURL = base
+    try reader.saveSettings(settings, key: "fixture-only")
+    let client = ScriptedLibraryModel { _, count in
+        if count == 1 {
+            return .init(
+                role: "assistant", content: "查找两种术语。",
+                toolCalls: ["a", "b"].map {
+                    .init(id: $0, name: "search_library", arguments: "{\"query\":\"\($0)\"}")
+                }, reasoningContent: "工具轮思考")
+        }
+        return .init(role: "assistant", content: "未检索到结果。", reasoningContent: "结论轮思考")
+    }
+    let agent = LibraryAgent(reader: reader, client: client)
+    agent.send("查找")
+    try await eventually { !agent.isRunning }
+    let turn = try #require(agent.turns.first)
+    #expect(turn.answer == "未检索到结果。")
+    #expect(turn.presentedResults.isEmpty)
+    #expect(turn.processNotes.filter { $0.kind == .progress }.map(\.text) == ["查找两种术语。"])
+    let thinking = turn.processNotes.filter { $0.kind == .thinking }
+    if base == "https://api.deepseek.com/v1" {
+        #expect(thinking.map(\.text) == ["工具轮思考", "结论轮思考"])
+        #expect(thinking.map(\.beforeActivityCount) == [0, 2])
+    } else {
+        #expect(thinking.isEmpty)
+    }
 }
 
 @Test(arguments: [true, false]) @MainActor
@@ -773,4 +918,85 @@ private actor DelayedHistorySearch: PaperDiscovery {
     try await eventually { !agent.isRunning }
     #expect(agent.turns.last?.answer == "当前会话回答")
     #expect(agent.turns.last?.error == nil)
+}
+
+@Test @MainActor func clarificationWaitsForTheReaderAndCarriesFreeTextWithoutPriorHistory() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let reader = try await makeAgentReader(root)
+    let client = ScriptedLibraryModel { messages, count in
+        if count == 1 {
+            return tool("ask_user", #"{"question":"你想看哪种论文？","options":["综述","实验"]}"#)
+        }
+        let content = try #require(messages.last?.content)
+        #expect(content.contains("找记忆论文") && content.contains("你想看哪种论文？") && content.contains("只看复现"))
+        return AgentMessage(role: "assistant", content: "已收到范围。")
+    }
+    var limits = AgentLimits()
+    limits.maxHistoryTurns = 0
+    let agent = LibraryAgent(reader: reader, client: client, discovery: AgentDiscoveryFixture(), limits: limits)
+    agent.send("找记忆论文")
+    try await eventually { !agent.isRunning }
+    let first = try #require(agent.turns.first)
+    #expect(agent.pendingClarificationTurnID == first.id)
+    #expect(first.clarification?.options == ["综述", "实验"])
+    #expect(await client.requests.count == 1)
+    agent.send("只看复现")
+    try await eventually { !agent.isRunning }
+    #expect(agent.turns.first?.clarification?.reply == "只看复现")
+    #expect(agent.turns.last?.question == "只看复现")
+    #expect(agent.pendingClarificationTurnID == nil)
+    #expect(await client.requests.count == 2)
+}
+
+@Test @MainActor func resultFollowUpUsesOnlyTheChosenRegisteredResultAndPreservesItsEditableQuestion() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let reader = try await makeAgentReader(root)
+    let paper = Paper(
+        title: "Attention", digest: "fixture", originalPath: "paper.pdf",
+        pageCount: 3, blocks: [], warnings: [], canReflow: false)
+    reader.state.papers = [paper]
+    let client = ScriptedLibraryModel { messages, count in
+        switch count {
+        case 1: return tool("search_library", #"{"query":"attention"}"#)
+        case 2: return tool("open_paper", "{\"paper_id\":\"\(paper.id)\",\"source_page\":3}", id: "open")
+        case 3: return AgentMessage(role: "assistant", content: "可打开第 3 页。")
+        default:
+            let input = try #require(messages.last?.content)
+            #expect(input.contains(paper.id.uuidString) && input.contains("result_id") && input.contains("source_page"))
+            #expect(input.hasPrefix("请只说明实验设置"))
+            return AgentMessage(role: "assistant", content: "结果已关联。")
+        }
+    }
+    let agent = LibraryAgent(reader: reader, client: client, discovery: AgentDiscoveryFixture())
+    agent.send("打开 Attention 的第 3 页")
+    try await eventually { !agent.isRunning }
+    let turn = try #require(agent.turns.first)
+    let resultID = try #require(turn.presentedResults.first?.id)
+    let searchID = try #require(turn.activities.first?.cardIDs.first)
+    #expect(!agent.prepareFollowUp(cardID: searchID))
+    #expect(agent.prepareFollowUp(cardID: resultID))
+    #expect(agent.followUpCard?.sourcePage == 3)
+    #expect(await client.requests.count == 3)
+    agent.send("请只说明实验设置", referencing: resultID)
+    try await eventually { !agent.isRunning }
+    #expect(agent.followUpCard == nil)
+    #expect(agent.turns.last?.referencedCardID == resultID && agent.turns.last?.referencedCardTitle == paper.title)
+    #expect(agent.turns.last?.question == "请只说明实验设置")
+    agent.reset()
+    agent.send("过期的结果", referencing: resultID)
+    #expect(agent.turns.isEmpty)
+}
+
+@Test func askUserRejectsEmptyOrAmbiguousChoices() throws {
+    let invalid = [
+        #"{"question":"A?","options":["one"]}"#, #"{"question":"A?","options":["one"," One "]}"#,
+        #"{"question":"A?","options":["one",1]}"#, #"{"question":"","options":["one","two"]}"#,
+    ]
+    for json in invalid {
+        #expect(throws: ReaderError.self) {
+            try AgentToolArguments.parse(name: "ask_user", json: json, limits: .init())
+        }
+    }
 }
