@@ -34,6 +34,21 @@ struct ReaderView: View {
                 }
                 if model.showingReflowLoading { ReflowLoadingView(model: model) }
             }.frame(maxWidth: .infinity, maxHeight: .infinity)
+                .overlay(alignment: .bottomTrailing) {
+                    if model.mode == "original", let session = model.pdfNoteEditor,
+                        session.note.paperID == model.selectedPaperID
+                    {
+                        GeometryReader { proxy in
+                            PDFReadingNoteCard(model: model, session: session)
+                                .frame(
+                                    width: min(350, max(1, proxy.size.width - 24)),
+                                    height: min(280, max(1, proxy.size.height - 24))
+                                )
+                                .padding(12).frame(
+                                    maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+                        }
+                    }
+                }
             if !model.showingReflowLoading { readingBar(width: width) }
         }
         .onChange(of: model.visiblePage) { _, page in
@@ -41,7 +56,10 @@ struct ReaderView: View {
             if model.pdfBilingual.isOpen { model.pdfBilingual.loadPage(model) }
         }
         .onChange(of: model.mode) { _, mode in
-            if mode != "original" { model.pdfBilingual.close() }
+            if mode != "original" {
+                model.pdfBilingual.close()
+                if model.pdfNoteEditor != nil { model.closePDFReadingNote() }
+            }
         }
         .onDisappear { model.pdfBilingual.close() }
         .onAppear { pageInput = "\(model.visiblePage + 1)" }
@@ -228,6 +246,13 @@ struct ReaderView: View {
                 if !model.usesHTMLReading {
                     Button(action: model.highlightSelection) { Label("高亮", systemImage: "highlighter") }
                 }
+            }
+            if model.hasPDFNoteSelection {
+                Button {
+                    Task { await model.beginPDFReadingNote() }
+                } label: {
+                    Label("添加笔记", systemImage: "square.and.pencil").labelStyle(.iconOnly)
+                }.help("添加笔记").accessibilityLabel("添加笔记")
             }
             if !model.assistantSelectionText.isEmpty {
                 Button(action: explainSelection) {

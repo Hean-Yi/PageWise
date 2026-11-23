@@ -200,6 +200,27 @@ public struct AgentClient: AgentCompleting {
                     "source_page": .init(type: "integer", description: "Optional one-based original page"),
                 ], ["paper_id"]),
             make(
+                "create_reading_note",
+                "Save a local reading note and mark its exact supporting passages. Only on the reader's explicit instruction. Call alone, once, for one paper.",
+                [
+                    "markdown": .init(
+                        type: "string",
+                        description:
+                            "Reader-facing note drawn from the discussion; distinguish interpretation from paper claims."
+                    ),
+                    "sources": .init(
+                        type: "array", description: "One to eight exact quotations from registered local evidence.",
+                        items: .init(
+                            type: "object",
+                            properties: [
+                                "result_id": .init(
+                                    type: "string", description: "result_id of a local excerpt with text, not paper_id"),
+                                "quote": .init(
+                                    type: "string",
+                                    description: "A verbatim, identifiable passage in that excerpt, without ellipses"),
+                            ], required: ["result_id", "quote"], additionalProperties: false)),
+                ], ["markdown", "sources"]),
+            make(
                 "ask_user",
                 "Ask one necessary clarification with a few short choices. Call this tool by itself and wait for the reader. Free text is also supported.",
                 [

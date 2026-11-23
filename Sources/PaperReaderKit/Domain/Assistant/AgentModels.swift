@@ -13,6 +13,7 @@ public struct AgentCard: Identifiable, Sendable {
     public var sourcePage: Int?
     public var paperID: UUID?
     public var blockID: UUID?
+    public var readingNoteID: UUID?
     public var candidateID: String?
     public var sourceURL: URL?
     public var importState: AgentImportState = .unprepared
@@ -45,7 +46,9 @@ public struct AgentActivity: Identifiable, Sendable {
 }
 
 public struct AgentPresentedResult: Identifiable, Sendable {
-    public enum Purpose: String, Sendable { case recommendation, citation, match, navigation, importAction }
+    public enum Purpose: String, Sendable {
+        case recommendation, citation, match, navigation, importAction, readingNote
+    }
     /// The identifier of the registered card, which owns the source and any subsequent import state.
     public let id: UUID
     public let purpose: Purpose

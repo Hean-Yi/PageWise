@@ -105,7 +105,16 @@ public actor HTMLReadingStore {
         try Task.checkCancellation()
         for index in sections.indices { sections[index].relativePath = path }
         retained = true
-        return HTMLReadingArtifact(relativePath: path, sections: sections, assets: assets.sorted())
+        var artifact = HTMLReadingArtifact(relativePath: path, sections: sections, assets: assets.sorted())
+        artifact.editionID = previous?.editionID
+        if previous?.sections.isEmpty != false, let first = sections.first?.id,
+            ([paper.htmlReading] + (paper.retainedReadings ?? []).map(\.html)).contains(where: {
+                $0?.sections.first?.id == first
+            })
+        {
+            artifact.editionID = UUID()
+        }
+        return artifact
     }
 
     /// Removes only application-owned unreferenced files. Safe at startup or after a commit.
@@ -133,6 +142,8 @@ public actor HTMLReadingStore {
 
     public func appendedContent(at url: URL, excluding keys: Set<String>) throws -> String {
         let document = try SwiftSoup.parse(String(contentsOf: url, encoding: .utf8))
+        // Inject the same text nodes as a full reload, including whitespace counted by selection anchors.
+        document.outputSettings().prettyPrint(pretty: false)
         return try document.select("#reader > section").filter { !keys.contains(try $0.attr("data-key")) }
             .map { try $0.outerHtml() }.joined()
     }

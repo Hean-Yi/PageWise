@@ -38,9 +38,16 @@ struct PaperAssistantView: View {
                                     scroll.scrollTo(
                                         AssistantCitationAnchor(turn: turn.id, source: sourceID), anchor: .top)
                                 }
+                                if model.assistantDraft?.id == turn.id, turn.answer.isEmpty {
+                                    ProgressView().controlSize(.small).accessibilityLabel("正在处理请求")
+                                }
                             }
                         }
+                        Color.clear.frame(height: 1).id("paper-chat-bottom")
                     }.padding(20)
+                }
+                .onChange(of: chats.last?.readingNoteID) { _, id in
+                    if id != nil { scroll.scrollTo("paper-chat-bottom", anchor: .bottom) }
                 }
             }
             composer
@@ -71,6 +78,20 @@ struct PaperAssistantView: View {
             TextField("问这篇论文…", text: $question, axis: .vertical).lineLimit(2...6).textFieldStyle(.plain).font(.callout)
                 .focused($composerFocused).onSubmit(send)
             HStack {
+                if let last = model.currentChats.last, last.readingNoteID == nil, !last.answer.isEmpty {
+                    Button {
+                        guard (try? model.modelSettings.normalized()) != nil else {
+                            openSettings()
+                            return
+                        }
+                        Task { await model.ask("把刚才讨论的观点记为阅读笔记，并标画对应原文。") }
+                    } label: {
+                        Image(systemName: "note.text.badge.plus").frame(minWidth: 30, minHeight: 30)
+                    }
+                    .buttonStyle(.plain).foregroundStyle(ReaderTheme.muted)
+                    .help("将刚才的讨论记为笔记").accessibilityLabel("将刚才的讨论记为笔记")
+                    .disabled(model.busyAI)
+                }
                 Spacer()
                 Button(action: send) {
                     Image(systemName: "arrow.up").font(.system(size: 13, weight: .semibold))

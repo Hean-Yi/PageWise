@@ -13,6 +13,8 @@ public enum AnnotationRangeEditor {
             }
             result = result.flatMap { mark -> [Highlight] in
                 guard mark.paperID == selection.paperID, mark.pageKey == selection.pageKey,
+                    mark.contentVersion == nil || selection.contentVersion == nil
+                        || mark.contentVersion == selection.contentVersion,
                     mark.htmlTarget == selection.htmlTarget, let range = mark.textRange, range.count == 2,
                     range[0] < cut[1], cut[0] < range[1]
                 else { return [mark] }

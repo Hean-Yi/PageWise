@@ -8,6 +8,7 @@ struct AssistantToolTile: View {
     var detail: String?
     var metadata: String?
     var accessory: String?
+    var detailLines = 2
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -27,7 +28,7 @@ struct AssistantToolTile: View {
                 .lineLimit(2).fixedSize(horizontal: false, vertical: true)
             if let detail, !detail.isEmpty {
                 Text(detail).font(.caption).foregroundStyle(ReaderTheme.muted)
-                    .lineLimit(2).fixedSize(horizontal: false, vertical: true)
+                    .lineLimit(detailLines).fixedSize(horizontal: false, vertical: true)
             }
         }
         .multilineTextAlignment(.leading)

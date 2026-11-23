@@ -39,6 +39,14 @@ import Testing
     #expect(!append.contains("First original"))
     #expect(append.contains("Second original"))
     let finalHTML = try String(contentsOf: root.appendingPathComponent(next.relativePath), encoding: .utf8)
+    // A freshly appended section and a reopened section must have identical text-node coordinates.
+    func domText(_ node: Node) -> String {
+        if let text = node as? TextNode { return text.getWholeText() }
+        return node.getChildNodes().map(domText).joined()
+    }
+    let liveSection = try #require(try SwiftSoup.parseBodyFragment(append).select("section").first())
+    let savedSection = try #require(try SwiftSoup.parse(finalHTML).getElementById("block-" + second.id.uuidString))
+    #expect(domText(liveSection) == domText(savedSection))
     #expect(finalHTML.contains("<math>"))
     #expect(finalHTML.contains("第二段"))
     #expect(!finalHTML.contains("base64"))

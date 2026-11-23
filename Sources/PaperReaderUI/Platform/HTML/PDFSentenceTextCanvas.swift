@@ -33,6 +33,8 @@ import WebKit
     }
 
     var continuous: Continuous?
+    var noteAnchors: [UUID: [NoteAnchor]] = [:]
+    var onOpenNote: (UUID) -> Void = { _ in }
 
     struct Continuous {
         let paperID: UUID
@@ -60,6 +62,7 @@ import WebKit
         private var follow: Bool?
         private var lastScrollRevision = -1
         private var lastPDFSelection: [String] = []
+        private var displayedNotes: [UUID: [NoteAnchor]] = [:]
         private var ready = false
         private var paragraphWindow = PDFParagraphWindowBridge()
 
@@ -122,6 +125,16 @@ import WebKit
                 renderedSentences = parent.sentences
                 translated = parent.translations
             }
+            if (changed || windowChanged || layoutChanged || displayedNotes != parent.noteAnchors)
+                && (!displayedNotes.isEmpty || !parent.noteAnchors.isEmpty)
+            {
+                let sentences = continuous.map { $0.pages.values.flatMap(\.sentences) } ?? parent.sentences
+                let marks = Self.noteMarks(in: sentences, notes: parent.noteAnchors)
+                view.callAsyncJavaScript(
+                    "window.sentenceReader.markNotes(marks)", arguments: ["marks": marks],
+                    in: nil, in: .defaultClient, completionHandler: nil)
+                displayedNotes = parent.noteAnchors
+            }
             if changed || windowChanged || layoutChanged || displayedFontSize != parent.fontSize
                 || active != parent.activeID
                 || focused != parent.focusedID
@@ -172,6 +185,67 @@ import WebKit
                     "en": sentence.text, "zh": translation ?? "",
                 ]
             }
+        }
+
+        /// Intersections are computed in the immutable PDF character space. Reflowed text receives ink
+        /// only when the overlapping glyphs also identify a unique substring of the rendered sentence.
+        static func noteMarks(in sentences: [PDFSourceSentence], notes: [UUID: [NoteAnchor]]) -> [[String: Any]] {
+            let byPage = Dictionary(grouping: sentences, by: \.pageIndex)
+            var output: [[String: Any]] = []
+            for (id, anchors) in notes {
+                var hits: [String: [[Int]]] = [:]
+                for anchor in anchors {
+                    guard let page = anchor.pdfPageIndex, anchor.start >= 0, anchor.end > anchor.start,
+                        anchor.end - anchor.start == anchor.text.utf16.count
+                    else { continue }
+                    let source = NSRange(location: anchor.start, length: anchor.end - anchor.start)
+                    for sentence in byPage[page] ?? [] {
+                        let english = sentence.text as NSString
+                        var sourceOffset = 0
+                        for (runIndex, run) in sentence.characterRanges.enumerated() {
+                            defer { sourceOffset += run.length }
+                            let overlap = NSIntersectionRange(source, run)
+                            guard overlap.length > 0 else { continue }
+                            if hits[sentence.id] == nil { hits[sentence.id] = [] }
+                            let piece = (anchor.text as NSString).substring(
+                                with:
+                                    NSRange(location: overlap.location - source.location, length: overlap.length))
+                            // Each earlier line boundary can remove one hyphen or insert one space.
+                            // Verify all feasible offsets. If two positions fit, leave just the note button.
+                            let offset = sourceOffset + overlap.location - run.location
+                            let low = max(0, offset - runIndex)
+                            let high = min(english.length, offset + runIndex)
+                            guard low <= high else { continue }
+                            var match: NSRange?
+                            for start in low...high {
+                                let remaining = english.length - start
+                                var length = overlap.length
+                                if length > remaining
+                                    || english.substring(with: NSRange(location: start, length: length)) != piece
+                                {
+                                    guard NSMaxRange(overlap) == NSMaxRange(run),
+                                        ["-", "‐", "\u{00ad}"].contains(String(piece.suffix(1))),
+                                        length > 1, length - 1 <= remaining,
+                                        english.substring(with: NSRange(location: start, length: length - 1))
+                                            == String(piece.dropLast())
+                                    else { continue }
+                                    length -= 1
+                                }
+                                if match != nil {
+                                    match = nil
+                                    break
+                                }
+                                match = NSRange(location: start, length: length)
+                            }
+                            if let match { hits[sentence.id, default: []].append([match.location, NSMaxRange(match)]) }
+                        }
+                    }
+                }
+                for (sentenceID, ranges) in hits {
+                    output.append(["note": id.uuidString, "sentence": sentenceID, "ranges": ranges])
+                }
+            }
+            return output
         }
 
         static func figure(_ item: PDFReadingIllustration) -> [String: Any] {
@@ -260,6 +334,12 @@ import WebKit
                 return
             }
             let action = event["action"] as? String
+            if action == "note", let raw = event["id"] as? String, let id = UUID(uuidString: raw),
+                latest.noteAnchors[id] != nil
+            {
+                latest.onOpenNote(id)
+                return
+            }
             if action == "illustration" || action == "copyTable" {
                 if latest.layout == .paragraph, let id = event["id"] as? String,
                     let item = latest.continuous?.pages.values.lazy.compactMap({
@@ -360,6 +440,10 @@ extension PDFSentenceTextCanvas {
         .untranslated .page-body section>p[lang="zh-Hans"]{display:none}
         .page-marker{display:flex;align-items:center;gap:.8em;margin:2.4em 0 1.4em;color:var(--en);font:500 .75em/1.5 -apple-system,sans-serif}
         .page-marker:after{content:"";height:1px;background:currentColor;opacity:.2;flex:1}
+        ::highlight(pdf-reading-notes){background-color:#eacb6d5c;text-decoration:underline #ab7752}
+        .sentence-note{display:inline-flex;vertical-align:super;align-items:center;justify-content:center;border:0;
+          color:var(--accent,#a55537);background:transparent;font:13px system-ui;cursor:pointer;padding:0 .2em}
+        .sentence-note::before{content:'✎'}
         .page-note,.page-loading{color:var(--en);font:.82em/1.65 -apple-system,sans-serif}
         .page-body>.page-note{margin:0 0 1.2em}
         .reading-table{width:max-content;min-width:100%;max-width:max(100%,calc(100vw - 2.5rem));
@@ -518,6 +602,8 @@ extension PDFSentenceTextCanvas {
           main.addEventListener('pointerover',e=>{if(e.pointerType==='mouse') hover(pairAt(e.target)?.dataset.sentence||'');});
           main.addEventListener('pointerleave',()=>hover(''));
           main.addEventListener('click',e=>{
+            const note=e.target.closest('[data-reading-note]');
+            if (note) {send('note',note.dataset.readingNote);return;}
             const source=e.target.closest('[data-original]');
             if (source) {post({action:'original',page:Number(source.dataset.original)});return;}
             const figure=e.target.closest('[data-illustration]');
@@ -701,6 +787,24 @@ extension PDFSentenceTextCanvas {
           \(continuousScript)
           window.sentenceReader={
             pageWindow,tableCopied,
+            markNotes(marks) {
+              const ink=[];
+              for (const button of main.querySelectorAll('[data-reading-note]')) button.remove();
+              for (const mark of marks) {
+                const en=pairs.get(mark.sentence)?.en, text=en?.firstChild;
+                if (!en?.isConnected || text?.nodeType!==Node.TEXT_NODE) continue;
+                for (const [start,end] of mark.ranges) {
+                  if (start<0 || end<=start || end>text.length) continue;
+                  const range=document.createRange();range.setStart(text,start);range.setEnd(text,end);ink.push(range);
+                }
+                if (paragraphMode) {
+                  const button=document.createElement('button');button.type='button';button.className='sentence-note';
+                  button.dataset.readingNote=mark.note;button.setAttribute('aria-label','打开阅读笔记');
+                  button.title='打开阅读笔记';en.after(button);
+                }
+              }
+              if (window.CSS?.highlights) CSS.highlights.set('pdf-reading-notes',new Highlight(...ink));
+            },
             render(rows,layout,items) {
               const changingStructure=paragraphMode!==(layout==='paragraph');
               if (flow) {flow=null;figures=[];main.replaceChildren();}

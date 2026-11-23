@@ -61,7 +61,21 @@ extension ReaderModel {
     }
 
     public func navigate(to highlight: Highlight) {
-        navigateToStablePage(highlight.pageKey, paperID: highlight.paperID)
+        guard let version = highlight.contentVersion else {
+            navigateToStablePage(highlight.pageKey, paperID: highlight.paperID)
+            return
+        }
+        guard let current = state.papers.first(where: { $0.id == highlight.paperID }) else { return }
+        if let key = UUID(uuidString: highlight.pageKey), !pendingArtifactIDs.contains(key),
+            let position = current.htmlPosition(version: version, pageKeys: [highlight.pageKey])
+        {
+            if selectedPaperID != current.id || selectedSection != "library" { select(current.id) }
+            retainedReadingID = position.editionID
+            mode = "translated"
+            navigateToPage(position.index)
+            return
+        }
+        message = "无法在这处标画对应的阅读版本中找到原文。"
     }
 
     /// Resolve a saved citation before changing the reader. The PDF is immutable and source

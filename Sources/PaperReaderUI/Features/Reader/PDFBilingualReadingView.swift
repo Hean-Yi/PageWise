@@ -174,7 +174,15 @@ struct PDFBilingualReadingView: View {
                             session.revealIllustration(item)
                         }
                         peekingAtOriginal = true
-                    }, continuous: paragraphs ? paragraphDocument : nil)
+                    }, continuous: paragraphs ? paragraphDocument : nil,
+                    noteAnchors: Dictionary(
+                        uniqueKeysWithValues: model.currentReadingNotes.filter {
+                            $0.contentVersion == (model.paper?.digest ?? "") + ":original-0"
+                        }.map { ($0.id, $0.anchors) }),
+                    onOpenNote: { id in
+                        guard let note = model.currentReadingNotes.first(where: { $0.id == id }) else { return }
+                        model.pdfNoteEditor = PDFNoteEditorSession(note: note, marks: [])
+                    })
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)

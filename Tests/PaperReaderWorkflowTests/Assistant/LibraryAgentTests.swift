@@ -1000,3 +1000,116 @@ private actor DelayedHistorySearch: PaperDiscovery {
         }
     }
 }
+
+@Test @MainActor func libraryAgentWritesOneNativeNoteOnlyOnExplicitRequestAndOpensItsVerifiedPDFPage() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let reader = try await makeAgentReader(root)
+    try DemoPaper.write(to: root.appendingPathComponent("paper.pdf"))
+    let paper = Paper(
+        title: "Understanding Attention", digest: "demo", originalPath: "paper.pdf",
+        pageCount: 2, blocks: [], warnings: [], canReflow: false)
+    reader.state.papers = [paper]
+    let quote = "A word can need different evidence"
+    let sourcePage = 2
+    let client = ScriptedLibraryModel { messages, count in
+        switch count {
+        case 1:
+            return tool("search_library", #"{"query":"attention"}"#, id: "search")
+        case 2:
+            return tool("read_paper", "{\"paper_id\":\"\(paper.id)\",\"source_page\":\(sourcePage)}", id: "read")
+        case 3, 5:
+            let records = try #require(messages.first(where: { $0.role == "tool" && $0.toolCallID == "read" })?.content)
+            let payload = try #require(try JSONSerialization.jsonObject(with: Data(records.utf8)) as? [String: Any])
+            let rows = try #require(payload["results"] as? [[String: Any]])
+            let row = try #require(rows.first(where: { ($0["text"] as? String)?.contains(quote) == true }))
+            let resultID = try #require(row["result_id"] as? String)
+            let args = try JSONSerialization.data(withJSONObject: [
+                "markdown": "讨论观点：同一个词的解释取决于上下文。",
+                "sources": [["result_id": resultID, "quote": quote]],
+            ])
+            return tool("create_reading_note", String(decoding: args, as: UTF8.self), id: "note-\(count)")
+        default:
+            return .init(role: "assistant", content: "可以讨论上下文。")
+        }
+    }
+    let agent = LibraryAgent(reader: reader, client: client, discovery: AgentDiscoveryFixture())
+    agent.send("请解释上下文")
+    try await eventually { !agent.isRunning }
+    #expect(reader.state.readingNotes.isEmpty && reader.state.highlights.isEmpty)
+    #expect(agent.turns.last?.activities.last?.status == .failed)
+    agent.send("请把刚才的观点记为阅读笔记")
+    try await eventually { !agent.isRunning }
+    let card = try #require(agent.turns.last?.cards.first { $0.readingNoteID != nil })
+    let note = try #require(reader.state.readingNotes.first)
+    #expect(note.id == card.readingNoteID)
+    #expect(note.anchors.first?.key == "original-1")
+    #expect(reader.state.highlights.count == 1 && reader.state.highlights[0].rects.isEmpty == false)
+    #expect(agent.open(cardID: card.id))
+    #expect(reader.selectedPaperID == paper.id && reader.requestedReadingNote == note.id)
+    let persisted = try await LibraryStore(directory: root).load()
+    #expect(persisted.readingNotes == [note])
+    #expect(persisted.highlights == reader.state.highlights)
+}
+
+@Test @MainActor func noteTransactionPreservesHumanHighlightsEditsAndSoftDeletionOnReplay() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let reader = try await makeAgentReader(root)
+    let paper = Paper(
+        title: "Notes", digest: "revision", originalPath: "paper.pdf", pageCount: 1,
+        blocks: [], warnings: [], canReflow: false)
+    reader.state.papers = [paper]
+    let key = UUID().uuidString
+    let anchor = NoteAnchor(key: key, target: "source", text: "abcd", start: 0, end: 4)
+    var human = Highlight(paperID: paper.id, pageKey: key, pageIndex: 0, text: "bc", rects: [])
+    human.htmlTarget = "source"
+    human.textRange = [1, 3]
+    human.color = .green
+    reader.state.highlights = [human]
+    var mark = Highlight(paperID: paper.id, pageKey: key, pageIndex: 0, text: "abcd", rects: [])
+    mark.htmlTarget = "source"
+    mark.textRange = [0, 4]
+    let original = ReadingNote(
+        paperID: paper.id, contentVersion: "revision:" + key, anchors: [anchor], markdown: "Initial")
+    let saved = try await reader.saveAnchoredDiscussionNote(original, highlights: [mark])
+    #expect(reader.state.highlights.first == human)
+    #expect(reader.state.highlights.map(\.text) == ["bc", "a", "d"])
+    reader.state.readingNotes[0].markdown = "edited"
+    let retry = try await reader.saveAnchoredDiscussionNote(original, highlights: [mark])
+    #expect(saved.id == retry.id && retry.markdown == "edited" && reader.state.highlights.count == 3)
+    reader.state.readingNotes[0].deletedAt = .now
+    await #expect(throws: ReaderError.self) {
+        try await reader.saveAnchoredDiscussionNote(original, highlights: [mark])
+    }
+    #expect(reader.state.readingNotes.count == 1 && reader.state.readingNotes[0].deletedAt != nil)
+}
+
+@Test @MainActor func quotedMarkupInstructionsControlTheSavedRangeEvenWhenTheModelSuggestsExtraText() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let reader = try await makeAgentReader(root)
+    try DemoPaper.write(to: root.appendingPathComponent("paper.pdf"))
+    let paper = Paper(
+        title: "Attention", digest: "demo", originalPath: "paper.pdf", pageCount: 2, blocks: [], warnings: [],
+        canReflow: false)
+    reader.state.papers = [paper]
+    reader.select(paper.id)
+    let scope = try reader.discussionNoteScope(for: paper.id)
+    let passage = "A word can need different evidence in different sentences."
+    let extra = "Consider the word bank"
+    let evidence = Evidence(id: "S1", title: paper.title, text: passage + " " + extra, paperID: paper.id, sourcePage: 1)
+    let proposed = [(evidence: evidence, quote: extra), (evidence: evidence, quote: passage)]
+    let note = try await reader.saveDiscussionNote(
+        in: scope, sources: proposed, markdown: "讨论结论", requestID: UUID(),
+        instruction: "把观点写成笔记，在原文里标出“different evidence”。")
+    #expect(note.anchors.map(\.text) == ["different evidence"])
+    #expect(reader.state.highlights.map(\.text) == ["different evidence"])
+    await #expect(throws: ReaderError.self) {
+        try await reader.saveDiscussionNote(
+            in: scope, sources: proposed, markdown: "第二条", requestID: UUID(),
+            instruction: "请标出“different evidence”和“a fabricated sentence”，记成笔记。")
+    }
+    #expect(reader.state.readingNotes == [note])
+    #expect(reader.state.highlights.count == 1)
+}

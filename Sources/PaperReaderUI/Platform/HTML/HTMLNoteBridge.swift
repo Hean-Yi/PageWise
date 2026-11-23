@@ -28,7 +28,7 @@ final class HTMLNoteBridge {
             sidebar = sidebarOpen
             call(view, "window.paperNotes?.sidebar(open)", ["open": sidebarOpen])
         }
-        let notes = model.currentReadingNotes
+        let notes = model.displayedHTMLReadingNotes
         if snapshot != notes {
             snapshot = notes
             let ids = Set(notes.map(\.id))
@@ -50,7 +50,7 @@ final class HTMLNoteBridge {
                         let html = try await self.renderer.render(note.markdown)
                         try Task.checkCancellation()
                         guard let view, self.model.selectedPaperID == expectedPaper,
-                            self.model.currentReadingNotes.contains(where: {
+                            self.model.displayedHTMLReadingNotes.contains(where: {
                                 $0.id == note.id && $0.markdown == note.markdown
                             })
                         else { return }
@@ -70,7 +70,9 @@ final class HTMLNoteBridge {
             persistence = status
             call(view, "window.paperNotes?.saved(status)", ["status": status])
         }
-        if let id = model.requestedReadingNote, navigationToken != model.readingNoteNavigationToken {
+        if let id = model.requestedReadingNote, navigationToken != model.readingNoteNavigationToken,
+            notes.contains(where: { $0.id == id })
+        {
             navigationToken = model.readingNoteNavigationToken
             call(view, "window.paperNotes?.open(id,true)", ["id": id.uuidString])
         }

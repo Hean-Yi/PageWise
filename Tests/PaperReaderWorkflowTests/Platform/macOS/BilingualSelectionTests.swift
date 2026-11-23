@@ -45,6 +45,24 @@
         #expect(model.selectionText == "original evidence with emoji 🧪 and a conclusion.\n\nSecond original")
         #expect(model.htmlSelection.map(\.pageKey) == [first.id.uuidString, second.id.uuidString])
         #expect(model.htmlSelection[0].end - model.htmlSelection[0].start == model.htmlSelection[0].text.utf16.count)
+        let manuallyAnchored = model.htmlSelection.map {
+            NoteAnchor(key: $0.pageKey, target: $0.target, text: $0.text, start: $0.start, end: $0.end)
+        }
+        let evidence = Evidence(id: "S1", title: paper.title, text: model.selectionText, paperID: paper.id)
+        let resolved = try await store.noteAnchors(
+            for: model.selectionText, evidence: evidence, paperID: paper.id,
+            artifact: try #require(paper.htmlReading), root: root, selection: manuallyAnchored)
+        #expect(resolved == manuallyAnchored)
+        let quoted = try await store.noteAnchors(
+            for: "a conclusion.",
+            evidence: Evidence(id: "S1", title: paper.title, text: first.text, paperID: paper.id, blockID: first.id),
+            paperID: paper.id, artifact: try #require(paper.htmlReading), root: root)
+        let anchors = try JSONSerialization.jsonObject(with: JSONEncoder().encode(quoted))
+        let paintedText =
+            try await web.callAsyncJavaScript(
+                "return anchors.flatMap(a => window.paperSelection.rangesFor(a)).map(r=>r.toString()).join('')",
+                arguments: ["anchors": anchors], in: nil, contentWorld: .defaultClient) as? String
+        #expect(paintedText == "a conclusion.")
         let copied =
             try await js(
                 web,

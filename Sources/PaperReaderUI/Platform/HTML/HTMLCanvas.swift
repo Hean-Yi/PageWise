@@ -38,6 +38,8 @@ final class HTMLCoordinator: NSObject, WKNavigationDelegate, WKScriptMessageHand
     let model: ReaderModel
     private var paperID: UUID?
     private var loadedPath: String?
+    private var editionVersion: String?
+    private var retainedID: UUID?
     private var requestedURL: URL?
     private var requestedNavigation: WKNavigation?
     private var keys: [String] = []
@@ -86,11 +88,17 @@ final class HTMLCoordinator: NSObject, WKNavigationDelegate, WKScriptMessageHand
     func update(_ view: WKWebView, sidebarOpen: Bool? = nil) {
         if let sidebarOpen { self.sidebarOpen = sidebarOpen }
         guard !stopped, model.usesHTMLReading, let paper = model.paper, let artifact = paper.htmlReading else { return }
-        if paperID != paper.id || loadedPath == nil || !artifact.sections.map({ $0.id.uuidString }).starts(with: keys) {
+        let version = artifact.readingNoteVersion(digest: paper.digest)
+        if paperID != paper.id || editionVersion != version || retainedID != model.retainedReadingID
+            || loadedPath == nil
+            || !artifact.sections.map({ $0.id.uuidString }).starts(with: keys)
+        {
             appendTask?.cancel()
             view.stopLoading()
             releaseDocument()
             paperID = paper.id
+            editionVersion = version
+            retainedID = model.retainedReadingID
             loadedPath = artifact.relativePath
             keys = artifact.sections.map { $0.id.uuidString }
             notes.stop()
@@ -166,7 +174,7 @@ final class HTMLCoordinator: NSObject, WKNavigationDelegate, WKScriptMessageHand
                 "window.paperReader.draft(html, paperID)", arguments: ["html": draft, "paperID": paperID!.uuidString],
                 in: nil, in: .defaultClient, completionHandler: nil)
         }
-        let marks = model.currentHighlights.filter { $0.textRange != nil }
+        let marks = model.displayedHTMLHighlights
         if highlightSnapshot != marks {
             highlightSnapshot = marks
             let values: [[String: Any]] = marks.map {
@@ -270,6 +278,8 @@ final class HTMLCoordinator: NSObject, WKNavigationDelegate, WKScriptMessageHand
 
     func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
         guard message.frameInfo.isMainFrame, model.selectedPaperID == paperID, model.usesHTMLReading,
+            model.htmlAnnotationVersion == editionVersion, model.retainedReadingID == retainedID,
+            message.frameInfo.request.url?.standardizedFileURL == requestedURL,
             let value = message.body as? [String: Any], let kind = value["kind"] as? String
         else { return }
         let index = (value["key"] as? String).flatMap { keys.firstIndex(of: $0) }

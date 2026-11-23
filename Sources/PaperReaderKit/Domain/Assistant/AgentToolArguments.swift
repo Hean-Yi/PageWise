@@ -6,6 +6,11 @@ public enum AgentToolArguments: Sendable, Equatable {
         public let id: UUID
         public let reason: String?
     }
+    public struct Quotation: Sendable, Equatable {
+        public let resultID: UUID
+        public let quote: String
+    }
+    case createReadingNote(markdown: String, sources: [Quotation])
     case askUser(AgentClarification)
     case searchLibrary(String)
     case searchOnline(String, limit: Int? = nil)
@@ -38,6 +43,20 @@ public enum AgentToolArguments: Sendable, Equatable {
             return value.intValue
         }
         switch name {
+        case "create_reading_note":
+            try keys(["markdown", "sources"], required: ["markdown", "sources"])
+            let markdown = try string("markdown", max: limits.maxArgumentBytes)
+            guard let rows = values["sources"] as? [[String: Any]], (1...8).contains(rows.count) else {
+                throw ReaderError.message("阅读笔记需要一至八处原文。")
+            }
+            let sources = try rows.map { row -> Quotation in
+                guard Set(row.keys) == ["result_id", "quote"],
+                    let raw = row["result_id"] as? String, let id = UUID(uuidString: raw),
+                    let quote = row["quote"] as? String, !quote.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                else { throw ReaderError.message("请使用已登记的本地摘录和其中的原句。") }
+                return Quotation(resultID: id, quote: quote)
+            }
+            return .createReadingNote(markdown: markdown, sources: sources)
         case "present_results":
             try keys(["purpose", "items"], required: ["purpose", "items"])
             guard let purpose = AgentPresentedResult.Purpose(rawValue: try string("purpose", max: 32)),

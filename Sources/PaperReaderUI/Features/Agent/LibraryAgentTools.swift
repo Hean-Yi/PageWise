@@ -10,6 +10,14 @@ struct AgentToolOutcome {
     var presentation: [AgentPresentedResult]?
 }
 
+struct AgentNoteRequest: Sendable {
+    let id: UUID
+    let instruction: String
+    let openedPaper: UUID?
+    let target: UUID?
+    let scope: DiscussionNoteScope?
+}
+
 enum AgentSourceTarget: Hashable {
     case candidate(String)
     case block(UUID, UUID)
@@ -30,11 +38,40 @@ enum AgentSourceTarget: Hashable {
 }
 
 extension LibraryAgent {
-    func execute(_ call: AgentToolCall, epoch: UUID, onSubject: (String) -> Void) async throws -> AgentToolOutcome {
+    func execute(_ call: AgentToolCall, epoch: UUID, noteRequest: AgentNoteRequest? = nil, onSubject: (String) -> Void)
+        async throws -> AgentToolOutcome
+    {
         let arguments = try AgentToolArguments.parse(
             name: call.function.name, json: call.function.arguments, limits: limits)
         try check(epoch)
         switch arguments {
+        case .createReadingNote(let markdown, let quotations):
+            guard let request = noteRequest, request.openedPaper == reader.selectedPaperID else {
+                throw ReaderError.message("需要读者在本轮明确要求为这篇论文记笔记。")
+            }
+            let sources = try quotations.map { part -> (evidence: Evidence, quote: String) in
+                guard let source = card(part.resultID), source.kind == .evidence, let evidence = evidence(for: source)
+                else {
+                    throw ReaderError.message("请先读取本地论文，再引用已登记的原文。")
+                }
+                return (evidence, part.quote)
+            }
+            guard let evidence = sources.first?.evidence, let paperID = evidence.paperID,
+                sources.allSatisfy({ $0.evidence.paperID == paperID }),
+                request.target == nil || request.target == paperID
+            else { throw ReaderError.message("一条阅读笔记只能标在本轮目标论文上。") }
+            let scope = try request.scope ?? reader.discussionNoteScope(for: paperID)
+            onSubject(evidence.title)
+            let note = try await reader.saveDiscussionNote(
+                in: scope, sources: sources, markdown: markdown,
+                requestID: request.id, instruction: request.instruction)
+            var item = AgentCard(kind: .navigation, title: evidence.title)
+            item.readingNoteID = note.id
+            item.paperID = paperID
+            item.excerpt = String(note.anchors.first?.text.prefix(300) ?? "")
+            item.sourcePage = note.anchors.first?.pdfPageIndex.map { $0 + 1 }
+            // The mutation has committed. Its receipt must fit even when the tool's excerpt budget is very small.
+            return AgentToolOutcome(content: #"{"ok":true,"saved":true}"#, cards: [item], truncated: false)
         case .presentResults(let purpose, let items):
             var seen = Set<AgentSourceTarget>()
             var selected: [AgentPresentedResult] = []
@@ -82,7 +119,24 @@ extension LibraryAgent {
             let paper = try registeredPaper(id, page: page)
             onSubject("\(paper.title) · 第 \(page) 页")
             let blocks = paper.blocks.filter { $0.sourcePage == page - 1 }
-            let pairs = blocks.prefix(min(max(0, limits.maxResults), 20)).map { block -> (ToolRecord, AgentCard) in
+            var passages: [(id: UUID?, text: String)] = blocks.map { ($0.id, $0.text) }
+            if passages.isEmpty {
+                let url = reader.root.appendingPathComponent(paper.originalPath)
+                let sentences = await Task.detached(priority: .userInitiated) {
+                    (try? PDFSentenceExtractor.extractPage(url: url, pageIndex: page - 1))?.sentences ?? []
+                }.value
+                try check(epoch)
+                var prior: String?
+                for sentence in sentences {
+                    if prior == sentence.readingParagraphID, let last = passages.indices.last {
+                        passages[last].text += " " + sentence.text
+                    } else {
+                        passages.append((nil, sentence.text))
+                    }
+                    prior = sentence.readingParagraphID
+                }
+            }
+            let pairs = passages.prefix(min(max(0, limits.maxResults), 20)).map { block -> (ToolRecord, AgentCard) in
                 var card = AgentCard(kind: .evidence, title: paper.title)
                 card.paperID = paper.id
                 card.blockID = block.id
@@ -92,8 +146,8 @@ extension LibraryAgent {
                 return (ToolRecord(card: card, pageCount: paper.pageCount), card)
             }
             return try result(
-                pairs, truncated: blocks.count > pairs.count || blocks.contains { $0.text.count > 2_000 },
-                message: blocks.isEmpty ? "这一页暂无已索引的正文。" : nil)
+                pairs, truncated: passages.count > pairs.count || passages.contains { $0.text.count > 2_000 },
+                message: passages.isEmpty ? "这一页暂无已索引的正文。" : nil)
         case .searchOnline(let query, let requestedCount):
             onSubject(query)
             let limit = min(requestedCount ?? limits.maxResults, 20)

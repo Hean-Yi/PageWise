@@ -638,3 +638,35 @@ private func sentenceFixture(
         #expect(item.rects.count == 2)
     }
 }
+
+@Test func pdfReadingNoteLocatorDisambiguatesRealSelectionsAndKeepsColumnsSeparate() async throws {
+    let url = try sentenceFixture([
+        (40, 650, "The first column describes a new transla-"),
+        (315, 650, "The other column starts with Fig. 2."),
+        (40, 634, "tion method. It retains 3.25 ms."),
+        (315, 634, "The second observation concerns latency."),
+        (40, 618, "The cache stays warm. The cache stays warm."),
+        (315, 618, "The last thought continues on"),
+    ])
+    defer { try? FileManager.default.removeItem(at: url) }
+    let data = try Data(contentsOf: url)
+    let locator = PDFReadingNoteLocator()
+    let quote = "The cache stays warm."
+    await #expect(throws: ReaderError.self) { try await locator.locate(quote: quote, pageIndex: 0, in: url) }
+    let document = try #require(PDFDocument(url: url))
+    defer { withExtendedLifetime(document) {} }
+    let raw = try #require(document.page(at: 0)?.string as NSString?)
+    let range = raw.range(of: quote, options: .backwards)
+    let manual = try await locator.selected(ranges: [range], pageIndex: 0, in: url)
+    let agent = try await locator.locate(quote: quote, pageIndex: 0, in: url, selectedRanges: [range])
+    #expect(manual.map(\.anchor) == agent.map(\.anchor))
+    #expect(manual.map(\.rects) == agent.map(\.rects))
+    #expect(agent.first?.anchor.start == range.location && agent.first?.anchor.pdfPageIndex == 0)
+    await #expect(throws: ReaderError.self) {
+        try await locator.locate(quote: "The other column", pageIndex: 0, in: url, selectedRanges: [range])
+    }
+    let parts = try await locator.locate(quote: "new translation method.", pageIndex: 0, in: url)
+    #expect(parts.map(\.anchor.text) == ["new transla-", "tion method."])
+    #expect(parts.flatMap(\.rects).allSatisfy { $0.count == 4 && $0[0] + $0[2] < 310 && $0[3] > 0 })
+    #expect(try Data(contentsOf: url) == data)
+}

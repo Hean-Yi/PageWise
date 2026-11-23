@@ -6,6 +6,46 @@
 
     @testable import PaperReaderUI
 
+    @Test @MainActor func pdfReflowNotesUnderlineOnlyAnchoredCharactersAndOpenTheirEditor() async throws {
+        let sentence = PDFSourceSentence(
+            id: "s", text: "word then word.", pageIndex: 0, rects: [], paragraphID: "p",
+            characterRanges: [NSRange(location: 30, length: 15)])
+        let id = UUID()
+        let anchor = NoteAnchor(key: "original-0", target: "pdf", text: "word", start: 40, end: 44)
+        var opened: UUID?
+        var canvas = PDFSentenceTextCanvas(
+            sentences: [sentence], translations: ["s": "对照"], layout: .paragraph, fontSize: 18, activeID: nil,
+            focusedID: nil,
+            focusRevision: 0, followsScroll: false, sourceScrollID: nil, sourceScrollRevision: 0, pdfSelectedIDs: [],
+            onScroll: { _ in }, onSelection: { _ in }, onFocus: { _ in }, onHover: { _ in },
+            noteAnchors: [id: [anchor]], onOpenNote: { opened = $0 })
+        let coordinator = canvas.makeCoordinator()
+        let web = coordinator.makeView()
+        defer { coordinator.stop(web) }
+        for _ in 0..<200 {
+            let verified =
+                try? await web.callAsyncJavaScript(
+                    """
+                    const button=document.querySelector('.sentence-note'), ink=CSS.highlights?.get('pdf-reading-notes');
+                    if (!button || !ink || ink.size!==1) return false;
+                    const [range]=ink;
+                    if (range.startOffset!==10 || range.toString()!=='word') return false;
+                    button.click();return true;
+                    """, arguments: [:], in: nil, contentWorld: .defaultClient) as? Bool
+            if verified == true { break }
+            try await Task.sleep(for: .milliseconds(35))
+        }
+        for _ in 0..<50 where opened == nil { try await Task.sleep(for: .milliseconds(20)) }
+        #expect(opened == id)
+        canvas.noteAnchors = [:]
+        coordinator.update(canvas, view: web)
+        let cleared =
+            try await web.callAsyncJavaScript(
+                "return !document.querySelector('.sentence-note') && CSS.highlights.get('pdf-reading-notes').size===0",
+                arguments: [:], in: nil, contentWorld: .defaultClient) as? Bool
+        #expect(cleared == true)
+    }
+
     @Test @MainActor func pdfOriginalBylineAndBibliographyCanBeSelectedAcrossEnglishProse() async throws {
         let sentence = PDFSourceSentence(id: "s", text: "Body sentence.", pageIndex: 0, rects: [], paragraphID: "p")
         let byline = PDFReadingIllustration(

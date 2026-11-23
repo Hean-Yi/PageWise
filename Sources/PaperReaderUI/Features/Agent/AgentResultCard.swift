@@ -18,6 +18,7 @@ struct AgentResultCard: View {
         case .match: ("检索结果", card.kind == .onlineCandidate ? "globe" : "books.vertical")
         case .navigation: ("定位论文", "location")
         case .importAction: ("导入论文", "arrow.down.doc")
+        case .readingNote: ("阅读笔记", "note.text")
         }
     }
 
@@ -29,6 +30,15 @@ struct AgentResultCard: View {
     }
 
     var body: some View {
+        if card.readingNoteID != nil && !agent.canOpen(card) {
+            Label("笔记已删除或原文不可用", systemImage: "note.text")
+                .font(.caption).foregroundStyle(ReaderTheme.muted)
+        } else {
+            resultTile
+        }
+    }
+
+    private var resultTile: some View {
         VStack(alignment: .leading, spacing: 0) {
             primaryAction
             if let error = card.importError {
@@ -63,6 +73,9 @@ struct AgentResultCard: View {
             Button(action: open) { label(accessory: "chevron.forward") }
                 .buttonStyle(AssistantToolButtonStyle(embedded: true)).help(card.title)
                 .accessibilityHint("在阅读器中打开")
+        } else if card.readingNoteID != nil {
+            Label("笔记已删除或不可用", systemImage: "note.text").font(.caption)
+                .foregroundStyle(ReaderTheme.muted).padding(12)
         } else if !card.excerpt.isEmpty {
             Button {
                 showsExcerpt.toggle()
@@ -81,11 +94,19 @@ struct AgentResultCard: View {
     }
 
     private func label(accessory: String?) -> some View {
-        let detail = card.kind == .onlineCandidate ? card.authors : (showsExcerpt ? nil : card.excerpt)
+        let detail: String?
+        if let id = card.readingNoteID {
+            let note = agent.reader.state.readingNotes.first {
+                $0.id == id && $0.paperID == card.paperID && $0.deletedAt == nil
+            }
+            detail = note.map { ReadingNoteSummary.text($0.markdown) }
+        } else {
+            detail = card.kind == .onlineCandidate ? card.authors : (showsExcerpt ? nil : card.excerpt)
+        }
         return VStack(alignment: .leading, spacing: 0) {
             AssistantToolTile(
                 tool: purpose.title, systemImage: purpose.icon, title: card.title, detail: detail,
-                metadata: metadata, accessory: accessory)
+                metadata: metadata, accessory: accessory, detailLines: card.readingNoteID == nil ? 2 : 1)
             if let reason = result.reason, !reason.isEmpty {
                 Text(reason).font(.caption).lineSpacing(2).foregroundStyle(ReaderTheme.ink)
                     .fixedSize(horizontal: false, vertical: true).multilineTextAlignment(.leading)

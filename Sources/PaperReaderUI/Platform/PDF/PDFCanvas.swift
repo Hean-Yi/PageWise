@@ -2,6 +2,27 @@ import PDFKit
 import PaperReaderKit
 import SwiftUI
 
+#if os(macOS)
+    private typealias PDFInkColor = NSColor
+#else
+    private typealias PDFInkColor = UIColor
+#endif
+
+extension AnnotationColor {
+    fileprivate var pdfInk: PDFInkColor {
+        switch self {
+        case .yellow: .systemYellow
+        case .red: .systemRed
+        case .green: .systemGreen
+        case .blue: .systemBlue
+        case .purple: .systemPurple
+        case .pink: .systemPink
+        case .orange: .systemOrange
+        case .gray: .systemGray
+        }
+    }
+}
+
 #if os(iOS)
     import PencilKit
 #endif
@@ -45,6 +66,9 @@ private final class ReaderPDFView: PDFView {
     #if os(macOS)
         var sentencePointer: ((CGPoint, Bool) -> Void)?
         var sentencePointerExited: (() -> Void)?
+        var notePointer: ((CGPoint) -> Void)?
+        var observesNoteInput = false
+        private var noteClickStart: CGPoint?
         var observesSentenceInput = false
         private var eventMonitor: Any?
         private var pointerWasInside = false
@@ -56,14 +80,30 @@ private final class ReaderPDFView: PDFView {
             guard window != nil else { return }
             // PDFKit's inner document view handles mouse tracking itself. Observe this window's
             // events without consuming them so text selection, links and scrolling keep working.
-            eventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .mouseMoved]) {
+            eventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .leftMouseUp, .mouseMoved]) {
                 [weak self] event in
-                guard let self, self.observesSentenceInput, let window = self.window,
+                guard let self, self.observesSentenceInput || self.observesNoteInput, let window = self.window,
                     event.window === window, window.attachedSheet == nil
                 else { return event }
                 let point = self.convert(event.locationInWindow, from: nil)
                 let inside = self.visibleRect.contains(point)
-                if inside {
+                if self.observesNoteInput && event.type == .leftMouseDown {
+                    let content = window.contentView
+                    let hit = content.flatMap { $0.hitTest($0.convert(event.locationInWindow, from: nil)) }
+                    self.noteClickStart =
+                        inside && event.clickCount == 1 && (hit?.isDescendant(of: self) == true || hit === self)
+                        ? point : nil
+                }
+                if event.type == .leftMouseUp {
+                    if self.observesNoteInput, inside, let start = self.noteClickStart,
+                        hypot(start.x - point.x, start.y - point.y) < 3
+                    {
+                        self.notePointer?(point)
+                    }
+                    self.noteClickStart = nil
+                    return event
+                }
+                if inside && self.observesSentenceInput {
                     if event.type == .mouseMoved || event.clickCount == 1 {
                         self.sentencePointer?(point, event.type == .leftMouseDown)
                     }
@@ -120,6 +160,12 @@ final class PDFCoordinator: NSObject, @preconcurrency PDFPageOverlayViewProvider
     var displayedURLs: [URL]?
     var keys: [String] = []
     var highlightIDs: Set<UUID> = []
+    private struct NoteLocation {
+        let page: PDFPage
+        let bounds: CGRect
+        let ink: [PDFAnnotation]
+    }
+    private var noteAnnotations: [UUID: [NoteLocation]] = [:]
     var penEnabled = false
     private var isVisible = false
     private var displayedSentenceIDs: [String] = []
@@ -160,6 +206,7 @@ final class PDFCoordinator: NSObject, @preconcurrency PDFPageOverlayViewProvider
                 }
             }
             view.sentencePointerExited = { [weak self] in self?.model.pdfBilingual.hover(nil) }
+            view.notePointer = { [weak self] point in self?.openNote(at: point) }
         #else
             let tap = UITapGestureRecognizer(target: self, action: #selector(tappedPDF(_:)))
             tap.cancelsTouchesInView = false
@@ -191,6 +238,7 @@ final class PDFCoordinator: NSObject, @preconcurrency PDFPageOverlayViewProvider
             keys = []
             paperID = nil
             highlightIDs = []
+            noteAnnotations = [:]
             #if os(iOS)
                 for canvas in canvases.values {
                     toolPicker.setVisible(false, forFirstResponder: canvas)
@@ -247,29 +295,42 @@ final class PDFCoordinator: NSObject, @preconcurrency PDFPageOverlayViewProvider
                 }
             #endif
             highlightIDs = []
+            noteAnnotations = [:]
             if let page = document.page(at: min(oldPage, max(0, document.pageCount - 1))) { view.go(to: page) }
         }
         for mark in model.currentHighlights where !highlightIDs.contains(mark.id) {
             guard let index = keys.firstIndex(of: mark.pageKey), let page = view.document?.page(at: index) else {
                 continue
             }
-            for rect in mark.rects where rect.count == 4 {
+            let style = mark.style ?? .highlight
+            let color = (mark.color ?? .yellow).pdfInk.withAlphaComponent(style == .underline ? 1 : 0.45)
+            let noteInk = Set(noteAnnotations.values.flatMap { $0 }.flatMap(\.ink).map(ObjectIdentifier.init))
+            let existing = page.annotations.filter {
+                ["Highlight", "Underline", "StrikeOut", "Squiggly"].contains($0.type ?? "")
+                    && !noteInk.contains(ObjectIdentifier($0))
+            }.flatMap(Self.markupBounds)
+            for rect in mark.rects.compactMap(Self.rectangle).flatMap({
+                PDFHighlightCoverage.uncovered($0, by: existing)
+            }) {
                 let annotation = PDFAnnotation(
-                    bounds: CGRect(x: rect[0], y: rect[1], width: rect[2], height: rect[3]), forType: .highlight,
-                    withProperties: nil)
-                #if os(macOS)
-                    annotation.color = NSColor.systemYellow.withAlphaComponent(0.45)
-                #else
-                    annotation.color = UIColor.systemYellow.withAlphaComponent(0.45)
-                #endif
+                    bounds: rect, forType: style == .underline ? .underline : .highlight, withProperties: nil)
+                annotation.color = color
                 page.addAnnotation(annotation)
             }
             highlightIDs.insert(mark.id)
         }
+        if let document = view.document { updateNotes(in: document) }
+        #if os(macOS)
+            (view as? ReaderPDFView)?.observesNoteInput = isVisible && !noteAnnotations.isEmpty
+        #endif
         if isVisible, let index = model.jumpPage, let page = view.document?.page(at: index) {
             let outline = model.jumpOutlineItem
             view.clearSelection()
-            if model.mode == "original", var point = outline?.sourcePoint {
+            if let id = model.requestedReadingNote, model.pdfNoteEditor?.id == id,
+                let box = noteAnnotations[id]?.first(where: { $0.page === page })?.bounds
+            {
+                view.go(to: box.insetBy(dx: -10, dy: -18), on: page)
+            } else if model.mode == "original", var point = outline?.sourcePoint {
                 if outline?.sourceRange != nil {
                     point.y = min(page.bounds(for: view.displayBox).maxY, point.y + 10 / max(view.scaleFactor, 0.1))
                 }
@@ -301,6 +362,68 @@ final class PDFCoordinator: NSObject, @preconcurrency PDFPageOverlayViewProvider
         #endif
     }
 
+    private func updateNotes(in document: PDFDocument) {
+        let notes = model.currentReadingNotes.filter {
+            $0.anchors.first?.pdfPageIndex != nil
+                && $0.contentVersion == (model.currentEdition?.digest ?? "") + ":original-0"
+        }
+        let live = Set(notes.map(\.id))
+        for id in noteAnnotations.keys where !live.contains(id) {
+            for location in noteAnnotations.removeValue(forKey: id) ?? [] {
+                for annotation in location.ink { location.page.removeAnnotation(annotation) }
+            }
+        }
+        let missing = notes.filter { noteAnnotations[$0.id] == nil }
+        guard !missing.isEmpty else { return }
+        let drawnInk = Set(noteAnnotations.values.flatMap { $0 }.flatMap(\.ink).map(ObjectIdentifier.init))
+        var existingUnderlines: [Int: [CGRect]] = [:]
+        for note in missing {
+            var annotations: [NoteLocation] = []
+            for anchor in note.anchors {
+                guard let index = anchor.pdfPageIndex, keys.indices.contains(index), keys[index] == anchor.key,
+                    let page = document.page(at: index), let raw = page.string as NSString?, anchor.start >= 0,
+                    anchor.end > anchor.start, anchor.end <= raw.length
+                else { continue }
+                let range = NSRange(location: anchor.start, length: anchor.end - anchor.start)
+                guard raw.substring(with: range) == anchor.text, let selection = page.selection(for: range) else {
+                    continue
+                }
+                if existingUnderlines[index] == nil {
+                    existingUnderlines[index] = page.annotations.filter {
+                        $0.type == "Underline" && !drawnInk.contains(ObjectIdentifier($0))
+                    }.flatMap(Self.markupBounds)
+                }
+                for line in selection.selectionsByLine() {
+                    let box = line.bounds(for: page)
+                    guard !box.isEmpty else { continue }
+                    let ink = PDFHighlightCoverage.uncovered(box, by: existingUnderlines[index] ?? []).map { rect in
+                        let annotation = PDFAnnotation(bounds: rect, forType: .underline, withProperties: nil)
+                        annotation.color = PDFInkColor.systemBrown
+                        page.addAnnotation(annotation)
+                        return annotation
+                    }
+                    annotations.append(NoteLocation(page: page, bounds: box, ink: ink))
+                }
+            }
+            noteAnnotations[note.id] = annotations
+        }
+    }
+
+    @discardableResult
+    private func openNote(at point: CGPoint) -> Bool {
+        guard isVisible, !penEnabled, !noteAnnotations.isEmpty, let view,
+            let page = view.page(for: point, nearest: false)
+        else { return false }
+        let location = view.convert(point, to: page)
+        guard
+            let note = model.currentReadingNotes.last(where: { note in
+                noteAnnotations[note.id]?.contains { $0.page === page && $0.bounds.contains(location) } == true
+            })
+        else { return false }
+        model.openReadingNote(note)
+        return true
+    }
+
     private func sentence(at point: CGPoint) -> PDFSourceSentence? {
         guard isVisible, let view, !penEnabled, model.pdfBilingual.matches(model),
             let page = view.page(for: point, nearest: false),
@@ -314,11 +437,34 @@ final class PDFCoordinator: NSObject, @preconcurrency PDFPageOverlayViewProvider
 
     #if os(iOS)
         @objc private func tappedPDF(_ gesture: UITapGestureRecognizer) {
-            if gesture.state == .ended, let view, let hit = sentence(at: gesture.location(in: view)) {
+            if gesture.state == .ended, let view, !openNote(at: gesture.location(in: view)),
+                let hit = sentence(at: gesture.location(in: view))
+            {
                 model.pdfBilingual.focusFromPDF(hit.id)
             }
         }
     #endif
+
+    /// Embedded multi-line PDF markup can have one large bounding box and several separate glyph quads.
+    private static func markupBounds(_ annotation: PDFAnnotation) -> [CGRect] {
+        guard let values = annotation.quadrilateralPoints, !values.isEmpty, values.count.isMultiple(of: 4)
+        else { return [annotation.bounds] }
+        #if os(macOS)
+            let points = values.map(\.pointValue)
+        #else
+            let points = values.map(\.cgPointValue)
+        #endif
+        let bounds = annotation.bounds
+        return stride(from: 0, to: points.count, by: 4).map { start in
+            let quad = points[start..<(start + 4)]
+            let xs = quad.map(\.x)
+            let ys = quad.map(\.y)
+            let x = xs.min() ?? 0
+            let y = ys.min() ?? 0
+            return CGRect(
+                x: bounds.minX + x, y: bounds.minY + y, width: (xs.max() ?? x) - x, height: (ys.max() ?? y) - y)
+        }
+    }
 
     private static func rectangle(_ values: [Double]) -> CGRect? {
         guard values.count == 4, values[2] > 0, values[3] > 0 else { return nil }
@@ -508,7 +654,7 @@ final class PDFCoordinator: NSObject, @preconcurrency PDFPageOverlayViewProvider
 #if os(iOS)
     extension PDFCoordinator: UIGestureRecognizerDelegate {
         func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
-            model.pdfBilingual.matches(model) && !penEnabled
+            (model.pdfBilingual.matches(model) || !noteAnnotations.isEmpty) && !penEnabled
         }
         func gestureRecognizer(
             _ gestureRecognizer: UIGestureRecognizer,

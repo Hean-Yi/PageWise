@@ -37,10 +37,13 @@ struct ReaderNotesView: View {
                     didNavigate()
                 } label: {
                     VStack(alignment: .leading, spacing: 7) {
-                        Text(note.anchors.map(\.text).joined(separator: " ")).font(.system(size: 11)).foregroundStyle(
-                            ReaderTheme.muted
-                        ).lineLimit(2)
-                        Text(note.markdown.isEmpty ? "空白笔记" : note.markdown).font(.system(size: 13)).lineLimit(4)
+                        Text(ReadingNoteSummary.excerpt(note.anchors.first?.text ?? "")).font(.system(size: 11))
+                            .foregroundStyle(
+                                ReaderTheme.muted
+                            ).lineLimit(2)
+                        Text(note.markdown.isEmpty ? "空白笔记" : ReadingNoteSummary.text(note.markdown)).font(
+                            .system(size: 13)
+                        ).lineLimit(1)
                     }.frame(maxWidth: .infinity, alignment: .leading).padding(12)
                         .background(ReaderTheme.canvas, in: RoundedRectangle(cornerRadius: 9))
                 }.buttonStyle(.plain)

@@ -45,6 +45,23 @@ struct PaperAssistantCitations: View {
                 .padding(.bottom, cited.isEmpty ? 0 : 3)
             }
             ForEach(cited) { source in card(source) }
+            if let id = turn.readingNoteID {
+                if let note = model.currentReadingNotes.first(where: { $0.id == id }) {
+                    Button {
+                        model.openReadingNote(note)
+                        didNavigate()
+                    } label: {
+                        AssistantToolTile(
+                            tool: "已记入原文", systemImage: "note.text",
+                            title: ReadingNoteSummary.excerpt(note.anchors.first?.text ?? "阅读笔记"),
+                            detail: ReadingNoteSummary.text(note.markdown),
+                            metadata: note.anchors.count > 1 ? "\(note.anchors.count) 处" : nil,
+                            accessory: "chevron.forward", detailLines: 1)
+                    }.buttonStyle(AssistantToolButtonStyle()).accessibilityHint("定位并打开阅读笔记")
+                } else {
+                    Label("笔记已删除", systemImage: "note.text").font(.caption).foregroundStyle(ReaderTheme.muted)
+                }
+            }
         }
         .task(id: turn.id) {
             // A streaming answer changes many times; its evidence and original question are fixed.

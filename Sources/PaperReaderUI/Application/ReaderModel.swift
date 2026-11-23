@@ -13,6 +13,7 @@ public final class ReaderModel {
     public var isImporting = false
     public var importProgress: String?
     public var selectionHTMLRange: [Int]?
+    var pdfNoteEditor: PDFNoteEditorSession?
     public var requestedReadingNote: UUID?
     public var readingNoteNavigationToken = UUID()
     public var lastDeletedNoteID: UUID?
@@ -160,6 +161,7 @@ public final class ReaderModel {
         if let id, pendingImportIDs.contains(id) { return }
         if let id, !state.papers.contains(where: { $0.id == id }) { return }
         Task { await flushReadingNotes() }
+        pdfNoteEditor = nil
         requestedReadingNote = nil
         let changedPaper = selectedPaperID != id
         if changedPaper {
@@ -197,7 +199,7 @@ public final class ReaderModel {
         cancellable: Bool = false, adding importedPaper: Paper? = nil,
         shelfChange: ShelfChange? = nil, importShelfID: UUID? = nil,
         orderChange: LibraryOrderChange? = nil, publishingReflow publication: Paper? = nil,
-        presentingReflow: (paperID: UUID, jobID: UUID)? = nil
+        presentingReflow: (paperID: UUID, jobID: UUID)? = nil, insertingNote: AnchoredNoteInsertion? = nil
     ) async -> Bool {
         guard loaded else { return false }
         let previous = saveQueue
@@ -230,7 +232,22 @@ public final class ReaderModel {
                     else { throw CancellationError() }
                     snapshot.papers[index].reflowJob?.hasPresentedContent = true
                 }
+                var noteMarks: [Highlight] = []
+                if let insertion = insertingNote {
+                    if let scope = insertion.scope {
+                        try self.validateDiscussionScope(
+                            scope, usesHTMLAnchor: insertion.note.anchors.first?.target != "pdf")
+                    }
+                    guard try insertion.existing(in: snapshot.readingNotes) == nil else { return true }
+                    noteMarks = insertion.newHighlights(in: snapshot.highlights)
+                    snapshot.readingNotes.append(insertion.note)
+                    snapshot.highlights.append(contentsOf: noteMarks)
+                }
                 try await store.save(snapshot, respectingCancellation: cancellable)
+                if let insertion = insertingNote {
+                    self.state.readingNotes.append(insertion.note)
+                    self.state.highlights.append(contentsOf: noteMarks)
+                }
                 if let importedPaper { self.state.papers.insert(importedPaper, at: 0) }
                 if let publication, let index = self.state.papers.firstIndex(where: { $0.id == publication.id }) {
                     let wasLocal = !self.state.papers[index].usesSourceReflow
@@ -309,6 +326,7 @@ public final class ReaderModel {
                 var highlight = Highlight(
                     paperID: id, pageKey: part.pageKey, pageIndex: index, text: text, rects: [])
                 highlight.textRange = [start, end]
+                highlight.contentVersion = htmlAnnotationVersion
                 highlight.htmlTarget = part.target
                 state.highlights.append(highlight)
             }
@@ -316,6 +334,7 @@ public final class ReaderModel {
             var highlight = Highlight(
                 paperID: id, pageKey: pageKeys[selectionPage], pageIndex: selectionPage, text: selectionText,
                 rects: selectionRects)
+            if usesHTMLReading { highlight.contentVersion = htmlAnnotationVersion }
             highlight.textRange = selectionHTMLRange
             state.highlights.append(highlight)
         }
