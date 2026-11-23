@@ -427,6 +427,149 @@
         model.select(nil)
     }
 
+    @Test(arguments: [false, true]) @MainActor
+    func insertingAndOpeningLibraryPassagesUsesTheRealNoteEditor(pdf: Bool) async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let model = try ReaderModel(root: root, credentials: WorkflowCredentials())
+        await model.load()
+        let file = root.appendingPathComponent("evidence.pdf")
+        try DemoPaper.write(to: file)
+        let target = try #require(await model.importURLs([file]).first)
+        let block = TextBlock(sourcePage: 0, text: "A reader can check the evidence.")
+        let noteID = UUID()
+        let web: WKWebView
+        var pdfCoordinator: PDFReadingNoteEditor.Coordinator?
+        var htmlCoordinator: HTMLCoordinator?
+        if pdf {
+            let fragments = try await PDFReadingNoteLocator().locate(quote: "Understanding", pageIndex: 0, in: file)
+            let note = ReadingNote(
+                id: noteID, paperID: target, contentVersion: "", anchors: fragments.map(\.anchor), markdown: "")
+            let session = PDFNoteEditorSession(note: note, marks: [])
+            model.pdfNoteEditor = session
+            let coordinator = PDFReadingNoteEditor(model: model, session: session).makeCoordinator()
+            pdfCoordinator = coordinator
+            web = coordinator.makeView()
+        } else {
+            var paper = Paper(
+                title: "A local reading", digest: "fixture", originalPath: "unused.pdf", pageCount: 1,
+                blocks: [block], warnings: [], canReflow: true)
+            paper.htmlReading = try await HTMLReadingStore().append(
+                [BilingualBlock(block: block, translation: "证据")],
+                to: nil, paper: paper, root: root)
+            paper.translatedBlockCount = 1
+            model.state.papers.append(paper)
+            model.select(paper.id)
+            model.openRetainedReading(nil)
+            let anchor = NoteAnchor(key: block.id.uuidString, target: "source", text: "reader", start: 2, end: 8)
+            try #require(model.updateReadingNote(id: noteID, anchors: [anchor], markdown: "A reference"))
+            let coordinator = HTMLCoordinator(model: model)
+            htmlCoordinator = coordinator
+            web = coordinator.makeView()
+            coordinator.update(web)
+        }
+        web.frame = CGRect(x: 0, y: 0, width: 900, height: 600)
+        defer {
+            pdfCoordinator?.stop()
+            htmlCoordinator?.stop(web)
+        }
+        if pdf {
+            try await noteWait { (try? await noteJS(web, "return !!window.pdfEditor")) as? Bool == true }
+            pdfCoordinator?.updateCitationRequest(1, in: web)
+        } else {
+            try await noteWait {
+                (try? await noteJS(web, "return !!document.querySelector('.reader-note-card')")) as? Bool == true
+            }
+            _ = try await noteJS(
+                web,
+                """
+                paperNotes.open(id,true);
+                const e=document.querySelector('.note-editor').noteEditor;e.setSelectionRange(2,11);
+                document.querySelector('[aria-label="插入书库片段"]').click();
+                """, ["id": noteID.uuidString])
+        }
+        try await noteWait { model.notePassageSheet != nil }
+        guard case .picker(let draft) = model.notePassageSheet else {
+            Issue.record("引用选择器未打开")
+            return
+        }
+        let choices = try await model.localPassageChoices(
+            paperID: target, query: "Multiple attention heads", pageIndex: 1)
+        let choice = try #require(choices.first)
+        try await model.insertNotePassage(choice, into: draft)
+        try await noteWait {
+            (try? await noteJS(web, "return !!document.querySelector('.cm-content a[data-passage]')")) as? Bool == true
+        }
+        let note = try #require(model.currentReadingNotes.first { $0.id == noteID })
+        let citation = try #require(note.citations?.first)
+        #expect(note.markdown.contains(citation.url.absoluteString))
+        if !pdf { #expect(note.markdown.hasPrefix("A [reference](")) }
+        // Exercise the down/up sequence on the live CodeMirror DOM. An editable mark can
+        // disappear during mousedown, before click is ever dispatched to the link.
+        for gesture in ["mouse", "touch", "keyboard"] {
+            model.notePassageSheet = nil
+            let stable = try await noteJS(
+                web,
+                """
+                const e=document.querySelector('.note-editor').noteEditor;
+                const a=e.view.contentDOM.querySelector('a[data-passage]');
+                if(!a || a.isContentEditable || a.tabIndex!==0) return false;
+                const before=e.value, caret=e.selectionStart;
+                if(gesture==='keyboard'){
+                    a.focus();
+                    a.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true,cancelable:true}));
+                }else{
+                    const rect=a.getBoundingClientRect(), event={bubbles:true,cancelable:true,
+                        button:0,clientX:rect.left+rect.width/2,clientY:rect.top+rect.height/2};
+                    a.dispatchEvent(new PointerEvent('pointerdown',{...event,pointerType:gesture,buttons:1}));
+                    if(gesture==='mouse') a.dispatchEvent(new MouseEvent('mousedown',{...event,buttons:1}));
+                    await new Promise(resolve=>setTimeout(resolve,20));
+                    if(!a.isConnected || a!==e.view.contentDOM.querySelector('a[data-passage]') || e.selectionStart!==caret) return false;
+                    a.dispatchEvent(new PointerEvent('pointerup',{...event,pointerType:gesture}));
+                    if(gesture==='touch') a.dispatchEvent(new MouseEvent('mousedown',{...event,buttons:1}));
+                    a.dispatchEvent(new MouseEvent('mouseup',event));
+                    a.dispatchEvent(new MouseEvent('click',event));
+                }
+                return a.isConnected && e.value===before;
+                """, ["gesture": gesture])
+            try #require(stable as? Bool == true, "打开引用时编辑选区与链接应保持稳定：\(gesture)")
+            try await noteWait {
+                if case .preview = model.notePassageSheet { return true }
+                return false
+            }
+        }
+        model.notePassageSheet = nil
+        let editable = try await noteJS(
+            web,
+            """
+            const e=document.querySelector('.note-editor').noteEditor;
+            const a=e.view.contentDOM.querySelector('a[data-passage]');
+            const source=e.value;
+            a.focus();a.dispatchEvent(new KeyboardEvent('keydown',{key:'F2',bubbles:true,cancelable:true}));
+            const showingSource=!e.view.contentDOM.querySelector('a[data-passage]') && e.view.contentDOM.textContent.includes('paperreader://passage/');
+            e.setSelectionRange(source.length,source.length);
+            return showingSource && source===e.value && !!e.view.contentDOM.querySelector('a[data-passage]');
+            """)
+        #expect(editable as? Bool == true)
+        #expect(model.notePassageSheet == nil)
+        let preview = try await model.previewLocalPassage(noteID: note.id, citationID: citation.id)
+        #expect(
+            preview.quote.contains("Multiple attention heads")
+                && preview.title == model.state.papers.first { $0.id == target }?.title)
+        if !pdf {
+            model.notePassageSheet = nil
+            _ = try await noteJS(
+                web, "paperNotes.finish();document.querySelector('.note-content a[data-passage]').click()")
+            try await noteWait {
+                if case .preview = model.notePassageSheet { return true }
+                return false
+            }
+        }
+        await model.flushReadingNotes()
+        try await model.openLocalPassage(preview)
+        #expect(model.selectedPaperID == target && model.visiblePage == 1)
+    }
+
     @MainActor private func noteJS(_ web: WKWebView, _ source: String, _ arguments: [String: Any] = [:]) async throws
         -> Any?
     {

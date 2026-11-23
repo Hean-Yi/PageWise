@@ -37,6 +37,13 @@ struct ReaderNotesView: View {
                     didNavigate()
                 } label: {
                     VStack(alignment: .leading, spacing: 7) {
+                        if let dimension = note.dimension {
+                            Label {
+                                Text(dimension.title)
+                            } icon: {
+                                Circle().fill(dimension.swatch).frame(width: 8, height: 8)
+                            }.font(.caption)
+                        }
                         Text(ReadingNoteSummary.excerpt(note.anchors.first?.text ?? "")).font(.system(size: 11))
                             .foregroundStyle(
                                 ReaderTheme.muted

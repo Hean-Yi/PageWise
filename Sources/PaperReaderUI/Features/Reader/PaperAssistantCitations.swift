@@ -52,15 +52,19 @@ struct PaperAssistantCitations: View {
                         didNavigate()
                     } label: {
                         AssistantToolTile(
-                            tool: "已记入原文", systemImage: "note.text",
-                            title: ReadingNoteSummary.excerpt(note.anchors.first?.text ?? "阅读笔记"),
-                            detail: ReadingNoteSummary.text(note.markdown),
+                            tool: turn.closeReadingVersion == nil ? "已记入原文" : "精读笔记", systemImage: "note.text",
+                            title: turn.closeReadingVersion == nil
+                                ? ReadingNoteSummary.excerpt(note.anchors.first?.text ?? "阅读笔记") : "全文论证骨架",
+                            detail: turn.closeReadingVersion == nil ? ReadingNoteSummary.text(note.markdown) : nil,
                             metadata: note.anchors.count > 1 ? "\(note.anchors.count) 处" : nil,
                             accessory: "chevron.forward", detailLines: 1)
                     }.buttonStyle(AssistantToolButtonStyle()).accessibilityHint("定位并打开阅读笔记")
                 } else {
                     Label("笔记已删除", systemImage: "note.text").font(.caption).foregroundStyle(ReaderTheme.muted)
                 }
+            }
+            if let ids = turn.closeReadingNoteIDs {
+                CloseReadingNoteList(ids: ids, model: model, didNavigate: didNavigate)
             }
         }
         .task(id: turn.id) {

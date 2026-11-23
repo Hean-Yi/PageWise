@@ -7,7 +7,32 @@ struct PDFNoteEditorSession: Identifiable {
     let marks: [Highlight]
 }
 
+struct PDFInlineNote: Equatable {
+    let id: UUID
+    let anchors: [NoteAnchor]
+    let color: AnnotationColor?
+}
+
 extension ReaderModel {
+    /// A report indexes its paragraph notes in the sidebar. Give an existing ordinary note the first hit in the text.
+    var inlinePDFNotes: [PDFInlineNote] {
+        guard let paper = currentEdition else { return [] }
+        let version = paper.digest + ":original-0"
+        let summaries = Set(
+            state.chats.compactMap { turn in
+                turn.paperID == paper.id && turn.closeReadingVersion != nil ? turn.readingNoteID : nil
+            })
+        let local = currentReadingNotes.reversed().filter {
+            $0.contentVersion == version && $0.anchors.first?.pdfPageIndex != nil && !summaries.contains($0.id)
+        }
+        let ordered = local.filter { $0.dimension == nil } + local.filter { $0.dimension != nil }
+        var seen = Set<[NoteAnchor]>()
+        return ordered.compactMap {
+            guard seen.insert($0.anchors).inserted else { return nil }
+            return PDFInlineNote(id: $0.id, anchors: $0.anchors, color: $0.dimension?.color)
+        }
+    }
+
     var hasPDFNoteSelection: Bool {
         !selectedPDFNoteRanges.isEmpty
     }
@@ -31,7 +56,9 @@ extension ReaderModel {
             }
             guard selectedPaperID == paper.id, selectedPDFNoteRanges == requested, !fragments.isEmpty else { return }
             let anchors = fragments.map(\.anchor)
-            if let existing = currentReadingNotes.first(where: { $0.anchors == anchors }) {
+            if let chosen = inlinePDFNotes.first(where: { $0.anchors == anchors }),
+                let existing = currentReadingNotes.first(where: { $0.id == chosen.id })
+            {
                 pdfNoteEditor = PDFNoteEditorSession(note: existing, marks: [])
             } else {
                 let note = ReadingNote(

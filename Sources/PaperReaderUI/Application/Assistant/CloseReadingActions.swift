@@ -1,0 +1,162 @@
+import Foundation
+import PaperReaderKit
+
+extension ReaderModel {
+    func closeReadingVersion(for scope: DiscussionNoteScope) -> String {
+        scope.htmlReading?.readingNoteVersion(digest: scope.digest) ?? scope.digest + ":original-0"
+    }
+
+    func existingCloseReading(for paperID: UUID, focus: String = "") -> ChatTurn? {
+        guard !pendingImportIDs.contains(paperID),
+            let document = paperID == selectedPaperID ? paper : state.papers.first(where: { $0.id == paperID })
+        else { return nil }
+        let version =
+            document.htmlReading?.readingNoteVersion(digest: document.digest) ?? document.digest + ":original-0"
+        return state.chats.last {
+            $0.paperID == paperID && $0.closeReadingVersion == version && (focus.isEmpty || $0.question == focus)
+        }
+    }
+
+    func showCloseReading(_ paperID: UUID, focus: String = "") async {
+        do {
+            let existing = existingCloseReading(for: paperID, focus: focus)
+            let turn = try await runCloseReading(paperID, focus: focus)
+            if existing != nil {
+                let ids = [turn.readingNoteID].compactMap { $0 } + (turn.closeReadingNoteIDs ?? [])
+                let notes = currentReadingNotes
+                if let note = ids.lazy.compactMap({ id in notes.first { $0.id == id } }).first {
+                    openReadingNote(note)
+                } else {
+                    message = "这次精读的笔记已删除。"
+                }
+            }
+        } catch is CancellationError {
+        } catch { message = error.localizedDescription }
+    }
+
+    func runCloseReading(_ paperID: UUID, focus: String = "") async throws -> ChatTurn {
+        if let existing = existingCloseReading(for: paperID, focus: focus) { return existing }
+        guard closeReadingTask == nil, !busyAI else { throw ReaderError.message("助读正在处理请求，请稍后再试。") }
+        let scope = try discussionNoteScope(for: paperID)
+        guard let document = paperID == selectedPaperID ? paper : state.papers.first(where: { $0.id == paperID })
+        else { throw ReaderError.message("这篇论文已不在书库中。") }
+        busyAI = true
+        closeReadingPaperID = paperID
+        closeReadingProgress = "准备本地原文…"
+        let task = Task {
+            let config = modelSettings
+            let key = try await modelKey(for: config)
+            let related = try await relatedLocalPassages(
+                query: document.title + " " + focus, excluding: paperID, limit: 5)
+            let analysis = try await CloseReadingEngine.run(
+                paper: document, root: root, related: related, focus: focus,
+                progress: { [weak self] text in
+                    await self?.setCloseReadingProgress(text)
+                },
+                complete: { [client] system, user in
+                    try await client.complete(
+                        settings: config, key: key, system: system, user: user, jsonOutput: true, maxOutputTokens: 8192)
+                })
+            try validateDiscussionScope(scope)
+            return try await saveCloseReading(analysis, scope: scope, focus: focus)
+        }
+        closeReadingTask = task
+        defer {
+            busyAI = false
+            closeReadingTask = nil
+            closeReadingPaperID = nil
+            closeReadingProgress = ""
+        }
+        return try await withTaskCancellationHandler {
+            try await task.value
+        } onCancel: {
+            task.cancel()
+        }
+    }
+
+    private func setCloseReadingProgress(_ text: String) { closeReadingProgress = text }
+
+    private func saveCloseReading(_ analysis: CloseReadingAnalysis, scope: DiscussionNoteScope, focus: String)
+        async throws -> ChatTurn
+    {
+        var insertions: [AnchoredNoteInsertion] = []
+        var firstSource: DiscussionNoteSource?
+        var skipped = 0
+        var verified: [String: LocalPassageCitation] = [:]
+        func citation(_ evidence: Evidence, _ quote: String) async throws -> LocalPassageCitation {
+            let key = [
+                evidence.paperID?.uuidString, evidence.blockID?.uuidString, evidence.sourcePage.map(String.init), quote,
+            ]
+            .compactMap { $0 }.joined(separator: "\u{1F}")
+            if let existing = verified[key] { return existing }
+            let result = try await makeLocalPassageCitation(evidence: evidence, quote: quote)
+            verified[key] = result
+            return result
+        }
+        for (index, annotation) in analysis.annotations.enumerated() {
+            try Task.checkCancellation()
+            closeReadingProgress = "核对批注 \(index + 1) / \(analysis.annotations.count)"
+            do {
+                let source = (evidence: annotation.source, quote: annotation.quote)
+                let primary = try await citation(source.evidence, source.quote)
+                var refs = [primary]
+                var links = [primary.markdown(label: "本段原文")]
+                for ref in annotation.references {
+                    let item = try await citation(ref.evidence, ref.quote)
+                    if !refs.contains(where: { $0.id == item.id }) {
+                        refs.append(item)
+                        links.append(item.markdown(label: ref.label))
+                    }
+                }
+                let body = annotation.markdown + "\n\n" + links.joined(separator: " · ")
+                let insertion = try await prepareDiscussionNote(
+                    in: scope, sources: [source], markdown: body,
+                    requestID: UUID(), citations: refs, dimension: annotation.dimension)
+                insertions.append(insertion)
+                if firstSource == nil { firstSource = source }
+            } catch is CancellationError { throw CancellationError() } catch {
+                try validateDiscussionScope(scope)
+                skipped += 1
+            }
+        }
+        var outline = ["# 全文论证骨架"]
+        var outlineRefs: [LocalPassageCitation] = []
+        for item in analysis.outline {
+            try Task.checkCancellation()
+            var links: [String] = []
+            for ref in item.references {
+                if let source = try? await citation(ref.evidence, ref.quote) {
+                    if firstSource == nil && ref.evidence.paperID == scope.paperID {
+                        firstSource = (ref.evidence, ref.quote)
+                    }
+                    if !outlineRefs.contains(where: { $0.id == source.id }) { outlineRefs.append(source) }
+                    links.append(source.markdown(label: ref.label))
+                }
+            }
+            let located = links.count == item.references.count
+            let text = located ? item.text : "该环节的引文未能在本地核实。"
+            outline.append(
+                "**\(item.stage.title)**　" + text + (links.isEmpty ? "" : "\n\n" + links.joined(separator: " · ")))
+        }
+        try Task.checkCancellation()
+        guard let firstSource else { throw ReaderError.message("没有批注或论证引文通过原文定位校验。可以选中一段原文，单独询问助读。") }
+        let summary = try await prepareDiscussionNote(
+            in: scope, sources: [firstSource],
+            markdown: outline.joined(separator: "\n\n"), requestID: UUID(), citations: outlineRefs)
+        let coverage = analysis.coverage + (skipped == 0 ? "" : " · \(skipped) 条批注未通过原文核对")
+        var report = ChatTurn(
+            paperID: scope.paperID, question: focus.isEmpty ? "AI 精读" : focus, selection: "",
+            answer: coverage, evidence: [])
+        report.closeReadingVersion = closeReadingVersion(for: scope)
+        report.readingNoteID = summary.note.id
+        report.closeReadingNoteIDs = insertions.map(\.note.id)
+        insertions.append(summary)
+        guard await save(cancellable: true, closeReading: (insertions, report)),
+            let saved = state.chats.first(where: { $0.id == report.id })
+        else {
+            try Task.checkCancellation()
+            throw ReaderError.message("精读结果未能保存，请重试。")
+        }
+        return saved
+    }
+}

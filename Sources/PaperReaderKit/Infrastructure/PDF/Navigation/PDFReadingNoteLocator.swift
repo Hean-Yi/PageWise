@@ -155,3 +155,20 @@ public actor PDFReadingNoteLocator {
         }
     }
 }
+
+extension PDFReadingNoteLocator {
+    public func citationContext(for citation: LocalPassageCitation, documentURL: URL) throws -> (
+        before: String, after: String
+    ) {
+        guard let first = citation.anchors.first, let index = first.pdfPageIndex, let last = citation.anchors.last,
+            citation.anchors.allSatisfy({ $0.pdfPageIndex == index && $0.start >= 0 && $0.end > $0.start })
+        else { throw Self.notFound }
+        let ranges = citation.anchors.map { NSRange(location: $0.start, length: $0.end - $0.start) }
+        let located = try locate(quote: citation.quote, pageIndex: index, in: documentURL, selectedRanges: ranges)
+        guard located.map(\.anchor) == citation.anchors else { throw Self.notFound }
+        let document = try document(at: documentURL, pageIndex: index)
+        guard let raw = document.page(at: index)?.string as NSString?, first.start <= raw.length, last.end <= raw.length
+        else { throw Self.notFound }
+        return (String(raw.substring(to: first.start).suffix(120)), String(raw.substring(from: last.end).prefix(180)))
+    }
+}

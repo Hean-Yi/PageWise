@@ -6,6 +6,7 @@ import WebKit
 @MainActor struct PDFReadingNoteEditor {
     let model: ReaderModel
     let session: PDFNoteEditorSession
+    var citationRequest = 0
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -15,9 +16,14 @@ import WebKit
         private weak var view: WKWebView?
         private var previewTask: Task<Void, Never>?
         private var source: String
+        private var ready = false
+        private var lastRequest = 0
+        private var pendingRequest = 0
 
         init(_ editor: PDFReadingNoteEditor) {
             self.editor = editor
+            lastRequest = editor.citationRequest
+            pendingRequest = editor.citationRequest
             source =
                 editor.model.currentReadingNotes.first { $0.id == editor.session.id }?.markdown
                 ?? editor.session.note.markdown
@@ -51,6 +57,7 @@ import WebKit
                 const send = message => window.webkit.messageHandlers.pdfNote.postMessage(message);
                 window.pdfEditor = window.PaperNoteEditor.create(document.querySelector('.note-editor'), source,
                     text => send({text}), () => send({done:true}));
+                window.PaperNoteEditor.bindPassages(document, passage => send({passage}));
                 window.pdfEditor.focus();
                 """
             webView.callAsyncJavaScript(js, arguments: ["source": source], in: nil, in: .defaultClient) {
@@ -60,8 +67,21 @@ import WebKit
                     editor.model.message = "笔记编辑器暂未就绪，请重新打开。"
                     return
                 }
+                ready = true
+                updateCitationRequest(pendingRequest, in: webView)
                 preview()
             }
+        }
+
+        func updateCitationRequest(_ request: Int, in view: WKWebView) {
+            pendingRequest = request
+            guard ready, request != lastRequest else { return }
+            lastRequest = request
+            let script = """
+                const e=window.pdfEditor;
+                window.webkit.messageHandlers.pdfNote.postMessage({pick:true,markdown:e.value,from:e.selectionStart,to:e.selectionEnd});
+                """
+            view.callAsyncJavaScript(script, arguments: [:], in: nil, in: .defaultClient, completionHandler: nil)
         }
 
         func userContentController(
@@ -72,7 +92,21 @@ import WebKit
                 note.paperID == editor.model.selectedPaperID,
                 let value = message.body as? [String: Any]
             else { return }
-            if let text = value["text"] as? String {
+            if value["pick"] as? Bool == true, let source = value["markdown"] as? String,
+                let from = value["from"] as? Int, let to = value["to"] as? Int
+            {
+                editor.model.pickNotePassage(noteID: note.id, anchors: note.anchors, source: source, from: from, to: to)
+                {
+                    [weak self] link in
+                    guard let self, let view else { return }
+                    view.callAsyncJavaScript(
+                        "window.pdfEditor?.insertPassage(source,from,to,link)",
+                        arguments: ["source": source, "from": from, "to": to, "link": link], in: nil,
+                        in: .defaultClient, completionHandler: nil)
+                }
+            } else if let raw = value["passage"] as? String, let passage = UUID(uuidString: raw) {
+                editor.model.presentNotePassage(noteID: note.id, citationID: passage)
+            } else if let text = value["text"] as? String {
                 if editor.model.updateReadingNote(id: note.id, anchors: note.anchors, markdown: text) {
                     source = text
                     preview()
@@ -89,7 +123,10 @@ import WebKit
                 guard let self else { return }
                 do {
                     try await Task.sleep(for: .milliseconds(100))
-                    let html = try await renderer.render(expected)
+                    let ids =
+                        editor.model.currentReadingNotes.first { $0.id == editor.session.id }?.citations?.map(\.id)
+                        ?? []
+                    let html = try await renderer.renderReadingNote(expected, passageIDs: Set(ids))
                     try Task.checkCancellation()
                     guard expected == source, let view else { return }
                     view.callAsyncJavaScript(
@@ -118,13 +155,17 @@ import WebKit
 #if os(macOS)
     extension PDFReadingNoteEditor: NSViewRepresentable {
         func makeNSView(context: Context) -> WKWebView { context.coordinator.makeView() }
-        func updateNSView(_ view: WKWebView, context: Context) {}
+        func updateNSView(_ view: WKWebView, context: Context) {
+            context.coordinator.updateCitationRequest(citationRequest, in: view)
+        }
         static func dismantleNSView(_ view: WKWebView, coordinator: Coordinator) { coordinator.stop() }
     }
 #else
     extension PDFReadingNoteEditor: UIViewRepresentable {
         func makeUIView(context: Context) -> WKWebView { context.coordinator.makeView() }
-        func updateUIView(_ view: WKWebView, context: Context) {}
+        func updateUIView(_ view: WKWebView, context: Context) {
+            context.coordinator.updateCitationRequest(citationRequest, in: view)
+        }
         static func dismantleUIView(_ view: WKWebView, coordinator: Coordinator) { coordinator.stop() }
     }
 #endif

@@ -326,7 +326,14 @@ final class PDFCoordinator: NSObject, @preconcurrency PDFPageOverlayViewProvider
         if isVisible, let index = model.jumpPage, let page = view.document?.page(at: index) {
             let outline = model.jumpOutlineItem
             view.clearSelection()
-            if let id = model.requestedReadingNote, model.pdfNoteEditor?.id == id,
+            let requestedNote = model.pdfNoteEditor?.note
+            let requestedAnchor = requestedNote?.id == model.requestedReadingNote ? requestedNote?.anchors.first : nil
+            if let anchor = model.jumpPassageAnchors.first ?? requestedAnchor, anchor.pdfPageIndex == index,
+                anchor.start >= 0, anchor.end > anchor.start, anchor.end <= page.numberOfCharacters,
+                let selection = page.selection(for: NSRange(location: anchor.start, length: anchor.end - anchor.start))
+            {
+                view.go(to: selection.bounds(for: page).insetBy(dx: -10, dy: -18), on: page)
+            } else if let id = model.requestedReadingNote, model.pdfNoteEditor?.id == id,
                 let box = noteAnnotations[id]?.first(where: { $0.page === page })?.bounds
             {
                 view.go(to: box.insetBy(dx: -10, dy: -18), on: page)
@@ -363,10 +370,7 @@ final class PDFCoordinator: NSObject, @preconcurrency PDFPageOverlayViewProvider
     }
 
     private func updateNotes(in document: PDFDocument) {
-        let notes = model.currentReadingNotes.filter {
-            $0.anchors.first?.pdfPageIndex != nil
-                && $0.contentVersion == (model.currentEdition?.digest ?? "") + ":original-0"
-        }
+        let notes = model.inlinePDFNotes
         let live = Set(notes.map(\.id))
         for id in noteAnnotations.keys where !live.contains(id) {
             for location in noteAnnotations.removeValue(forKey: id) ?? [] {
@@ -410,15 +414,15 @@ final class PDFCoordinator: NSObject, @preconcurrency PDFPageOverlayViewProvider
     }
 
     @discardableResult
-    private func openNote(at point: CGPoint) -> Bool {
+    func openNote(at point: CGPoint) -> Bool {
         guard isVisible, !penEnabled, !noteAnnotations.isEmpty, let view,
             let page = view.page(for: point, nearest: false)
         else { return false }
         let location = view.convert(point, to: page)
         guard
-            let note = model.currentReadingNotes.last(where: { note in
+            let hit = model.inlinePDFNotes.first(where: { note in
                 noteAnnotations[note.id]?.contains { $0.page === page && $0.bounds.contains(location) } == true
-            })
+            }), let note = model.currentReadingNotes.first(where: { $0.id == hit.id })
         else { return false }
         model.openReadingNote(note)
         return true

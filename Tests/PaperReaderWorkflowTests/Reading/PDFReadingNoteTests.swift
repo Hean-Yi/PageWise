@@ -97,6 +97,46 @@ import WebKit
     Issue.record("PDF 笔记卡片未在编辑区显示加粗文字和公式，正文已保存 = \(reader.currentReadingNotes.first?.markdown == markdown)")
 }
 
+@Test @MainActor func tappingOriginalPDFMarksPrefersTheParagraphOrTheReadersOwnNoteOverItsReport() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let reader = try ReaderModel(root: root, credentials: WorkflowCredentials())
+    await reader.load()
+    let url = root.appendingPathComponent("fixture.pdf")
+    try DemoPaper.write(to: url)
+    let id = try #require(await reader.importURLs([url]).first)
+    let version = try #require(reader.paper?.digest) + ":original-0"
+    let quote = "Imagine a notebook"
+    let anchor = try #require(
+        try await PDFReadingNoteLocator().locate(quote: quote, pageIndex: 0, in: url).first?.anchor)
+    var paragraph = ReadingNote(paperID: id, contentVersion: version, anchors: [anchor], markdown: "论点批注")
+    paragraph.dimension = .thesis
+    let summary = ReadingNote(paperID: id, contentVersion: version, anchors: [anchor], markdown: "已编辑的骨架标题")
+    var report = ChatTurn(paperID: id, question: "AI 精读", selection: "", answer: "", evidence: [])
+    report.closeReadingVersion = version
+    report.readingNoteID = summary.id
+    report.closeReadingNoteIDs = [paragraph.id]
+    reader.state.chats = [report]
+    reader.state.readingNotes = [paragraph, summary]
+    let coordinator = PDFCoordinator(model: reader)
+    let view = coordinator.makeView()
+    view.frame = CGRect(x: 0, y: 0, width: 800, height: 900)
+    let focus = PDFCanvas(model: reader, penEnabled: false).sentenceDisplay
+    coordinator.update(view, penEnabled: false, focus: focus)
+    let page = try #require(view.document?.page(at: 0))
+    let rect = try #require(
+        page.selection(for: NSRange(location: anchor.start, length: quote.utf16.count))?.bounds(for: page))
+    let point = view.convert(CGPoint(x: rect.midX, y: rect.midY), from: page)
+    #expect(coordinator.openNote(at: point) && reader.pdfNoteEditor?.id == paragraph.id)
+    let manual = ReadingNote(paperID: id, contentVersion: version, anchors: [anchor], markdown: "原有手写笔记")
+    reader.state.readingNotes.insert(manual, at: 0)
+    coordinator.update(view, penEnabled: false, focus: focus)
+    #expect(reader.inlinePDFNotes.map(\.id) == [manual.id])
+    #expect(coordinator.openNote(at: point) && reader.pdfNoteEditor?.id == manual.id)
+    reader.openReadingNote(summary)
+    #expect(reader.pdfNoteEditor?.id == summary.id)
+}
+
 @Test(arguments: [AnnotationStyle.underline, .highlight]) @MainActor
 func pdfDiscussionNoteKeepsTheColorAndInkOfAnOverlappingManualMark(style: AnnotationStyle) async throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)

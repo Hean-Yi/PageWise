@@ -11,7 +11,16 @@ final class HTMLNoteBridge {
     private var persistence = ""
     private var navigationToken: UUID?
     private var tasks: [UUID: Task<Void, Never>] = [:]
-    private var previewCache: [UUID: (source: String, html: String)] = [:]
+    private struct Preview {
+        let source: String
+        let passages: Set<UUID>
+        let html: String
+
+        func matches(_ note: ReadingNote) -> Bool {
+            source == note.markdown && passages == Set((note.citations ?? []).map(\.id))
+        }
+    }
+    private var previewCache: [UUID: Preview] = [:]
     init(model: ReaderModel) { self.model = model }
 
     func stop() {
@@ -36,25 +45,28 @@ final class HTMLNoteBridge {
             let values: [[String: Any]] = notes.map { note in
                 [
                     "id": note.id.uuidString, "markdown": note.markdown, "anchors": note.anchors.map(Self.anchor),
-                    "html": previewCache[note.id].flatMap { $0.source == note.markdown ? $0.html : nil } ?? "",
+                    "dimensionTitle": note.dimension?.title ?? "",
+                    "html": previewCache[note.id].flatMap { $0.matches(note) ? $0.html : nil } ?? "",
                 ]
             }
             call(view, "window.paperNotes?.sync(notes)", ["notes": values])
-            for note in notes where previewCache[note.id]?.source != note.markdown {
+            for note in notes where previewCache[note.id]?.matches(note) != true {
                 tasks[note.id]?.cancel()
                 let expectedPaper = note.paperID
                 tasks[note.id] = Task { [weak self, weak view] in
                     guard let self else { return }
                     do {
                         try await Task.sleep(for: .milliseconds(60))
-                        let html = try await self.renderer.render(note.markdown)
+                        let passages = Set((note.citations ?? []).map(\.id))
+                        let html = try await self.renderer.renderReadingNote(note.markdown, passageIDs: passages)
+                        let preview = Preview(source: note.markdown, passages: passages, html: html)
                         try Task.checkCancellation()
                         guard let view, self.model.selectedPaperID == expectedPaper,
                             self.model.displayedHTMLReadingNotes.contains(where: {
-                                $0.id == note.id && $0.markdown == note.markdown
+                                $0.id == note.id && preview.matches($0)
                             })
                         else { return }
-                        self.previewCache[note.id] = (note.markdown, html)
+                        self.previewCache[note.id] = preview
                         self.call(
                             view, "window.paperNotes?.preview(id,source,html)",
                             ["id": note.id.uuidString, "source": note.markdown, "html": html])
@@ -81,6 +93,24 @@ final class HTMLNoteBridge {
     func receive(_ value: [String: Any], view: WKWebView) {
         guard value["paperID"] as? String == model.selectedPaperID?.uuidString else { return }
         switch value["kind"] as? String {
+        case "notePreviewPassage":
+            guard let raw = value["id"] as? String, let id = UUID(uuidString: raw),
+                let destination = value["passage"] as? String, let passage = UUID(uuidString: destination)
+            else { return }
+            model.presentNotePassage(noteID: id, citationID: passage)
+        case "noteInsertPassage":
+            guard let raw = value["id"] as? String, let id = UUID(uuidString: raw),
+                let anchors = Self.anchors(value["anchors"]), let markdown = value["markdown"] as? String,
+                let from = value["from"] as? Int, let to = value["to"] as? Int
+            else { return }
+            model.pickNotePassage(noteID: id, anchors: anchors, source: markdown, from: from, to: to) {
+                [weak self, weak view] link in
+                guard let self, let view else { return }
+                call(
+                    view, "window.paperNotes?.insertPassage(id,source,from,to,link)",
+                    ["id": raw, "source": markdown, "from": from, "to": to, "link": link])
+                update(view, sidebarOpen: sidebar ?? true)
+            }
         case "noteChange":
             guard let raw = value["id"] as? String, let id = UUID(uuidString: raw),
                 let markdown = value["markdown"] as? String, let anchors = Self.anchors(value["anchors"]),

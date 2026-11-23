@@ -3,15 +3,31 @@ import SwiftUI
 struct PDFReadingNoteCard: View {
     let model: ReaderModel
     let session: PDFNoteEditorSession
+    @State private var citationRequest = 0
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
-                Label("阅读笔记", systemImage: "note.text").font(.headline)
+                if let dimension = session.note.dimension {
+                    Label {
+                        Text(dimension.title)
+                    } icon: {
+                        Circle().fill(dimension.swatch).frame(width: 10, height: 10)
+                    }
+                    .font(.headline)
+                } else {
+                    Label("阅读笔记", systemImage: "note.text").font(.headline)
+                }
                 if let page = session.note.anchors.first?.pdfPageIndex {
                     Text("第 \(page + 1) 页").font(.caption).foregroundStyle(ReaderTheme.muted)
                 }
                 Spacer()
+                Button {
+                    citationRequest += 1
+                } label: {
+                    Image(systemName: "link")
+                }
+                .buttonStyle(.borderless).help("插入书库片段").accessibilityLabel("插入书库片段")
                 if model.currentReadingNotes.contains(where: { $0.id == session.id }) {
                     Button {
                         model.deleteReadingNote(session.id)
@@ -25,7 +41,7 @@ struct PDFReadingNoteCard: View {
                 .font(.caption).foregroundStyle(ReaderTheme.muted).lineLimit(2)
                 .padding(.horizontal, 14).padding(.vertical, 8)
             Divider()
-            PDFReadingNoteEditor(model: model, session: session).id(session.id)
+            PDFReadingNoteEditor(model: model, session: session, citationRequest: citationRequest).id(session.id)
             Divider()
             HStack {
                 if model.noteSaveFailed {

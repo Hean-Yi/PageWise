@@ -18,10 +18,11 @@
             focusedID: nil,
             focusRevision: 0, followsScroll: false, sourceScrollID: nil, sourceScrollRevision: 0, pdfSelectedIDs: [],
             onScroll: { _ in }, onSelection: { _ in }, onFocus: { _ in }, onHover: { _ in },
-            noteAnchors: [id: [anchor]], onOpenNote: { opened = $0 })
+            inlineNotes: [.init(id: id, anchors: [anchor], color: nil)], onOpenNote: { opened = $0 })
         let coordinator = canvas.makeCoordinator()
         let web = coordinator.makeView()
         defer { coordinator.stop(web) }
+        web.frame = CGRect(x: 0, y: 0, width: 500, height: 400)
         for _ in 0..<200 {
             let verified =
                 try? await web.callAsyncJavaScript(
@@ -37,7 +38,30 @@
         }
         for _ in 0..<50 where opened == nil { try await Task.sleep(for: .milliseconds(20)) }
         #expect(opened == id)
-        canvas.noteAnchors = [:]
+        let manual = UUID()
+        let shorter = NoteAnchor(key: "original-0", target: "pdf", text: "wo", start: 40, end: 42)
+        canvas.inlineNotes = [
+            .init(id: manual, anchors: [shorter], color: nil), .init(id: id, anchors: [anchor], color: .blue),
+        ]
+        coordinator.update(canvas, view: web)
+        for (index, expected) in [(10, manual), (13, id)] {
+            opened = nil
+            let sent =
+                try await web.callAsyncJavaScript(
+                    """
+                    const node=document.querySelector('.en'), range=document.createRange();
+                    range.setStart(node.firstChild,index);range.setEnd(node.firstChild,index+1);
+                    const box=range.getBoundingClientRect();
+                    if (!box.width || document.querySelector('.sentence-note').dataset.readingNote!==manual) return false;
+                    node.dispatchEvent(new MouseEvent('click',{bubbles:true,detail:1,
+                      clientX:box.x+box.width/2,clientY:box.y+box.height/2}));return true;
+                    """, arguments: ["index": index, "manual": manual.uuidString], in: nil, contentWorld: .defaultClient
+                ) as? Bool
+            #expect(sent == true)
+            for _ in 0..<50 where opened == nil { try await Task.sleep(for: .milliseconds(20)) }
+            #expect(opened == expected)
+        }
+        canvas.inlineNotes = []
         coordinator.update(canvas, view: web)
         let cleared =
             try await web.callAsyncJavaScript(

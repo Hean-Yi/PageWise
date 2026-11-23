@@ -31,6 +31,10 @@ enum HTMLNoteStyle {
           .reader-note-card .cm-scroller{font:inherit;overflow:auto;padding:10px 14px}
           .reader-note-card .cm-content{font:inherit;padding:0;caret-color:#a34c33;min-height:100px}
           .reader-note-card .cm-line{padding:0}.reader-note-card .cm-focused{outline:none}
+          .reader-note-card a[data-passage]{color:#995136;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:.18em;cursor:pointer}
+          .cm-content a[data-passage][contenteditable=false]{touch-action:manipulation;-webkit-user-select:none;user-select:none}
+          .reader-note-card a[data-passage]:hover,.reader-note-card a[data-passage]:focus-visible{text-decoration-style:solid}
+          @media(prefers-color-scheme:dark){.reader-note-card a[data-passage]{color:#e2a889}}
           .reader-note-card .cm-selectionBackground{background:#b8c6d55c!important}
           .reader-note-card .note-md-strong{font-weight:700}.reader-note-card .note-md-em{font-style:italic}.reader-note-card .note-md-strike{text-decoration:line-through}
           .reader-note-card .note-md-heading{font-weight:650;font-size:1.2em;line-height:1.5;padding:4px 0}.reader-note-card .note-md-h1{font-size:1.35em}

@@ -9,6 +9,8 @@ public struct ChatTurn: Identifiable, Codable, Sendable {
     public var evidence: [Evidence]
     /// A note lives in the same collection as manually made reading notes.
     public var readingNoteID: UUID?
+    public var closeReadingVersion: String?
+    public var closeReadingNoteIDs: [UUID]?
     public var createdAt = Date()
     public init(paperID: UUID, question: String, selection: String, answer: String, evidence: [Evidence]) {
         self.paperID = paperID

@@ -16,6 +16,9 @@ struct ReaderView: View {
 
     var body: some View {
         GeometryReader { proxy in content(width: proxy.size.width) }
+            .sheet(item: $model.notePassageSheet) { sheet in
+                NotePassageSheetView(model: model, sheet: sheet)
+            }
     }
 
     private func content(width: CGFloat) -> some View {
@@ -64,6 +67,7 @@ struct ReaderView: View {
         .onDisappear { model.pdfBilingual.close() }
         .onAppear { pageInput = "\(model.visiblePage + 1)" }
         .onChange(of: model.selectedPaperID) { _, _ in
+            model.notePassageSheet = nil
             model.pdfBilingual.close()
             pageInput = "\(model.visiblePage + 1)"
         }

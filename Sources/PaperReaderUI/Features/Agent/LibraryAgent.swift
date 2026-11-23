@@ -82,7 +82,7 @@ public final class LibraryAgent {
         if let clarificationID { updateTurn(clarificationID) { $0.clarification?.reply = question } }
         turns.append(turn)
         followUpCardID = nil
-        let wantsNote = ReadingNoteIntent.isRequested(question)
+        let wantsNote = CloseReadingIntent.isRequested(question) || ReadingNoteIntent.isRequested(question)
         if wantsNote, reference?.kind == .onlineCandidate, reference?.paperID == nil {
             updateTurn(turn.id) { $0.error = "请先将这篇论文导入书库，再在原文旁记笔记。" }
             return
@@ -248,6 +248,12 @@ public final class LibraryAgent {
         if let request = noteRequest {
             instructions +=
                 "\n本轮读者已要求写入本机阅读笔记。用 create_reading_note 一次独立调用，提供一篇已登记论文内的一至八处摘录和 Markdown。结合本次讨论提炼观点，区分论文事实与读者的解释。每处 quote 逐字来自已返回的 text，其中 result_id 指向该摘录。不要仅回复笔记草稿。"
+            if CloseReadingIntent.isRequested(request.instruction) {
+                instructions += "\n这是全文精读请求。单独调用 close_read_paper，使用已登记的目标论文 ID。"
+            } else {
+                instructions +=
+                    "\n写笔记时可按需要用 search_library/read_paper 核对其他本地论文，把引用写进 citations，按顺序将 {{cite:1}} 等放在 markdown 中。外部候选和未校验的编号不能生成链接。"
+            }
             if let id = request.target, let doc = reader.state.papers.first(where: { $0.id == id }) {
                 paperRegistry.insert(id)
                 let firstPage = reader.selectedPaperID == id && reader.mode == "original" ? reader.visiblePage + 1 : 1
@@ -296,7 +302,9 @@ public final class LibraryAgent {
                 }
                 updateTurn(turnID) { turn in
                     turn.recordProcess(response, displaysThinking: displaysProviderThinking, toolRound: false)
-                    if noteRequest != nil {
+                    if let noteRequest, CloseReadingIntent.isRequested(noteRequest.instruction) {
+                        turn.answer = "尚未生成精读。请指定书库中的目标论文，或在论文助读里点「AI 精读」。"
+                    } else if noteRequest != nil {
                         turn.answer = "尚未保存笔记。请指定一段可核对的原文，或选中要标记的句子再试。"
                     } else if turn.answer != text {
                         turn.answer = text
@@ -333,7 +341,9 @@ public final class LibraryAgent {
                 updateTurn(turnID) { $0.activities.append(activity) }
                 let content: String
                 do {
-                    if ["ask_user", "create_reading_note"].contains(call.function.name), calls.count != 1 {
+                    if ["ask_user", "create_reading_note", "close_read_paper"].contains(call.function.name),
+                        calls.count != 1
+                    {
                         throw ReaderError.message("请单独调用此工具。")
                     }
                     let outcome = try await execute(call, epoch: epoch, noteRequest: noteRequest) { subject in
@@ -357,6 +367,9 @@ public final class LibraryAgent {
                                 turn.answer = "已在原文标记并保存阅读笔记。"
                             } else if let presentation = outcome.presentation {
                                 turn.presentedResults = presentation
+                                if call.function.name == "close_read_paper" {
+                                    turn.answer = outcome.message ?? "精读已保存。"
+                                }
                                 explicitlyPresented = true
                             } else if !explicitlyPresented,
                                 ["open_paper", "prepare_import"].contains(call.function.name)

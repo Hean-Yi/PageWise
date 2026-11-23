@@ -45,9 +45,34 @@ extension LibraryAgent {
             name: call.function.name, json: call.function.arguments, limits: limits)
         try check(epoch)
         switch arguments {
-        case .createReadingNote(let markdown, let quotations):
+        case .closeReadPaper(let raw):
+            let paper = try registeredPaper(raw, page: nil)
+            guard let request = noteRequest, CloseReadingIntent.isRequested(request.instruction),
+                request.openedPaper == reader.selectedPaperID, request.target == nil || request.target == paper.id
+            else { throw ReaderError.message("需要读者明确要求精读这篇本地论文。") }
+            onSubject(paper.title)
+            let report = try await reader.runCloseReading(paper.id, focus: request.instruction)
+            let ids = [report.readingNoteID].compactMap { $0 } + (report.closeReadingNoteIDs ?? [])
+            let cards = ids.compactMap { id -> AgentCard? in
+                guard let note = reader.state.readingNotes.first(where: { $0.id == id && $0.deletedAt == nil }) else {
+                    return nil
+                }
+                var item = AgentCard(kind: .navigation, title: note.dimension?.title ?? "全文论证骨架")
+                item.paperID = paper.id
+                item.readingNoteID = id
+                item.sourcePage = note.anchors.first?.pdfPageIndex.map { $0 + 1 }
+                return item
+            }
+            guard !cards.isEmpty else { throw ReaderError.message("此版论文的精读笔记已删除。") }
+            return AgentToolOutcome(
+                content: #"{"ok":true}"#, cards: cards, truncated: false, message: report.answer,
+                presentation: cards.map { .init(id: $0.id, purpose: .readingNote) })
+        case .createReadingNote(let markdown, let quotations, let references, let dimension):
             guard let request = noteRequest, request.openedPaper == reader.selectedPaperID else {
                 throw ReaderError.message("需要读者在本轮明确要求为这篇论文记笔记。")
+            }
+            guard !CloseReadingIntent.isRequested(request.instruction) else {
+                throw ReaderError.message("读者要求精读全文。请使用 close_read_paper。")
             }
             let sources = try quotations.map { part -> (evidence: Evidence, quote: String) in
                 guard let source = card(part.resultID), source.kind == .evidence, let evidence = evidence(for: source)
@@ -62,9 +87,17 @@ extension LibraryAgent {
             else { throw ReaderError.message("一条阅读笔记只能标在本轮目标论文上。") }
             let scope = try request.scope ?? reader.discussionNoteScope(for: paperID)
             onSubject(evidence.title)
+            let links = try references.map { reference -> NoteLinkRequest in
+                guard let registered = card(reference.passage.resultID), registered.kind == .evidence,
+                    let evidence = self.evidence(for: registered), evidence.paperID != nil
+                else { throw ReaderError.message("链接只能引用从本地论文读到的片段。") }
+                return NoteLinkRequest(evidence: evidence, quote: reference.passage.quote, label: reference.label)
+            }
+            let linked = try await reader.attachNoteLinks(to: markdown, references: links)
             let note = try await reader.saveDiscussionNote(
-                in: scope, sources: sources, markdown: markdown,
-                requestID: request.id, instruction: request.instruction)
+                in: scope, sources: sources, markdown: linked.markdown,
+                requestID: request.id, instruction: request.instruction, citations: linked.citations,
+                dimension: dimension)
             var item = AgentCard(kind: .navigation, title: evidence.title)
             item.readingNoteID = note.id
             item.paperID = paperID

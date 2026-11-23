@@ -15,6 +15,7 @@ struct PaperAssistantView: View {
     var body: some View {
         let chats = displayedChats
         return VStack(alignment: .leading, spacing: 0) {
+            CloseReadingControl(model: model, openSettings: openSettings)
             ScrollViewReader { scroll in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 24) {

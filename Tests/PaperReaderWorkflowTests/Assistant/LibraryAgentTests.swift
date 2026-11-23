@@ -1052,6 +1052,77 @@ private actor DelayedHistorySearch: PaperDiscovery {
     #expect(persisted.highlights == reader.state.highlights)
 }
 
+@Test @MainActor func libraryAgentOnlyLinksRegisteredLocalPassagesFromAnotherPaperInTheSavedNote() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let reader = try await makeAgentReader(root)
+    let primaryQuote = "A word can need different evidence in different sentences."
+    let citedQuote = "The comparison used identical training sets."
+    let primary = Paper(
+        title: "Fixture Primary", digest: "primary", originalPath: "primary.pdf", pageCount: 2,
+        blocks: [TextBlock(sourcePage: 1, text: primaryQuote)], warnings: [], canReflow: false)
+    try DemoPaper.write(to: root.appendingPathComponent(primary.originalPath))
+    let citedBlock = TextBlock(sourcePage: 0, text: citedQuote)
+    var cited = Paper(
+        title: "Fixture Comparison", digest: "comparison", originalPath: "comparison.pdf", pageCount: 1,
+        blocks: [citedBlock], warnings: [], canReflow: true)
+    cited.htmlReading = try await HTMLReadingStore().append(
+        [BilingualBlock(block: citedBlock, translation: "对照使用了相同的训练集。")], to: nil, paper: cited, root: root)
+    try #require(await reader.save(adding: primary))
+    try #require(await reader.save(adding: cited))
+    reader.select(primary.id)
+    let comparisonID = cited.id
+    let client = ScriptedLibraryModel { messages, count in
+        func result(_ callID: String, for paperID: UUID) throws -> String {
+            let body = try #require(messages.first { $0.toolCallID == callID }?.content)
+            let payload = try #require(try JSONSerialization.jsonObject(with: Data(body.utf8)) as? [String: Any])
+            let rows = try #require(payload["results"] as? [[String: Any]])
+            let row = try #require(rows.first { $0["paper_id"] as? String == paperID.uuidString })
+            return try #require(row["result_id"] as? String)
+        }
+        switch count {
+        case 1:
+            return tool("search_library", #"{"query":"fixture"}"#, id: "search")
+        case 2:
+            return tool("read_paper", #"{"paper_id":"\#(primary.id)","source_page":2}"#, id: "primary")
+        case 5:
+            return tool("read_paper", #"{"paper_id":"\#(comparisonID)","source_page":1}"#, id: "comparison")
+        case 3, 4, 6:
+            let reference: String
+            switch count {
+            case 3: reference = try result("search", for: comparisonID)  // Title hit, no source excerpt.
+            case 4: reference = UUID().uuidString
+            default: reference = try result("comparison", for: comparisonID)
+            }
+            let arguments = try JSONSerialization.data(withJSONObject: [
+                "markdown": "该解释依赖比较条件。{{cite:1}}",
+                "sources": [["result_id": try result("primary", for: primary.id), "quote": primaryQuote]],
+                "citations": [["result_id": reference, "quote": citedQuote, "label": "参见实验设置"]],
+                "dimension": "evidence",
+            ])
+            return tool("create_reading_note", String(decoding: arguments, as: UTF8.self), id: "note-\(count)")
+        default: throw ReaderError.message("测试工具轮数超过预期。")
+        }
+    }
+    let agent = LibraryAgent(reader: reader, client: client, discovery: AgentDiscoveryFixture())
+    agent.send("请把讨论观点写成阅读笔记，并引用另一篇本地论文。")
+    try await eventually { !agent.isRunning }
+    let turn = try #require(agent.turns.first)
+    #expect(turn.error == nil)
+    #expect(turn.activities.map(\.status) == [.succeeded, .succeeded, .failed, .failed, .succeeded, .succeeded])
+    #expect(reader.state.readingNotes.count == 1)
+    let note = try #require(reader.state.readingNotes.first)
+    let link = try #require(note.citations?.first)
+    #expect(note.paperID == primary.id && note.anchors.first?.text == primaryQuote && note.dimension == .evidence)
+    #expect(note.citations?.count == 1 && link.paperID == comparisonID && link.quote == citedQuote)
+    #expect(note.markdown == "该解释依赖比较条件。" + link.markdown(label: "参见实验设置"))
+    #expect(reader.state.highlights.map(\.paperID) == [primary.id] && reader.state.highlights.first?.color == .blue)
+    #expect(turn.presentedResults.map(\.purpose) == [.readingNote])
+    let preview = try await reader.previewLocalPassage(noteID: note.id, citationID: link.id)
+    #expect(preview.title == cited.title && preview.quote == citedQuote)
+    #expect(try await LibraryStore(directory: root).load().readingNotes == [note])
+}
+
 @Test @MainActor func noteTransactionPreservesHumanHighlightsEditsAndSoftDeletionOnReplay() async throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: root) }

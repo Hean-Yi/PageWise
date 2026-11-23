@@ -11,7 +11,12 @@ public actor NoteMarkdownRenderer {
         try markdownDocument(markdown).body()?.html() ?? ""
     }
 
-    func markdownDocument(_ markdown: String) throws -> Document {
+    /// The reader may activate only a passage registered on this particular note.
+    public func renderReadingNote(_ markdown: String, passageIDs: Set<UUID>) throws -> String {
+        try markdownDocument(markdown, passageIDs: passageIDs).body()?.html() ?? ""
+    }
+
+    func markdownDocument(_ markdown: String, passageIDs: Set<UUID>? = nil) throws -> Document {
         if engine == nil {
             guard let context = JSContext(),
                 let url = Bundle.module.url(forResource: "marked.umd", withExtension: "js", subdirectory: "Marked")
@@ -60,7 +65,15 @@ public actor NoteMarkdownRenderer {
             }
             if element.tagName() == "a" {
                 let href = try element.attr("href")
-                if let url = URL(string: href), ["https", "http"].contains(url.scheme?.lowercased() ?? ""),
+                if let passageIDs {
+                    if let url = URL(string: href), let id = LocalPassageCitation.id(from: url),
+                        passageIDs.contains(id)
+                    {
+                        try element.attr("data-passage", id.uuidString)
+                    } else {
+                        try element.unwrap()
+                    }
+                } else if let url = URL(string: href), ["https", "http"].contains(url.scheme?.lowercased() ?? ""),
                     url.host != nil
                 {
                     try element.attr("rel", "noreferrer noopener")

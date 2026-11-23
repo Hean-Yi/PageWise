@@ -13,6 +13,7 @@ public final class ReaderModel {
     public var isImporting = false
     public var importProgress: String?
     public var selectionHTMLRange: [Int]?
+    var notePassageSheet: NotePassageSheet?
     var pdfNoteEditor: PDFNoteEditorSession?
     public var requestedReadingNote: UUID?
     public var readingNoteNavigationToken = UUID()
@@ -20,6 +21,7 @@ public final class ReaderModel {
     public var noteRevision = 0
     public var savedNoteRevision = 0
     public var noteSaveFailed = false
+    @ObservationIgnored var verifiedPassageChoices: [LocalPassageCitation] = []
     @ObservationIgnored var noteSaveTask: Task<Void, Never>?
     public var htmlSelection: [HTMLTextSelection] = []
     public var usesHTMLReading: Bool { mode == "translated" && paper?.htmlReading != nil }
@@ -32,6 +34,9 @@ public final class ReaderModel {
     @ObservationIgnored var reflowPresenting: Set<UUID> = []
     public var assistantDraft: ChatTurn?
     public var busyAI = false
+    var closeReadingPaperID: UUID?
+    var closeReadingProgress = ""
+    @ObservationIgnored var closeReadingTask: Task<ChatTurn, Error>?
     public var translating: Set<UUID> = []
     public private(set) var pendingArtifactIDs: Set<UUID> = []
     var pendingImportIDs: Set<UUID> = []
@@ -53,8 +58,12 @@ public final class ReaderModel {
         }
     }
     public var jumpPage: Int? {
-        didSet { jumpOutlineItem = nil }
+        didSet {
+            jumpOutlineItem = nil
+            jumpPassageAnchors = []
+        }
     }
+    var jumpPassageAnchors: [NoteAnchor] = []
     var jumpOutlineItem: PaperNavigationItem?
     public var navigationItems: [PaperNavigationItem] = []
     var loadedNavigationDocumentID: String?
@@ -165,6 +174,7 @@ public final class ReaderModel {
         requestedReadingNote = nil
         let changedPaper = selectedPaperID != id
         if changedPaper {
+            closeReadingTask?.cancel()
             pdfBilingual.close()
             translationPauseReason = nil
         }
@@ -199,7 +209,8 @@ public final class ReaderModel {
         cancellable: Bool = false, adding importedPaper: Paper? = nil,
         shelfChange: ShelfChange? = nil, importShelfID: UUID? = nil,
         orderChange: LibraryOrderChange? = nil, publishingReflow publication: Paper? = nil,
-        presentingReflow: (paperID: UUID, jobID: UUID)? = nil, insertingNote: AnchoredNoteInsertion? = nil
+        presentingReflow: (paperID: UUID, jobID: UUID)? = nil, insertingNote: AnchoredNoteInsertion? = nil,
+        closeReading: (notes: [AnchoredNoteInsertion], report: ChatTurn)? = nil
     ) async -> Bool {
         guard loaded else { return false }
         let previous = saveQueue
@@ -232,22 +243,34 @@ public final class ReaderModel {
                     else { throw CancellationError() }
                     snapshot.papers[index].reflowJob?.hasPresentedContent = true
                 }
+                var additions: [ReadingNote] = []
                 var noteMarks: [Highlight] = []
-                if let insertion = insertingNote {
+                var report = closeReading?.report
+                let insertions = closeReading?.notes ?? insertingNote.map { [$0] } ?? []
+                for insertion in insertions {
+                    try self.validateLocalPassageTargets(insertion.note.citations ?? [])
                     if let scope = insertion.scope {
                         try self.validateDiscussionScope(
                             scope, usesHTMLAnchor: insertion.note.anchors.first?.target != "pdf")
                     }
-                    guard try insertion.existing(in: snapshot.readingNotes) == nil else { return true }
-                    noteMarks = insertion.newHighlights(in: snapshot.highlights)
+                    if let existing = try insertion.existing(in: snapshot.readingNotes) {
+                        if report?.readingNoteID == insertion.note.id { report?.readingNoteID = existing.id }
+                        if let index = report?.closeReadingNoteIDs?.firstIndex(of: insertion.note.id) {
+                            report?.closeReadingNoteIDs?[index] = existing.id
+                        }
+                        continue
+                    }
+                    let marks = insertion.newHighlights(in: snapshot.highlights)
+                    additions.append(insertion.note)
+                    noteMarks += marks
                     snapshot.readingNotes.append(insertion.note)
-                    snapshot.highlights.append(contentsOf: noteMarks)
+                    snapshot.highlights += marks
                 }
+                if let report { snapshot.chats.append(report) }
                 try await store.save(snapshot, respectingCancellation: cancellable)
-                if let insertion = insertingNote {
-                    self.state.readingNotes.append(insertion.note)
-                    self.state.highlights.append(contentsOf: noteMarks)
-                }
+                if !additions.isEmpty { self.state.readingNotes.append(contentsOf: additions) }
+                if !noteMarks.isEmpty { self.state.highlights.append(contentsOf: noteMarks) }
+                if let report { self.state.chats.append(report) }
                 if let importedPaper { self.state.papers.insert(importedPaper, at: 0) }
                 if let publication, let index = self.state.papers.firstIndex(where: { $0.id == publication.id }) {
                     let wasLocal = !self.state.papers[index].usesSourceReflow

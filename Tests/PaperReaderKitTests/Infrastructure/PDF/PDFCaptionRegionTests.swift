@@ -197,3 +197,68 @@ private func illustratedFixture() throws -> URL {
     context.closePDF()
     return url
 }
+
+@Test func closeReadingPDFSeparatesTableValuesFromFigureCaptionsAndChecksTheLastPage() async throws {
+    let url = try illustratedFixture()
+    defer { try? FileManager.default.removeItem(at: url) }
+    let original = try Data(contentsOf: url)
+    let pageCount = try #require(PDFDocument(url: url)?.pageCount)
+    let paper = Paper(
+        title: "Fixture", digest: "source", originalPath: url.lastPathComponent, pageCount: pageCount,
+        blocks: [], warnings: [], canReflow: false)
+    let corpus = try await CloseReadingCorpus.read(
+        paper: paper, root: url.deletingLastPathComponent(), progress: { _ in })
+    let passages = corpus.windows.flatMap { $0 }
+    let table = try #require(passages.first { $0.evidence.sourcePage == 1 && $0.kind == "table" })
+    #expect(table.table?.contains("Western\t31") == true)
+    #expect(table.evidence.text.contains("Table 2") && !table.evidence.text.contains("Western"))
+    let figure = try #require(passages.first { $0.evidence.sourcePage == 0 && $0.kind == "captionOnly" })
+    #expect(figure.table == nil && figure.evidence.text.contains("Figure 1"))
+    #expect(!passages.contains { $0.evidence.text.contains("The signal rises.") })
+    #expect(passages.contains { $0.evidence.sourcePage == pageCount - 1 })
+    #expect(try Data(contentsOf: url) == original)
+}
+
+@Test func closeReadingPartialPDFTableRetainsExplicitGroupUnitAndRejectsSpanningHeader() throws {
+    let data = NSMutableData()
+    let writer = try #require(CGDataConsumer(data: data))
+    var pageBox = CGRect(x: 0, y: 0, width: 460, height: 660)
+    let canvas = try #require(CGContext(consumer: writer, mediaBox: &pageBox, nil))
+    func draw(_ string: String, x: CGFloat, y: CGFloat) {
+        let font = CTFontCreateWithName("Helvetica" as CFString, 10, nil)
+        let line = CTLineCreateWithAttributedString(
+            NSAttributedString(
+                string: string,
+                attributes: [.init(kCTFontAttributeName as String): font]))
+        canvas.textMatrix = .identity
+        canvas.textPosition = CGPoint(x: x - CTLineGetTypographicBounds(line, nil, nil, nil) / 2, y: y)
+        CTLineDraw(line, canvas)
+    }
+    for grouped in [false, true] {
+        canvas.beginPDFPage(nil)
+        draw("Method", x: 90, y: 560)
+        draw(grouped ? "Across two outcomes" : "Acc (%)", x: grouped ? 233 : 190, y: 560)
+        draw("Time", x: 330, y: 560)
+        draw("Holdout cohort", x: 255, y: 543)
+        for (index, label) in ["Control", "Learned", "Third"].enumerated() {
+            let y = CGFloat(520 - index * 15)
+            draw(label, x: 90, y: y)
+            draw(["62.1", "70.0", "61.0"][index], x: 190, y: y)
+            draw("4.1", x: 330, y: y)
+        }
+        canvas.endPDFPage()
+    }
+    canvas.closePDF()
+    let doc = try #require(PDFDocument(data: data as Data))
+    defer { withExtendedLifetime(doc) {} }
+    let bounds = CGRect(x: 40, y: 480, width: 330, height: 100)
+    let simple = try #require(doc.page(at: 0))
+    let spanning = try #require(doc.page(at: 1))
+    let rows = try #require(try PDFTableEvidenceColumn.rows(on: simple, in: bounds))
+    #expect(
+        rows.components(separatedBy: "\n") == [
+            "分组\tMethod\tAcc (%)", "Holdout cohort\tControl\t62.1",
+            "Holdout cohort\tLearned\t70.0", "Holdout cohort\tThird\t61.0",
+        ])
+    #expect(try PDFTableEvidenceColumn.rows(on: spanning, in: bounds) == nil)
+}

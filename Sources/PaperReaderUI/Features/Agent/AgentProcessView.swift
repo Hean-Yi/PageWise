@@ -169,6 +169,7 @@ struct AgentProcessView: View {
         case "open_paper": "定位论文"
         case "present_results": "选定结果"
         case "ask_user": "询问偏好"
+        case "close_read_paper": "精读论文"
         case "create_reading_note": "在原文记笔记"
         default: "调用工具"
         }

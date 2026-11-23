@@ -10,7 +10,13 @@ public enum AgentToolArguments: Sendable, Equatable {
         public let resultID: UUID
         public let quote: String
     }
-    case createReadingNote(markdown: String, sources: [Quotation])
+    public struct NoteCitation: Sendable, Equatable {
+        public var passage: Quotation
+        public var label: String
+    }
+    case createReadingNote(
+        markdown: String, sources: [Quotation], citations: [NoteCitation], dimension: CloseReadingDimension?)
+    case closeReadPaper(String)
     case askUser(AgentClarification)
     case searchLibrary(String)
     case searchOnline(String, limit: Int? = nil)
@@ -43,8 +49,11 @@ public enum AgentToolArguments: Sendable, Equatable {
             return value.intValue
         }
         switch name {
+        case "close_read_paper":
+            try keys(["paper_id"], required: ["paper_id"])
+            return .closeReadPaper(try string("paper_id", max: 128))
         case "create_reading_note":
-            try keys(["markdown", "sources"], required: ["markdown", "sources"])
+            try keys(["markdown", "sources", "citations", "dimension"], required: ["markdown", "sources"])
             let markdown = try string("markdown", max: limits.maxArgumentBytes)
             guard let rows = values["sources"] as? [[String: Any]], (1...8).contains(rows.count) else {
                 throw ReaderError.message("阅读笔记需要一至八处原文。")
@@ -56,7 +65,28 @@ public enum AgentToolArguments: Sendable, Equatable {
                 else { throw ReaderError.message("请使用已登记的本地摘录和其中的原句。") }
                 return Quotation(resultID: id, quote: quote)
             }
-            return .createReadingNote(markdown: markdown, sources: sources)
+            var citations: [NoteCitation] = []
+            if let value = values["citations"] {
+                guard let rows = value as? [[String: Any]], rows.count <= 8 else {
+                    throw ReaderError.message("每条笔记最多引用八处本地片段。")
+                }
+                citations = try rows.map { row in
+                    guard Set(row.keys) == ["result_id", "quote", "label"],
+                        let raw = row["result_id"] as? String, let id = UUID(uuidString: raw),
+                        let quote = row["quote"] as? String,
+                        !quote.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                        let label = row["label"] as? String, (1...120).contains(label.count)
+                    else { throw ReaderError.message("引用需要已登记的本地摘录、逐字原文和链接文字。") }
+                    return .init(passage: .init(resultID: id, quote: quote), label: label)
+                }
+            }
+            var dimension: CloseReadingDimension?
+            if values["dimension"] != nil {
+                guard let parsed = CloseReadingDimension(rawValue: try string("dimension", max: 32))
+                else { throw ReaderError.message("未知的精读分析维度。") }
+                dimension = parsed
+            }
+            return .createReadingNote(markdown: markdown, sources: sources, citations: citations, dimension: dimension)
         case "present_results":
             try keys(["purpose", "items"], required: ["purpose", "items"])
             guard let purpose = AgentPresentedResult.Purpose(rawValue: try string("purpose", max: 32)),

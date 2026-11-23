@@ -190,8 +190,17 @@ final class HTMLCoordinator: NSObject, WKNavigationDelegate, WKScriptMessageHand
         }
         notes.update(view, sidebarOpen: sidebarOpen)
         if let index = model.jumpPage, keys.indices.contains(index) {
+            let anchor = model.jumpPassageAnchors.first
+            let data: [String: Any] =
+                anchor.map {
+                    ["key": $0.key, "target": $0.target, "text": $0.text, "start": $0.start, "end": $0.end]
+                } ?? [:]
             view.callAsyncJavaScript(
-                "window.paperReader.jump(key)", arguments: ["key": keys[index]], in: nil,
+                """
+                const r = anchor.key === key ? window.paperSelection?.rangesFor(anchor)[0] : null;
+                if (r) window.scrollBy(0, r.getBoundingClientRect().top - innerHeight * 0.3);
+                else window.paperReader.jump(key);
+                """, arguments: ["key": keys[index], "anchor": data], in: nil,
                 in: .defaultClient, completionHandler: nil)
             Task { @MainActor [weak self] in
                 guard let self, self.model.selectedPaperID == self.paperID, self.model.jumpPage == index else { return }

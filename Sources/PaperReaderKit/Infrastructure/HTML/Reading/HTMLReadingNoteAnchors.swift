@@ -42,7 +42,8 @@ extension HTMLReadingStore {
             guard element.id() == "block-" + key, streams[key] == nil else { throw unavailable }
             streams[key] = try PublishedText(
                 element: element, key: key,
-                includesSelectedObjects: selection.contains { $0.key == key && $0.target.hasPrefix("object:") })
+                includesSelectedObjects: selection.contains { $0.key == key && $0.target.hasPrefix("object:") }
+                    || (evidence.blockID != nil && !(try element.select("table:not(.paper-equation)").isEmpty())))
         }
         guard streams.count == keys.count else { throw unavailable }
 
@@ -66,6 +67,9 @@ extension HTMLReadingStore {
         var matches: [[NoteAnchor]] = []
         for stream in streams.values {
             matches += try verifiedMatches(in: stream.source, expression: expression)
+            let tables = stream.objects.filter { $0.text.hasPrefix("[表格] ") }
+                .map { AnchorFragment(anchor: $0, boundary: .object) }
+            matches += try verifiedMatches(in: tables, expression: expression)
             if matches.count > 1 { throw ambiguous }
         }
         guard let match = matches.first else { throw unavailable }
@@ -238,8 +242,22 @@ private func verifiedMatches(in fragments: [AnchorFragment], expression: NSRegul
         }
         if part.anchor.target.hasPrefix("object:") {
             let full = NSRange(part.anchor.text.startIndex..., in: part.anchor.text)
-            if expression.firstMatch(in: part.anchor.text, range: full)?.range == full {
-                matches.append([part.anchor])
+            if let hit = expression.firstMatch(in: part.anchor.text, range: full) {
+                if hit.range == full {
+                    matches.append([part.anchor])
+                } else if part.anchor.text.hasPrefix("[表格] "), hit.range.location >= "[表格] ".utf16.count {
+                    // Tables retain their original row and column structure as a single shared object.
+                    // Repeated cell contents cannot identify which observation was cited.
+                    matches.append([part.anchor])
+                    let next = NSMaxRange(hit.range)
+                    if next < full.length,
+                        expression.firstMatch(
+                            in: part.anchor.text,
+                            range: NSRange(location: next, length: full.length - next)) != nil
+                    {
+                        matches.append([part.anchor])
+                    }
+                }
             }
             continue
         }
@@ -249,4 +267,39 @@ private func verifiedMatches(in fragments: [AnchorFragment], expression: NSRegul
     }
     matchRun()
     return matches
+}
+
+extension HTMLReadingStore {
+    /// Reopen the very same published language stream. Its stable offsets disambiguate repeated wording.
+    public func citationContext(for citation: LocalPassageCitation, artifact: HTMLReadingArtifact, root: URL) throws
+        -> (before: String, after: String)
+    {
+        let failure = ReaderError.message("这处引用已无法在保存的阅读版本中核对。")
+        let evidence = Evidence(id: "", title: "", text: citation.quote, paperID: citation.paperID)
+        let verified = try noteAnchors(
+            for: citation.quote, evidence: evidence, paperID: citation.paperID,
+            artifact: artifact, root: root, selection: citation.anchors)
+        guard verified == citation.anchors, let first = verified.first, let last = verified.last else { throw failure }
+        guard !first.target.hasPrefix("object:"), !last.target.hasPrefix("object:") else { return ("", "") }
+        let url = root.appendingPathComponent(artifact.relativePath)
+        Self.retainOpenDocument(url)
+        defer { Self.releaseOpenDocument(url) }
+        let document = try SwiftSoup.parse(String(contentsOf: url, encoding: .utf8))
+        func text(for anchor: NoteAnchor) throws -> NSString {
+            guard let element = try document.getElementById("block-" + anchor.key) else { throw failure }
+            let stream = try PublishedText(element: element, key: anchor.key, includesSelectedObjects: false)
+            let parts = anchor.target == "source" ? stream.source : stream.translation
+            let value = parts.map(\.anchor.text).joined() as NSString
+            guard anchor.start >= 0, anchor.end > anchor.start, anchor.end <= value.length,
+                value.substring(with: NSRange(location: anchor.start, length: anchor.end - anchor.start)) == anchor.text
+            else { throw failure }
+            return value
+        }
+        let startText = try text(for: first)
+        let endText = first.key == last.key && first.target == last.target ? startText : try text(for: last)
+        return (
+            String(startText.substring(to: first.start).suffix(120)),
+            String(endText.substring(from: last.end).prefix(180))
+        )
+    }
 }

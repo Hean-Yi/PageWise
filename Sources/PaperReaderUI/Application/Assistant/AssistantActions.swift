@@ -21,6 +21,10 @@ extension ReaderModel {
 
     public func ask(_ question: String) async {
         guard let paper, !busyAI, !question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        if CloseReadingIntent.isRequested(question) {
+            await showCloseReading(paper.id, focus: question)
+            return
+        }
         busyAI = true
         defer {
             busyAI = false
@@ -67,8 +71,17 @@ extension ReaderModel {
                 notes: notes,
                 selectedBlockIDs: pinnedIDs, originalPages: originalPages)
             if let scope = noteScope {
+                let wantsLinks =
+                    question.range(
+                        of: #"引用|链接|对照|对比|比较|link|citat|compar"#, options: [.regularExpression, .caseInsensitive])
+                    != nil
+                let related =
+                    wantsLinks
+                    ? try await relatedLocalPassages(query: question + " " + paper.title, excluding: paper.id, limit: 5)
+                    : []
                 let context = PaperDiscussionNote(
-                    paperID: paper.id, selection: selectedEvidence, history: history, retrieved: evidence)
+                    paperID: paper.id, selection: selectedEvidence, history: history, retrieved: evidence,
+                    related: related)
                 try await recordDiscussionNote(
                     question: question, scope: scope, paper: paper, selection: selection, context: context,
                     config: config, key: key)

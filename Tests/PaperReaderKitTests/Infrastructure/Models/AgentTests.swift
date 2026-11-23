@@ -41,7 +41,7 @@ private actor AgentWireTransport: HTTPTransport {
     #expect(
         Set(definitions.compactMap { $0["name"] as? String }) == [
             "search_library", "read_paper", "search_online", "prepare_import", "open_paper", "present_results",
-            "ask_user", "create_reading_note",
+            "ask_user", "create_reading_note", "close_read_paper",
         ])
     let presentation = try #require(definitions.first { $0["name"] as? String == "present_results" })
     let parameters = try #require(presentation["parameters"] as? [String: Any])

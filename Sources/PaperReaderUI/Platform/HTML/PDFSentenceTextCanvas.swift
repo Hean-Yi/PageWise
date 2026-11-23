@@ -33,7 +33,7 @@ import WebKit
     }
 
     var continuous: Continuous?
-    var noteAnchors: [UUID: [NoteAnchor]] = [:]
+    var inlineNotes: [PDFInlineNote] = []
     var onOpenNote: (UUID) -> Void = { _ in }
 
     struct Continuous {
@@ -62,7 +62,7 @@ import WebKit
         private var follow: Bool?
         private var lastScrollRevision = -1
         private var lastPDFSelection: [String] = []
-        private var displayedNotes: [UUID: [NoteAnchor]] = [:]
+        private var displayedNotes: [PDFInlineNote] = []
         private var ready = false
         private var paragraphWindow = PDFParagraphWindowBridge()
 
@@ -125,15 +125,15 @@ import WebKit
                 renderedSentences = parent.sentences
                 translated = parent.translations
             }
-            if (changed || windowChanged || layoutChanged || displayedNotes != parent.noteAnchors)
-                && (!displayedNotes.isEmpty || !parent.noteAnchors.isEmpty)
+            if (changed || windowChanged || layoutChanged || displayedNotes != parent.inlineNotes)
+                && (!displayedNotes.isEmpty || !parent.inlineNotes.isEmpty)
             {
                 let sentences = continuous.map { $0.pages.values.flatMap(\.sentences) } ?? parent.sentences
-                let marks = Self.noteMarks(in: sentences, notes: parent.noteAnchors)
+                let marks = Self.noteMarks(in: sentences, notes: parent.inlineNotes)
                 view.callAsyncJavaScript(
                     "window.sentenceReader.markNotes(marks)", arguments: ["marks": marks],
                     in: nil, in: .defaultClient, completionHandler: nil)
-                displayedNotes = parent.noteAnchors
+                displayedNotes = parent.inlineNotes
             }
             if changed || windowChanged || layoutChanged || displayedFontSize != parent.fontSize
                 || active != parent.activeID
@@ -189,12 +189,14 @@ import WebKit
 
         /// Intersections are computed in the immutable PDF character space. Reflowed text receives ink
         /// only when the overlapping glyphs also identify a unique substring of the rendered sentence.
-        static func noteMarks(in sentences: [PDFSourceSentence], notes: [UUID: [NoteAnchor]]) -> [[String: Any]] {
+        static func noteMarks(
+            in sentences: [PDFSourceSentence], notes: [PDFInlineNote]
+        ) -> [[String: Any]] {
             let byPage = Dictionary(grouping: sentences, by: \.pageIndex)
             var output: [[String: Any]] = []
-            for (id, anchors) in notes {
+            for note in notes {
                 var hits: [String: [[Int]]] = [:]
-                for anchor in anchors {
+                for anchor in note.anchors {
                     guard let page = anchor.pdfPageIndex, anchor.start >= 0, anchor.end > anchor.start,
                         anchor.end - anchor.start == anchor.text.utf16.count
                     else { continue }
@@ -242,7 +244,10 @@ import WebKit
                     }
                 }
                 for (sentenceID, ranges) in hits {
-                    output.append(["note": id.uuidString, "sentence": sentenceID, "ranges": ranges])
+                    output.append([
+                        "note": note.id.uuidString, "sentence": sentenceID, "ranges": ranges,
+                        "color": note.color?.rawValue ?? "yellow",
+                    ])
                 }
             }
             return output
@@ -335,7 +340,7 @@ import WebKit
             }
             let action = event["action"] as? String
             if action == "note", let raw = event["id"] as? String, let id = UUID(uuidString: raw),
-                latest.noteAnchors[id] != nil
+                latest.inlineNotes.contains(where: { $0.id == id })
             {
                 latest.onOpenNote(id)
                 return
@@ -441,6 +446,10 @@ extension PDFSentenceTextCanvas {
         .page-marker{display:flex;align-items:center;gap:.8em;margin:2.4em 0 1.4em;color:var(--en);font:500 .75em/1.5 -apple-system,sans-serif}
         .page-marker:after{content:"";height:1px;background:currentColor;opacity:.2;flex:1}
         ::highlight(pdf-reading-notes){background-color:#eacb6d5c;text-decoration:underline #ab7752}
+        ::highlight(pdf-notes-red){background-color:#f5aaa67d;text-decoration:underline #d4807a}
+        ::highlight(pdf-notes-blue){background-color:#b5d5f884;text-decoration:underline #7ca3d0}
+        ::highlight(pdf-notes-green){background-color:#b7db9e80;text-decoration:underline #7ca663}
+        ::highlight(pdf-notes-purple){background-color:#cbb7ed80;text-decoration:underline #9880b6}
         .sentence-note{display:inline-flex;vertical-align:super;align-items:center;justify-content:center;border:0;
           color:var(--accent,#a55537);background:transparent;font:13px system-ui;cursor:pointer;padding:0 .2em}
         .sentence-note::before{content:'✎'}
@@ -484,6 +493,7 @@ extension PDFSentenceTextCanvas {
           let figures=[];
           let hot='', active='', focused='', track=false, userScroll=false, scrollTimer=0, lastScroll='';
           let lastSelection=[], related=[], order=[], paragraphMode=false, revealLanguage='en';
+          let inlineNoteRanges=new WeakMap();
           let flow=null;
           function post(event) {
             if (flow) { event.paper=flow.paper;event.revision=flow.revision; }
@@ -604,6 +614,12 @@ extension PDFSentenceTextCanvas {
           main.addEventListener('click',e=>{
             const note=e.target.closest('[data-reading-note]');
             if (note) {send('note',note.dataset.readingNote);return;}
+            if (e.detail===1 && getSelection().isCollapsed) {
+              const runs=inlineNoteRanges.get(e.target.closest('.en'));
+              const hit=runs?.find(({range})=>[...range.getClientRects()].some(rect=>
+                rect.left<=e.clientX && e.clientX<=rect.right && rect.top<=e.clientY && e.clientY<=rect.bottom));
+              if (hit) {send('note',hit.id);return;}
+            }
             const source=e.target.closest('[data-original]');
             if (source) {post({action:'original',page:Number(source.dataset.original)});return;}
             const figure=e.target.closest('[data-illustration]');
@@ -788,22 +804,27 @@ extension PDFSentenceTextCanvas {
           window.sentenceReader={
             pageWindow,tableCopied,
             markNotes(marks) {
-              const ink=[];
+              const colors={yellow:'pdf-reading-notes',red:'pdf-notes-red',blue:'pdf-notes-blue',green:'pdf-notes-green',purple:'pdf-notes-purple'};
+              const ink=new Map(Object.values(colors).map(name=>[name,[]]));
+              inlineNoteRanges=new WeakMap();
+              const lastButton=new Map();
               for (const button of main.querySelectorAll('[data-reading-note]')) button.remove();
               for (const mark of marks) {
                 const en=pairs.get(mark.sentence)?.en, text=en?.firstChild;
                 if (!en?.isConnected || text?.nodeType!==Node.TEXT_NODE) continue;
                 for (const [start,end] of mark.ranges) {
                   if (start<0 || end<=start || end>text.length) continue;
-                  const range=document.createRange();range.setStart(text,start);range.setEnd(text,end);ink.push(range);
+                  const range=document.createRange();range.setStart(text,start);range.setEnd(text,end);ink.get(colors[mark.color] ?? colors.yellow).push(range);
+                  if (!inlineNoteRanges.has(en)) inlineNoteRanges.set(en,[]);
+                  inlineNoteRanges.get(en).push({id:mark.note,range});
                 }
                 if (paragraphMode) {
                   const button=document.createElement('button');button.type='button';button.className='sentence-note';
                   button.dataset.readingNote=mark.note;button.setAttribute('aria-label','打开阅读笔记');
-                  button.title='打开阅读笔记';en.after(button);
+                  button.title='打开阅读笔记';(lastButton.get(en) ?? en).after(button);lastButton.set(en,button);
                 }
               }
-              if (window.CSS?.highlights) CSS.highlights.set('pdf-reading-notes',new Highlight(...ink));
+              if (window.CSS?.highlights) for (const [name,ranges] of ink) CSS.highlights.set(name,new Highlight(...ranges));
             },
             render(rows,layout,items) {
               const changingStructure=paragraphMode!==(layout==='paragraph');

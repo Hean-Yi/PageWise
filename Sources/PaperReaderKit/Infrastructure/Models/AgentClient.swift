@@ -200,6 +200,10 @@ public struct AgentClient: AgentCompleting {
                     "source_page": .init(type: "integer", description: "Optional one-based original page"),
                 ], ["paper_id"]),
             make(
+                "close_read_paper",
+                "Run the reader-requested critical close reading of one registered local paper. Call alone.",
+                ["paper_id": .init(type: "string", description: "Registered local paper ID")], ["paper_id"]),
+            make(
                 "create_reading_note",
                 "Save a local reading note and mark its exact supporting passages. Only on the reader's explicit instruction. Call alone, once, for one paper.",
                 [
@@ -208,6 +212,20 @@ public struct AgentClient: AgentCompleting {
                         description:
                             "Reader-facing note drawn from the discussion; distinguish interpretation from paper claims."
                     ),
+                    "dimension": .init(
+                        type: "string", description: "Optional analytical role and highlight color",
+                        choices: CloseReadingDimension.allCases.map(\.rawValue)),
+                    "citations": .init(
+                        type: "array",
+                        description:
+                            "Optional local passage links, including other local papers. Put {{cite:1}}, {{cite:2}}, etc. at their positions within markdown.",
+                        items: .init(
+                            type: "object",
+                            properties: [
+                                "result_id": .init(type: "string", description: "Registered local evidence result"),
+                                "quote": .init(type: "string", description: "Exact excerpt from the result"),
+                                "label": .init(type: "string", description: "Short descriptive link text"),
+                            ], required: ["result_id", "quote", "label"], additionalProperties: false)),
                     "sources": .init(
                         type: "array", description: "One to eight exact quotations from registered local evidence.",
                         items: .init(

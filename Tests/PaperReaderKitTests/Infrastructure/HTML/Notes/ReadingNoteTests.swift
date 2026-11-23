@@ -125,3 +125,18 @@ import Testing
     #expect(otherTurn.citations.isEmpty)
     #expect(!otherTurn.html.contains("href="))
 }
+
+@Test func readingNoteLinksAcceptOnlyRegisteredLocalDestinations() async throws {
+    let id = UUID()
+    let renderer = NoteMarkdownRenderer()
+    let allowed = "paperreader://passage/" + id.uuidString
+    let unknown = "paperreader://passage/" + UUID().uuidString
+    let body = "[已登记](\(allowed)) [别的笔记](\(unknown)) [网页](https://example.org/) [文件](file:///tmp/demo)"
+    let html = try await renderer.renderReadingNote(body, passageIDs: [id])
+    #expect(html.contains("data-passage=\"\(id.uuidString)\""))
+    #expect(html.contains(allowed))
+    #expect(!html.contains(unknown) && !html.contains("https:") && !html.contains("file:"))
+    #expect(html.contains("网页") && html.contains("文件"))
+    let removed = try await renderer.renderReadingNote(body, passageIDs: [])
+    #expect(!removed.contains("href="))
+}

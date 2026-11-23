@@ -33,8 +33,8 @@ enum HTMLNotesScript {
           const leave=()=>{if(active&&!editing){active=null;schedule();}};
           const button=(text,handler,label=text)=>{const b=document.createElement('button');b.type='button';b.textContent=text;b.setAttribute('aria-label',label);b.onclick=event=>{event.stopPropagation();handler();};return b;};
           const make=note=>{
-            const e={...note,persisted:false};e.card=document.createElement('article');e.card.className='reader-note-card';e.card.hidden=true;e.card.dataset.noteId=e.id;e.card.tabIndex=0;e.card.setAttribute('aria-label','阅读笔记');
-            const header=document.createElement('header'),title=document.createElement('strong');title.textContent='笔记';header.append(title);
+            const e={...note,persisted:false};e.card=document.createElement('article');e.card.className='reader-note-card';e.card.hidden=true;e.card.dataset.noteId=e.id;e.card.tabIndex=0;e.card.setAttribute('aria-label',e.dimensionTitle||'阅读笔记');
+            const header=document.createElement('header'),title=document.createElement('strong');title.textContent=e.dimensionTitle||'笔记';header.append(title);
             e.choices=document.createElement('select');e.choices.setAttribute('aria-label','重叠笔记');e.choices.className='note-hidden';e.choices.onchange=()=>activate(e.choices.value,!!editing);header.append(e.choices);
             e.tabs=document.createElement('span');e.tabs.className='note-hidden';
             e.tabs.textContent='Markdown';header.append(e.tabs);header.append(button('原文',()=>{document.getElementById('block-'+e.anchors[0].key)?.scrollIntoView({block:'center'});schedule();},'定位笔记原文'));
@@ -45,8 +45,13 @@ enum HTMLNotesScript {
             e.input.onkeydown=event=>{if((event.metaKey||event.ctrlKey)&&event.key==='Enter'){event.preventDefault();finish();}if(event.key==='Escape'){event.preventDefault();event.stopPropagation();finish();}};
             e.summary=document.createElement('div');e.summary.className='note-summary';
             e.content=document.createElement('div');e.content.className='note-content';e.content.setAttribute('aria-label','笔记预览');
+            PaperNoteEditor.bindPassages(e.card,passage=>send({kind:'notePreviewPassage',id:e.id,passage}));
             e.footer=document.createElement('footer');e.footer.className='note-hidden';e.status=document.createElement('button');e.status.type='button';e.status.textContent=lastStatus;e.status.onclick=flush;
-            const done=button('完成',finish);done.className='note-done';e.footer.append(e.status,done);e.card.append(header,e.input,e.content,e.summary,e.footer);
+            const insert=button('引用片段',()=>{
+              if(editing!==e.id||!e.editor)return;
+              send({kind:'noteInsertPassage',id:e.id,anchors:e.anchors,markdown:e.input.value,from:e.editor.selectionStart,to:e.editor.selectionEnd});
+            },'插入书库片段');
+            const done=button('完成',finish);done.className='note-done';e.footer.append(e.status,insert,done);e.card.append(header,e.input,e.content,e.summary,e.footer);
             e.card.addEventListener('mouseenter',()=>{if(!editing&&(active!==e.id||!reverse))activate(e.id,false,true);});
             e.card.addEventListener('focusin',()=>{if(!editing&&(active!==e.id||!reverse))activate(e.id,false,true);});
             e.card.addEventListener('click',event=>{if(event.target.closest('button,.note-editor,a,summary,select,#annotation-menu'))return;if(editing!==e.id)activate(e.id,true,true);});
@@ -142,6 +147,7 @@ enum HTMLNotesScript {
             preview(id,source,html){const e=records.get(id);if(!e||e.markdown!==source)return;e.html=html;e.content.style.whiteSpace='normal';body(e);e.editor?.preview(source,html);if(active===id&&!editing)schedule();},
             previewError(id){const e=records.get(id);if(e){e.content.textContent=e.markdown;e.status.textContent='预览失败，源码已保留';}},
             saved(status){lastStatus=status;for(const e of records.values())e.status.textContent=status;},
+            insertPassage(id,source,from,to,markdown){return editing===id&&records.get(id)?.editor?.insertPassage(source,from,to,markdown);},
             open(id,edit){const e=records.get(id);if(!e)return;document.getElementById('block-'+e.anchors[0].key)?.scrollIntoView({block:'center'});activate(id,edit);},
             finish,layout:schedule
           };

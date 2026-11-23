@@ -56,13 +56,16 @@ public struct ModelClient: Sendable {
     let transport: any HTTPTransport
     public init(transport: any HTTPTransport = NetworkTransport()) { self.transport = transport }
 
-    public func complete(settings: ModelSettings, key: String, system: String, user: String, jsonOutput: Bool = false)
+    public func complete(
+        settings: ModelSettings, key: String, system: String, user: String, jsonOutput: Bool = false,
+        maxOutputTokens: Int = 4096
+    )
         async throws -> String
     {
         let request = try ChatCompletionRequest.make(
             settings: settings, key: key,
             messages: [.init(role: "system", content: system), .init(role: "user", content: user)],
-            jsonOutput: jsonOutput)
+            maxOutputTokens: maxOutputTokens, jsonOutput: jsonOutput)
         let (data, response) = try await transport.data(for: request)
         switch response.statusCode {
         case 200...299: break
@@ -74,12 +77,17 @@ public struct ModelClient: Sendable {
         do { decoded = try JSONDecoder().decode(ResponseBody.self, from: data) } catch {
             throw ReaderError.message("模型响应格式不兼容，请检查服务设置。")
         }
+        if decoded.choices.first?.finishReason == "length" { throw TruncatedCompletion() }
         guard let choice = decoded.choices.first, choice.finishReason == "stop",
             let text = choice.message.content?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty
         else {
             throw ReaderError.message("模型未返回完整文本，结果未保存；可调整模型或重试。")
         }
         return text
+    }
+
+    struct TruncatedCompletion: LocalizedError {
+        var errorDescription: String? { "模型未返回完整文本，结果未保存；可调整模型或重试。" }
     }
 
     private struct ResponseBody: Decodable {

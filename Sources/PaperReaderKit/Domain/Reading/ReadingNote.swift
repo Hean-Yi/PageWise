@@ -21,7 +21,9 @@ public struct ReadingNote: Identifiable, Codable, Sendable, Equatable {
     public var paperID: UUID
     public var contentVersion: String
     public var anchors: [NoteAnchor]
+    public var citations: [LocalPassageCitation]?
     public var markdown: String
+    public var dimension: CloseReadingDimension?
     public var createdAt: Date
     public var modifiedAt: Date
     /// Soft deletion supports undo without discarding the user's source text.

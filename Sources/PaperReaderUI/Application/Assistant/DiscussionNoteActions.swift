@@ -33,7 +33,8 @@ struct AnchoredNoteInsertion {
         }
         return notes.first {
             $0.deletedAt == nil && $0.paperID == note.paperID && $0.contentVersion == note.contentVersion
-                && $0.anchors == note.anchors && $0.markdown == note.markdown
+                && $0.anchors == note.anchors && $0.markdown == note.markdown && $0.dimension == note.dimension
+                && ($0.citations ?? []) == (note.citations ?? [])
         }
     }
 
@@ -126,15 +127,45 @@ extension ReaderModel {
 
     func saveDiscussionNote(
         in scope: DiscussionNoteScope, sources proposed: [DiscussionNoteSource], markdown: String,
-        requestID: UUID, instruction: String = ""
+        requestID: UUID, instruction: String = "", citations: [LocalPassageCitation] = [],
+        dimension: CloseReadingDimension? = nil
     ) async throws -> ReadingNote {
+        let insertion = try await prepareDiscussionNote(
+            in: scope, sources: proposed, markdown: markdown, requestID: requestID,
+            instruction: instruction, citations: citations, dimension: dimension)
+        return try await saveAnchoredDiscussionNote(insertion.note, highlights: insertion.highlights, scope: scope)
+    }
+
+    func prepareDiscussionNote(
+        in scope: DiscussionNoteScope, sources proposed: [DiscussionNoteSource], markdown: String,
+        requestID: UUID, instruction: String = "", citations: [LocalPassageCitation] = [],
+        dimension: CloseReadingDimension? = nil
+    ) async throws -> AnchoredNoteInsertion {
         try validateDiscussionScope(scope)
         let body = markdown.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !body.isEmpty, body.utf8.count <= 24_000, (1...8).contains(proposed.count) else {
             throw ReaderError.message("笔记需要正文和一至八处可核对的原文。")
         }
-        let document = scope.paperID == selectedPaperID ? paper : state.papers.first { $0.id == scope.paperID }
         let sources = try Self.sourcesMatchingInstruction(instruction, proposed: proposed, scope: scope)
+        let (version, anchors, marks) = try await verifiedDiscussionLocation(in: scope, sources: sources)
+        try await validateNoteCitations(citations, markdown: body)
+        try validateDiscussionScope(scope)
+        var note = ReadingNote(
+            id: requestID, paperID: scope.paperID, contentVersion: version, anchors: anchors, markdown: body)
+        note.citations = citations.isEmpty ? nil : citations
+        note.dimension = dimension
+        let highlights = marks.map { original in
+            var mark = original
+            if let dimension { mark.color = dimension.color }
+            return mark
+        }
+        return AnchoredNoteInsertion(note: note, highlights: highlights, scope: scope)
+    }
+
+    func verifiedDiscussionLocation(in scope: DiscussionNoteScope, sources: [DiscussionNoteSource]) async throws
+        -> (version: String, anchors: [NoteAnchor], highlights: [Highlight])
+    {
+        let document = scope.paperID == selectedPaperID ? paper : state.papers.first { $0.id == scope.paperID }
         let published = Set(scope.htmlReading?.sections.flatMap(\.blockIDs) ?? [])
         let located = await Self.linkPublishedSources(sources, scope: scope, document: document, published: published)
         let html =
@@ -198,9 +229,7 @@ extension ReaderModel {
         try Task.checkCancellation()
         try validateDiscussionScope(scope)
         if html { _ = try currentHTML(for: scope) }
-        let note = ReadingNote(
-            id: requestID, paperID: scope.paperID, contentVersion: version, anchors: anchors, markdown: body)
-        return try await saveAnchoredDiscussionNote(note, highlights: marks, scope: scope)
+        return (version, anchors, marks)
     }
 
     private nonisolated static func sourcesMatchingInstruction(
