@@ -67,7 +67,7 @@ struct PaperAssistantView: View {
             if !model.assistantSelectionText.isEmpty {
                 HStack(alignment: .top, spacing: 8) {
                     Rectangle().fill(ReaderTheme.accent).frame(width: 2)
-                    Text(model.assistantSelectionText).font(.caption).foregroundStyle(ReaderTheme.muted).lineLimit(3)
+                    Text(model.assistantSelectionText).font(.callout).foregroundStyle(ReaderTheme.muted).lineLimit(3)
                     Button {
                         model.clearAssistantSelection()
                     } label: {
@@ -76,8 +76,10 @@ struct PaperAssistantView: View {
                     .buttonStyle(.plain).foregroundStyle(ReaderTheme.muted).accessibilityLabel("移除选文")
                 }.fixedSize(horizontal: false, vertical: true)
             }
-            TextField("问这篇论文…", text: $question, axis: .vertical).lineLimit(2...6).textFieldStyle(.plain).font(.callout)
-                .focused($composerFocused).onSubmit(send)
+            TextField("问这篇论文…", text: $question, axis: .vertical)
+                .textFieldStyle(.plain).font(.title3).lineLimit(3...6)
+                .frame(minHeight: 60, alignment: .top)
+                .focused($composerFocused).onSubmit(send).accessibilityLabel("向论文助读提问")
             HStack {
                 if let last = model.currentChats.last, last.readingNoteID == nil, !last.answer.isEmpty {
                     Button {
@@ -95,18 +97,13 @@ struct PaperAssistantView: View {
                 }
                 Spacer()
                 Button(action: send) {
-                    Image(systemName: "arrow.up").font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(ReaderTheme.surface).frame(width: 30, height: 30)
-                        .background(ReaderTheme.ink, in: Circle())
-                }.buttonStyle(.plain).help("发送问题").accessibilityLabel("发送问题")
-                    .opacity(question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? 0.4 : 1)
+                    Image(systemName: "arrow.up")
+                }.buttonStyle(AssistantSendButtonStyle()).help("发送问题").accessibilityLabel("发送问题")
                     .disabled(question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || model.busyAI)
             }
-        }.padding(16).background(ReaderTheme.surface, in: RoundedRectangle(cornerRadius: 16))
-            .overlay(
-                RoundedRectangle(cornerRadius: 16).strokeBorder(
-                    composerFocused ? ReaderTheme.accent.opacity(0.35) : ReaderTheme.line)
-            ).padding(14)
+        }
+        .assistantComposerSurface(emphasized: composerFocused || !model.assistantSelectionText.isEmpty)
+        .padding(12)
     }
 
     private func send() {

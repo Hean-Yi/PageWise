@@ -18,7 +18,7 @@ private struct TranscriptRow: Identifiable {
     let turn: AgentTurn
     let spacingBefore: CGFloat
 
-    static func rows(for turns: [AgentTurn]) -> [Self] {
+    static func rows(for turns: [AgentTurn], activeQuestion: UUID?) -> [Self] {
         var rows: [Self] = []
         for turn in turns {
             func append(_ part: Part, spacing: CGFloat = 16) {
@@ -30,7 +30,7 @@ private struct TranscriptRow: Identifiable {
             for (index, result) in turn.presentedResults.enumerated() {
                 append(.result(result.id), spacing: index == 0 ? 16 : 8)
             }
-            if turn.clarification != nil { append(.clarification) }
+            if turn.clarification != nil, turn.id != activeQuestion { append(.clarification) }
             if turn.error != nil || (turn.isCancelled && turn.activities.last?.status != .cancelled) { append(.status) }
         }
         return rows
@@ -39,6 +39,7 @@ private struct TranscriptRow: Identifiable {
 
 struct AgentTranscriptView: View {
     let agent: LibraryAgent
+    let activeQuestionID: UUID?
     let didNavigate: () -> Void
     let followUp: (AgentCard) -> Void
     let retry: (AgentTurn) -> Void
@@ -47,7 +48,11 @@ struct AgentTranscriptView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
-                    ForEach(TranscriptRow.rows(for: agent.turns)) { row in
+                    ForEach(
+                        TranscriptRow.rows(
+                            for: agent.turns,
+                            activeQuestion: activeQuestionID)
+                    ) { row in
                         content(row)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.top, row.spacingBefore)
@@ -95,7 +100,10 @@ struct AgentTranscriptView: View {
                 AgentResultCard(result: result, card: card, agent: agent, didNavigate: didNavigate) { followUp(card) }
             }
         case .clarification:
-            if let clarification = turn.clarification { clarify(clarification, in: turn) }
+            if let clarification = turn.clarification {
+                Label(clarification.question, systemImage: "questionmark.bubble")
+                    .font(.callout.weight(.medium)).fixedSize(horizontal: false, vertical: true)
+            }
         case .status:
             if let error = turn.error {
                 VStack(alignment: .leading, spacing: 8) {
@@ -107,31 +115,6 @@ struct AgentTranscriptView: View {
             } else {
                 Text("已停止").font(.system(size: 11)).foregroundStyle(ReaderTheme.muted)
             }
-        }
-    }
-
-    private func clarify(_ clarification: AgentClarification, in turn: AgentTurn) -> some View {
-        VStack(alignment: .leading, spacing: 9) {
-            Label(clarification.question, systemImage: "questionmark.bubble")
-                .font(.callout.weight(.medium)).fixedSize(horizontal: false, vertical: true)
-            if agent.pendingClarificationTurnID == turn.id {
-                ViewThatFits(in: .horizontal) {
-                    HStack { choices(clarification.options) }.fixedSize(horizontal: true, vertical: false)
-                    VStack(alignment: .leading, spacing: 5) { choices(clarification.options) }
-                }
-                .disabled(agent.isRunning)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private func choices(_ options: [String]) -> some View {
-        ForEach(options, id: \.self) { option in
-            Button {
-                agent.send(option)
-            } label: {
-                Text(option).multilineTextAlignment(.leading).fixedSize(horizontal: false, vertical: true)
-            }.buttonStyle(.bordered).controlSize(.small).tint(ReaderTheme.accent)
         }
     }
 
