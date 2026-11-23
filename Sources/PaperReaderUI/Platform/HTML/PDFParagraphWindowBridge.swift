@@ -136,7 +136,7 @@ extension PDFSentenceTextCanvas {
         function anchorAt(page) {
           const line=Math.min(innerHeight*.2,112);
           // Inline sentence boxes may wrap. Their leading edge remains stable even if the preceding page grows.
-          for (const element of page.section.querySelectorAll('.page-marker,.page-note,figure,.en,.zh')) {
+          for (const element of page.section.querySelectorAll('.page-marker,.page-note,figure,.source-line,.en,.zh')) {
             const rect=element.getBoundingClientRect();
             if (rect.height && rect.bottom>line && rect.top<innerHeight) return {element,top:rect.top};
           }

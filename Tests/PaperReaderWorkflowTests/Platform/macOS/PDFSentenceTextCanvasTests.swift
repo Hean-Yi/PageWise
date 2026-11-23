@@ -6,6 +6,49 @@
 
     @testable import PaperReaderUI
 
+    @Test @MainActor func pdfOriginalBylineAndBibliographyCanBeSelectedAcrossEnglishProse() async throws {
+        let sentence = PDFSourceSentence(id: "s", text: "Body sentence.", pageIndex: 0, rects: [], paragraphID: "p")
+        let byline = PDFReadingIllustration(
+            id: "author", label: "作者与机构", pageIndex: 0, sourceBounds: .zero, insertBeforeSentenceID: "s",
+            imagePNG: nil, originalText: .init(kind: .byline, paragraphs: ["Mira Ellis\nAlpine Institute"]))
+        let references = PDFReadingIllustration(
+            id: "refs", label: "References", pageIndex: 0, sourceBounds: .zero, insertBeforeSentenceID: nil,
+            imagePNG: nil, originalText: .init(kind: .references, paragraphs: ["[1] A < B.", "[2] Second title."]))
+        let canvas = PDFSentenceTextCanvas(
+            sentences: [sentence], translations: ["s": "正文。"], layout: .paragraph, fontSize: 18,
+            activeID: nil, focusedID: nil, focusRevision: 0, followsScroll: false, sourceScrollID: nil,
+            sourceScrollRevision: 0, pdfSelectedIDs: [], onScroll: { _ in }, onSelection: { _ in }, onFocus: { _ in },
+            onHover: { _ in }, illustrations: [byline, references])
+        let coordinator = canvas.makeCoordinator()
+        let web = coordinator.makeView()
+        defer { coordinator.stop(web) }
+        web.frame = CGRect(x: 0, y: 0, width: 390, height: 600)
+        func evaluate(_ script: String) async throws -> Bool {
+            try await web.callAsyncJavaScript(script, arguments: [:], in: nil, contentWorld: .defaultClient) as? Bool
+                == true
+        }
+        for _ in 0..<160 {
+            if (try? await evaluate("return !!document.querySelector('.references')")) == true { break }
+            try await Task.sleep(for: .milliseconds(25))
+        }
+        let valid = try await evaluate(
+            """
+            const nodes=[...document.querySelector('main').children];
+            const author=nodes[0].querySelector('.source-line'),refs=nodes[2];
+            if (refs.querySelector('h3')?.textContent!=='References' || refs.querySelectorAll('p').length!==2 ||
+                getComputedStyle(author).whiteSpace!=='pre-line' || refs.querySelector('button,img,.zh')) return false;
+            const range=document.createRange();
+            range.setStart(author.firstChild,0);range.setEndAfter(refs.lastChild);
+            const selection=getSelection();selection.removeAllRanges();selection.addRange(range);
+            const event=new Event('copy',{cancelable:true}),clipboard=new DataTransfer();
+            Object.defineProperty(event,'clipboardData',{value:clipboard});document.dispatchEvent(event);
+            const text=clipboard.getData('text/plain');
+            return text.includes('Mira Ellis') && text.includes('Body sentence.') && text.endsWith('[2] Second title.')
+              && text.includes('[1] A < B.') && !text.includes('正文。');
+            """)
+        #expect(valid)
+    }
+
     @Test @MainActor func pdfSentenceLayoutsKeepTheSameRangeWhenAnEarlierTranslationArrives() async throws {
         let sentences = ["a", "b", "c"].map { id in
             PDFSourceSentence(id: id, text: "Repeated line.", pageIndex: 0, rects: [], paragraphID: "p")

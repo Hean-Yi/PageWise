@@ -148,6 +148,18 @@ public struct PDFReadingIllustration: Identifiable, Equatable, Sendable {
         case illustration, excerpt, originalPage, supplement
     }
 
+    /// Selectable source material whose wording and order are preserved without translation.
+    public struct OriginalText: Equatable, Sendable {
+        public enum Kind: String, Sendable { case byline, references, prose }
+        public let kind: Kind
+        public let paragraphs: [String]
+
+        public init(kind: Kind, paragraphs: [String]) {
+            self.kind = kind
+            self.paragraphs = paragraphs
+        }
+    }
+
     public let label: String
     public let pageIndex: Int
     public let sourceBounds: CGRect
@@ -155,10 +167,12 @@ public struct PDFReadingIllustration: Identifiable, Equatable, Sendable {
     public let imagePNG: Data?
     public let table: PDFReadingTable?
     public let presentation: Presentation
+    public let originalText: OriginalText?
 
     public init(
         id: String, label: String, pageIndex: Int, sourceBounds: CGRect, insertBeforeSentenceID: String?,
-        imagePNG: Data?, table: PDFReadingTable? = nil, presentation: Presentation = .illustration
+        imagePNG: Data?, table: PDFReadingTable? = nil, presentation: Presentation = .illustration,
+        originalText: OriginalText? = nil
     ) {
         self.id = id
         self.label = label
@@ -168,5 +182,6 @@ public struct PDFReadingIllustration: Identifiable, Equatable, Sendable {
         self.imagePNG = imagePNG
         self.table = table
         self.presentation = presentation
+        self.originalText = originalText
     }
 }

@@ -178,6 +178,11 @@ import WebKit
                 "id": item.id, "label": item.label, "before": item.insertBeforeSentenceID ?? "",
                 "presentation": item.presentation.rawValue,
             ]
+            if let original = item.originalText {
+                result["originalKind"] = original.kind.rawValue
+                result["paragraphs"] = original.paragraphs
+                return result
+            }
             if let table = item.table {
                 func runs(_ values: [PDFReadingTable.Run]) -> [[String: Any]] {
                     values.map { run in
@@ -333,6 +338,19 @@ extension PDFSentenceTextCanvas {
         figure button:not(:has(img)){font-size:.9em;text-decoration:underline;text-underline-offset:.2em}
         .paragraph p{margin:0}.paragraph p[lang="en"]{font:1.06em/1.55 Georgia,"Times New Roman",serif;color:var(--en)}
         .paragraph .en{display:inline}.paragraph p[lang="zh-Hans"]{margin-top:.45em;line-height:1.8}
+        .source-text{color:var(--en);line-height:1.6}
+        .source-text h3{color:var(--ink);font:600 1.12em/1.4 Georgia,serif;margin:0 0 .65em}
+        .source-text.byline{font:.92em/1.6 -apple-system,sans-serif}
+        .source-text.byline p{white-space:pre-line}
+        .source-text.byline p+p{margin-top:.25em}
+        .source-text.author-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,15rem),1fr));
+          gap:.9em 1.6em;align-items:start}
+        .source-text.author-cards p+p{margin:0}
+        .author-cards p::first-line{color:var(--ink);font-weight:600}
+        .source-text.prose{font:1.06em/1.55 Georgia,"Times New Roman",serif}
+        .source-text.references{font:1em/1.55 Georgia,serif}
+        .source-text.references p{margin:0 0 .65em;padding-inline-start:1.3em;text-indent:-1.3em}
+        [data-selecting="zh"] .source-line{-webkit-user-select:none;user-select:none}
         .pending{color:var(--en);font:.8em/1.6 -apple-system,sans-serif;margin-inline:.2em;-webkit-user-select:none;user-select:none}
         [data-selecting="zh"] .en,[data-selecting="en"] .zh{-webkit-user-select:none;user-select:none}
         .paragraph.continuous main{padding-top:0}
@@ -388,7 +406,7 @@ extension PDFSentenceTextCanvas {
           }
           const send=(action,id)=>post({action,id});
           const pairAt=node=>node?.closest?.('[data-sentence]');
-          const sideOf=node=>node?.closest('.en') ? 'en' : 'zh';
+          const sideOf=node=>node?.closest('.en,.source-line') ? 'en' : 'zh';
           function hover(id) { if (id!==hot) {hot=id; send('hover',id);} }
           function focus(node) {
             revealLanguage=sideOf(node)==='en' ? 'zh' : 'en';
@@ -438,7 +456,7 @@ extension PDFSentenceTextCanvas {
             }
             return overlap.toString();
           }
-          function selectedPieces() {
+          function selectedPieces(includeOriginal=false) {
             const selection = getSelection();
             if (!selection.rangeCount || selection.isCollapsed) return [];
             const anchor = selection.anchorNode;
@@ -446,15 +464,16 @@ extension PDFSentenceTextCanvas {
             const language = main.dataset.selecting || sideOf(start);
             const range = selection.getRangeAt(0);
             const pieces = [];
-            for (const text of main.querySelectorAll('.' + language)) {
+            const selector=includeOriginal && language==='en' ? '.en,.source-line' : '.'+language;
+            for (const text of main.querySelectorAll(selector)) {
               if (!range.intersectsNode(text)) continue;
               const value = selectedText(range,text);
-              if (value.length) pieces.push({id: text.dataset.sentence, text: value, language});
+              if (value.length) pieces.push({id:text.dataset.sentence, group:text.dataset.sourceGroup, text:value, language});
             }
             return pieces;
           }
           main.addEventListener('pointerdown', event => {
-            const text = event.target.closest('.en,.zh');
+            const text = event.target.closest('.en,.zh,.source-line');
             if (text) main.dataset.selecting = sideOf(text);
             else delete main.dataset.selecting;
           });
@@ -481,12 +500,12 @@ extension PDFSentenceTextCanvas {
                 event.clipboardData.setData('text/plain',cells);event.preventDefault();return;
               }
             }
-            const pieces = selectedPieces();
+            const pieces = selectedPieces(true);
             if (!pieces.length || !event.clipboardData) return;
             let plain = '';
             let paragraph;
             for (const piece of pieces) {
-              const next = pairs.get(piece.id).group;
+              const next = piece.group ?? pairs.get(piece.id).group;
               if (paragraph && paragraph !== next) plain += '\\n\\n';
               else if (plain && piece.language === 'en') plain += ' ';
               plain += piece.text;
@@ -568,6 +587,24 @@ extension PDFSentenceTextCanvas {
             return group;
           }
           function makeFigure(item) {
+            if (item.originalKind) {
+              const node=document.createElement('section');
+              node.className='source-text '+item.originalKind;
+              if (item.originalKind==='byline' && item.paragraphs.length>1 && item.paragraphs.every(p=>p.includes('\\n'))) {
+                node.classList.add('author-cards');
+              }
+              node.lang='en';
+              node.setAttribute('aria-label',item.label || '参考文献续页');
+              if (item.originalKind==='references' && item.label) {
+                const title=document.createElement('h3');title.textContent=item.label;
+                title.className='source-line';title.dataset.sourceGroup=item.id+'-title';node.append(title);
+              }
+              for (const [index,value] of item.paragraphs.entries()) {
+                const p=document.createElement('p');p.textContent=value;p.className='source-line';
+                p.dataset.sourceGroup=item.id+'-'+index;node.append(p);
+              }
+              return {before:item.before,node};
+            }
             const node=document.createElement('figure'), button=document.createElement('button');
             button.type='button';
             button.dataset.illustration=item.id;

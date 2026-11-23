@@ -21,8 +21,10 @@ enum PDFIllustratedPage {
         var covered: [CGRect] = []
         var coveredIDs: Set<String> = []
         var crops: [(PDFCaptionRegion, Data?, PDFReadingTable?)] = []
-        for region in regions {
+        let byline = text.illustrations.first { $0.originalText?.kind == .byline }?.sourceBounds
+        for candidate in regions {
             try Task.checkCancellation()
+            let region = try separatingByline(byline, from: candidate, on: page)
             var png: Data?
             var table: PDFReadingTable?
             if let bounds = region.sourceBounds, covered.count < 6 {
@@ -64,9 +66,15 @@ enum PDFIllustratedPage {
                 : PDFSourceRemainder.regions(
                     for: text.unpairedBounds, excluding: covered, sentences: sentences, cropBox: box)
             let unresolved = items.filter { $0.imagePNG == nil && $0.table == nil }
-            let wholePage = sentences.isEmpty && covered.isEmpty
+            let originalText = text.illustrations.filter { item in
+                guard let original = item.originalText else { return false }
+                return original.kind != .prose
+                    || !covered.contains { $0.insetBy(dx: -1, dy: -1).contains(item.sourceBounds) }
+            }
+            let wholePage = sentences.isEmpty && covered.isEmpty && originalText.isEmpty
             // A verified table can survive even when the surrounding text layer could not be read.
-            let unreadableBody = text.sentences.isEmpty && text.notice != nil && !covered.isEmpty
+            let unreadableBody =
+                text.sentences.isEmpty && originalText.isEmpty && text.notice != nil && !covered.isEmpty
             var needsSupplement = text.hasUnlocatedText || tooFragmented || !unresolved.isEmpty || unreadableBody
             if !wholePage {
                 for (index, bounds) in excerpts.enumerated() {
@@ -106,6 +114,27 @@ enum PDFIllustratedPage {
                     notice = text.notice ?? "部分原文未能在此显示，请查看原页。"
                 }
             }
+            for block in originalText {
+                var anchor = block.insertBeforeSentenceID
+                if let id = anchor, coveredIDs.contains(id),
+                    let index = text.sentences.firstIndex(where: { $0.id == id })
+                {
+                    anchor = text.sentences[index...].first { !coveredIDs.contains($0.id) }?.id
+                }
+                let position = items.firstIndex { item in
+                    guard item.insertBeforeSentenceID == anchor else { return false }
+                    if item.presentation == .supplement { return true }
+                    let a = block.sourceBounds
+                    let b = item.sourceBounds
+                    if min(a.maxY, b.maxY) > max(a.minY, b.minY), a.maxX <= b.minX + 2 { return true }
+                    if min(a.maxY, b.maxY) > max(a.minY, b.minY), b.maxX <= a.minX + 2 { return false }
+                    return a.maxY > b.maxY
+                }
+                let anchored = PDFReadingIllustration(
+                    id: block.id, label: block.label, pageIndex: pageIndex, sourceBounds: block.sourceBounds,
+                    insertBeforeSentenceID: anchor, imagePNG: nil, originalText: block.originalText)
+                items.insert(anchored, at: position ?? items.endIndex)
+            }
         }
         var result = PDFSentenceExtraction(
             sentences: text.sentences, notice: text.notice, illustrations: items, picturedSentenceIDs: coveredIDs)
@@ -116,6 +145,49 @@ enum PDFIllustratedPage {
     private static func rect(_ components: [Double]) -> CGRect? {
         guard components.count == 4 else { return nil }
         return CGRect(x: components[0], y: components[1], width: components[2], height: components[3])
+    }
+
+    /// A title-page illustration can share the page width with the byline above it. Require a
+    /// visible gap before shortening a crop, and keep the whole source available if ink touches.
+    private static func separatingByline(_ byline: CGRect?, from region: PDFCaptionRegion, on page: PDFPage) throws
+        -> PDFCaptionRegion
+    {
+        guard let byline, let box = region.sourceBounds, byline.intersects(box),
+            box.intersection(byline).width > min(box.width, byline.width) * 0.55,
+            byline.minY > region.captionBounds.maxY, region.label.hasPrefix("图 ")
+        else { return region }
+        let lower = CGRect(x: box.minX, y: box.minY, width: box.width, height: byline.minY - box.minY)
+        var clipped: CGRect?
+        if box.maxY <= byline.maxY + 4, lower.height > region.captionBounds.height * 2, let ink = PDFCaptionInk(page) {
+            var strips = try ink.strips(in: lower)
+            // A glyph can paint a descender just beyond its PDFKit line box. It belongs to the
+            // byline only if it touches that edge and a separate band of whitespace follows.
+            if let last = strips.last, lower.maxY - last.bounds.maxY < 1.5,
+                lower.maxY - last.bounds.minY <= min(3, region.captionBounds.height * 0.28)
+            {
+                strips.removeLast()
+            }
+            let flank = CGRect(x: box.minX, y: byline.minY, width: box.width, height: box.maxY - byline.minY)
+            let sides = [
+                CGRect(x: flank.minX, y: flank.minY, width: max(0, byline.minX - flank.minX - 2), height: flank.height),
+                CGRect(
+                    x: byline.maxX + 2, y: flank.minY, width: max(0, flank.maxX - byline.maxX - 2), height: flank.height
+                ),
+            ]
+            let otherInk = try sides.contains { side in
+                guard side.width > 2 else { return false }
+                return try !ink.strips(in: side).isEmpty
+            }
+            if let top = strips.map(\.bounds.maxY).max(), lower.maxY - top >= 3,
+                !otherInk,
+                strips.contains(where: { $0.longestStroke > 25 || $0.drawnRows > 2 })
+            {
+                clipped = CGRect(x: box.minX, y: box.minY, width: box.width, height: top + 2 - box.minY)
+            }
+        }
+        return PDFCaptionRegion(
+            label: region.label, captionBounds: region.captionBounds, captionRange: region.captionRange,
+            sourceBounds: clipped)
     }
 
     /// Prefer the actual caption's PDF character range. For omitted captions, use lines in the

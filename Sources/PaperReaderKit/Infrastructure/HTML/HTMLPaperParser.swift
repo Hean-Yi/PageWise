@@ -184,6 +184,7 @@ public actor HTMLPaperParser {
             }
         }
         if element.hasClass("ltx_authors") { attributes += " class=\"paper-authors\"" }
+        if element.hasClass("tex-bibliography") { attributes += " class=\"bibliography tex-bibliography\"" }
         if element.hasClass("ltx_equation") || element.hasClass("ltx_equationgroup") {
             attributes += " class=\"paper-equation\""
         }

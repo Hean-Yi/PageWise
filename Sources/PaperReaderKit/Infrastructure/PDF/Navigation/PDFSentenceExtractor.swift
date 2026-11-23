@@ -122,35 +122,46 @@ public enum PDFSentenceExtractor {
             }
         }
         let rows = physicalRows(runs.filter { !floatRanges.contains($0.range.location) })
-        let readingRows = withoutMetadata(rows, source: source, crop: crop, pageIndex: pageIndex, remainder: &remainder)
-        let bands = orderedColumns(rows: readingRows, crop: crop, omitted: &omitted)
-        let hasWrappedHyphen = runs.contains { source.character(at: NSMaxRange($0.range) - 1) == 45 }
-        let spellings = hasWrappedHyphen ? nearbySpellings(in: document, pageIndex: pageIndex, source: string) : []
+        let wordSpacing = PDFEnglishWordSpacing(page: page)
+        let hasWrappedHyphen = runs.contains { [45, 0x2010].contains(source.character(at: NSMaxRange($0.range) - 1)) }
+        let spellings = nearbySpellings(
+            in: document, pageIndex: pageIndex, source: string, includeNeighbors: hasWrappedHyphen)
+        let references = try referenceSection(
+            rows: rows, source: source, document: document, pageIndex: pageIndex, crop: crop, spellings: spellings,
+            captionRegions: captionRegions)
+        let bodyRows = references?.bodyRows(in: rows, source: source) ?? rows
+        var sourceTextBlocks = [PDFReadingIllustration]()
+        let byline = pageIndex == 0 ? PDFBylineExtractor.locate(in: bodyRows, on: page, source: source) : nil
+        var body = bodyRows
+        if let byline {
+            body.removeSubrange(byline.rows)
+            if byline.paragraphs == nil { remainder.add(byline.bounds, within: crop) }
+        }
+        let authorFootnotes =
+            pageIndex == 0 ? PDFBylineExtractor.affiliationFootnotes(in: body, on: page, source: source) : []
+        let readingRows = withoutMetadata(
+            body, source: source, crop: crop, pageIndex: pageIndex, checkUnidentifiedByline: byline == nil,
+            authorFootnotes: authorFootnotes,
+            remainder: &remainder)
+        let markedRows = PDFProseMarkers.attach(in: readingRows, source: source)
+        let bands = orderedColumns(rows: markedRows, crop: crop, omitted: &omitted)
         var sentences = [PDFSourceSentence]()
+        var originalOnly = Set<String>()
         var unpairedRegions = Set<String>()
-        var isFirstGroup = true
-        readingOrder: for column in bands {
+        for column in bands {
             try Task.checkCancellation()
-            for group in paragraphs(in: column, source: source) {
-                if let line = group.first,
-                    ["references", "bibliography"].contains(content(line, source: source).lowercased())
-                {
-                    if isFirstGroup {
-                        return PDFSentenceExtraction(sentences: [], notice: "本页为参考文献，保留原文。")
-                    }
-                    omitted = true
-                    break readingOrder
-                }
-                isFirstGroup = false
+            for group in paragraphs(in: column, source: source, page: page) {
                 sentences += split(
-                    group, on: page, source: source, pageIndex: pageIndex, spellings: spellings, omitted: &omitted,
-                    unpairedRegions: &unpairedRegions)
+                    group, on: page, source: source, pageIndex: pageIndex, spellings: spellings,
+                    wordSpacing: wordSpacing, omitted: &omitted,
+                    unpairedRegions: &unpairedRegions, originalOnly: &originalOnly)
             }
         }
         for table in wrapped {
             let caption = split(
                 table.caption, on: page, source: source, pageIndex: pageIndex, spellings: spellings,
-                omitted: &omitted, unpairedRegions: &unpairedRegions)
+                wordSpacing: wordSpacing,
+                omitted: &omitted, unpairedRegions: &unpairedRegions, originalOnly: &originalOnly)
             guard let anchor = table.caption.first else { continue }
             var insertion =
                 sentences.firstIndex { sentence in
@@ -165,12 +176,41 @@ public enum PDFSentenceExtractor {
             }
             sentences.insert(contentsOf: caption, at: insertion)
         }
-        if sentences.isEmpty { return uncertain }
+        let readingUnits = sentences
+        if !originalOnly.isEmpty {
+            var following: String?
+            var fragments = [PDFReadingIllustration]()
+            for unit in readingUnits.reversed() {
+                if originalOnly.contains(unit.id) {
+                    let area = unit.rects.reduce(CGRect.null) { box, rect in
+                        box.union(CGRect(x: rect[0], y: rect[1], width: rect[2], height: rect[3]))
+                    }
+                    fragments.append(
+                        PDFReadingIllustration(
+                            id: unit.id + "-original", label: "英文原文", pageIndex: pageIndex,
+                            sourceBounds: area, insertBeforeSentenceID: following, imagePNG: nil,
+                            originalText: .init(kind: .prose, paragraphs: [unit.text])))
+                } else {
+                    following = unit.id
+                }
+            }
+            sourceTextBlocks += fragments.reversed()
+            sentences.removeAll { originalOnly.contains($0.id) }
+        }
+        if let item = byline?.item(before: sentences) { sourceTextBlocks.append(item) }
+        if let references {
+            if let text = references.item(pageIndex: pageIndex, sentences: sentences) {
+                sourceTextBlocks.append(text)
+            } else {
+                for line in references.lines { remainder.add(line.bounds, within: crop) }
+            }
+        }
+        if sentences.isEmpty, references == nil { return uncertain }
         // A rejected fragment may sit on the same baseline as a verified sentence. Subtract the
         // exact source ranges before asking PDFKit for the fragment bounds, preserving both.
         if omitted || !unpairedRegions.isEmpty {
             var covered = IndexSet()
-            for sentence in sentences {
+            for sentence in readingUnits {
                 for range in sentence.characterRanges {
                     covered.insert(integersIn: range.location..<NSMaxRange(range))
                 }
@@ -190,23 +230,29 @@ public enum PDFSentenceExtractor {
             }
         }
         let notice: String?
-        if !unpairedRegions.isEmpty {
+        if sentences.isEmpty, references != nil {
+            notice = "本页为参考文献，保留原文。"
+        } else if !unpairedRegions.isEmpty {
             let locations = unpairedRegions.sorted().joined(separator: "、")
             notice = "\(locations)有文字无法可靠配对，请在原页核对。"
+        } else if remainder.hasUnlocatedText || !remainder.bounds.isEmpty {
+            notice = "本页有部分内容需在原页核对。"
+        } else if !originalOnly.isEmpty {
+            notice = "部分英文片段保留原文，可在段落重排中阅读。"
         } else {
-            notice = remainder.hasUnlocatedText || !remainder.bounds.isEmpty ? "本页有部分内容需在原页核对。" : nil
+            notice = references != nil ? "参考文献保留原文。" : nil
         }
         return PDFSentenceExtraction(
-            sentences: sentences, notice: notice, unpairedBounds: remainder.bounds,
+            sentences: sentences, notice: notice, illustrations: sourceTextBlocks, unpairedBounds: remainder.bounds,
             hasUnlocatedText: remainder.hasUnlocatedText)
     }
 
-    private struct Run {
+    struct Run {
         let range: NSRange
         let bounds: CGRect
     }
 
-    private struct Line {
+    struct Line {
         var runs: [Run]
         var bounds: CGRect
     }
@@ -363,18 +409,20 @@ public enum PDFSentenceExtractor {
         }
     }
 
-    private static func content(_ line: Line, source: NSString) -> String {
+    static func content(_ line: Line, source: NSString) -> String {
         line.runs.map { source.substring(with: $0.range) }.joined(separator: " ")
     }
 
     private static func withoutMetadata(
-        _ rows: [[Line]], source: NSString, crop: CGRect, pageIndex: Int, remainder: inout PDFSourceRemainder
+        _ rows: [[Line]], source: NSString, crop: CGRect, pageIndex: Int, checkUnidentifiedByline: Bool,
+        authorFootnotes: Set<Int>, remainder: inout PDFSourceRemainder
     ) -> [[Line]] {
         let all = rows.flatMap { $0 }
         let heights = all.map(\.bounds.height).sorted()
+        guard !heights.isEmpty else { return [] }
         let typicalHeight = heights[heights.count / 2]
         var authorBand: ClosedRange<CGFloat>?
-        if pageIndex == 0,
+        if pageIndex == 0, checkUnidentifiedByline,
             let title = all.first(where: {
                 $0.bounds.midY > crop.midY + crop.height * 0.24
                     && $0.bounds.height > typicalHeight * 1.35 && $0.bounds.width > crop.width * 0.22
@@ -417,6 +465,7 @@ public enum PDFSentenceExtractor {
                     && line.bounds.height < typicalHeight * 0.88
                 if isPageNumber { return false }
                 if authorBand?.contains(line.bounds.midY) == true || isFooter || isHeader
+                    || line.runs.contains(where: { authorFootnotes.contains($0.range.location) })
                     || (text.contains("@") && text.contains("."))
                 {
                     remainder.add(line.bounds, within: crop)
@@ -430,7 +479,9 @@ public enum PDFSentenceExtractor {
 
     /// Estimate the gutter from recurring paragraph-width lines on both sides. This also works
     /// when the PDF's two columns have different baselines or are interleaved in source order.
-    private static func orderedColumns(rows: [[Line]], crop: CGRect, omitted: inout Bool) -> [[Line]] {
+    static func orderedColumns(
+        rows: [[Line]], crop: CGRect, joiningReferenceLines: Bool = false, omitted: inout Bool
+    ) -> [[Line]] {
         let all = rows.flatMap { $0 }
         let midpoint = crop.midX
         let rightCandidates = all.filter {
@@ -438,7 +489,14 @@ public enum PDFSentenceExtractor {
                 && $0.bounds.maxX > midpoint + crop.width * 0.15
         }
         let starts = rightCandidates.map(\.bounds.minX).sorted()
-        let rightStart = starts.isEmpty ? midpoint : starts[starts.count / 2]
+        // A numbered reference can protrude to the left of the hanging indent. A repeated
+        // outer edge keeps its bracket in the right column instead of treating it as a spanning row.
+        let outerMargin =
+            joiningReferenceLines
+            ? starts.enumerated().first { index, x in
+                index + 1 < starts.count && starts[index + 1] - x < 1.5
+            }?.element : nil
+        let rightStart = outerMargin ?? (starts.isEmpty ? midpoint : starts[starts.count / 2])
         let leftCandidates = all.filter {
             $0.bounds.width > crop.width * 0.15 && $0.bounds.minX < midpoint - crop.width * 0.18
                 && $0.bounds.maxX <= rightStart && rightStart - $0.bounds.maxX < crop.width * 0.35
@@ -449,12 +507,27 @@ public enum PDFSentenceExtractor {
             && leftCandidates.contains { left in
                 rightCandidates.contains { abs($0.bounds.midY - left.bounds.midY) < 30 }
             }
+        func merge(_ side: [Line]) -> Line? {
+            guard var line = side.first else { return nil }
+            for next in side.dropFirst() {
+                // Book and journal citations can justify short fields across a large word space.
+                // A gutter still separates the sides before either is merged.
+                let limit =
+                    joiningReferenceLines ? max(32, line.bounds.height * 4.5) : max(12, line.bounds.height * 1.55)
+                guard next.bounds.minX - line.bounds.maxX <= limit else { return nil }
+                line.runs += next.runs
+                line.bounds = line.bounds.union(next.bounds)
+            }
+            return line
+        }
         guard hasColumns, let innerEdge = leftEnds.last else {
             var bands = [[Line]]()
             var body = [Line]()
             for row in rows {
                 if row.count == 1 {
                     body += row
+                } else if joiningReferenceLines, let line = merge(row) {
+                    body.append(line)
                 } else {
                     omitted = true
                     if !body.isEmpty {
@@ -482,19 +555,11 @@ public enum PDFSentenceExtractor {
             }
         }
         func appendSide(_ side: [Line], to lines: inout [Line]) {
-            guard let first = side.first else { return }
-            // PDFKit can split one justified line into two text runs. A larger gap is likely to
-            // separate chart labels or table cells; leave that region on the PDF.
-            var merged = first
-            for next in side.dropFirst() {
-                guard next.bounds.minX - merged.bounds.maxX <= max(12, first.bounds.height * 1.55) else {
-                    omitted = true
-                    return
-                }
-                merged.runs += next.runs
-                merged.bounds = merged.bounds.union(next.bounds)
+            if let line = merge(side) {
+                lines.append(line)
+            } else if !side.isEmpty {
+                omitted = true
             }
-            lines.append(merged)
         }
         for row in rows {
             if row.contains(where: { $0.bounds.minX < gutter && $0.bounds.maxX > gutter }) {
@@ -520,6 +585,7 @@ public enum PDFSentenceExtractor {
 
     private static func isHeading(_ text: String) -> Bool {
         let lower = text.trimmingCharacters(in: .whitespaces).lowercased()
+        if endOfReferences(text) { return true }
         if ["abstract", "introduction", "discussion", "conclusion", "references", "bibliography", "keywords"].contains(
             lower)
         {
@@ -533,7 +599,7 @@ public enum PDFSentenceExtractor {
         text.wholeMatch(of: /([0-9]+(?:\.[0-9]+)*)\.?\s+[A-Z].*\s(?:in|of|for|on|with|and|to)/)?.1
     }
 
-    private static func paragraphs(in column: [Line], source: NSString) -> [[Line]] {
+    private static func paragraphs(in column: [Line], source: NSString, page: PDFPage) -> [[Line]] {
         let pitches = zip(column, column.dropFirst()).compactMap { a, b -> CGFloat? in
             let dy = a.bounds.midY - b.bounds.midY
             return dy > 3 && dy <= 30 ? dy : nil
@@ -546,10 +612,12 @@ public enum PDFSentenceExtractor {
                 let height = max(last.bounds.height, line.bounds.height)
                 let indent = line.bounds.minX - last.bounds.minX
                 let alignsCenters = height >= 11 && abs(line.bounds.midX - last.bounds.midX) < height
-                if dy > 0, dy <= max(height * 1.95, pitch * 1.35),
+                let value = content(line, source: source)
+                let hangingItem = PDFProseMarkers.continuesItem(after: last, with: line, source: source, page: page)
+                if !PDFProseMarkers.startsItem(value), dy > 0, dy <= max(height * 1.95, pitch * 1.35),
                     abs(last.bounds.height - line.bounds.height) <= max(2, height * 0.32),
-                    indent < max(5, height * 0.8) || alignsCenters, !isHeading(content(last, source: source)),
-                    !isHeading(content(line, source: source))
+                    indent < max(5, height * 0.8) || alignsCenters || hangingItem,
+                    !isHeading(content(last, source: source)), !isHeading(value)
                 {
                     groups[groups.count - 1].append(line)
                     continue
@@ -616,8 +684,8 @@ public enum PDFSentenceExtractor {
 
     private static func split(
         _ lines: [Line], on page: PDFPage, source: NSString, pageIndex: Int, spellings: Set<String>,
-        omitted: inout Bool,
-        unpairedRegions: inout Set<String>
+        wordSpacing: PDFEnglishWordSpacing, omitted: inout Bool,
+        unpairedRegions: inout Set<String>, originalOnly: inout Set<String>
     )
         -> [PDFSourceSentence]
     {
@@ -629,23 +697,36 @@ public enum PDFSentenceExtractor {
             for (runIndex, run) in line.runs.enumerated() {
                 let chunk = source.substring(with: run.range)
                 if !text.isEmpty {
-                    let joinsHyphen = runIndex == 0 && (text.last == "-" || text.last == "\u{ad}")
                     let joinsGlyph = runIndex > 0 && run.bounds.minX - line.runs[runIndex - 1].bounds.maxX < 0.8
-                    if joinsHyphen && shouldRemoveHyphen(in: text, next: chunk, spellings: spellings) {
+                    let separator: PDFEnglishLineBreak =
+                        runIndex == 0
+                        ? PDFEnglishLineBreak.separator(after: text, before: chunk, spellings: spellings)
+                        : (joinsGlyph ? .joined : .space)
+                    switch separator {
+                    case .removeHyphen:
                         text.removeLast()
                         length -= 1
                         spans[spans.count - 1].normalized.length -= 1
-                    } else if !joinsHyphen && !joinsGlyph {
+                    case .space:
+                        text += " "
+                        length += 1
+                    case .joined: break
+                    }
+                }
+                let parts = wordSpacing.sourceRanges(
+                    for: run.range, in: source, bounds: run.bounds, spellings: spellings)
+                for (index, part) in parts.enumerated() {
+                    if index > 0 {
                         text += " "
                         length += 1
                     }
+                    spans.append(
+                        Span(
+                            normalized: NSRange(location: length, length: part.length), original: part, line: lineIndex)
+                    )
+                    text += parts.count == 1 ? chunk : source.substring(with: part)
+                    length += part.length
                 }
-                spans.append(
-                    Span(
-                        normalized: NSRange(location: length, length: run.range.length), original: run.range,
-                        line: lineIndex))
-                text += chunk
-                length += run.range.length
             }
         }
         let tokenizer = NLTokenizer(unit: .sentence)
@@ -686,8 +767,18 @@ public enum PDFSentenceExtractor {
             // Retain complete prose. A clipped sentence at a page boundary or a diagram label
             // remains visible on the PDF rather than becoming an apparently verified sentence.
             let trimmed = value.trimmingCharacters(in: CharacterSet(charactersIn: "\"'’”)]} "))
-            guard heading || (trimmed.last.map { ".!?".contains($0) } == true && value.first?.isLowercase != true),
-                value.range(of: #"[A-Za-z]{36,}"#, options: .regularExpression) == nil
+            // A complete prose lead-in can end at the colon introducing a displayed equation or a list.
+            let leadIn =
+                trimmed.last == ":" && trimmed.first?.isUppercase == true
+                && trimmed.matches(of: /\b[A-Za-z][a-z]{2,}\b/).count >= 3
+                && !trimmed.contains(where: { "=≠≈∑∫".contains($0) })
+            let complete =
+                heading || leadIn
+                || (trimmed.last.map { ".!?".contains($0) } == true && value.first?.isLowercase != true)
+            // Sentence alignment and text legibility are independent. Verifiable prose fragments
+            // still belong in the reading flow, even when an equation, column or page interrupts them.
+            guard value.range(of: #"[A-Za-z]{36,}"#, options: .regularExpression) == nil,
+                complete || readableProseFragment(value)
             else {
                 omitted = true
                 return nil
@@ -718,50 +809,53 @@ public enum PDFSentenceExtractor {
                 bounds[span.line] = (bounds[span.line] ?? .null).union(box)
             }
             guard let first = original.first, let readingAnchor, !bounds.isEmpty else { return nil }
+            if !complete, !bounds.values.allSatisfy(page.bounds(for: .cropBox).contains) {
+                // Content painted off the page may start or end in the middle of a glyph.
+                omitted = true
+                return nil
+            }
             let rects = bounds.keys.sorted().compactMap { index -> [Double]? in
                 guard let box = bounds[index] else { return nil }
                 return [box.minX, box.minY, box.width, box.height]
             }
+            let id = "p\(pageIndex)-s\(first.location)"
+            if !complete { originalOnly.insert(id) }
             return PDFSourceSentence(
-                id: "p\(pageIndex)-s\(first.location)", text: value, pageIndex: pageIndex,
+                id: id, text: value, pageIndex: pageIndex,
                 rects: rects, paragraphID: paragraph, characterRanges: original,
                 readingParagraphID: "p\(pageIndex)-b\(readingAnchor)")
         }
     }
 
+    private static func readableProseFragment(_ text: String) -> Bool {
+        guard !text.contains(where: { $0.isMathSymbol || $0 == "\u{fffd}" || $0 == "|" }),
+            text.matches(of: /\b[A-Za-z][a-z]{1,}\b/).count >= 5
+        else { return false }
+        return text.firstMatch(of: /(?i)\b(?:a|an|the|of|to|for|and|that|from|with|in|is|are|we|our)\b/) != nil
+    }
+
     /// Only local PDF text on the requested page and its two immediate neighbors is used for
     /// spelling evidence. No adjacent-page text becomes a reading unit or model input.
-    private static func nearbySpellings(in document: PDFDocument, pageIndex: Int, source: String) -> Set<String> {
+    private static func nearbySpellings(
+        in document: PDFDocument, pageIndex: Int, source: String, includeNeighbors: Bool
+    ) -> Set<String> {
         var samples = [source]
-        for neighbor in [pageIndex - 1, pageIndex + 1] where (0..<document.pageCount).contains(neighbor) {
+        for neighbor in [pageIndex - 1, pageIndex + 1]
+        where includeNeighbors && (0..<document.pageCount).contains(neighbor) {
             if let page = document.page(at: neighbor), page.numberOfCharacters <= 70_000, let text = page.string {
                 samples.append(text)
             }
         }
         var words = Set<String>()
         for sample in samples {
-            let tokens = sample.lowercased().split { !$0.isLetter && $0 != "-" }
+            let tokens = sample.lowercased().replacingOccurrences(of: "‐", with: "-").split {
+                !$0.isLetter && $0 != "-"
+            }
             for token in tokens where token.count <= 96 && token.first != "-" && token.last != "-" {
                 words.insert(String(token))
             }
         }
         return words
-    }
-
-    private static func shouldRemoveHyphen(in text: String, next: String, spellings: Set<String>) -> Bool {
-        if text.last == "\u{ad}" { return true }
-        let left = text.dropLast().reversed().prefix(while: { $0.isLetter }).reversed()
-        let right = next.prefix(while: { $0.isLetter })
-        guard !left.isEmpty, !right.isEmpty, right.first?.isLowercase == true else { return false }
-        let prefix = String(left).lowercased()
-        let suffix = String(right).lowercased()
-        // Prefer an attested compound even when the author also uses an unhyphenated variant.
-        if spellings.contains(prefix + "-" + suffix) { return false }
-        return spellings.contains(prefix + suffix)
-            || [
-                "tion", "tions", "ation", "ations", "uation", "ments", "ment", "tive", "tives", "ity", "ities",
-                "ing", "ously", "ization",
-            ].contains(suffix)
     }
 
     private static func joinsAbbreviation(previous: String, next: String) -> Bool {

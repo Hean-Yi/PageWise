@@ -19,7 +19,7 @@ public actor TeXPaperParser {
         let digest = Self.digest(archive)
         for index in blocks.indices {
             // IDs are deterministic for this exact archive and parser version, including restart before commit.
-            let hash = Array(SHA256.hash(data: Data("tex-v1:\(digest):\(document.mainFile):\(index)".utf8)))
+            let hash = Array(SHA256.hash(data: Data("tex-v2:\(digest):\(document.mainFile):\(index)".utf8)))
             blocks[index].id = UUID(
                 uuid: (
                     hash[0], hash[1], hash[2], hash[3], hash[4], hash[5], hash[6], hash[7],

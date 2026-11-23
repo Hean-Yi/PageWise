@@ -14,6 +14,7 @@ enum TeXPreviewSmoke {
             \documentclass{article}
             \newcommand{\vect}[1]{\mathbf{#1}}
             \title{TeX Source Reading - Original Offline Fixture}
+            \author{Mira Ellis \\ Alpine Institute \and Jo Park \\ River Laboratory}
             \begin{document}
             \maketitle
             \begin{abstract}
@@ -25,7 +26,7 @@ enum TeXPreviewSmoke {
             $\vect{y}=\vect{x}+1$. No PDF line joining is needed.
 
             The next paragraph keeps its own source identity. Figure~\ref{fig:flow}
-            illustrates the route from source evidence to bilingual reading.
+            illustrates the route from source evidence to bilingual reading \cite{alpine,river}.
             \begin{equation}\label{eq:sum} s = \sum_{i=1}^{n} x_i \end{equation}
             \begin{figure}
             \includegraphics{flow.svg}
@@ -44,6 +45,10 @@ enum TeXPreviewSmoke {
             \bottomrule
             \end{tabular}
             \end{table}
+            \begin{thebibliography}{9}
+            \bibitem{alpine} M. Ellis. Reading across lines. 2025.
+            \bibitem{river} J. Park. Preserving source order. 2026.
+            \end{thebibliography}
             \end{document}
             """#
         let svg = #"""
@@ -57,6 +62,13 @@ enum TeXPreviewSmoke {
             """#
         let archive = tar([("main.tex", Data(source.utf8)), ("flow.svg", Data(svg.utf8))])
         let blocks = try await TeXPaperParser().parse(archive)
+        guard
+            blocks.contains(where: {
+                $0.text.contains("Alpine Institute") && $0.richContent?.requiresTranslation == false
+            }),
+            blocks.contains(where: { $0.richContent?.html.contains("<li>") == true && $0.text.contains("[2]") }),
+            blocks.contains(where: { $0.text.contains("[1, 2]") })
+        else { throw ReaderError.message("TeX 署名或参考文献未正确保留。") }
         // A one-page original fixture, independent of the application's reading generator.
         let pdf = root.appendingPathComponent("Original Fixture.pdf")
         var bounds = CGRect(x: 0, y: 0, width: 612, height: 792)

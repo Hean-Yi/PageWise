@@ -305,7 +305,10 @@ struct TeXDocument {
                 }
             } else if c == "%" {
                 while let next = cursor.peek, next != "\n" { cursor.index += 1 }
-                if cursor.peek == "\n" { cursor.index += 1 }
+                if cursor.peek == "\n" {
+                    cursor.index += 1
+                    while cursor.peek == " " || cursor.peek == "\t" { cursor.index += 1 }
+                }
             } else {
                 result.append(c)
             }

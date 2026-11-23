@@ -7,6 +7,49 @@ import Testing
 
 @testable import PaperReaderKit
 
+@Test func readableSourceFragmentCanReflowWithoutBeingSentAsACompleteSentence() throws {
+    let url = try sentenceFixture([
+        (60, 525, "along the shore of the lake."),
+        (60, 483, "The survey began in spring."),
+    ])
+    defer { try? FileManager.default.removeItem(at: url) }
+    let page = try PDFSentenceExtractor.extractPage(url: url, pageIndex: 0, includingIllustrations: true)
+    let body = try #require(page.paragraphSentences.first)
+    #expect(page.paragraphSentences.map(\.text) == ["The survey began in spring."])
+    let fragment = try #require(page.illustrations.first { $0.originalText?.kind == .prose })
+    #expect(fragment.originalText?.paragraphs == ["along the shore of the lake."])
+    #expect(fragment.insertBeforeSentenceID == body.id && fragment.imagePNG == nil)
+    #expect(
+        !page.illustrations.contains {
+            $0.presentation == .excerpt && $0.sourceBounds.intersects(fragment.sourceBounds)
+        })
+}
+
+@Test func pdfProseIntroducingAnEquationOrListStaysSelectable() throws {
+    let url = try sentenceFixture([
+        (60, 590, "Our observations are as follows:"),
+        (60, 548, "Flow rate. Given a pipe of radius R, we compute the total"),
+        (60, 534, "flow from the following relation:"),
+        (166, 511, "Q = R"), (439, 511, "(1)"),
+        (60, 470, "Further observations confirm this relationship."),
+    ])
+    defer { try? FileManager.default.removeItem(at: url) }
+    let extracted = try PDFSentenceExtractor.extractPage(url: url, pageIndex: 0, includingIllustrations: true)
+    let sentences = extracted.paragraphSentences
+    let intro = try #require(sentences.first { $0.text == "Our observations are as follows:" })
+    let prose = try #require(
+        sentences.first {
+            $0.text == "Given a pipe of radius R, we compute the total flow from the following relation:"
+        })
+    #expect(intro.rects.count == 1 && prose.rects.count == 2)
+    #expect(!sentences.contains { $0.text.contains("Q = R") })
+    let source = try #require(
+        extracted.illustrations.first {
+            $0.presentation == .excerpt && $0.sourceBounds.contains(CGPoint(x: 170, y: 514))
+        })
+    #expect(source.imagePNG != nil && source.sourceBounds.maxY < 532)
+}
+
 @Test func pdfSentenceExtractorMapsInterleavedColumnsToSourceLines() throws {
     let url = try sentenceFixture([
         (40, 650, "The first column describes a new transla-"),
@@ -135,13 +178,120 @@ func pdfSentenceExtractorExplainsReferencesPageAndReadsFollowingAppendix(_ headi
     #expect(references.paragraphSentences.isEmpty)
     #expect(references.notice == "本页为参考文献，保留原文。")
     #expect(references.paragraphNotice == nil)
-    let page = try #require(references.illustrations.first { $0.presentation == .originalPage })
-    #expect(page.pageIndex == 0 && page.insertBeforeSentenceID == nil)
-    try checkReadableImage(page)
+    let list = try #require(references.illustrations.first { $0.originalText?.kind == .references })
+    #expect(list.pageIndex == 0 && list.insertBeforeSentenceID == nil)
+    #expect(list.originalText?.paragraphs == ["[1] A. Reader. A separate publication."])
+    #expect(list.label == heading && references.illustrations.count == 1)
     let queued = try PDFSentenceExtractor.extractPage(url: url, pageIndex: 0, illustrations: .translation)
     #expect(queued.illustrations.isEmpty && queued.paragraphSentences.isEmpty)
     let appendix = try PDFSentenceExtractor.extractPage(url: url, pageIndex: 1, includingIllustrations: true)
     #expect(appendix.paragraphSentences.map(\.text) == ["The appendix describes the measurement."])
+}
+
+@Test func numberedReferencesRetainWholeEntriesAcrossLinesAndStopAtAnAppendix() throws {
+    let url = try sentenceFixture(
+        [
+            (54, 650, "VII. REFERENCES"), (54, 620, "[1]"), (83, 620, "A. Reed. Light in the"),
+            (83, 607, "garden. Journal of Light, 2023."), (54, 585, "[2] B. Lane. Colour, 2024."),
+        ],
+        supporting: [
+            (54, 650, "[3] C. May. Ocean currents."),
+            (83, 637, "2025. https://example.org/"), (83, 624, "catalog/one."),
+            (54, 583, "Appendix A"), (54, 555, "We calibrated the sensor."),
+        ])
+    defer { try? FileManager.default.removeItem(at: url) }
+    let first = try PDFSentenceExtractor.extractPage(url: url, pageIndex: 0, includingIllustrations: true)
+    let refs = try #require(first.illustrations.first { $0.originalText?.kind == .references })
+    #expect(
+        refs.originalText?.paragraphs == [
+            "[1] A. Reed. Light in the garden. Journal of Light, 2023.", "[2] B. Lane. Colour, 2024.",
+        ])
+    let second = try PDFSentenceExtractor.extractPage(url: url, pageIndex: 1, includingIllustrations: true)
+    let next = try #require(second.illustrations.first { $0.originalText?.kind == .references })
+    #expect(next.label.isEmpty)
+    #expect(next.originalText?.paragraphs == ["[3] C. May. Ocean currents. 2025. https://example.org/catalog/one."])
+    #expect(second.sentences.contains { $0.text == "We calibrated the sensor." })
+    #expect(next.insertBeforeSentenceID == second.paragraphSentences.first?.id)
+    #expect(!second.sentences.contains { $0.text.contains("Ocean") })
+}
+
+@Test func authorYearReferencesUseHangingIndentsAndRequireSectionEvidence() throws {
+    let lines: [(CGFloat, CGFloat, String)] = [
+        (54, 635, "Ames, K. and E. Stone. Evidence from river"),
+        (65, 622, "sediments. Journal of Ecology, 2021."),
+        (54, 605, "Burns, R. Botanical surveys."),
+        (65, 592, "Regional Field Reports, 2022."),
+    ]
+    let url = try sentenceFixture([(54, 675, "Works Cited")] + lines, supporting: lines)
+    defer { try? FileManager.default.removeItem(at: url) }
+    let list = try PDFSentenceExtractor.extractPage(url: url, pageIndex: 1, includingIllustrations: true)
+    #expect(list.sentences.isEmpty)
+    #expect(
+        list.illustrations.compactMap { $0.originalText?.paragraphs }.first == [
+            "Ames, K. and E. Stone. Evidence from river sediments. Journal of Ecology, 2021.",
+            "Burns, R. Botanical surveys. Regional Field Reports, 2022.",
+        ])
+    let body = try sentenceFixture([(54, 675, "We describe earlier work in this section.")], supporting: lines)
+    defer { try? FileManager.default.removeItem(at: body) }
+    let ordinary = try PDFSentenceExtractor.extractPage(url: body, pageIndex: 1)
+    #expect(ordinary.illustrations.isEmpty && !ordinary.sentences.isEmpty)
+}
+
+@Test func unnumberedReferencesContinueAcrossColumnsAndIgnorePageRangesAsEntryNumbers() throws {
+    let url = try sentenceFixture([
+        (45, 700, "References"), (45, 672, "Allen, R. and J. Dale. Coastal changes."),
+        (55, 659, "Journal of Field Science, 2021."),
+        (45, 638, "Banks, A. Seasonal measurements in"),
+        (55, 625, "wetlands and marshes. Field Reports, 2023, 620-"),
+        (325, 672, "626. ACM."), (315, 650, "Cole, V. and L. Green. Forest soils."),
+        (325, 637, "Journal of Materials, 2024."),
+    ])
+    defer { try? FileManager.default.removeItem(at: url) }
+    let page = try PDFSentenceExtractor.extractPage(url: url, pageIndex: 0, includingIllustrations: true)
+    let lists = page.illustrations.compactMap { $0.originalText?.paragraphs }
+    let entries = try #require(lists.first)
+    try #require(entries.count == 3)
+    #expect(entries[1].hasPrefix("Banks, A.") && entries[1].hasSuffix("620-626. ACM."))
+    #expect(entries[2].hasPrefix("Cole, V.") && page.sentences.isEmpty)
+}
+
+@Test func numberedBibliographyKeepsTheRightColumnsOutdentedMarkersAfterTheLeftHeading() throws {
+    let url = try sentenceFixture([
+        (54, 685, "Closing remarks about evidence and observations."), (54, 666, "The samples remained stable."),
+        (54, 630, "References"), (54, 609, "[1] R. Ames and D. Birch. Original evidence."),
+        (70, 595, "Field studies in the mountains, 2022."),
+        (315, 685, "[2] K. Reed. An independent field report."),
+        (333, 671, "Studies of botanical distribution in coastal"),
+        (333, 657, "areas. Journal of Ecology, 2024."),
+        (315, 632, "[3] B. Hall. Regional soil testing."),
+        (333, 618, "Studies of soil chemistry in remote regions."),
+        (333, 604, "Agricultural Reports, 2025."),
+    ])
+    defer { try? FileManager.default.removeItem(at: url) }
+    let page = try PDFSentenceExtractor.extractPage(url: url, pageIndex: 0, includingIllustrations: true)
+    let list = try #require(page.illustrations.first { $0.originalText?.kind == .references })
+    #expect(list.originalText?.paragraphs.map { String($0.prefix(3)) } == ["[1]", "[2]", "[3]"])
+    #expect(page.sentences.contains { $0.text == "The samples remained stable." })
+    #expect(!page.sentences.contains { $0.text.contains("field report") })
+}
+
+@Test func referenceColumnLabelDoesNotTurnTheFollowingBodyIntoABibliography() throws {
+    let url = try sentenceFixture(
+        [
+            (54, 680, "Reference"), (220, 680, "Mean"), (54, 660, "Ames, K. 2024."), (220, 660, "6.8"),
+            (54, 585, "We compare the three regions in the next section."),
+        ],
+        supporting: [
+            (54, 685, "We repeated the experiment in 2025."),
+            (54, 655, "A study by K. Ames confirms our results."),
+        ])
+    defer { try? FileManager.default.removeItem(at: url) }
+    let page = try PDFSentenceExtractor.extractPage(url: url, pageIndex: 0, includingIllustrations: true)
+    #expect(!page.illustrations.contains { $0.originalText?.kind == .references })
+    #expect(page.sentences.contains { $0.text == "We compare the three regions in the next section." })
+    let next = try PDFSentenceExtractor.extractPage(url: url, pageIndex: 1, includingIllustrations: true)
+    #expect(next.sentences.contains { $0.text == "We repeated the experiment in 2025." })
+    #expect(!next.illustrations.contains { $0.originalText?.kind == .references })
 }
 
 @Test func pdfSentenceExtractorUsesNearbySpellingsAndKeepsSourceOffsets() throws {
@@ -386,4 +536,105 @@ private func sentenceFixture(
     }
     context.closePDF()
     return url
+}
+
+@Test func pdfBylineKeepsEachAuthorsContactCardTogetherBeforeTheAbstract() throws {
+    let url = try sentenceFixture(
+        [
+            (50, 730, "Tracking Coastal Habitats"), (50, 704, "A Survey Across Four Ports"),
+            (68, 670, "Ada Vale"), (340, 670, "Ravi Kato"),
+            (50, 656, "North Harbor University"), (320, 656, "South Harbor College"),
+            (49, 642, "ada@example.org"), (322, 642, "ravi@example.org"),
+            (68, 615, "Nora Lane"), (340, 615, "Leo West"),
+            (50, 601, "Marsh Institute"), (320, 601, "Tidal Institute"),
+            (49, 587, "nora@example.org"), (322, 587, "leo@example.org"),
+            (50, 550, "Abstract"), (50, 526, "We record changes along the coast."),
+            (50, 400, "Each site received the same instruments for this experiment."),
+        ], fontSizesByBaseline: [730: 20, 704: 16])
+    defer { try? FileManager.default.removeItem(at: url) }
+    let result = try PDFSentenceExtractor.extractPage(url: url, pageIndex: 0, includingIllustrations: true)
+    let block = try #require(result.illustrations.first { $0.originalText?.kind == .byline })
+    #expect(
+        block.originalText?.paragraphs == [
+            "Ada Vale\nNorth Harbor University\nada@example.org", "Ravi Kato\nSouth Harbor College\nravi@example.org",
+            "Nora Lane\nMarsh Institute\nnora@example.org", "Leo West\nTidal Institute\nleo@example.org",
+        ])
+    #expect(block.insertBeforeSentenceID == result.sentences.first(where: { $0.text == "Abstract" })?.id)
+    #expect(result.sentences.contains { $0.text.contains("A Survey Across Four Ports") })
+    #expect(!result.sentences.contains { $0.text.contains("Vale") || $0.text.contains("@") })
+    #expect(
+        !result.illustrations.contains { $0.presentation == .excerpt && $0.sourceBounds.intersects(block.sourceBounds) }
+    )
+    let queued = try PDFSentenceExtractor.extractPage(url: url, pageIndex: 0, illustrations: .translation)
+    #expect(queued.paragraphSentences == result.paragraphSentences)
+}
+
+@Test func pdfBylineRecognizesTeamCreditAndAnInlineAbstractWithoutLosingProse() throws {
+    let url = try sentenceFixture(
+        [
+            (50, 730, "Birds of the Open Estuary"), (50, 685, "North Coast Research Team"),
+            (50, 666, "Tidal University"), (50, 640, "Abstract—The birds return in spring."),
+            (50, 624, "Their visits were recorded every morning."),
+            (50, 400, "We compare our recordings across all seven observation sites."),
+        ], fontSizesByBaseline: [730: 19])
+    defer { try? FileManager.default.removeItem(at: url) }
+    let result = try PDFSentenceExtractor.extractPage(url: url, pageIndex: 0, includingIllustrations: true)
+    let block = try #require(result.illustrations.first { $0.originalText?.kind == .byline })
+    #expect(block.originalText?.paragraphs == ["North Coast Research Team", "Tidal University"])
+    #expect(result.sentences.contains { $0.text.contains("The birds return in spring.") })
+    #expect(!result.sentences.contains { $0.text.contains("Research Team") })
+}
+
+@Test func pdfBylineKeepsWrappedAffiliationFootnoteOutOfTheTranslationQueue() throws {
+    let url = try sentenceFixture(
+        [
+            (50, 730, "Measurements on Tidal Flats"), (50, 688, "Nora Lane"),
+            (50, 650, "Abstract"), (50, 625, "The method is reliable."),
+            (50, 400, "The same measurements were repeated at each site."),
+            (50, 180, "Our next experiment is complete."),
+            (50, 155, "1North Harbor University. Correspondence"),
+            (50, 145, "about field sampling and tide records to:"),
+            (50, 135, "Nora Lane <nora@example.org>."),
+            (320, 155, "Another group tested the birds."),
+            (320, 145, "Their estimates agreed."),
+        ], fontSizesByBaseline: [730: 19, 135: 8, 145: 8, 155: 8])
+    defer { try? FileManager.default.removeItem(at: url) }
+    let result = try PDFSentenceExtractor.extractPage(url: url, pageIndex: 0, includingIllustrations: true)
+    #expect(!result.sentences.contains { $0.text.contains("tide records") || $0.text.contains("Harbor University") })
+    let note = try #require(
+        result.illustrations.first { $0.presentation == .excerpt && $0.sourceBounds.contains(CGPoint(x: 65, y: 146)) })
+    #expect(note.sourceBounds.minY < 137 && note.sourceBounds.maxY > 154 && note.sourceBounds.maxX < 310)
+    #expect(result.sentences.contains { $0.text.contains("Another group") })
+}
+
+@Test func pdfHangingListRetainsWrappedSentencesAndKeepsNeighboringItemsSeparate() throws {
+    let url = try sentenceFixture([
+        (50, 688, "The field report describes two observations."),
+        (63, 649, "• First we record all the boats"),
+        (73, 637, "that enter the harbor. The next tide was higher."),
+        (63, 625, "•"), (88, 625, "Later our team compared the totals from"),
+        (88, 613, "two different sites."),
+        (50, 560, "2"), (76, 560, "Results of the Survey"),
+        (50, 536, "Both sites recorded the same tide levels."),
+    ])
+    defer { try? FileManager.default.removeItem(at: url) }
+    let page = try PDFSentenceExtractor.extractPage(url: url, pageIndex: 0, includingIllustrations: true)
+    let sentences = page.paragraphSentences
+    let one = try #require(sentences.first { $0.text.contains("First we record") })
+    let secondSentence = try #require(sentences.first { $0.text.contains("next tide") })
+    let two = try #require(sentences.first { $0.text.contains("Later our team") })
+    #expect(one.text.hasSuffix("that enter the harbor."))
+    #expect(two.text.hasSuffix("two different sites."))
+    #expect(one.readingParagraphID == secondSentence.readingParagraphID)
+    #expect(one.readingParagraphID != two.readingParagraphID)
+    #expect(sentences.contains { $0.text == "2 Results of the Survey" })
+    #expect(!page.illustrations.contains { $0.presentation == .excerpt })
+    let document = try #require(PDFDocument(url: url))
+    defer { withExtendedLifetime(document) {} }
+    let original = try #require(document.page(at: 0))
+    for item in [one, two] {
+        let fragments = item.characterRanges.compactMap { original.selection(for: $0)?.string }
+        #expect(fragments.joined().contains("•"))
+        #expect(item.rects.count == 2)
+    }
 }

@@ -222,3 +222,47 @@ private actor SourceFallbackDiscovery: PaperDiscovery {
         try await sourceStore.prepare(paper: attached, root: root, discovery: discovery)
     }
 }
+
+@Test func texBylineWrappedProseAndReferencesKeepTheirOwnRoles() async throws {
+    let source = #"""
+        \documentclass{article}
+        \title{A small example}
+        \author{Mira Ellis \\ Alpine Institute \and Jo Park \thanks{Corresponding author}}
+        \begin{document}
+        \maketitle
+        The inter% continue the word on the next source line
+            national re\-search group
+        studies long-term learning \cite{river,stone}.
+        \begin{thebibliography}{9}
+        \bibitem{river} M. Ellis. \newblock A river
+          study. \newblock 2020.
+        \bibitem{stone} J. Park. A stone study. 2022.
+        \end{thebibliography}
+        \end{document}
+        """#
+    let blocks = try await TeXPaperParser().parse(Data(source.utf8))
+    let byline = try #require(blocks.first { $0.richContent?.html.contains("paper-authors") == true })
+    #expect(byline.text.contains("Mira Ellis") && byline.text.contains("Alpine Institute"))
+    #expect(byline.text.contains("Jo Park") && byline.text.contains("Corresponding author"))
+    #expect(byline.richContent?.requiresTranslation == false)
+    let prose = try #require(blocks.first { $0.text.contains("international research group") })
+    #expect(prose.text.contains("long-term learning [1, 2]"))
+    let references = try #require(blocks.first { $0.richContent?.html.contains("tex-bibliography") == true })
+    let html = try #require(references.richContent?.html)
+    #expect(html.components(separatedBy: "<li>").count == 3)
+    #expect(html.contains("[1]") && html.contains("[2]"))
+    #expect(references.richContent?.requiresTranslation == false)
+}
+
+@Test func texAuthorYearReferencesResolveFromPublishedLabels() async throws {
+    let source = #"""
+        \documentclass{article}\begin{document}
+        According to \citet{one}, this follows from \citeauthor{two} in \citeyear{two}.
+        \begin{thebibliography}{9}
+        \bibitem[Lane et~al.(2021)Lane and Carr]{one} R. Lane and S. Carr. First title.
+        \bibitem[Ellis(2022a)]{two} M. Ellis. Second title.
+        \end{thebibliography}\end{document}
+        """#
+    let blocks = try await TeXPaperParser().parse(Data(source.utf8))
+    #expect(blocks.first?.text == "According to Lane et al. (2021), this follows from Ellis in 2022a.")
+}

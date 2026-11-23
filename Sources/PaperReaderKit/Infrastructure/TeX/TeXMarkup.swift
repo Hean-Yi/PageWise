@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import SwiftSoup
 
 /// Converts a deliberately bounded LaTeX subset into application-owned semantic markup.
 /// Unknown body commands fail the entire source before a single reading block is published.
@@ -7,6 +8,8 @@ final class TeXMarkup {
     let compiler: LatexMathCompiler
     var labels: Set<String> = []
     var references: Set<String> = []
+    private var byline = TeXByline()
+    private var bibliographyLabels: [String: String] = [:]
     var title = ""
     var titleEmitted = false
     var depth = 0
@@ -29,6 +32,9 @@ final class TeXMarkup {
                 if command == "title" {
                     _ = try cursor.optional()
                     title = try cursor.group()
+                } else if ["author", "affil", "affiliation", "institute"].contains(command) {
+                    let mark = try cursor.optional()
+                    byline.append(try cursor.group(), mark: mark, author: command == "author")
                 }
             } else {
                 cursor.index += 1
@@ -36,7 +42,17 @@ final class TeXMarkup {
         }
         let body = try render(String(source[begin.upperBound..<end.lowerBound]))
         guard references.isSubset(of: labels) else { throw TeXArchive.failure("存在无法定位的引用目标") }
-        return "<article class='ltx_document'>" + body + "</article>"
+        let html = "<article class='ltx_document'>" + body + "</article>"
+        guard !bibliographyLabels.isEmpty, html.contains("data-tex-cite") else { return html }
+        let document = try SwiftSoup.parseBodyFragment(html)
+        document.outputSettings().syntax(syntax: .xml).escapeMode(.xhtml).prettyPrint(pretty: false)
+        for link in try document.select("a[data-tex-cite]") {
+            if let label = bibliographyLabels[try link.attr("href")] {
+                try link.text(Self.citationLabel(label, command: link.attr("data-tex-cite")))
+            }
+            try link.removeAttr("data-tex-cite")
+        }
+        return try document.body()?.html() ?? html
     }
 
     func render(_ text: String, inline: Bool = false) throws -> String {
@@ -84,11 +100,16 @@ final class TeXMarkup {
                     } else {
                         paragraph += markup
                     }
+                case "author", "affil", "affiliation", "institute":
+                    guard !inline, !titleEmitted else { throw TeXArchive.failure("署名位于不支持的位置") }
+                    let mark = try cursor.optional()
+                    byline.append(try cursor.group(), mark: mark, author: command == "author")
                 case "maketitle":
                     guard !inline, !titleEmitted else { throw TeXArchive.failure("重复或嵌套标题") }
                     titleEmitted = true
                     flush()
                     if !title.isEmpty { result += "<h1>" + (try render(title, inline: true)) + "</h1>" }
+                    result += byline.html
                 case "section", "subsection", "subsubsection", "paragraph", "subparagraph":
                     guard !inline else { throw TeXArchive.failure("嵌套章节") }
                     flush()
@@ -128,20 +149,15 @@ final class TeXMarkup {
                     let keys = try cursor.group().split(separator: ",").map {
                         $0.trimmingCharacters(in: .whitespacesAndNewlines)
                     }
-                    paragraph += "["
-                    if let prefix { paragraph += try render(prefix, inline: true) + " " }
+                    let brackets = ["cite", "citep"].contains(command)
+                    if brackets { paragraph += "[" }
+                    if let prefix, suffix != nil { paragraph += try render(prefix, inline: true) + " " }
                     paragraph += keys.map { key in
                         references.insert("bib:" + key)
-                        return "<a href='#\(anchor("bib:" + key))'>\(escape(key))</a>"
+                        return "<a data-tex-cite='\(command)' href='#\(anchor("bib:" + key))'>\(escape(key))</a>"
                     }.joined(separator: ", ")
-                    if let suffix { paragraph += ", " + (try render(suffix, inline: true)) }
-                    paragraph += "]"
-                case "bibitem":
-                    flush()
-                    let display = try cursor.optional()
-                    let key = try cursor.group()
-                    guard labels.insert("bib:" + key).inserted else { throw TeXArchive.failure("重复参考文献") }
-                    paragraph += "<span id='\(anchor("bib:" + key))'>[\(escape(display ?? key))]</span> "
+                    if let note = suffix ?? prefix { paragraph += ", " + (try render(note, inline: true)) }
+                    if brackets { paragraph += "]" }
                 case "includegraphics":
                     let path = try cursor.group()
                     let encoded = path.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? path
@@ -166,7 +182,9 @@ final class TeXMarkup {
                     flush()
                     let label = try cursor.optional()
                     paragraph += "• " + (label.map { escape($0) + " " } ?? "")
-                case "par", "smallskip", "medskip", "bigskip", "newblock": flush()
+                case "par", "smallskip", "medskip", "bigskip": flush()
+                case "newblock": paragraph += " "
+                case "-": break
                 case "\\":
                     _ = try cursor.optional()
                     paragraph += "<br>"
@@ -268,14 +286,80 @@ final class TeXMarkup {
             }
             return "<div class='ltx_equation'>" + anchors + (try compiler.compile(math, display: true)) + "</div>"
         case "thebibliography":
-            var cursor = TeXCursor(content)
-            _ = try cursor.group()
-            return "<ul class='ltx_biblist'><li>" + (try render(String(cursor.characters[cursor.index...])))
-                + "</li></ul>"
+            return try bibliography(content)
         case "verbatim", "lstlisting": return "<pre>" + escape(content) + "</pre>"
         case "tabular", "tabular*": return try table(content, starred: name == "tabular*")
         default: throw TeXArchive.failure("存在尚不支持的环境 " + name)
         }
+    }
+
+    /// Natbib's optional label commonly contains a short author list, a parenthesized year and a long list.
+    private static func citationLabel(_ label: String, command: String) throws -> String {
+        if let match = label.firstMatch(of: /^(.+?)\s*\(\s*((?:1[5-9]|20)[0-9]{2}[a-z]?)\s*\)/) {
+            let authors = match.1.trimmingCharacters(in: .whitespaces)
+            let year = String(match.2)
+            switch command {
+            case "citeauthor": return authors
+            case "citeyear": return year
+            case "citet": return "\(authors) (\(year))"
+            default: return "\(authors), \(year)"
+            }
+        }
+        if ["citeauthor", "citeyear", "citet"].contains(command) {
+            // A numeric label alone has no source-grounded author name or date.
+            throw TeXArchive.failure("作者年份引用缺少可核对的标签")
+        }
+        return label
+    }
+
+    private func bibliography(_ content: String) throws -> String {
+        var cursor = TeXCursor(content)
+        _ = try cursor.group()  // The standard environment starts with its widest printed label.
+        var result = "<ol class='ltx_biblist tex-bibliography'>"
+        var start = cursor.index
+        var labelHTML: String?
+        var index = 0
+        func finish(at end: Int) throws {
+            let source = String(cursor.characters[start..<end]).trimmingCharacters(in: .whitespacesAndNewlines)
+            if let labelHTML {
+                result += "<li>" + labelHTML + " " + (try render(source, inline: true)) + "</li>"
+            } else if !source.isEmpty {
+                // Bibliography packages can emit setup commands before the first item.
+                // Preserve supported material and let the normal parser reject unknown commands.
+                result += try render(source)
+            }
+        }
+        while !cursor.ended {
+            let pos = cursor.index
+            if cursor.peek == "{" {
+                _ = try cursor.group()
+                continue
+            }
+            guard cursor.peek == "\\" else {
+                cursor.index += 1
+                continue
+            }
+            if try cursor.literalEnvironment() != nil { continue }
+            guard cursor.command() == "bibitem" else { continue }
+            try finish(at: pos)
+            let optionalLabel = try cursor.optional()
+            let key = try cursor.group()
+            guard labels.insert("bib:" + key).inserted else { throw TeXArchive.failure("重复参考文献") }
+            index += 1
+            let id = anchor("bib:" + key)
+            let label: String
+            if let optionalLabel {
+                label = try SwiftSoup.parseBodyFragment(render(optionalLabel, inline: true)).text()
+            } else {
+                label = String(index)
+            }
+            bibliographyLabels["#" + id] = label
+            let display = try Self.citationLabel(label, command: "cite")
+            labelHTML = "<span id='\(id)'>[\(escape(display))]</span>"
+            start = cursor.index
+        }
+        try finish(at: cursor.index)
+        return result + "</ol>"
     }
 
     private func table(_ content: String, starred: Bool) throws -> String {

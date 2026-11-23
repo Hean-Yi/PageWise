@@ -150,3 +150,36 @@ private func draw(
     context.textPosition = CGPoint(x: centered ? x - CTLineGetTypographicBounds(run, nil, nil, nil) / 2 : x, y: y)
     CTLineDraw(run, context)
 }
+
+@Test func titlePageFigureStopsBelowKnownAuthorsOnlyAtClearGap() throws {
+    let url = try captionPDF(pages: 2) { index, context in
+        draw("Jane Reed, River Institute", on: context, x: 120, y: 578)
+        context.fill(CGRect(x: 124, y: 569, width: 1, height: 2))
+        draw("Figure 1. Seasonal variations.", on: context, x: 100, y: 445)
+        context.fill(CGRect(x: 100, y: 470, width: 220, height: index == 0 ? 55 : 110))
+    }
+    defer { try? FileManager.default.removeItem(at: url) }
+    let doc = try #require(PDFDocument(url: url))
+    defer { withExtendedLifetime(doc) {} }
+    for index in 0...1 {
+        let page = try #require(doc.page(at: index))
+        let author = PDFReadingIllustration(
+            id: "byline", label: "作者与机构", pageIndex: index,
+            sourceBounds: CGRect(x: 90, y: 570, width: 240, height: 30), insertBeforeSentenceID: nil,
+            imagePNG: nil, originalText: .init(kind: .byline, paragraphs: ["Jane Reed, River Institute"]))
+        let range = try #require((page.string as NSString?)?.range(of: "Figure 1"))
+        let caption = PDFCaptionRegion(
+            label: "图 1", captionBounds: CGRect(x: 100, y: 445, width: 135, height: 11), captionRange: range,
+            sourceBounds: CGRect(x: 94, y: 465, width: 232, height: 130))
+        let onlyByline = PDFSentenceExtraction(sentences: [], notice: nil, illustrations: [author])
+        let result = try PDFIllustratedPage.compose(text: onlyByline, on: page, pageIndex: index, regions: [caption])
+        #expect(result.illustrations.first?.originalText?.paragraphs == ["Jane Reed, River Institute"])
+        if index == 0 {
+            let figure = try #require(
+                result.illustrations.first { $0.presentation == .illustration && $0.imagePNG != nil })
+            #expect(figure.sourceBounds.maxY < 540 && figure.sourceBounds.maxY >= 525)
+        } else {
+            #expect(result.illustrations.contains { $0.presentation == .supplement && $0.imagePNG != nil })
+        }
+    }
+}
