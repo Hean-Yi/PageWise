@@ -3,30 +3,50 @@ import Foundation
 /// App-authored diagnoses can be shown to the reader or returned to a model without forwarding server text.
 public enum ArxivQueryError: LocalizedError, Sendable {
     case http(status: Int, retryAfter: Date?)
+    case cooldown(status: Int, until: Date)
+    indirect case incompleteSearch(arxiv: ArxivQueryError, doiReturnedNoMatches: Bool)
     case network(URLError.Code)
     case invalidResponse
     case invalidQuery
 
+    public var offersWebSearch: Bool {
+        switch self {
+        case .http(429, _), .http(500...599, _), .cooldown: true
+        case .incompleteSearch(let arxiv, _): arxiv.offersWebSearch
+        default: false
+        }
+    }
+
+    var allowsMetadataFallback: Bool {
+        switch self {
+        case .http(429, _), .http(408, _), .http(500...599, _), .cooldown, .invalidResponse: true
+        case .network(let code):
+            [.timedOut, .cannotConnectToHost, .cannotFindHost, .dnsLookupFailed, .networkConnectionLost].contains(code)
+        default: false
+        }
+    }
+
     public var canRefineQuery: Bool {
         switch self {
         case .invalidQuery, .http(400, _), .http(422, _): true
+        case .incompleteSearch(let arxiv, let empty): empty || arxiv.canRefineQuery
         default: false
         }
     }
 
     public var errorDescription: String? {
         switch self {
+        case .incompleteSearch(let arxiv, let empty):
+            return (empty ? "DataCite 的 arXiv 题名索引未命中。" : "DataCite 的 arXiv 题名索引暂时不可用。") + arxiv.localizedDescription
+        case .cooldown(let status, let until):
+            return "上次 arXiv 请求返回 HTTP \(status)，本次仍在等待，未向 arXiv API 再发请求。" + Self.retryHint(until)
         case .http(let status, let retryAfter):
-            let next =
-                retryAfter.map { date in
-                    let style = Date.FormatStyle(
-                        date: Calendar.current.isDateInToday(date) ? .omitted : .abbreviated,
-                        time: .standard, locale: Locale(identifier: "zh_CN"))
-                    return "可在 \(date.formatted(style)) 后重试。"
-                } ?? "请稍后重试。"
+            let next = retryAfter.map(Self.retryHint) ?? "请稍后重试。"
             switch status {
             case 400, 422: return "arXiv 无法处理此检索式（HTTP \(status)），请调整关键词。"
-            case 429: return "arXiv 已限制请求频率（HTTP 429）。" + next
+            case 429:
+                return "arXiv 已限制请求频率（HTTP 429）。"
+                    + (retryAfter.map(Self.retryHint) ?? "服务端未提供重试时间，应用会短暂等待。")
             case 408, 500...599: return "arXiv 检索服务暂时不可用（HTTP \(status)）。" + next
             default: return "arXiv 检索请求失败（HTTP \(status)）。"
             }
@@ -42,6 +62,13 @@ public enum ArxivQueryError: LocalizedError, Sendable {
         case .invalidResponse: return "arXiv 的响应格式异常，无法读取检索结果。"
         case .invalidQuery: return "arXiv 无法处理此检索式，请调整关键词。"
         }
+    }
+
+    private static func retryHint(_ date: Date) -> String {
+        let style = Date.FormatStyle(
+            date: Calendar.current.isDateInToday(date) ? .omitted : .abbreviated,
+            time: .standard, locale: Locale(identifier: "zh_CN"))
+        return "可在 \(date.formatted(style)) 后重试。"
     }
 }
 
@@ -61,8 +88,14 @@ actor ArxivMetadataRequests {
     private let throttleDelay: TimeInterval
     private var earliestStart = ContinuousClock.now
     private var cooldown: (until: Date, status: Int)?
-    private var busy = false
-    private var waiters: [(id: UUID, continuation: CheckedContinuation<Void, any Error>)] = []
+    private var doiRetryAt: Date?
+    private enum Queue: Hashable {
+        case search(String)
+        case doi, atom
+    }
+    private typealias Waiter = (id: UUID, continuation: CheckedContinuation<Void, any Error>)
+    // An entry exists while its owner holds the queue, even when nobody is waiting.
+    private var waiters: [Queue: [Waiter]] = [:]
 
     init(
         spacing: Duration = .seconds(3), maxAutomaticWait: TimeInterval = 15, throttleDelay: TimeInterval = 30,
@@ -74,21 +107,26 @@ actor ArxivMetadataRequests {
         self.cacheLifetime = cacheLifetime
     }
 
-    func results(for url: URL, using transport: any HTTPTransport, searchKey: String?, limit: Int) async throws
+    func results(
+        for url: URL, using transport: any HTTPTransport, searchKey: String?, limit: Int, doiQuery: String? = nil
+    ) async throws
         -> [PaperCandidate]
     {
         try Task.checkCancellation()
+        guard let searchKey else {
+            let results = try await lookup(url, doiQuery: doiQuery, limit: limit, transport: transport)
+            try Task.checkCancellation()
+            return results
+        }
         if let cached = cachedResults(for: searchKey, limit: limit) { return cached }
-        try await acquire()
-        defer { release() }
+        try await acquire(.search(searchKey))
+        defer { release(.search(searchKey)) }
         try Task.checkCancellation()
         // A preceding caller may have filled this entry while this request was queued.
         if let cached = cachedResults(for: searchKey, limit: limit) { return cached }
 
-        let data = try await data(for: url, using: transport)
-        let results = try ArxivClient.parseMetadata(data)
+        let results = try await lookup(url, doiQuery: doiQuery, limit: limit, transport: transport)
         try Task.checkCancellation()
-        guard let searchKey else { return results }
         let selected = Array(results.prefix(limit))
         if !selected.isEmpty {
             if cache[searchKey] == nil, cache.count >= 32,
@@ -101,19 +139,48 @@ actor ArxivMetadataRequests {
         return selected
     }
 
-    private func cachedResults(for key: String?, limit: Int) -> [PaperCandidate]? {
-        guard let key, let entry = cache[key], entry.expires > .now, entry.limit >= limit else { return nil }
+    private func lookup(_ url: URL, doiQuery: String?, limit: Int, transport: any HTTPTransport) async throws
+        -> [PaperCandidate]
+    {
+        var doiReturnedNoMatches = false
+        if let doiQuery {
+            try await acquire(.doi)
+            defer { release(.doi) }
+            try Task.checkCancellation()
+            if doiRetryAt.map({ $0 <= Date() }) ?? true {
+                do {
+                    let records = try await ArxivDOISearch.search(doiQuery, limit: limit, using: transport)
+                    try Task.checkCancellation()
+                    if !records.isEmpty { return records }
+                    doiReturnedNoMatches = true
+                } catch is CancellationError {
+                    throw CancellationError()
+                } catch ArxivDOISearch.Failure.rateLimited(let until) {
+                    doiRetryAt = until
+                } catch {
+                    try Task.checkCancellation()
+                }
+            }
+        }
+        do {
+            return try ArxivClient.parseMetadata(await data(for: url, using: transport))
+        } catch let error as ArxivQueryError where doiQuery != nil {
+            throw ArxivQueryError.incompleteSearch(arxiv: error, doiReturnedNoMatches: doiReturnedNoMatches)
+        }
+    }
+
+    private func cachedResults(for key: String, limit: Int) -> [PaperCandidate]? {
+        guard let entry = cache[key], entry.expires > .now, entry.limit >= limit else { return nil }
         return Array(entry.results.prefix(limit))
     }
 
     private func data(for url: URL, using transport: any HTTPTransport) async throws -> Data {
+        try await acquire(.atom)
+        defer { release(.atom) }
         var request = URLRequest(url: url, timeoutInterval: 90)
         request.setValue("application/atom+xml", forHTTPHeaderField: "Accept")
-        var waitedForThrottle = false
-        var allowedWait = maxAutomaticWait
         for attempt in 1...3 {
-            try await waitForSlot(maxWait: allowedWait)
-            allowedWait = maxAutomaticWait
+            try await waitForSlot(maxWait: maxAutomaticWait)
             do {
                 defer { earliestStart = .now + spacing }
                 let (data, response) = try await transport.data(for: request)
@@ -127,14 +194,11 @@ actor ArxivMetadataRequests {
 
                 let transient = [408, 429, 500, 502, 503, 504].contains(status)
                 // arXiv may reply 429 without Retry-After. Back off across all callers in that case too.
-                var retryAfter = Self.retryDate(response.value(forHTTPHeaderField: "Retry-After"))
-                if status == 429, retryAfter == nil {
-                    let until = Date().addingTimeInterval(throttleDelay * (waitedForThrottle ? 2 : 1))
+                let retryAfter = Self.retryDate(response.value(forHTTPHeaderField: "Retry-After"))
+                if status == 429 {
+                    let until = retryAfter ?? Date().addingTimeInterval(throttleDelay)
                     cooldown = (until, status)
-                    guard !waitedForThrottle else { throw ArxivQueryError.http(status: status, retryAfter: until) }
-                    waitedForThrottle = true
-                    allowedWait = max(allowedWait, throttleDelay)
-                    retryAfter = until
+                    throw ArxivQueryError.http(status: status, retryAfter: retryAfter)
                 } else if transient, let until = retryAfter {
                     cooldown = (until, status)
                 }
@@ -155,8 +219,8 @@ actor ArxivMetadataRequests {
         try Task.checkCancellation()
         if let cooldown {
             let remaining = cooldown.until.timeIntervalSinceNow
-            guard remaining <= maxWait else {
-                throw ArxivQueryError.http(status: cooldown.status, retryAfter: cooldown.until)
+            if remaining > 0 && (cooldown.status == 429 || remaining > maxWait) {
+                throw ArxivQueryError.cooldown(status: cooldown.status, until: cooldown.until)
             }
             if remaining > 0 { earliestStart = max(earliestStart, .now + .seconds(remaining)) }
         }
@@ -177,36 +241,34 @@ actor ArxivMetadataRequests {
         return format.date(from: value)
     }
 
-    private func acquire() async throws {
-        try Task.checkCancellation()
-        guard busy else {
-            busy = true
-            return
-        }
+    private func acquire(_ queue: Queue) async throws {
         let id = UUID()
         try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
                 if Task.isCancelled {
                     continuation.resume(throwing: CancellationError())
+                } else if waiters[queue] == nil {
+                    waiters[queue] = []
+                    continuation.resume()
                 } else {
-                    waiters.append((id, continuation))
+                    waiters[queue]?.append((id, continuation))
                 }
             }
         } onCancel: {
-            Task { await self.cancelWaiter(id) }
+            Task { await self.cancelWaiter(id, in: queue) }
         }
     }
 
-    private func cancelWaiter(_ id: UUID) {
-        guard let index = waiters.firstIndex(where: { $0.id == id }) else { return }
-        waiters.remove(at: index).continuation.resume(throwing: CancellationError())
+    private func cancelWaiter(_ id: UUID, in queue: Queue) {
+        guard let index = waiters[queue]?.firstIndex(where: { $0.id == id }) else { return }
+        waiters[queue]?.remove(at: index).continuation.resume(throwing: CancellationError())
     }
 
-    private func release() {
-        if waiters.isEmpty {
-            busy = false
+    private func release(_ queue: Queue) {
+        if waiters[queue]?.isEmpty == false {
+            waiters[queue]?.removeFirst().continuation.resume()
         } else {
-            waiters.removeFirst().continuation.resume()
+            waiters.removeValue(forKey: queue)
         }
     }
 }

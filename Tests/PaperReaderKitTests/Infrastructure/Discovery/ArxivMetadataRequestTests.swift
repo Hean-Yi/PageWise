@@ -37,16 +37,29 @@ private actor MetadataTransport: HTTPTransport {
     }
 }
 
+/// Exercises the Atom queue independently of the DOI search index.
+private struct AtomSearchFixture {
+    let transport: any HTTPTransport
+    let metadataRequests: ArxivMetadataRequests
+
+    func search(_ query: String, limit: Int = 8) async throws -> [PaperCandidate] {
+        var components = URLComponents(string: "https://export.arxiv.org/api/query")!
+        components.queryItems = [.init(name: "search_query", value: query)]
+        return try await metadataRequests.results(
+            for: components.url!, using: transport, searchKey: query.lowercased(), limit: limit)
+    }
+}
+
 @Test func arxivRetriesTemporaryHTTPAndNetworkFailuresWithinOneSearch() async throws {
     let transport = MetadataTransport([.http(503), .network(.timedOut), .http(200)])
-    let client = ArxivClient(transport: transport, metadataRequests: .init(spacing: .zero))
+    let client = AtomSearchFixture(transport: transport, metadataRequests: .init(spacing: .zero))
     #expect(try await client.search("memory").isEmpty)
     #expect(await transport.starts.count == 3)
 }
 
 @Test func arxivStopsAfterBoundedAttemptsAndReportsHTTPStatus() async throws {
     let transport = MetadataTransport(Array(repeating: .http(502), count: 3))
-    let client = ArxivClient(transport: transport, metadataRequests: .init(spacing: .zero))
+    let client = AtomSearchFixture(transport: transport, metadataRequests: .init(spacing: .zero))
     do {
         _ = try await client.search("memory")
         Issue.record("Expected arXiv service failure")
@@ -63,17 +76,21 @@ private actor MetadataTransport: HTTPTransport {
 @Test func arxivHonorsLongServerCooldownAcrossClientsWithoutSendingAnotherRequest() async throws {
     let gate = ArxivMetadataRequests(spacing: .zero, maxAutomaticWait: 0.1)
     let transport = MetadataTransport([.http(429, headers: ["Retry-After": "300"])])
+    var deadline: Date?
     for query in ["retrieval", "agent memory"] {
-        let client = ArxivClient(transport: transport, metadataRequests: gate)
+        let client = AtomSearchFixture(transport: transport, metadataRequests: gate)
         do {
             _ = try await client.search(query)
             Issue.record("Expected arXiv cooldown")
         } catch let error as ArxivQueryError {
-            guard case .http(429, let until?) = error else {
-                Issue.record("Expected HTTP 429")
-                return
+            switch error {
+            case .http(429, let until?) where deadline == nil:
+                #expect(until > Date())
+                deadline = until
+            case .cooldown(429, let until):
+                #expect(until == deadline)
+            default: Issue.record("Unexpected arXiv error")
             }
-            #expect(until > Date())
             #expect(!error.canRefineQuery)
         }
     }
@@ -94,7 +111,7 @@ private actor MetadataTransport: HTTPTransport {
     try await withThrowingTaskGroup(of: Void.self) { group in
         for query in ["memory", "attention", "planning"] {
             group.addTask {
-                _ = try await ArxivClient(transport: transport, metadataRequests: gate).search(query)
+                _ = try await AtomSearchFixture(transport: transport, metadataRequests: gate).search(query)
             }
         }
         try await group.waitForAll()
@@ -114,7 +131,7 @@ private actor MetadataTransport: HTTPTransport {
         (.http(200, body: "<html><body>gateway</body></html>"), false), (.network(.notConnectedToInternet), false),
     ] {
         let transport = MetadataTransport([reply])
-        let client = ArxivClient(transport: transport, metadataRequests: .init(spacing: .zero))
+        let client = AtomSearchFixture(transport: transport, metadataRequests: .init(spacing: .zero))
         do {
             _ = try await client.search("memory")
             Issue.record("Expected classified arXiv error")
@@ -127,55 +144,57 @@ private actor MetadataTransport: HTTPTransport {
 
 @Test func arxivCancellationDoesNotIssueARetryOrHoldTheQueue() async throws {
     let transport = MetadataTransport([.network(.cancelled), .http(200)])
-    let client = ArxivClient(transport: transport, metadataRequests: .init(spacing: .zero))
+    let client = AtomSearchFixture(transport: transport, metadataRequests: .init(spacing: .zero))
     await #expect(throws: CancellationError.self) { _ = try await client.search("memory") }
     #expect(try await client.search("attention").isEmpty)
     #expect(await transport.starts.count == 2)
 }
 
-@Test func arxivRecoversFromOneUnspecifiedThrottleAndKeepsCooldownAfterRepeatedThrottling() async throws {
-    struct CooldownProbe: HTTPTransport {
-        let retryAt: Date
-        let transport: MetadataTransport
+@Test func arxivOnlyReportsEmptyWhenTheFeedHasNoMatches() throws {
+    let opening =
+        #"<atom:feed xmlns:atom="http://www.w3.org/2005/Atom" xmlns:os="http://a9.com/-/spec/opensearch/1.1/">"#
+    let entry = """
+        <atom:entry><atom:id>https://arxiv.org/abs/2401.00001v1</atom:id><atom:title>Matched paper</atom:title>
+        <atom:link title="pdf" href="https://arxiv.org/pdf/2401.00001v1"/></atom:entry>
+        """
+    func feed(_ body: String) -> Data { Data((opening + body + "</atom:feed>").utf8) }
+    #expect(try ArxivClient.parseMetadata(feed("<os:totalResults>0</os:totalResults>")).isEmpty)
+    #expect(try ArxivClient.parseMetadata(feed(entry)).map(\.title) == ["Matched paper"])
+    for body in [
+        "<os:totalResults>3</os:totalResults>", "<atom:entry><atom:title>Broken record</atom:title></atom:entry>",
+    ] {
+        #expect(throws: ArxivQueryError.self) { try ArxivClient.parseMetadata(feed(body)) }
+    }
+}
 
-        func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) {
-            // A delayed test runner can legitimately resume after the deadline. Check at the actual send.
-            #expect(Date() >= retryAt)
-            return try await transport.data(for: request)
-        }
+@Test func arxivRejectsOversizedSearchBeforeContactingEitherService() async throws {
+    let transport = MetadataTransport([])
+    let client = ArxivClient(transport: transport)
+    do {
+        _ = try await client.search(String(repeating: "a", count: 4_097))
+        Issue.record("Expected an invalid query")
+    } catch ArxivQueryError.invalidQuery {}
+    #expect(await transport.starts.isEmpty)
+}
+
+@Test func aHeaderless429DoesNotScheduleAnotherRequestOrExtendTheNextQueriesDeadline() async throws {
+    let gate = ArxivMetadataRequests(spacing: .zero, throttleDelay: 120)
+    let transport = MetadataTransport([.http(429)])
+    let client = AtomSearchFixture(transport: transport, metadataRequests: gate)
+    do {
+        _ = try await client.search("OPSD")
+        Issue.record("Expected HTTP 429")
+        return
+    } catch ArxivQueryError.http(429, nil) {}
+    var deadlines: [Date] = []
+    for term in ["on-policy self-distillation", "on-policy distillation"] {
+        do {
+            _ = try await client.search(term)
+            Issue.record("Expected local cooldown")
+        } catch ArxivQueryError.cooldown(429, let until) { deadlines.append(until) }
     }
-    for recovers in [true, false] {
-        let gate = ArxivMetadataRequests(spacing: .zero, maxAutomaticWait: 0, throttleDelay: 0.05)
-        let transport = MetadataTransport([.http(429), .http(recovers ? 200 : 429), .http(200)])
-        let client = ArxivClient(transport: transport, metadataRequests: gate)
-        var retryAt: Date?
-        if recovers {
-            #expect(try await client.search("attention").isEmpty)
-        } else {
-            do {
-                _ = try await client.search("attention")
-                Issue.record("Expected repeated throttling to return a retry deadline")
-            } catch ArxivQueryError.http(429, let until?) {
-                retryAt = until
-            }
-        }
-        let starts = await transport.starts
-        #expect(starts.count == 2)
-        if let first = starts.first, let last = starts.last {
-            #expect(first.duration(to: last) >= .milliseconds(45))
-        }
-        if let retryAt {
-            let probe = ArxivClient(
-                transport: CooldownProbe(retryAt: retryAt, transport: transport), metadataRequests: gate)
-            do {
-                #expect(try await probe.search("another query").isEmpty)
-                #expect(await transport.starts.count == 3)
-            } catch ArxivQueryError.http(429, let until?) {
-                #expect(until == retryAt)
-                #expect(await transport.starts.count == 2)
-            }
-        }
-    }
+    #expect(deadlines.count == 2 && deadlines[0] == deadlines[1] && deadlines[0] > Date())
+    #expect(await transport.starts.count == 1)
 }
 
 @Test func arxivCachesVerifiedNonemptyResultsForConcurrentAndSmallerQueries() async throws {
@@ -190,14 +209,14 @@ private actor MetadataTransport: HTTPTransport {
     try await withThrowingTaskGroup(of: Void.self) { group in
         for query in ["Attention memory", "attention memory"] {
             group.addTask {
-                let client = ArxivClient(transport: transport, metadataRequests: gate)
+                let client = AtomSearchFixture(transport: transport, metadataRequests: gate)
                 let results = try await client.search(query, limit: 8)
                 #expect(results.count == 2)
             }
         }
         try await group.waitForAll()
     }
-    let client = ArxivClient(transport: transport, metadataRequests: gate)
+    let client = AtomSearchFixture(transport: transport, metadataRequests: gate)
     #expect(try await client.search("ATTENTION memory", limit: 1).map(\.title) == ["Attention"])
     #expect(await transport.starts.count == 1)
     #expect(try await client.search("attention memory", limit: 13).isEmpty)
@@ -208,7 +227,7 @@ private actor MetadataTransport: HTTPTransport {
 @Test func arxivCancelsWaitDuringBackoffBeforeAnotherRequestIsSent() async throws {
     let transport = MetadataTransport([.http(503)])
     let gate = ArxivMetadataRequests(spacing: .seconds(60))
-    let client = ArxivClient(transport: transport, metadataRequests: gate)
+    let client = AtomSearchFixture(transport: transport, metadataRequests: gate)
     let search = Task { try await client.search("attention") }
     while await transport.starts.isEmpty { await Task.yield() }
     search.cancel()

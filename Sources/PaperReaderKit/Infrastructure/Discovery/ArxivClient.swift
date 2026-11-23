@@ -6,6 +6,7 @@ public struct PaperCandidate: Identifiable, Sendable {
     public var authors: String
     public var year: String
     public var pdfURL: URL
+    public var indexedByDataCite = false
     public init(id: String, title: String, authors: String, year: String, pdfURL: URL) {
         self.id = id
         self.title = title
@@ -70,13 +71,17 @@ public actor ArxivClient: PaperDiscovery {
             let identifier = String(URL(string: candidate.id)!.path.dropFirst(5))
             var components = URLComponents(string: "https://export.arxiv.org/api/query")!
             components.queryItems = [.init(name: "id_list", value: identifier)]
-            let results = try await metadata(components)
-            guard results.count == 1, let result = results.first,
-                let resolved = Self.versionedIdentifier(result.id),
-                resolved.replacingOccurrences(of: #"v[1-9][0-9]*$"#, with: "", options: .regularExpression)
-                    == identifier
-            else { throw ReaderError.message("无法确认论文版本，请重新查找。") }
-            pinned = result
+            do {
+                let results = try await metadata(components)
+                guard results.count == 1, let result = results.first,
+                    let resolved = Self.versionedIdentifier(result.id),
+                    resolved.replacingOccurrences(of: #"v[1-9][0-9]*$"#, with: "", options: .regularExpression)
+                        == identifier
+                else { throw ReaderError.message("无法确认论文版本，请重新查找。") }
+                pinned = result
+            } catch let error as ArxivQueryError where error.allowsMetadataFallback {
+                pinned = try await ArxivAbstractVersion.resolve(candidate, identifier: identifier, using: transport)
+            }
         }
         let identifier = Self.versionedIdentifier(pinned.id)!
         let sourceURL = URL(string: "https://arxiv.org/src/" + identifier)!
@@ -130,29 +135,37 @@ public actor ArxivClient: PaperDiscovery {
         guard !clean.isEmpty else { return [] }
         let words = clean.split { !$0.isLetter && !$0.isNumber }.prefix(16)
         guard !words.isEmpty else { return [] }
+        guard words.reduce(0, { $0 + $1.utf8.count }) <= 4_096 else { throw ArxivQueryError.invalidQuery }
         let titleQuery = words.map { "ti:\"\($0)\"" }.joined(separator: " AND ")
         var components = URLComponents(string: "https://export.arxiv.org/api/query")!
         components.queryItems = [
             .init(name: "search_query", value: titleQuery),
             .init(name: "max_results", value: String(limit)),
         ]
-        return try await metadata(components, searchKey: titleQuery.lowercased(), limit: limit)
+        guard let url = components.url else { throw ArxivQueryError.invalidQuery }
+        return try await metadataRequests.results(
+            for: url, using: transport, searchKey: titleQuery.lowercased(), limit: limit,
+            doiQuery: words.joined(separator: " "))
     }
 
-    private func metadata(_ components: URLComponents, searchKey: String? = nil, limit: Int = 40) async throws
+    private func metadata(_ components: URLComponents) async throws
         -> [PaperCandidate]
     {
         guard let url = components.url else { throw ArxivQueryError.invalidQuery }
-        return try await metadataRequests.results(for: url, using: transport, searchKey: searchKey, limit: limit)
+        return try await metadataRequests.results(for: url, using: transport, searchKey: nil, limit: 40)
     }
 
     static func parseMetadata(_ data: Data) throws -> [PaperCandidate] {
         let parser = XMLParser(data: data)
         let delegate = FeedParser()
         parser.delegate = delegate
+        parser.shouldProcessNamespaces = true
         parser.shouldResolveExternalEntities = false
         guard parser.parse(), delegate.root == "feed" else { throw ArxivQueryError.invalidResponse }
         if delegate.hasQueryError { throw ArxivQueryError.invalidQuery }
+        guard !delegate.results.isEmpty || (!delegate.sawEntry && (delegate.totalResults ?? 0) == 0) else {
+            throw ArxivQueryError.invalidResponse
+        }
         return delegate.results
     }
     public func download(_ candidate: PaperCandidate) async throws -> URL {
@@ -208,6 +221,8 @@ private final class FeedParser: NSObject, XMLParserDelegate {
     var results: [PaperCandidate] = []
     private(set) var root: String?
     private(set) var hasQueryError = false
+    private(set) var sawEntry = false
+    private(set) var totalResults: Int?
     private var fields: [String: String] = [:]
     private var current = ""
     private var inEntry = false
@@ -217,9 +232,14 @@ private final class FeedParser: NSObject, XMLParserDelegate {
         _ parser: XMLParser, didStartElement elementName: String, namespaceURI: String?, qualifiedName qName: String?,
         attributes attributeDict: [String: String] = [:]
     ) {
-        if root == nil { root = elementName }
+        if root == nil {
+            root =
+                namespaceURI == nil || namespaceURI == "" || namespaceURI == "http://www.w3.org/2005/Atom"
+                ? elementName : ""
+        }
         current = elementName
         if elementName == "entry" {
+            sawEntry = true
             inEntry = true
             fields = [:]
             pdf = nil
@@ -232,11 +252,14 @@ private final class FeedParser: NSObject, XMLParserDelegate {
         }
     }
     func parser(_ parser: XMLParser, foundCharacters string: String) {
-        if inEntry { fields[current, default: ""] += string }
+        if inEntry || current == "totalResults" { fields[current, default: ""] += string }
     }
     func parser(
         _ parser: XMLParser, didEndElement elementName: String, namespaceURI: String?, qualifiedName qName: String?
     ) {
+        if !inEntry, elementName == "totalResults", let count = fields.removeValue(forKey: elementName) {
+            totalResults = Int(count.trimmingCharacters(in: .whitespacesAndNewlines))
+        }
         if elementName == "name", let name = fields["name"] {
             authors.append(name.trimmingCharacters(in: .whitespacesAndNewlines))
         }

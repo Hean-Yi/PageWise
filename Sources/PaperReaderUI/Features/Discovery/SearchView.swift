@@ -69,6 +69,7 @@ struct SearchView: View {
             Text(item.authors).font(.caption).foregroundStyle(ReaderTheme.muted).lineLimit(2)
             HStack {
                 Text(item.year).font(.caption).foregroundStyle(ReaderTheme.muted)
+                if item.indexedByDataCite { Text("DataCite 索引").font(.caption).foregroundStyle(ReaderTheme.muted) }
                 Link("arXiv 来源", destination: URL(string: item.id) ?? item.pdfURL).font(.caption)
                 Spacer()
                 if search.imported[item.id] != nil {

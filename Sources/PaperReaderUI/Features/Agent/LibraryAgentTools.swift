@@ -227,7 +227,9 @@ extension LibraryAgent {
                 }
                 return (ToolRecord(card: card, authors: candidate.authors, year: candidate.year), card)
             }
-            let outcome = try result(pairs, truncated: found.count > 40 || verified.count > pairs.count)
+            let outcome = try result(
+                pairs, truncated: found.count > 40 || verified.count > pairs.count,
+                message: found.first?.indexedByDataCite == true ? "候选来自 DataCite 登记的 arXiv 元数据，来源链接指向 arXiv 原文。" : nil)
             for (card, candidate) in zip(outcome.cards, verified) {
                 if let id = card.candidateID {
                     candidates[id] = candidate

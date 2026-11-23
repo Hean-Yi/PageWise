@@ -6,6 +6,12 @@ import Testing
 private struct FeedTransport: HTTPTransport {
     var expectedLimit = 8
     func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        if let url = request.url, url.host == "api.datacite.org" {
+            return (
+                Data(#"{"data":[]}"#.utf8),
+                HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!
+            )
+        }
         let components = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)
         #expect(components?.queryItems?.first?.value?.contains(" AND ") == true)
         #expect(components?.queryItems?.first { $0.name == "max_results" }?.value == String(expectedLimit))

@@ -112,9 +112,7 @@ public final class OnlinePaperSearch {
     }
 
     private static func webSearchURL(for term: String, error: any Error) -> URL? {
-        guard let failure = error as? ArxivQueryError, case .http(let status, _) = failure,
-            status == 429 || (500...599).contains(status)
-        else { return nil }
+        guard (error as? ArxivQueryError)?.offersWebSearch == true else { return nil }
         var search = URLComponents()
         search.scheme = "https"
         search.host = "arxiv.org"
