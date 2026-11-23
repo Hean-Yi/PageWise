@@ -117,6 +117,8 @@ public struct AgentLimits: Sendable {
     public var maxResults = 12
     public var maxQuestionBytes = 8_000
     public var maxHistoryTurns = 6
+    /// Tool definitions to advertise on this request. Standalone clients default to the full catalog.
+    public var availableToolNames: Set<String>?
     public init() {}
 }
 

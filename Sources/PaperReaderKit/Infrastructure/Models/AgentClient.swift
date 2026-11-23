@@ -32,7 +32,8 @@ public struct AgentClient: AgentCompleting {
             endpoint.host == "api.deepseek.com" && endpoint.port == nil ? .disabled : nil
         let request = try ChatCompletionRequest.make(
             settings: settings, key: key, messages: messages, stream: onPartial != nil,
-            toolChoice: limits.maxToolCalls > 0 ? .auto : finalToolChoice)
+            toolChoice: limits.maxToolCalls > 0 ? .auto : finalToolChoice, availableToolNames: limits.availableToolNames
+        )
         let data: Data
         let response: HTTPURLResponse
         do {
@@ -161,7 +162,7 @@ public struct AgentClient: AgentCompleting {
         static let definitions: [Tool] = [
             make(
                 "present_results",
-                "Choose the exact ordered subset of registered results to display as interactive cards. Replaces the previous selection for this answer. Use after searching and before your final answer.",
+                "Show selected recommendations, matches or citations in order. Import and navigation tools display their own action cards.",
                 [
                     "purpose": .init(
                         type: "string", description: "How the selected sources are used",
@@ -177,11 +178,15 @@ public struct AgentClient: AgentCompleting {
                 ], ["purpose", "items"]),
             make(
                 "search_library",
-                "Search local titles and extracted text. Rewrite or translate keywords when needed. Only real matches are returned.",
-                ["query": .init(type: "string", description: "Short keywords in Chinese or English")], ["query"]),
+                "Find papers or passages in the reader's own library, including previously downloaded papers.",
+                [
+                    "query": .init(
+                        type: "string",
+                        description: "One query per topic; combine Chinese and English synonyms with spaces.")
+                ], ["query"]),
             make(
                 "search_reading_notes",
-                "Retrieve the reader’s saved local notes by topic. Use for reader observations, prior discussion and cross-paper knowledge links. Returns note excerpts and result_id for citations.",
+                "Find the reader's saved notes and observations. Returns excerpts and result_id for citations.",
                 [
                     "query": .init(
                         type: "string", description: "Concepts, keywords or paper title in Chinese or English")
@@ -194,16 +199,16 @@ public struct AgentClient: AgentCompleting {
                     "source_page": .init(type: "integer", description: "One-based original page"),
                 ], ["paper_id", "source_page"]),
             make(
-                "search_online", "Search arXiv for verified paper candidates; does not download.",
+                "search_online", "Find arXiv candidates for downloads, new papers or online recommendations.",
                 [
                     "query": .init(type: "string", description: "Paper title keywords"),
                     "limit": .init(
                         type: "integer",
-                        description: "Optional number of search hits when the reader specifies a quantity"),
+                        description: "Start with 3 hits for a known title. For discovery, size to the request."),
                 ], ["query"]),
             make(
                 "prepare_import",
-                "Prepare a confirmation card for a registered candidate. Only the user's click can download or import.",
+                "Use an existing candidate_id directly to show a download card. The reader clicks to import.",
                 ["candidate_id": .init(type: "string", description: "Candidate ID from search_online")],
                 ["candidate_id"]),
             make(

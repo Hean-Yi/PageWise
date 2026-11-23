@@ -57,6 +57,24 @@ private actor AgentWireTransport: HTTPTransport {
     #expect(requests[1].value(forHTTPHeaderField: "Authorization") == "Bearer test-only")
 }
 
+@Test func agentSendsOnlyTheToolSchemasAvailableDuringThisRound() async throws {
+    let transport = AgentWireTransport([
+        #"{"choices":[{"message":{"role":"assistant","content":"完成"},"finish_reason":"stop"}]}"#
+    ])
+    let client = AgentClient(transport: transport)
+    let messages = [AgentMessage(role: "user", content: "下载选中的论文")]
+    let availableTools: Set<String> = ["prepare_import", "search_online", "ask_user"]
+    var limits = AgentLimits()
+    limits.availableToolNames = availableTools
+    _ = try await client.respond(settings: agentSettings(), key: "fixture", messages: messages, limits: limits)
+    let body = try #require(await transport.requests.first?.httpBody)
+    let object = try #require(JSONSerialization.jsonObject(with: body) as? [String: Any])
+    let definitions = try #require(object["tools"] as? [[String: Any]])
+    let names = definitions.compactMap { ($0["function"] as? [String: Any])?["name"] as? String }
+    #expect(Set(names) == availableTools && names.count == availableTools.count)
+    #expect(object["tool_choice"] as? String == "auto")
+}
+
 @Test func agentStreamingBatchUsesTheRequestBudgetBeyondSixteenCalls() async throws {
     let events =
         (0..<17).map { index in

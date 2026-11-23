@@ -9,7 +9,8 @@ enum ChatCompletionRequest {
 
     static func make(
         settings: ModelSettings, key: String, messages: [AgentMessage], stream: Bool = false,
-        maxOutputTokens: Int = 4_096, jsonOutput: Bool = false, reflow: Bool = false, toolChoice: ToolChoice? = nil
+        maxOutputTokens: Int = 4_096, jsonOutput: Bool = false, reflow: Bool = false, toolChoice: ToolChoice? = nil,
+        availableToolNames: Set<String>? = nil
     ) throws -> URLRequest {
         let settings = try settings.normalized()
         let key = key.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -26,6 +27,12 @@ enum ChatCompletionRequest {
         let disableThinking =
             (reflow && provider == .glm && model == "glm-5.3-flash")
             || ((jsonOutput || reflow) && provider == .deepSeek && model == "deepseek-flash")
+        let tools =
+            toolChoice == nil
+            ? []
+            : AgentClient.Tool.definitions.filter { tool in
+                availableToolNames?.contains(tool.function.name) ?? true
+            }
         let body = Body(
             model: settings.model, messages: messages, stream: stream,
             temperature: fixedSampling ? nil : settings.temperature,
@@ -34,7 +41,7 @@ enum ChatCompletionRequest {
             // Claude's compatibility API rejects json_object. The prompts and local schema checks still require JSON.
             responseFormat: jsonOutput && provider != .anthropic ? ["type": "json_object"] : nil,
             thinking: disableThinking ? ["type": "disabled"] : nil,
-            tools: toolChoice == nil ? nil : AgentClient.Tool.definitions, toolChoice: toolChoice?.rawValue)
+            tools: tools.isEmpty ? nil : tools, toolChoice: tools.isEmpty ? nil : toolChoice?.rawValue)
         var request = URLRequest(url: try settings.endpointURL())
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")

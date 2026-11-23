@@ -9,13 +9,14 @@ private actor ScriptedLibraryModel: AgentCompleting {
     typealias Script = @Sendable ([AgentMessage], Int) throws -> AgentMessage
     private let script: Script
     private(set) var requests: [[AgentMessage]] = []
-    private(set) var callBudgets: [Int] = []
+    private(set) var requestLimits: [AgentLimits] = []
+    var callBudgets: [Int] { requestLimits.map(\.maxToolCalls) }
     init(_ script: @escaping Script) { self.script = script }
     func respond(settings: ModelSettings, key: String, messages: [AgentMessage], limits: AgentLimits) async throws
         -> AgentMessage
     {
         requests.append(messages)
-        callBudgets.append(limits.maxToolCalls)
+        requestLimits.append(limits)
         return try script(messages, requests.count)
     }
 }
@@ -437,9 +438,18 @@ func changingAgentServiceOrModelStartsFreshWireHistoryAndKeepsDisplayedTurns(cha
     reader.selectedPaperID = nil
     let discovery = AgentDiscoveryFixture(
         source: root.appendingPathComponent(existing.originalPath), holdDownload: true)
-    let agent = LibraryAgent(reader: reader, client: ScriptedLibraryModel(onlineScript), discovery: discovery)
+    let model = ScriptedLibraryModel(onlineScript)
+    let agent = LibraryAgent(reader: reader, client: model, discovery: discovery)
     agent.send("找 attention 并准备导入")
     try await eventually { !agent.isRunning }
+    #expect(agent.turns[0].activities.map(\.toolName) == ["search_online", "prepare_import"])
+    let rounds = await model.requestLimits
+    #expect(
+        rounds.first?.availableToolNames == ["search_online", "search_library", "search_reading_notes", "ask_user"])
+    let afterSearch = try #require(rounds.dropFirst().first?.availableToolNames)
+    #expect(afterSearch.contains("prepare_import") && afterSearch.contains("present_results"))
+    #expect(afterSearch.isDisjoint(with: ["read_paper", "create_reading_note", "close_read_paper"]))
+    #expect(await discovery.searchCount == 1)
     #expect(await discovery.downloadCount == 0)
     let card = try #require(agent.turns[0].cards.first { $0.importState == .ready })
     #expect(card.authors == "Original Fixture")
@@ -458,6 +468,49 @@ func changingAgentServiceOrModelStartsFreshWireHistoryAndKeepsDisplayedTurns(cha
     agent.confirmImport(cardID: card.id)
     #expect(await discovery.downloadCount == 1)
     #expect(reader.selectedPaperID == existing.id)
+}
+
+@Test @MainActor func downloadFollowUpUsesTheSelectedOnlineCandidateWithoutAnotherSearch() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let reader = try await makeAgentReader(root)
+    var limits = AgentLimits()
+    limits.maxHistoryTurns = 0
+    let discovery = AgentDiscoveryFixture(candidateCount: 2)
+    let model = ScriptedLibraryModel { messages, count in
+        switch count {
+        case 1: return tool("search_online", #"{"query":"fixture","limit":2}"#, id: "candidates")
+        case 2: return try present(candidateResultIDs(in: messages, callID: "candidates"), id: "show")
+        case 3: return .init(role: "assistant", content: "找到两篇。")
+        case 4:
+            #expect(messages.map(\.role) == ["system", "user"])
+            let record = try #require(messages.last?.content?.split(separator: "\n").last)
+            let selected = try JSONDecoder().decode([String: String].self, from: Data(record.utf8))
+            let candidateID = try #require(selected["candidate_id"])
+            return tool("prepare_import", "{\"candidate_id\":\"\(candidateID)\"}", id: "prepare")
+        default: return .init(role: "assistant", content: "可以导入这篇。")
+        }
+    }
+    let agent = LibraryAgent(reader: reader, client: model, discovery: discovery, limits: limits)
+    agent.send("在 arXiv 找两篇相关文章")
+    try await eventually { !agent.isRunning }
+    let recommendations = try #require(agent.turns.first)
+    #expect(recommendations.presentedResults.count == 2)
+    let selected = try #require(recommendations.presentedResults.last)
+    let selectedCard = try #require(recommendations.cards.first { $0.id == selected.id })
+    agent.send("下载这篇", referencing: selected.id)
+    try await eventually { !agent.isRunning }
+    let followUp = try #require(agent.turns.last)
+    let followUpTools = try #require(await model.requestLimits.dropFirst(3).first?.availableToolNames)
+    #expect(followUpTools.contains("prepare_import"))
+    #expect(followUp.error == nil)
+    #expect(followUp.activities.map(\.toolName) == ["prepare_import"])
+    let action = try #require(followUp.presentedResults.first)
+    let card = try #require(followUp.cards.first { $0.id == action.id })
+    #expect(action.purpose == .importAction)
+    #expect(card.candidateID == selectedCard.candidateID && card.importState == .ready)
+    #expect(await discovery.searchCount == 1)
+    #expect(await discovery.downloadCount == 0)
 }
 
 @Test(arguments: [false, true]) @MainActor func libraryAgentCancelOrResetRejectsLateModelResponse(reset: Bool)
@@ -1091,8 +1144,11 @@ private actor DelayedHistorySearch: PaperDiscovery {
     try await eventually { !agent.isRunning }
     #expect(reader.state.readingNotes.isEmpty && reader.state.highlights.isEmpty)
     #expect(agent.turns.last?.activities.last?.status == .failed)
+    #expect(await client.requestLimits.allSatisfy { $0.availableToolNames?.contains("create_reading_note") == false })
     agent.send("请把刚才的观点记为阅读笔记")
     try await eventually { !agent.isRunning }
+    let authorized = try #require(await client.requestLimits.last?.availableToolNames)
+    #expect(authorized.contains("create_reading_note") && !authorized.contains("close_read_paper"))
     let card = try #require(agent.turns.last?.cards.first { $0.readingNoteID != nil })
     let note = try #require(reader.state.readingNotes.first)
     #expect(note.id == card.readingNoteID)
@@ -1103,6 +1159,28 @@ private actor DelayedHistorySearch: PaperDiscovery {
     let persisted = try await LibraryStore(directory: root).load()
     #expect(persisted.readingNotes == [note])
     #expect(persisted.highlights == reader.state.highlights)
+}
+
+@Test(arguments: [false, true]) @MainActor
+func closeReadingToolBecomesAvailableAsSoonAsTheTargetPaperIsRegistered(selected: Bool) async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let reader = try await makeAgentReader(root)
+    let paper = Paper(
+        title: "Attention", digest: "fixture", originalPath: "paper.pdf", pageCount: 1,
+        blocks: [], warnings: [], canReflow: false)
+    reader.state.papers = [paper]
+    if selected { reader.select(paper.id) }
+    let client = ScriptedLibraryModel { _, count in
+        if !selected && count == 1 { return tool("search_library", #"{"query":"Attention"}"#) }
+        return .init(role: "assistant", content: "已识别目标论文。")
+    }
+    let agent = LibraryAgent(reader: reader, client: client, discovery: AgentDiscoveryFixture())
+    agent.send("请精读《Attention》")
+    try await eventually { !agent.isRunning }
+    let offered = await client.requestLimits.compactMap(\.availableToolNames)
+    #expect(offered.map { $0.contains("close_read_paper") } == (selected ? [true] : [false, true]))
+    #expect(offered.allSatisfy { !$0.contains("create_reading_note") })
 }
 
 @Test @MainActor func libraryAgentLinksRetrievedNotesFromAnotherPaperButRejectsOriginalTextAndForgedIDs() async throws {
@@ -1177,6 +1255,9 @@ private actor DelayedHistorySearch: PaperDiscovery {
     let agent = LibraryAgent(reader: reader, client: client, discovery: AgentDiscoveryFixture(), limits: limits)
     agent.send("请把讨论观点写成阅读笔记，并引用另一篇本地论文的笔记。")
     try await eventually { !agent.isRunning }
+    let offered = await client.requestLimits.compactMap(\.availableToolNames)
+    #expect(offered.first?.contains("create_reading_note") == false)
+    #expect(offered.dropFirst(2).first?.contains("create_reading_note") == true)
     let turn = try #require(agent.turns.first)
     #expect(turn.error == nil)
     #expect(
