@@ -15,21 +15,26 @@ private actor InlineDiscoveryFixture: PaperDiscovery {
     let source: URL?
     let holdSearch: Bool
     let holdDownload: Bool
+    let searchResults: [PaperCandidate]
     var pendingSearch: [String: CheckedContinuation<[PaperCandidate], Never>] = [:]
     var pendingDownload: CheckedContinuation<Void, Never>?
     var downloads = 0
-    var failSearch = false
+    var searchFailure: ArxivQueryError?
     var failDownload = false
     var returnedURL: URL?
-    init(source: URL? = nil, holdSearch: Bool = false, holdDownload: Bool = false) {
+    init(
+        source: URL? = nil, holdSearch: Bool = false, holdDownload: Bool = false,
+        searchResults: [PaperCandidate] = [onlineFixtureCandidate()]
+    ) {
         self.source = source
         self.holdSearch = holdSearch
         self.holdDownload = holdDownload
+        self.searchResults = searchResults
     }
     func search(_ query: String) async throws -> [PaperCandidate] {
-        if failSearch { throw ReaderError.message("离线查找失败") }
+        if let searchFailure { throw searchFailure }
         if holdSearch { return await withCheckedContinuation { pendingSearch[query] = $0 } }
-        return [onlineFixtureCandidate()]
+        return searchResults
     }
     func download(_ candidate: PaperCandidate) async throws -> URL {
         downloads += 1
@@ -51,17 +56,103 @@ private actor InlineDiscoveryFixture: PaperDiscovery {
         pendingDownload?.resume()
         pendingDownload = nil
     }
-    func setFailures(search: Bool = false, download: Bool = false) {
-        failSearch = search
+    func setFailures(search: ArxivQueryError? = nil, download: Bool = false) {
+        searchFailure = search
         failDownload = download
     }
 }
 
 @MainActor private func onlineModel() async throws -> ReaderModel {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-    let model = try ReaderModel(root: root)
+    let model = try ReaderModel(root: root, credentials: WorkflowCredentials())
     await model.load()
     return model
+}
+
+@MainActor @Test func onlineRepeatedSubmitKeepsOneRequestAndReportsSuccessfulZeroMatches() async throws {
+    let model = try await onlineModel()
+    defer { try? FileManager.default.removeItem(at: model.root) }
+    let search = OnlinePaperSearch(reader: model, discovery: InlineDiscoveryFixture(searchResults: []))
+    search.open(shelfID: nil)
+    search.query = "fixture"
+    search.search()
+    let task = try #require(search.searchTask)
+    search.query = " fixture "
+    #expect(!search.canSearch)
+    search.search()
+    #expect(search.searchTask == task)
+    await task.value
+    #expect(search.results.isEmpty)
+    #expect(search.error == nil)
+    #expect(search.searched)
+}
+
+@Test(arguments: [
+    (ArxivQueryError.http(status: 429, retryAfter: nil), true), (.http(status: 503, retryAfter: nil), true),
+    (.network(.notConnectedToInternet), false), (.invalidQuery, false), (.http(status: 403, retryAfter: nil), false),
+])
+@MainActor func onlineWebFallbackUsesTheFailedTitleOnlyWhenTheServiceIsBusy(
+    _ failure: ArxivQueryError, _ offersWebSearch: Bool
+) async throws {
+    let model = try await onlineModel()
+    defer { try? FileManager.default.removeItem(at: model.root) }
+    let discovery = InlineDiscoveryFixture()
+    await discovery.setFailures(search: failure)
+    let search = OnlinePaperSearch(reader: model, discovery: discovery)
+    let title = "C++ & 中文 #1?searchtype=all"
+    search.query = title
+    search.search()
+    await search.searchTask?.value
+    search.query = "a newer draft"
+    #expect((search.webSearchURL != nil) == offersWebSearch)
+    if offersWebSearch {
+        let url = try #require(search.webSearchURL)
+        let page = try #require(URLComponents(url: url, resolvingAgainstBaseURL: false))
+        #expect(page.scheme == "https" && page.host == "arxiv.org" && page.path == "/search/")
+        #expect(page.queryItems == [.init(name: "query", value: title), .init(name: "searchtype", value: "title")])
+        #expect(page.percentEncodedQuery?.contains("%2B%2B") == true)
+        #expect(page.fragment == nil)
+    }
+    await discovery.setFailures()
+    search.search()
+    await search.searchTask?.value
+    #expect(search.webSearchURL == nil)
+}
+
+private struct OnlineToolReplyEcho: AgentCompleting {
+    func respond(settings: ModelSettings, key: String, messages: [AgentMessage], limits: AgentLimits) async throws
+        -> AgentMessage
+    {
+        if let tool = messages.last(where: { $0.toolCallID == "find" }) {
+            return .init(role: "assistant", content: tool.content)
+        }
+        return .init(
+            role: "assistant", toolCalls: [.init(id: "find", name: "search_online", arguments: #"{"query":"fixture"}"#)]
+        )
+    }
+}
+
+@Test(arguments: [ArxivQueryError.invalidQuery, .http(status: 429, retryAfter: nil), .network(.timedOut)])
+@MainActor func onlineAgentReportsFailureAndWhetherAnotherQueryMightWork(_ failure: ArxivQueryError) async throws {
+    let model = try await onlineModel()
+    defer { try? FileManager.default.removeItem(at: model.root) }
+    var settings = model.modelSettings
+    settings.model = "fixture-model"
+    try model.saveSettings(settings, key: nil)
+    let discovery = InlineDiscoveryFixture()
+    await discovery.setFailures(search: failure)
+    let agent = LibraryAgent(reader: model, client: OnlineToolReplyEcho(), discovery: discovery)
+    agent.send("在线查找 fixture")
+    let deadline = ContinuousClock.now + .seconds(5)
+    while agent.isRunning && ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(10)) }
+    let turn = try #require(agent.turns.first)
+    #expect(turn.error == nil)
+    #expect(turn.activities.first?.status == .failed)
+    #expect(turn.activities.first?.message == failure.localizedDescription)
+    let payload = try #require(try JSONSerialization.jsonObject(with: Data(turn.answer.utf8)) as? [String: Any])
+    #expect(payload["ok"] as? Bool == false)
+    #expect(payload["message"] as? String == failure.localizedDescription)
+    #expect(payload["can_refine_query"] as? Bool == failure.canRefineQuery)
 }
 
 @MainActor @Test func onlineLateSearchCannotReplaceNewerResultsOrReopenClosedArea() async throws {
@@ -91,6 +182,7 @@ private actor InlineDiscoveryFixture: PaperDiscovery {
     await closingTask?.value
     #expect(!search.isExpanded)
     #expect(search.results.isEmpty)
+    #expect(!search.searched)
     #expect(!search.isSearching)
     #expect(search.error == nil)
 }
@@ -169,14 +261,19 @@ private actor InlineDiscoveryFixture: PaperDiscovery {
     let discovery = InlineDiscoveryFixture(source: source)
     let search = OnlinePaperSearch(reader: model, discovery: discovery)
     search.open(shelfID: nil)
-    await discovery.setFailures(search: true)
+    let limited = ArxivQueryError.http(status: 429, retryAfter: nil)
+    await discovery.setFailures(search: limited)
     search.query = "fixture"
     search.search()
     await search.searchTask?.value
-    #expect(search.error == "离线查找失败")
+    #expect(search.error == limited.localizedDescription)
+    #expect(!search.searched)
+    #expect(search.canSearch)
     await discovery.setFailures(download: true)
     search.search()
     await search.searchTask?.value
+    #expect(search.error == nil)
+    #expect(search.searched)
     search.confirmImport(onlineFixtureCandidate())
     await search.importTask?.value
     #expect(search.importErrors[onlineFixtureCandidate().id] == "离线下载失败")

@@ -8,9 +8,16 @@ public final class OnlinePaperSearch {
     public var query = ""
     public private(set) var results: [PaperCandidate] = []
     public private(set) var isExpanded = false
-    public private(set) var isSearching = false
+    private var activeQuery: String?
+    public var isSearching: Bool { activeQuery != nil }
+    var canSearch: Bool {
+        let term = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        return !term.isEmpty && term != activeQuery && importingID == nil
+    }
     public private(set) var searched = false
-    public private(set) var error: String?
+    private var failure: (reason: String, webSearchURL: URL?)?
+    public var error: String? { failure?.reason }
+    var webSearchURL: URL? { failure?.webSearchURL }
     public private(set) var contextNotice: String?
     public private(set) var importingID: String?
     private var importStage = "下载 TeX 与原版 PDF"
@@ -44,7 +51,7 @@ public final class OnlinePaperSearch {
             targetShelfID = shelfID
             results = []
             searched = false
-            error = nil
+            failure = nil
             imported = [:]
             importErrors = [:]
         }
@@ -70,18 +77,18 @@ public final class OnlinePaperSearch {
         generation = UUID()
         searchTask?.cancel()
         searchTask = nil
-        isSearching = false
+        activeQuery = nil
     }
 
     public func search() {
+        guard canSearch else { return }
         let term = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !term.isEmpty, importTask == nil else { return }
         cancelSearch()
         let token = generation
-        isSearching = true
-        error = nil
+        activeQuery = term
+        failure = nil
         results = []
-        searched = true
+        searched = false
         searchTask = Task { [weak self] in
             guard let self else { return }
             do {
@@ -91,14 +98,31 @@ public final class OnlinePaperSearch {
                 self.results = candidates.filter {
                     ArxivClient.verified($0) != nil && seen.insert($0.id).inserted
                 }
+                self.searched = true
+            } catch is CancellationError {
+                // A cancelled search has no result count to show.
             } catch {
                 guard token == self.generation, !Task.isCancelled else { return }
-                self.error = error.localizedDescription
+                self.failure = (error.localizedDescription, Self.webSearchURL(for: term, error: error))
             }
             guard token == self.generation else { return }
-            self.isSearching = false
+            self.activeQuery = nil
             self.searchTask = nil
         }
+    }
+
+    private static func webSearchURL(for term: String, error: any Error) -> URL? {
+        guard let failure = error as? ArxivQueryError, case .http(let status, _) = failure,
+            status == 429 || (500...599).contains(status)
+        else { return nil }
+        var search = URLComponents()
+        search.scheme = "https"
+        search.host = "arxiv.org"
+        search.path = "/search/"
+        search.queryItems = [.init(name: "query", value: term), .init(name: "searchtype", value: "title")]
+        // HTML form decoding treats a literal plus in a query string as a space.
+        search.percentEncodedQuery = search.percentEncodedQuery?.replacingOccurrences(of: "+", with: "%2B")
+        return search.url
     }
 
     public func cancelImport() { importTask?.cancel() }

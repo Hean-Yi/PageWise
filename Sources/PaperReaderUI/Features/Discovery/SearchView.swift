@@ -24,9 +24,7 @@ struct SearchView: View {
                     .focused($searchFocused).onSubmit { search.search() }.autocorrectionDisabled()
                     .disabled(search.importingID != nil)
                 Button("查找") { search.search() }.buttonStyle(.borderedProminent)
-                    .disabled(
-                        search.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                            || search.importingID != nil)
+                    .disabled(!search.canSearch)
             }.padding(14).background(ReaderTheme.surface, in: RoundedRectangle(cornerRadius: 10))
             HStack {
                 Text("导入到：\(targetName)").font(.caption).foregroundStyle(ReaderTheme.muted)
@@ -41,9 +39,14 @@ struct SearchView: View {
                 Text(notice).font(.caption).foregroundStyle(ReaderTheme.muted)
             }
             if let error = search.error {
-                HStack {
+                VStack(alignment: .leading, spacing: 6) {
                     Text(error).font(.caption).foregroundStyle(ReaderTheme.accent)
-                    Button("重试") { search.search() }.buttonStyle(.plain)
+                    HStack(spacing: 14) {
+                        Button("重试") { search.search() }.buttonStyle(.plain)
+                        if let url = search.webSearchURL {
+                            Link(destination: url) { Label("在 arXiv 网页查找", systemImage: "arrow.up.right.square") }
+                        }
+                    }
                 }
             } else if search.searched && search.results.isEmpty && !search.isSearching {
                 Text("未找到论文，试试更短的标题").font(.caption).foregroundStyle(ReaderTheme.muted)

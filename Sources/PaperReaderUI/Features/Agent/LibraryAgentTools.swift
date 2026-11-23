@@ -314,8 +314,10 @@ extension LibraryAgent {
         }
     }
 
-    static func errorResult(_ message: String, maxBytes: Int) throws -> String {
-        let data = try JSONEncoder().encode(ToolPayload(ok: false, results: [], truncated: false, message: message))
+    static func errorResult(_ message: String, canRefineQuery: Bool? = nil, maxBytes: Int) throws -> String {
+        let payload = ToolPayload(
+            ok: false, results: [], truncated: false, message: message, canRefineQuery: canRefineQuery)
+        let data = try JSONEncoder().encode(payload)
         guard data.count <= maxBytes else { throw ReaderError.message("工具结果超过长度上限。") }
         return String(decoding: data, as: UTF8.self)
     }
@@ -326,10 +328,12 @@ private struct ToolPayload: Encodable {
     var results: [ToolRecord]
     var truncated: Bool
     var message: String?
+    var canRefineQuery: Bool?
     let dataOnly = true
     enum CodingKeys: String, CodingKey {
         case ok, results, truncated, message
         case dataOnly = "data_only"
+        case canRefineQuery = "can_refine_query"
     }
 }
 

@@ -49,7 +49,17 @@ public struct DownloadedPublication: Sendable {
 
 public actor ArxivClient: PaperDiscovery {
     private let transport: any HTTPTransport
-    public init(transport: any HTTPTransport = NetworkTransport()) { self.transport = transport }
+    private let metadataRequests: ArxivMetadataRequests
+    public init() {
+        self.init(transport: NetworkTransport(), metadataRequests: .shared)
+    }
+    public init(transport: any HTTPTransport) {
+        self.init(transport: transport, metadataRequests: ArxivMetadataRequests())
+    }
+    init(transport: any HTTPTransport, metadataRequests: ArxivMetadataRequests) {
+        self.transport = transport
+        self.metadataRequests = metadataRequests
+    }
     public func downloadPublication(_ candidate: PaperCandidate) async throws -> DownloadedPublication {
         guard let candidate = Self.verified(candidate) else { throw ReaderError.message("论文下载来源无效。") }
         // Search normally returns a version. Resolve older unversioned candidates before either download.
@@ -60,16 +70,8 @@ public actor ArxivClient: PaperDiscovery {
             let identifier = String(URL(string: candidate.id)!.path.dropFirst(5))
             var components = URLComponents(string: "https://export.arxiv.org/api/query")!
             components.queryItems = [.init(name: "id_list", value: identifier)]
-            let (data, response) = try await transport.data(for: URLRequest(url: components.url!))
-            try Task.checkCancellation()
-            guard response.statusCode == 200, response.url == components.url, data.count <= 2_000_000 else {
-                throw ReaderError.message("无法确认论文版本，请稍后重试。")
-            }
-            let parser = XMLParser(data: data)
-            let delegate = FeedParser()
-            parser.delegate = delegate
-            parser.shouldResolveExternalEntities = false
-            guard parser.parse(), delegate.results.count == 1, let result = delegate.results.first,
+            let results = try await metadata(components)
+            guard results.count == 1, let result = results.first,
                 let resolved = Self.versionedIdentifier(result.id),
                 resolved.replacingOccurrences(of: #"v[1-9][0-9]*$"#, with: "", options: .regularExpression)
                     == identifier
@@ -134,17 +136,24 @@ public actor ArxivClient: PaperDiscovery {
             .init(name: "search_query", value: titleQuery),
             .init(name: "max_results", value: String(limit)),
         ]
-        let (data, response) = try await transport.data(for: URLRequest(url: components.url!))
-        try Task.checkCancellation()
-        guard response.statusCode == 200, response.url == components.url, data.count <= 2_000_000 else {
-            throw ReaderError.message("arXiv 暂时无法访问，请稍后重试或导入 PDF。")
-        }
+        return try await metadata(components, searchKey: titleQuery.lowercased(), limit: limit)
+    }
+
+    private func metadata(_ components: URLComponents, searchKey: String? = nil, limit: Int = 40) async throws
+        -> [PaperCandidate]
+    {
+        guard let url = components.url else { throw ArxivQueryError.invalidQuery }
+        return try await metadataRequests.results(for: url, using: transport, searchKey: searchKey, limit: limit)
+    }
+
+    static func parseMetadata(_ data: Data) throws -> [PaperCandidate] {
         let parser = XMLParser(data: data)
         let delegate = FeedParser()
         parser.delegate = delegate
         parser.shouldResolveExternalEntities = false
-        guard parser.parse() else { throw ReaderError.message("无法解析 arXiv 搜索结果。") }
-        return Array(delegate.results.prefix(limit))
+        guard parser.parse(), delegate.root == "feed" else { throw ArxivQueryError.invalidResponse }
+        if delegate.hasQueryError { throw ArxivQueryError.invalidQuery }
+        return delegate.results
     }
     public func download(_ candidate: PaperCandidate) async throws -> URL {
         guard let candidate = Self.verified(candidate) else { throw ReaderError.message("论文下载来源无效。") }
@@ -197,6 +206,8 @@ public actor ArxivClient: PaperDiscovery {
 
 private final class FeedParser: NSObject, XMLParserDelegate {
     var results: [PaperCandidate] = []
+    private(set) var root: String?
+    private(set) var hasQueryError = false
     private var fields: [String: String] = [:]
     private var current = ""
     private var inEntry = false
@@ -206,6 +217,7 @@ private final class FeedParser: NSObject, XMLParserDelegate {
         _ parser: XMLParser, didStartElement elementName: String, namespaceURI: String?, qualifiedName qName: String?,
         attributes attributeDict: [String: String] = [:]
     ) {
+        if root == nil { root = elementName }
         current = elementName
         if elementName == "entry" {
             inEntry = true
@@ -214,7 +226,10 @@ private final class FeedParser: NSObject, XMLParserDelegate {
             authors = []
         }
         if elementName == "name" { fields["name"] = "" }
-        if elementName == "link", attributeDict["title"] == "pdf" { pdf = attributeDict["href"] }
+        if inEntry, elementName == "link", attributeDict["title"] == "pdf" || attributeDict["type"] == "application/pdf"
+        {
+            pdf = attributeDict["href"]
+        }
     }
     func parser(_ parser: XMLParser, foundCharacters string: String) {
         if inEntry { fields[current, default: ""] += string }
@@ -228,9 +243,13 @@ private final class FeedParser: NSObject, XMLParserDelegate {
         if elementName == "entry" {
             defer { inEntry = false }
             guard let rawID = fields["id"]?.trimmingCharacters(in: .whitespacesAndNewlines),
-                let rawTitle = fields["title"], let rawPDF = pdf,
-                var components = URLComponents(string: rawPDF),
-                var source = URLComponents(string: rawID),
+                var source = URLComponents(string: rawID)
+            else { return }
+            if source.path == "/api/errors", ["arxiv.org", "export.arxiv.org"].contains(source.host ?? "") {
+                hasQueryError = true
+                return
+            }
+            guard let rawTitle = fields["title"], let rawPDF = pdf, var components = URLComponents(string: rawPDF),
                 ["http", "https"].contains(components.scheme ?? ""),
                 ["http", "https"].contains(source.scheme ?? "")
             else { return }
