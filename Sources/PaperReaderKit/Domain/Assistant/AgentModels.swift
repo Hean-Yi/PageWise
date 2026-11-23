@@ -30,7 +30,7 @@ public struct AgentCard: Identifiable, Sendable {
 }
 
 public enum AgentImportState: String, Sendable {
-    case unprepared, ready, downloading, importing, imported, failed, cancelled
+    case unprepared, ready, queued, downloading, importing, imported, failed, cancelled
 }
 
 public struct AgentActivity: Identifiable, Sendable {

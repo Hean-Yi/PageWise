@@ -1,5 +1,6 @@
 import CSQLite
 import Foundation
+import PDFKit
 import PaperReaderKit
 import Testing
 
@@ -186,6 +187,15 @@ private func present(_ ids: [String], id: String) throws -> AgentMessage {
     let items = ids.enumerated().map { ["result_id": $0.element, "reason": "选择理由 \($0.offset + 1)"] }
     let body = try JSONSerialization.data(withJSONObject: ["purpose": "recommendation", "items": items])
     return tool("present_results", String(decoding: body, as: UTF8.self), id: id)
+}
+
+private func recommendTwoOnlinePapers(_ messages: [AgentMessage], _ count: Int) throws -> AgentMessage {
+    switch count {
+    case 1: return tool("search_online", #"{"query":"fixture","limit":2}"#, id: "online")
+    case 2: return try present(candidateResultIDs(in: messages, callID: "online"), id: "recommend")
+    case 3: return .init(role: "assistant", content: "推荐这两篇。")
+    default: throw ReaderError.message("点击推荐卡不应请求模型。")
+    }
 }
 
 @Test @MainActor func presentationSelectsEightOfTenByIDAndPreservesOrderAcrossTurnsAndRetries() async throws {
@@ -511,6 +521,95 @@ func changingAgentServiceOrModelStartsFreshWireHistoryAndKeepsDisplayedTurns(cha
     #expect(card.candidateID == selectedCard.candidateID && card.importState == .ready)
     #expect(await discovery.searchCount == 1)
     #expect(await discovery.downloadCount == 0)
+}
+
+@Test(arguments: [false, true]) @MainActor
+func recommendedPaperDownloadsFromItsOwnCardWithoutAnotherModelRequest(retry: Bool) async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let reader = try await makeAgentReader(root)
+    let source = root.appendingPathComponent("candidate.pdf")
+    let discovery = AgentDiscoveryFixture(source: source, holdDownload: true, candidateCount: 2)
+    let model = ScriptedLibraryModel(recommendTwoOnlinePapers)
+    let agent = LibraryAgent(reader: reader, client: model, discovery: discovery)
+    agent.send("推荐两篇相关的 arXiv 论文")
+    try await eventually { !agent.isRunning }
+    let turn = try #require(agent.turns.first)
+    #expect(turn.activities.map(\.toolName) == ["search_online", "present_results"])
+    let chosen = try #require(turn.presentedResults.last)
+    let card = try #require(turn.cards.first { $0.id == chosen.id })
+    #expect(chosen.purpose == .recommendation && card.title == "Fixture 2")
+    #expect(card.importState == .unprepared && card.canImport)
+    #expect(await discovery.downloadCount == 0)
+    if retry {
+        agent.confirmImport(cardID: card.id)
+        try await eventually { await discovery.waiting }
+        await discovery.release()
+        try await eventually { agent.card(card.id)?.importState == .failed }
+        #expect(agent.card(card.id)?.canImport == true && reader.state.papers.isEmpty)
+    }
+    try DemoPaper.write(to: source)
+    agent.confirmImport(cardID: card.id)
+    agent.confirmImport(cardID: card.id)
+    try await eventually { await discovery.waiting }
+    await discovery.release()
+    try await eventually { agent.card(card.id)?.importState == .imported }
+    let paper = try #require(reader.state.papers.first)
+    #expect(reader.state.papers.count == 1 && paper.id == agent.card(card.id)?.paperID)
+    #expect(paper.title == card.title && paper.sourceURL == card.sourceURL?.absoluteString)
+    #expect(agent.turns.first?.cards.first?.importState == .unprepared)
+    #expect(await discovery.searchCount == 1)
+    #expect(await model.requests.count == 3)
+    #expect(await discovery.downloadCount == (retry ? 2 : 1))
+}
+
+@Test(arguments: [false, true]) @MainActor
+func downloadsFromTwoRecommendationCardsQueueOnceAndRespectCancellation(cancelSecond: Bool) async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let reader = try await makeAgentReader(root)
+    let source = root.appendingPathComponent("fixture.pdf")
+    try DemoPaper.write(to: source)
+    let discovery = AgentDiscoveryFixture(source: source, holdDownload: true, candidateCount: 2)
+    let model = ScriptedLibraryModel(recommendTwoOnlinePapers)
+    let agent = LibraryAgent(reader: reader, client: model, discovery: discovery)
+    agent.send("在 arXiv 推荐两篇论文")
+    try await eventually { !agent.isRunning }
+    let turn = try #require(agent.turns.last)
+    let first = try #require(turn.presentedResults.first?.id)
+    let second = try #require(turn.presentedResults.last?.id)
+    #expect(first != second)
+    agent.confirmImport(cardID: first)
+    try await eventually { await discovery.waiting }
+    agent.confirmImport(cardID: second)
+    agent.confirmImport(cardID: second)
+    #expect(agent.card(second)?.importState == .queued)
+    #expect(await discovery.downloadCount == 1)
+    if cancelSecond {
+        agent.cancelImport(cardID: second)
+        #expect(agent.card(second)?.importState == .cancelled)
+    }
+    await discovery.release()
+    try await eventually { agent.card(first)?.importState == .imported }
+    if cancelSecond {
+        #expect(await discovery.downloadCount == 1)
+        #expect(agent.card(second)?.importState == .cancelled)
+        #expect(reader.state.papers.map(\.title) == ["Fixture Attention"])
+    } else {
+        try await eventually { await discovery.waiting }
+        // The second download returns a different PDF so byte-level deduplication cannot mask a lost import.
+        let secondPDF = try #require(PDFDocument(url: source))
+        secondPDF.removePage(at: 1)
+        let bytes = try #require(secondPDF.dataRepresentation())
+        try bytes.write(to: source)
+        await discovery.release()
+        try await eventually { agent.card(second)?.importState == .imported }
+        #expect(await discovery.downloadCount == 2)
+        #expect(reader.state.papers.first { $0.title == "Fixture Attention" }?.pageCount == 2)
+        #expect(reader.state.papers.first { $0.title == "Fixture 2" }?.pageCount == 1)
+        #expect(reader.state.papers.count == 2)
+    }
+    #expect(await model.requests.count == 3)
 }
 
 @Test(arguments: [false, true]) @MainActor func libraryAgentCancelOrResetRejectsLateModelResponse(reset: Bool)

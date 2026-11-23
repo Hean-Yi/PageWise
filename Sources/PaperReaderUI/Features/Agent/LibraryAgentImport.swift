@@ -12,11 +12,16 @@ extension LibraryAgent {
             _ = open(cardID: cardID)
             return
         }
-        guard importTasks[id] == nil else { return }
-        guard !reader.isImporting, importTasks.isEmpty else {
-            updateCandidateCards(id, state: .failed, error: "已有论文正在导入，请完成后重试。")
+        guard importTasks[id] == nil, !queuedImports.contains(where: { $0.id == id }) else { return }
+        guard importTasks.isEmpty else {
+            queuedImports.append((id, candidate))
+            updateCandidateCards(id, state: .queued)
             return
         }
+        startDownload(id, candidate: candidate)
+    }
+
+    private func startDownload(_ id: String, candidate: PaperCandidate) {
         let currentEpoch = epoch
         let currentSession = sessionID
         let token = UUID()
@@ -28,6 +33,10 @@ extension LibraryAgent {
                 if self.importTokens[id] == token {
                     self.importTasks[id] = nil
                     self.importTokens[id] = nil
+                    if !self.queuedImports.isEmpty {
+                        let next = self.queuedImports.removeFirst()
+                        self.startDownload(next.id, candidate: next.candidate)
+                    }
                 }
             }
             do {
@@ -36,8 +45,10 @@ extension LibraryAgent {
                 defer { try? FileManager.default.removeItem(at: url) }
                 try Task.checkCancellation()
                 try self.checkImport(id, token: token, epoch: currentEpoch)
-                guard !self.reader.isImporting else { throw ReaderError.message("已有论文正在导入，请稍后重试。") }
                 self.updateCandidateCards(id, state: .importing)
+                // A Finder or bookshelf import can still be writing when this download finishes.
+                while self.reader.isImporting { try await Task.sleep(for: .milliseconds(200)) }
+                try self.checkImport(id, token: token, epoch: currentEpoch)
                 let paperIDs = await self.reader.importURLs(
                     [url], selectAfterImport: false, metadata: download.candidate, onlineDownload: download)
                 if let paperID = paperIDs.first {
@@ -64,6 +75,11 @@ extension LibraryAgent {
     }
 
     func cancelCandidateImport(_ id: String) {
+        if let index = queuedImports.firstIndex(where: { $0.id == id }) {
+            queuedImports.remove(at: index)
+            updateCandidateCards(id, state: .cancelled)
+            return
+        }
         guard let task = importTasks[id] else { return }
         // Retain the slot until cleanup finishes so a retry cannot race the previous commit.
         task.cancel()

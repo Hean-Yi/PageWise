@@ -46,16 +46,18 @@ struct AgentResultCard: View {
                     .padding(.horizontal, 12).padding(.bottom, 7).fixedSize(horizontal: false, vertical: true)
             }
             HStack(spacing: 12) {
+                if card.kind == .onlineCandidate {
+                    importAction
+                    Spacer(minLength: 4)
+                }
                 Button(action: followUp) {
                     Label("追问", systemImage: "bubble.left")
                 }
                 .buttonStyle(.borderless).foregroundStyle(ReaderTheme.muted)
                 .help("基于这项结果追问").accessibilityLabel("基于《\(card.title)》追问")
                 .disabled(agent.isRunning)
-                Spacer(minLength: 4)
-                if card.kind == .onlineCandidate { importAction }
             }
-            .font(.caption).padding(.horizontal, 12).padding(.bottom, 9)
+            .labelStyle(.titleAndIcon).font(.caption).padding(.horizontal, 12).padding(.bottom, 9)
         }
         .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous)).assistantToolSurface()
     }
@@ -119,27 +121,32 @@ struct AgentResultCard: View {
 
     @ViewBuilder private var importAction: some View {
         switch card.importState {
-        case .downloading, .importing:
-            ProgressView().controlSize(.mini)
-            Text(card.importState == .downloading ? "下载中" : "整理中").foregroundStyle(ReaderTheme.muted)
+        case .queued, .downloading, .importing:
+            if card.importState == .queued {
+                Label("等待下载", systemImage: "clock").foregroundStyle(ReaderTheme.muted)
+            } else {
+                ProgressView().controlSize(.mini)
+                Text(card.importState == .downloading ? "下载中" : "正在入库").foregroundStyle(ReaderTheme.muted)
+            }
+            let cancelTitle = card.importState == .queued ? "取消排队" : "停止导入"
             Button {
                 agent.cancelImport(cardID: card.id)
             } label: {
                 Image(systemName: "stop.circle")
             }
-            .buttonStyle(.borderless).help("停止导入").accessibilityLabel("停止导入 \(card.title)")
+            .buttonStyle(.borderless).help(cancelTitle).accessibilityLabel("\(cancelTitle) \(card.title)")
         case .imported:
             Button(action: open) { Label("在书库打开", systemImage: "books.vertical") }
-                .buttonStyle(.borderless).disabled(!agent.canOpen(card))
-        default:
+                .buttonStyle(.bordered).disabled(!agent.canOpen(card))
+                .accessibilityHint(card.title)
+        case .unprepared, .ready, .failed, .cancelled:
+            let title = card.importState == .failed || card.importState == .cancelled ? "重新下载" : "下载并导入"
             Button {
                 agent.confirmImport(cardID: card.id)
             } label: {
-                Label(
-                    card.importState == .failed || card.importState == .cancelled ? "重新导入" : "导入论文",
-                    systemImage: "arrow.down.to.line")
+                Label(title, systemImage: "arrow.down.to.line")
             }
-            .buttonStyle(.bordered).controlSize(.small).disabled(!card.canImport)
+            .buttonStyle(.borderedProminent).tint(ReaderTheme.accent).disabled(!card.canImport)
             .help("下载并添加到书库").accessibilityHint(card.title)
         }
     }

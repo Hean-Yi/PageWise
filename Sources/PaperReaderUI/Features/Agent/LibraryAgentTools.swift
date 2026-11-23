@@ -247,6 +247,7 @@ extension LibraryAgent {
             }
             let message: String
             switch card.importState {
+            case .queued: message = "已排队，等待下载。"
             case .downloading: message = "正在下载；已有导入任务。"
             case .importing: message = "正在解析并保存；已有导入任务。"
             case .imported: message = "候选已在书库，可打开已有论文。"
