@@ -46,10 +46,10 @@ extension ReaderModel {
         let task = Task {
             let config = modelSettings
             let key = try await modelKey(for: config)
-            let related = try await relatedLocalPassages(
-                query: document.title + " " + focus, excluding: paperID, limit: 5)
             let analysis = try await CloseReadingEngine.run(
-                paper: document, root: root, related: related, focus: focus,
+                paper: document, root: root, focus: focus,
+                retrieveNotes: { query in try await self.readingNoteEvidence(query: query, excluding: paperID, limit: 5)
+                },
                 progress: { [weak self] text in
                     await self?.setCloseReadingProgress(text)
                 },
@@ -85,7 +85,8 @@ extension ReaderModel {
         var verified: [String: LocalPassageCitation] = [:]
         func citation(_ evidence: Evidence, _ quote: String) async throws -> LocalPassageCitation {
             let key = [
-                evidence.paperID?.uuidString, evidence.blockID?.uuidString, evidence.sourcePage.map(String.init), quote,
+                evidence.paperID?.uuidString, evidence.readingNoteID?.uuidString, evidence.blockID?.uuidString,
+                evidence.sourcePage.map(String.init), quote,
             ]
             .compactMap { $0 }.joined(separator: "\u{1F}")
             if let existing = verified[key] { return existing }
@@ -98,17 +99,16 @@ extension ReaderModel {
             closeReadingProgress = "核对批注 \(index + 1) / \(analysis.annotations.count)"
             do {
                 let source = (evidence: annotation.source, quote: annotation.quote)
-                let primary = try await citation(source.evidence, source.quote)
-                var refs = [primary]
-                var links = [primary.markdown(label: "本段原文")]
-                for ref in annotation.references {
+                var refs: [LocalPassageCitation] = []
+                var links: [String] = []
+                for ref in annotation.references where ref.evidence.readingNoteID != nil {
                     let item = try await citation(ref.evidence, ref.quote)
                     if !refs.contains(where: { $0.id == item.id }) {
                         refs.append(item)
                         links.append(item.markdown(label: ref.label))
                     }
                 }
-                let body = annotation.markdown + "\n\n" + links.joined(separator: " · ")
+                let body = ([annotation.markdown] + links).joined(separator: "\n\n")
                 let insertion = try await prepareDiscussionNote(
                     in: scope, sources: [source], markdown: body,
                     requestID: UUID(), citations: refs, dimension: annotation.dimension)

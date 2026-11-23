@@ -3,7 +3,7 @@ import NaturalLanguage
 
 public enum Retriever {
     public static func context(
-        question: String, selection: String, current: Paper, others: [Paper], notes: [Evidence],
+        question: String, selection: String, current: Paper, notes: [Evidence], readingNotes: [Evidence] = [],
         selectedBlockIDs: Set<UUID> = [], originalPages: [Evidence] = []
     ) -> [Evidence] {
         let terms = tokens(question + " " + selection)
@@ -27,10 +27,9 @@ public enum Retriever {
         if total <= 18_000 {
             for index in current.blocks.indices { add(index) }
         } else {
-            let ranked = current.blocks.indices.sorted {
-                let a = rank(current.blocks[$0].text)
-                let b = rank(current.blocks[$1].text)
-                return a == b ? $0 < $1 : a > b
+            let scores = current.blocks.map { rank($0.text) }
+            let ranked = current.blocks.indices.sorted { lhs, rhs in
+                scores[lhs] == scores[rhs] ? lhs < rhs : scores[lhs] > scores[rhs]
             }
             for index in ranked.prefix(12) { add(index) }
             add(0)
@@ -63,16 +62,9 @@ public enum Retriever {
                 used += page.text.count
             }
         }
-        var support =
-            others.filter { $0.id != current.id }.flatMap { paper in
-                paper.blocks.map {
-                    Evidence(
-                        id: "", title: paper.title, text: $0.text, paperID: paper.id, blockID: $0.id,
-                        sourcePage: $0.sourcePage >= 0 ? $0.sourcePage : nil)
-                }
-            } + notes
-        support = support.filter { rank($0.text) > 0 }.sorted { rank($0.text) > rank($1.text) }
-        for var hit in support.prefix(4) {
+        let vaultMatches = notes.map { (source: $0, score: rank($0.text)) }
+            .filter { $0.score > 0 }.sorted { $0.score > $1.score }.prefix(4)
+        for var hit in readingNotes.prefix(5) + vaultMatches.map(\.source) {
             hit.text = String(hit.text.prefix(1200))
             result.append(hit)
         }
@@ -83,13 +75,27 @@ public enum Retriever {
         }
     }
 
+    // Language detection on a Chinese question plus an English paper title can discard nearly
+    // every Chinese word. Tokenize each script run independently, retaining the original word tokenizer.
+    private static let scriptRuns = try! NSRegularExpression(pattern: #"\p{Han}+|[^\p{Han}]+"#)
+
     public static func tokens(_ value: String) -> Set<String> {
-        let tokenizer = NLTokenizer(unit: .word)
-        tokenizer.string = value.lowercased()
+        let text = value.lowercased()
+        let chinese = NLTokenizer(unit: .word)
+        chinese.setLanguage(.simplifiedChinese)
+        let other = NLTokenizer(unit: .word)
         var words: Set<String> = []
-        tokenizer.enumerateTokens(in: tokenizer.string!.startIndex..<tokenizer.string!.endIndex) { range, _ in
-            words.insert(String(tokenizer.string![range]))
-            return true
+        scriptRuns.enumerateMatches(in: text, range: NSRange(text.startIndex..., in: text)) { match, _, _ in
+            guard let match, let range = Range(match.range, in: text),
+                text[range].contains(where: { $0.isLetter || $0.isNumber })
+            else { return }
+            let run = String(text[range])
+            let tokenizer = run.unicodeScalars.first?.properties.isIdeographic == true ? chinese : other
+            tokenizer.string = run
+            tokenizer.enumerateTokens(in: run.startIndex..<run.endIndex) { token, _ in
+                words.insert(String(run[token]))
+                return true
+            }
         }
         return words
     }

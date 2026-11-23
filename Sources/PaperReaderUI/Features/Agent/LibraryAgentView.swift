@@ -34,7 +34,7 @@ struct LibraryAgentView: View {
 
     private var welcome: some View {
         VStack(spacing: 0) {
-            suggestion("在书库中找知识点", icon: "text.magnifyingglass", prompt: "我的书库中，哪些段落解释了注意力机制？")
+            suggestion("检索阅读笔记", icon: "note.text", prompt: "我之前在哪些笔记里讨论过注意力机制？")
             suggestion("在线查找论文", icon: "globe", prompt: "帮我在线查找 Attention Is All You Need")
         }.frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -49,7 +49,11 @@ struct LibraryAgentView: View {
     private func prepareFollowUp(_ card: AgentCard) {
         guard agent.prepareFollowUp(cardID: card.id) else { return }
         if draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            draft = card.kind == .evidence ? "这段原文如何支持上面的回答？" : "这篇论文与我的问题有什么关联？"
+            if card.readingNoteID != nil {
+                draft = "这条阅读笔记和上面的判断有什么联系？"
+            } else {
+                draft = card.kind == .evidence ? "这段原文如何支持上面的回答？" : "这篇论文与我的问题有什么关联？"
+            }
         }
         composerFocused = true
     }

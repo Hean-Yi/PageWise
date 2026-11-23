@@ -19,6 +19,7 @@ public enum AgentToolArguments: Sendable, Equatable {
     case closeReadPaper(String)
     case askUser(AgentClarification)
     case searchLibrary(String)
+    case searchReadingNotes(String)
     case searchOnline(String, limit: Int? = nil)
     case presentResults(AgentPresentedResult.Purpose, [Selection])
     case readPaper(id: String, sourcePage: Int)
@@ -68,7 +69,7 @@ public enum AgentToolArguments: Sendable, Equatable {
             var citations: [NoteCitation] = []
             if let value = values["citations"] {
                 guard let rows = value as? [[String: Any]], rows.count <= 8 else {
-                    throw ReaderError.message("每条笔记最多引用八处本地片段。")
+                    throw ReaderError.message("每条笔记最多引用八处书库笔记。")
                 }
                 citations = try rows.map { row in
                     guard Set(row.keys) == ["result_id", "quote", "label"],
@@ -76,7 +77,7 @@ public enum AgentToolArguments: Sendable, Equatable {
                         let quote = row["quote"] as? String,
                         !quote.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                         let label = row["label"] as? String, (1...120).contains(label.count)
-                    else { throw ReaderError.message("引用需要已登记的本地摘录、逐字原文和链接文字。") }
+                    else { throw ReaderError.message("引用需要已检索的笔记、其中的原句和链接文字。") }
                     return .init(passage: .init(resultID: id, quote: quote), label: label)
                 }
             }
@@ -108,6 +109,9 @@ public enum AgentToolArguments: Sendable, Equatable {
                 return Selection(id: id, reason: nil)
             }
             return .presentResults(purpose, items)
+        case "search_reading_notes":
+            try keys(["query"], required: ["query"])
+            return .searchReadingNotes(try string("query", max: 512))
         case "search_library":
             try keys(["query"], required: ["query"])
             return .searchLibrary(try string("query", max: 512))

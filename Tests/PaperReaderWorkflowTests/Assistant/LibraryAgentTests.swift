@@ -1052,17 +1052,17 @@ private actor DelayedHistorySearch: PaperDiscovery {
     #expect(persisted.highlights == reader.state.highlights)
 }
 
-@Test @MainActor func libraryAgentOnlyLinksRegisteredLocalPassagesFromAnotherPaperInTheSavedNote() async throws {
+@Test @MainActor func libraryAgentLinksRetrievedNotesFromAnotherPaperButRejectsOriginalTextAndForgedIDs() async throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: root) }
     let reader = try await makeAgentReader(root)
     let primaryQuote = "A word can need different evidence in different sentences."
-    let citedQuote = "The comparison used identical training sets."
+    let citedQuote = "比较消融时应固定训练集和推理预算。"
     let primary = Paper(
         title: "Fixture Primary", digest: "primary", originalPath: "primary.pdf", pageCount: 2,
         blocks: [TextBlock(sourcePage: 1, text: primaryQuote)], warnings: [], canReflow: false)
     try DemoPaper.write(to: root.appendingPathComponent(primary.originalPath))
-    let citedBlock = TextBlock(sourcePage: 0, text: citedQuote)
+    let citedBlock = TextBlock(sourcePage: 0, text: "The comparison used identical training sets.")
     var cited = Paper(
         title: "Fixture Comparison", digest: "comparison", originalPath: "comparison.pdf", pageCount: 1,
         blocks: [citedBlock], warnings: [], canReflow: true)
@@ -1070,6 +1070,17 @@ private actor DelayedHistorySearch: PaperDiscovery {
         [BilingualBlock(block: citedBlock, translation: "对照使用了相同的训练集。")], to: nil, paper: cited, root: root)
     try #require(await reader.save(adding: primary))
     try #require(await reader.save(adding: cited))
+    let section = try #require(cited.htmlReading?.sections.first)
+    let edition = try #require(cited.htmlReading?.readingNoteVersion(digest: cited.digest))
+    let saved = ReadingNote(
+        paperID: cited.id, contentVersion: edition,
+        anchors: [
+            NoteAnchor(
+                key: section.id.uuidString, target: "source", text: citedBlock.text, start: 0,
+                end: citedBlock.text.utf16.count)
+        ],
+        markdown: citedQuote)
+    _ = try await reader.saveAnchoredDiscussionNote(saved, highlights: [])
     reader.select(primary.id)
     let comparisonID = cited.id
     let client = ScriptedLibraryModel { messages, count in
@@ -1085,42 +1096,107 @@ private actor DelayedHistorySearch: PaperDiscovery {
             return tool("search_library", #"{"query":"fixture"}"#, id: "search")
         case 2:
             return tool("read_paper", #"{"paper_id":"\#(primary.id)","source_page":2}"#, id: "primary")
-        case 5:
+        case 3:
             return tool("read_paper", #"{"paper_id":"\#(comparisonID)","source_page":1}"#, id: "comparison")
-        case 3, 4, 6:
+        case 6:
+            return tool("search_reading_notes", #"{"query":"训练集 推理预算"}"#, id: "notes")
+        case 4, 5, 7:
             let reference: String
             switch count {
-            case 3: reference = try result("search", for: comparisonID)  // Title hit, no source excerpt.
-            case 4: reference = UUID().uuidString
-            default: reference = try result("comparison", for: comparisonID)
+            case 4: reference = try result("comparison", for: comparisonID)
+            case 5: reference = UUID().uuidString
+            default: reference = try result("notes", for: comparisonID)
             }
             let arguments = try JSONSerialization.data(withJSONObject: [
                 "markdown": "该解释依赖比较条件。{{cite:1}}",
                 "sources": [["result_id": try result("primary", for: primary.id), "quote": primaryQuote]],
-                "citations": [["result_id": reference, "quote": citedQuote, "label": "参见实验设置"]],
+                "citations": [
+                    ["result_id": reference, "quote": count == 4 ? citedBlock.text : citedQuote, "label": "参见实验设置"]
+                ],
                 "dimension": "evidence",
             ])
             return tool("create_reading_note", String(decoding: arguments, as: UTF8.self), id: "note-\(count)")
         default: throw ReaderError.message("测试工具轮数超过预期。")
         }
     }
-    let agent = LibraryAgent(reader: reader, client: client, discovery: AgentDiscoveryFixture())
-    agent.send("请把讨论观点写成阅读笔记，并引用另一篇本地论文。")
+    var limits = AgentLimits()
+    limits.maxRounds = 7
+    let agent = LibraryAgent(reader: reader, client: client, discovery: AgentDiscoveryFixture(), limits: limits)
+    agent.send("请把讨论观点写成阅读笔记，并引用另一篇本地论文的笔记。")
     try await eventually { !agent.isRunning }
     let turn = try #require(agent.turns.first)
     #expect(turn.error == nil)
-    #expect(turn.activities.map(\.status) == [.succeeded, .succeeded, .failed, .failed, .succeeded, .succeeded])
-    #expect(reader.state.readingNotes.count == 1)
-    let note = try #require(reader.state.readingNotes.first)
+    #expect(
+        turn.activities.map(\.status) == [.succeeded, .succeeded, .succeeded, .failed, .failed, .succeeded, .succeeded])
+    #expect(reader.state.readingNotes.count == 2)
+    let note = try #require(reader.state.readingNotes.first { $0.paperID == primary.id })
     let link = try #require(note.citations?.first)
     #expect(note.paperID == primary.id && note.anchors.first?.text == primaryQuote && note.dimension == .evidence)
-    #expect(note.citations?.count == 1 && link.paperID == comparisonID && link.quote == citedQuote)
+    #expect(
+        note.citations?.count == 1 && link.paperID == comparisonID && link.readingNoteID == saved.id
+            && link.quote == citedQuote)
     #expect(note.markdown == "该解释依赖比较条件。" + link.markdown(label: "参见实验设置"))
     #expect(reader.state.highlights.map(\.paperID) == [primary.id] && reader.state.highlights.first?.color == .blue)
     #expect(turn.presentedResults.map(\.purpose) == [.readingNote])
     let preview = try await reader.previewLocalPassage(noteID: note.id, citationID: link.id)
     #expect(preview.title == cited.title && preview.quote == citedQuote)
-    #expect(try await LibraryStore(directory: root).load().readingNotes == [note])
+    #expect(try await LibraryStore(directory: root).load().readingNotes == [saved, note])
+    let searchCard = try #require(turn.cards.first { $0.readingNoteID == saved.id })
+    #expect(agent.open(cardID: searchCard.id))
+    #expect(reader.selectedPaperID == comparisonID && reader.requestedReadingNote == saved.id)
+}
+
+@Test @MainActor func libraryAgentRecallsDistinctNotesOnTheSamePageAndRefreshesMemoryAfterEditsAndDeletion()
+    async throws
+{
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let reader = try await makeAgentReader(root)
+    let paper = Paper(
+        title: "Attention", digest: "test", originalPath: "demo.pdf", pageCount: 2, blocks: [], warnings: [],
+        canReflow: false)
+    try DemoPaper.write(to: root.appendingPathComponent(paper.originalPath))
+    try #require(await reader.save(adding: paper))
+    let anchor = NoteAnchor(key: "original-0", target: "pdf", text: "Attention", start: 0, end: 9)
+    let original = ReadingNote(
+        paperID: paper.id, contentVersion: paper.digest + ":original-0", anchors: [anchor],
+        markdown: "排查混杂时，旧的蓝鲸假设需要验证。")
+    let other = ReadingNote(
+        paperID: paper.id, contentVersion: original.contentVersion, anchors: [anchor], markdown: "排查混杂需要固定样本顺序。")
+    reader.state.readingNotes = [original, other]
+    let correction = "排查混杂时，新的对照排除了贝壳偏差。"
+    let client = ScriptedLibraryModel { messages, count in
+        switch count {
+        case 1, 4, 6:
+            if count > 1 { #expect(!messages.contains { $0.content?.contains("旧的蓝鲸") == true }) }
+            if count == 4 { #expect(messages.last?.content?.contains(correction) == true) }
+            if count == 6 { #expect(!messages.contains { $0.content?.contains(correction) == true }) }
+            return tool("search_reading_notes", #"{"query":"排查混杂"}"#, id: "recall-\(count)")
+        case 2:
+            return try present(candidateResultIDs(in: messages, callID: "recall-1"), id: "select")
+        case 5, 7:
+            let ids = try candidateResultIDs(in: messages, callID: "recall-\(count - 1)")
+            #expect(ids.count == (count == 5 ? 2 : 1))
+            return .init(role: "assistant", content: "已核对保存的笔记。")
+        default: return .init(role: "assistant", content: "旧的蓝鲸假设属于一条读者笔记。")
+        }
+    }
+    let agent = LibraryAgent(reader: reader, client: client, discovery: AgentDiscoveryFixture())
+    agent.send("我之前记过哪些关于排查混杂的观点？")
+    try await eventually { !agent.isRunning }
+    let turn = try #require(agent.turns.last)
+    #expect(turn.presentedResults.count == 2)
+    let card = try #require(turn.cards.first { $0.readingNoteID == original.id })
+    reader.state.readingNotes[0].markdown = correction
+    reader.state.readingNotes[0].modifiedAt = .now
+    #expect(agent.evidence(for: card) == nil && agent.canOpen(card))
+    agent.send("重新核对这条笔记。", referencing: card.id)
+    try await eventually { !agent.isRunning }
+    reader.state.readingNotes[0].deletedAt = .now
+    #expect(!agent.canOpen(card))
+    agent.send("我的笔记里现在还保留哪些观点？")
+    try await eventually { !agent.isRunning }
+    #expect(agent.turns.last?.error == nil)
 }
 
 @Test @MainActor func noteTransactionPreservesHumanHighlightsEditsAndSoftDeletionOnReplay() async throws {

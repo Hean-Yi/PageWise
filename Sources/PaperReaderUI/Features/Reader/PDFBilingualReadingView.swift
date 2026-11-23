@@ -70,7 +70,6 @@ struct PDFBilingualReadingView: View {
                 }
             }
             .onChange(of: pdfVisible) { _, visible in
-                session.hover(nil)
                 if visible, let id = session.focusedID { session.focus(id) }
             }
         }
@@ -147,7 +146,7 @@ struct PDFBilingualReadingView: View {
             } else {
                 PDFSentenceTextCanvas(
                     sentences: sentences, translations: translations,
-                    layout: textLayout, fontSize: fontSize, activeID: session.activeID, focusedID: session.focusedID,
+                    layout: textLayout, fontSize: fontSize, focusedID: session.focusedID,
                     focusRevision: session.sourceFocusRevision, followsScroll: session.followsScroll,
                     sourceScrollID: session.sourceScrollID, sourceScrollRevision: session.sourceScrollRevision,
                     pdfSelectedIDs: session.pdfSelectedIDs,
@@ -165,7 +164,7 @@ struct PDFBilingualReadingView: View {
                         } else {
                             session.focus(id)
                         }
-                    }, onHover: session.hover,
+                    },
                     illustrations: session.illustrations,
                     onRevealIllustration: { item in
                         if paragraphs {

@@ -20,6 +20,7 @@ extension ReaderModel {
         var replacements: [String] = []
         for ref in references {
             try Task.checkCancellation()
+            guard ref.evidence.readingNoteID != nil else { throw ReaderError.message("请选择已检索的阅读笔记。") }
             let item = try await makeLocalPassageCitation(evidence: ref.evidence, quote: ref.quote)
             if !citations.contains(where: { $0.id == item.id }) { citations.append(item) }
             replacements.append(item.markdown(label: ref.label))

@@ -47,10 +47,10 @@ enum HTMLNotesScript {
             e.content=document.createElement('div');e.content.className='note-content';e.content.setAttribute('aria-label','笔记预览');
             PaperNoteEditor.bindPassages(e.card,passage=>send({kind:'notePreviewPassage',id:e.id,passage}));
             e.footer=document.createElement('footer');e.footer.className='note-hidden';e.status=document.createElement('button');e.status.type='button';e.status.textContent=lastStatus;e.status.onclick=flush;
-            const insert=button('引用片段',()=>{
+            const insert=button('引用笔记',()=>{
               if(editing!==e.id||!e.editor)return;
               send({kind:'noteInsertPassage',id:e.id,anchors:e.anchors,markdown:e.input.value,from:e.editor.selectionStart,to:e.editor.selectionEnd});
-            },'插入书库片段');
+            },'引用阅读笔记');
             const done=button('完成',finish);done.className='note-done';e.footer.append(e.status,insert,done);e.card.append(header,e.input,e.content,e.summary,e.footer);
             e.card.addEventListener('mouseenter',()=>{if(!editing&&(active!==e.id||!reverse))activate(e.id,false,true);});
             e.card.addEventListener('focusin',()=>{if(!editing&&(active!==e.id||!reverse))activate(e.id,false,true);});

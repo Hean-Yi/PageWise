@@ -63,25 +63,17 @@ public enum CloseReadingEngine {
         let window: Int
         let windows: Int
         let passages: [Input]
-        let comparisons: [Input]
+        let readingNotes: [Input]
     }
 
     public static func run(
-        paper: Paper, root: URL, related: [Evidence] = [], focus: String = "",
+        paper: Paper, root: URL, focus: String = "",
+        retrieveNotes: @Sendable (String) async throws -> [Evidence] = { _ in [] },
         progress: @Sendable (String) async -> Void,
         complete: @Sendable (_ system: String, _ user: String) async throws -> String
     ) async throws -> CloseReadingAnalysis {
         let corpus = try await CloseReadingCorpus.read(paper: paper, root: root, progress: progress)
         guard !corpus.windows.isEmpty else { throw ReaderError.message("这篇论文缺少可定位的本地原文，无法精读。") }
-        let comparisons = related.filter {
-            $0.paperID != nil && $0.paperID != paper.id && $0.notePath == nil
-                && ($0.blockID != nil || ($0.sourcePage.map { $0 >= 0 } == true)) && !$0.text.isEmpty
-        }.prefix(6).enumerated().map { index, evidence in
-            var copy = evidence
-            copy.id = "L\(index + 1)"
-            copy.text = String(copy.text.prefix(900))
-            return CloseReadingPassage(evidence: copy, kind: "localComparison", table: nil)
-        }
         var notes = [CloseReadingAnnotation]()
         var stages = [CloseReadingOutlineItem]()
         var rejected = 0
@@ -92,9 +84,20 @@ public enum CloseReadingEngine {
         for (index, passages) in corpus.windows.enumerated() {
             try Task.checkCancellation()
             await progress("正在精读第 \(index + 1) / \(corpus.windows.count) 组原文")
+            let stride = max(1, passages.count / 5)
+            let excerpts = passages.enumerated().filter { $0.offset.isMultiple(of: stride) }
+                .prefix(5).map { String($0.element.evidence.text.prefix(200)) }
+            let query = ([focus, name] + excerpts).joined(separator: " ")
+            let memory = try await retrieveNotes(query).filter {
+                $0.readingNoteID != nil && $0.paperID != nil && $0.paperID != paper.id && !$0.text.isEmpty
+            }.prefix(5).enumerated().map { index, hit in
+                var evidence = hit
+                evidence.id = "L\(index + 1)"
+                return CloseReadingPassage(evidence: evidence, kind: "readingNote", table: nil)
+            }
             let input = Window(
                 paper: name, focus: focus, window: index + 1, windows: corpus.windows.count,
-                passages: passages.map(Input.init), comparisons: comparisons.map(Input.init))
+                passages: passages.map(Input.init), readingNotes: memory.map(Input.init))
             let batch: Batch
             do {
                 batch = try await request(
@@ -110,7 +113,7 @@ public enum CloseReadingEngine {
                 unreadable.append(index + 1)
                 continue
             }
-            let registry = Dictionary(uniqueKeysWithValues: (passages + comparisons).map { ($0.evidence.id, $0) })
+            let registry = Dictionary(uniqueKeysWithValues: (passages + memory).map { ($0.evidence.id, $0) })
             // Both the source ID and the exact quotation must match the locally registered window.
             for record in (batch.annotations ?? []).prefix(8) {
                 guard let item = record.value, let passage = registry[item.source],

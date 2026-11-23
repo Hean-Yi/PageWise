@@ -1,5 +1,6 @@
 import CoreText
 import Foundation
+import PDFKit
 import PaperReaderKit
 import Testing
 
@@ -30,7 +31,7 @@ import Testing
     return (reader, html, pdf)
 }
 
-@Test @MainActor func localPassageLinksBindTheNoteToAPersistedPDFRangeAndManualInsert() async throws {
+@Test @MainActor func legacyLinksKeepTheirPersistedPDFRangeAndPaper() async throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: root) }
     let (model, main, pdf) = try await makeCitationLibrary(root)
@@ -40,13 +41,14 @@ import Testing
         key: block.id.uuidString, target: "source", text: block.text, start: 0, end: block.text.utf16.count)
     #expect(model.updateReadingNote(id: noteID, anchors: [anchor], markdown: "我们讨论了适用范围。"))
     let quote = "An attention weight is part of a computation."
-    let choices = try await model.localPassageChoices(paperID: pdf.id, query: quote)
-    let selected = try #require(choices.first)
-    #expect(selected.evidence.sourcePage == 1 && !selected.pdfRanges.isEmpty)
-    let citation = try await model.makeLocalPassageCitation(choice: selected)
+    let evidence = Evidence(id: "S1", title: pdf.title, text: quote, paperID: pdf.id, sourcePage: 1)
+    let citation = try await model.makeLocalPassageCitation(evidence: evidence, quote: quote)
     let body = "我们讨论了适用范围。" + citation.markdown(label: "互证 [1]")
-    try model.insertLocalPassageCitation(citation, noteID: noteID, anchors: [anchor], markdown: body)
-    await model.flushReadingNotes()
+    let index = try #require(model.state.readingNotes.firstIndex { $0.id == noteID })
+    // A pre-memory library linked raw passages directly, including passages from other papers.
+    model.state.readingNotes[index].markdown = body
+    model.state.readingNotes[index].citations = [citation]
+    try #require(await model.save())
     let restored = try ReaderModel(root: root, credentials: WorkflowCredentials())
     await restored.load()
     restored.select(main.id)
@@ -104,9 +106,15 @@ import Testing
             requestID: UUID(), citations: [invented])
     }
     #expect(model.state.readingNotes.isEmpty && model.state.highlights.isEmpty)
+    await #expect(throws: ReaderError.self) {
+        try await model.saveDiscussionNote(
+            in: scope, sources: [(source, origin)], markdown: body, requestID: UUID(), citations: [citation])
+    }
     let note = try await model.saveDiscussionNote(
-        in: scope, sources: [(source, origin)], markdown: body,
-        requestID: UUID(), citations: [citation], dimension: .evidence)
+        in: scope, sources: [(source, origin)], markdown: "与观察条件对照。", requestID: UUID(), dimension: .evidence)
+    let index = try #require(model.state.readingNotes.firstIndex { $0.id == note.id })
+    model.state.readingNotes[index].markdown = body
+    model.state.readingNotes[index].citations = [citation]
     #expect(note.dimension == .evidence && model.state.highlights.first?.color == .blue)
     let retained = RetainedReading(paper: html)
     let second = TextBlock(sourcePage: -1, text: "A distinct edition.")
@@ -131,14 +139,62 @@ import Testing
     }
 }
 
-@Test @MainActor func localPassageRelatedLookupCanFindUnindexedPDFsAndExcludesTheActivePaper() async throws {
+@Test @MainActor func recalledNoteCitationsFollowEditsRestartAndDeletionAndNeverSearchAnUnannotatedPaper() async throws
+{
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: root) }
     let (model, main, pdf) = try await makeCitationLibrary(root)
-    let rows = try await model.relatedLocalPassages(query: "contextual query attention", excluding: main.id)
-    #expect(rows.map(\.paperID) == [pdf.id] && rows[0].sourcePage != nil)
-    let source = try #require(rows.first)
-    #expect(try await model.makeLocalPassageCitation(evidence: source, quote: source.text).paperID == pdf.id)
+    #expect(try await model.readingNoteEvidence(query: "attention", excluding: main.id).isEmpty)
+    let scope = try model.discussionNoteScope(for: pdf.id)
+    let sentence = "An attention weight is part of a computation."
+    let source = Evidence(id: "P1", title: pdf.title, text: sentence, paperID: pdf.id, sourcePage: 1)
+    let observation = "模型的缓存预算相同才可以比较。"
+    let target = try await model.saveDiscussionNote(
+        in: scope, sources: [(source, sentence)], markdown: observation, requestID: UUID())
+    let matches = try await model.readingNoteEvidence(query: "缓存预算", excluding: main.id)
+    let hit = try #require(matches.first)
+    #expect(matches.count == 1 && hit.readingNoteID == target.id && hit.text == observation)
+    #expect(try await model.readingNoteEvidence(query: "computation").isEmpty)
+    let citation = try await model.makeLocalPassageCitation(evidence: hit, quote: hit.text)
+    #expect(citation.readingNoteID == target.id && citation.anchors.isEmpty)
+    await #expect(throws: ReaderError.self) { try await model.makeLocalPassageCitation(evidence: hit, quote: sentence) }
+    let block = try #require(main.blocks.first)
+    let key = try #require(main.htmlReading?.sections.first?.id)
+    let anchor = NoteAnchor(
+        key: key.uuidString, target: "source", text: block.text, start: 0, end: block.text.utf16.count)
+    let originID = UUID()
+    let body = "跨论文比较。" + citation.markdown(label: "先前的判断")
+    try model.insertLocalPassageCitation(citation, noteID: originID, anchors: [anchor], markdown: body)
+    await model.flushReadingNotes()
+    let restored = try ReaderModel(root: root, credentials: WorkflowCredentials())
+    await restored.load()
+    restored.select(main.id)
+    #expect(try await restored.readingNoteEvidence(query: "缓存预算").map(\.readingNoteID) == [target.id])
+    let preview = try await restored.previewLocalPassage(noteID: originID, citationID: citation.id)
+    #expect(preview.noteMarkdown == observation && preview.readingNoteID == target.id)
+    try await restored.openLocalPassage(preview)
+    #expect(restored.selectedPaperID == pdf.id && restored.requestedReadingNote == target.id)
+    let correction = "改正：真正限制在于显存容量。"
+    #expect(restored.updateReadingNote(id: target.id, anchors: target.anchors, markdown: correction))
+    await restored.flushReadingNotes()
+    #expect(try await restored.readingNoteEvidence(query: "缓存预算").isEmpty)
+    #expect(try await restored.readingNoteEvidence(query: "显存容量").first?.text == correction)
+    await #expect(throws: ReaderError.self) {
+        try await restored.makeLocalPassageCitation(evidence: hit, quote: hit.text)
+    }
+    #expect(throws: ReaderError.self) { try restored.validateLocalPassageTargets([citation]) }
+    restored.select(main.id)
+    let revised = try await restored.previewLocalPassage(noteID: originID, citationID: citation.id)
+    #expect(revised.noteMarkdown == correction && !revised.quote.contains(observation))
+    try await restored.openLocalPassage(revised)
+    restored.deleteReadingNote(target.id)
+    await restored.flushReadingNotes()
+    restored.select(main.id)
+    #expect(try await restored.readingNoteEvidence(query: "显存容量").isEmpty)
+    await #expect(throws: ReaderError.self) { try await restored.openLocalPassage(revised) }
+    await #expect(throws: ReaderError.self) {
+        try await restored.previewLocalPassage(noteID: originID, citationID: citation.id)
+    }
 }
 
 @Test @MainActor func localPassageLinksKeepTheChosenOccurrenceWhenAPDFRepeatsAnIdenticalSentence() async throws {
@@ -160,13 +216,22 @@ import Testing
     }
     context.endPDFPage()
     context.closePDF()
-    let choices = try await model.localPassageChoices(paperID: pdf.id, query: quote, pageIndex: 0)
-    #expect(choices.count == 2)
-    let first = try await model.makeLocalPassageCitation(choice: #require(choices.first))
-    let second = try await model.makeLocalPassageCitation(choice: #require(choices.last))
+    let raw = try #require(PDFDocument(url: file)?.page(at: 0)?.string) as NSString
+    let locator = PDFReadingNoteLocator()
+    let firstParts = try await locator.locate(
+        quote: quote, pageIndex: 0, in: file, selectedRanges: [raw.range(of: quote)])
+    let lastParts = try await locator.locate(
+        quote: quote, pageIndex: 0, in: file, selectedRanges: [raw.range(of: quote, options: .backwards)])
+    let first = LocalPassageCitation(
+        paperID: pdf.id, digest: pdf.digest, contentVersion: pdf.digest + ":original-0",
+        anchors: firstParts.map(\.anchor), quote: quote)
+    let second = LocalPassageCitation(
+        paperID: pdf.id, digest: pdf.digest, contentVersion: first.contentVersion, anchors: lastParts.map(\.anchor),
+        quote: quote)
     #expect(first.id != second.id && first.anchors != second.anchors && first.quote == second.quote)
+    let ambiguous = Evidence(id: "P1", title: pdf.title, text: quote, paperID: pdf.id, sourcePage: 0)
     await #expect(throws: ReaderError.self) {
-        try await model.makeLocalPassageCitation(evidence: #require(choices.first).evidence, quote: quote)
+        try await model.makeLocalPassageCitation(evidence: ambiguous, quote: quote)
     }
     let afterFirst = try await PDFReadingNoteLocator().citationContext(for: first, documentURL: file)
     let beforeSecond = try await PDFReadingNoteLocator().citationContext(for: second, documentURL: file)

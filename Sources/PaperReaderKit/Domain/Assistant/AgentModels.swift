@@ -14,6 +14,7 @@ public struct AgentCard: Identifiable, Sendable {
     public var paperID: UUID?
     public var blockID: UUID?
     public var readingNoteID: UUID?
+    public var noteModifiedAt: Date?
     public var candidateID: String?
     public var sourceURL: URL?
     public var importState: AgentImportState = .unprepared

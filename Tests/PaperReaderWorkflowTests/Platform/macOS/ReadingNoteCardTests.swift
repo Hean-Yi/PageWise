@@ -428,7 +428,7 @@
     }
 
     @Test(arguments: [false, true]) @MainActor
-    func insertingAndOpeningLibraryPassagesUsesTheRealNoteEditor(pdf: Bool) async throws {
+    func insertingAndOpeningLibraryNotesUsesTheRealNoteEditor(pdf: Bool) async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let model = try ReaderModel(root: root, credentials: WorkflowCredentials())
@@ -436,6 +436,13 @@
         let file = root.appendingPathComponent("evidence.pdf")
         try DemoPaper.write(to: file)
         let target = try #require(await model.importURLs([file]).first)
+        model.select(target)
+        let document = try #require(model.paper)
+        let quote = "Multiple attention heads"
+        let passage = Evidence(id: "source", title: document.title, text: quote, paperID: target, sourcePage: 1)
+        let memory = try await model.saveDiscussionNote(
+            in: model.discussionNoteScope(for: target), sources: [(passage, quote)],
+            markdown: "检索预算不同，比较时应按实际消耗分组。", requestID: UUID())
         let block = TextBlock(sourcePage: 0, text: "A reader can check the evidence.")
         let noteID = UUID()
         let web: WKWebView
@@ -485,7 +492,7 @@
                 """
                 paperNotes.open(id,true);
                 const e=document.querySelector('.note-editor').noteEditor;e.setSelectionRange(2,11);
-                document.querySelector('[aria-label="插入书库片段"]').click();
+                document.querySelector('[aria-label="引用阅读笔记"]').click();
                 """, ["id": noteID.uuidString])
         }
         try await noteWait { model.notePassageSheet != nil }
@@ -493,9 +500,8 @@
             Issue.record("引用选择器未打开")
             return
         }
-        let choices = try await model.localPassageChoices(
-            paperID: target, query: "Multiple attention heads", pageIndex: 1)
-        let choice = try #require(choices.first)
+        let choices = try await model.readingNoteEvidence(query: "检索预算")
+        let choice = try #require(choices.first { $0.readingNoteID == memory.id })
         try await model.insertNotePassage(choice, into: draft)
         try await noteWait {
             (try? await noteJS(web, "return !!document.querySelector('.cm-content a[data-passage]')")) as? Bool == true
@@ -554,7 +560,7 @@
         #expect(model.notePassageSheet == nil)
         let preview = try await model.previewLocalPassage(noteID: note.id, citationID: citation.id)
         #expect(
-            preview.quote.contains("Multiple attention heads")
+            preview.noteMarkdown == memory.markdown && preview.readingNoteID == memory.id
                 && preview.title == model.state.papers.first { $0.id == target }?.title)
         if !pdf {
             model.notePassageSheet = nil
@@ -567,7 +573,7 @@
         }
         await model.flushReadingNotes()
         try await model.openLocalPassage(preview)
-        #expect(model.selectedPaperID == target && model.visiblePage == 1)
+        #expect(model.selectedPaperID == target && model.visiblePage == 1 && model.pdfNoteEditor?.id == memory.id)
     }
 
     @MainActor private func noteJS(_ web: WKWebView, _ source: String, _ arguments: [String: Any] = [:]) async throws

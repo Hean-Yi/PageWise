@@ -36,7 +36,7 @@ class PassageLink extends WidgetType {
     a.textContent = this.label;
     a.contentEditable = 'false';
     a.tabIndex = 0;
-    a.title = '预览原文片段';
+    a.title = '预览引用';
     a.setAttribute('aria-keyshortcuts', 'Enter F2');
     a.editPassageSource = () => {
       view.dispatch({selection: {anchor: this.from + 1}});

@@ -43,7 +43,7 @@ import Testing
     #expect(await transport.requests == 0)
     let sentence = try #require(session.sentences.first)
     session.focusFromPDF(sentence.id)
-    #expect(session.activeID == sentence.id)
+    #expect(session.focusedID == sentence.id)
     session.translatePage(model)
     try await waitForPageSession { !session.isTranslating }
     #expect(session.error == nil)

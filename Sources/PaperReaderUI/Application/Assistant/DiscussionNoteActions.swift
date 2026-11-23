@@ -146,6 +146,9 @@ extension ReaderModel {
         guard !body.isEmpty, body.utf8.count <= 24_000, (1...8).contains(proposed.count) else {
             throw ReaderError.message("笔记需要正文和一至八处可核对的原文。")
         }
+        guard citations.allSatisfy({ $0.readingNoteID != nil || $0.paperID == scope.paperID }) else {
+            throw ReaderError.message("跨论文引用须选择书库中的阅读笔记。")
+        }
         let sources = try Self.sourcesMatchingInstruction(instruction, proposed: proposed, scope: scope)
         let (version, anchors, marks) = try await verifiedDiscussionLocation(in: scope, sources: sources)
         try await validateNoteCitations(citations, markdown: body)
@@ -190,7 +193,8 @@ extension ReaderModel {
         let pdf = PDFReadingNoteLocator()
         for (evidence, quote) in located {
             try Task.checkCancellation()
-            guard evidence.paperID == scope.paperID, evidence.notePath == nil, !quote.isEmpty,
+            guard evidence.paperID == scope.paperID, evidence.notePath == nil, evidence.readingNoteID == nil,
+                !quote.isEmpty,
                 quote.utf8.count <= 12_000,
                 Self.containsDiscussionQuote(quote, in: evidence.text)
             else { throw ReaderError.message("引文与这篇论文提供的证据不符，请选择原句。") }

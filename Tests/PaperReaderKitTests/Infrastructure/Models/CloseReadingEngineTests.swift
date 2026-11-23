@@ -11,7 +11,7 @@ private struct CloseReadingTestInput: Decodable {
     }
     let focus: String
     let passages: [Passage]
-    let comparisons: [Passage]
+    let readingNotes: [Passage]
 }
 
 private func closeReadingFixture(root: URL, texts: [String]) async throws -> Paper {
@@ -32,14 +32,19 @@ private func closeReadingFixture(root: URL, texts: [String]) async throws -> Pap
     let paper = try await closeReadingFixture(root: root, texts: [sentence])
     let comparison = Evidence(
         id: "arbitrary", title: "Local replication", text: "Performance varied between cohorts.",
-        paperID: UUID(), sourcePage: 0)
+        paperID: UUID(), readingNoteID: UUID())
     let web = Evidence(id: "arbitrary2", title: "Not in library", text: "An online abstract.")
     let result = try await CloseReadingEngine.run(
-        paper: paper, root: root, related: [web, comparison], focus: "核对对照",
+        paper: paper, root: root, focus: "核对对照",
+        retrieveNotes: { query in
+            #expect(query.contains("held-out sample"))
+            let rawPaper = Evidence(id: "other", title: "Unannotated", text: sentence, paperID: UUID(), sourcePage: 0)
+            return [web, rawPaper, comparison]
+        },
         progress: { _ in },
         complete: { system, user in
             let input = try JSONDecoder().decode(CloseReadingTestInput.self, from: Data(user.utf8))
-            #expect(input.focus == "核对对照" && input.comparisons.map(\.source) == ["L1"])
+            #expect(input.focus == "核对对照" && input.readingNotes.map(\.source) == ["L1"])
             #expect(input.passages.map(\.anchorText) == [sentence])
             #expect(system.contains("captionOnly"))
             let real: [String: Any] = [

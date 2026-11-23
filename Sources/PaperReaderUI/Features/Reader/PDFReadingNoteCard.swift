@@ -27,7 +27,7 @@ struct PDFReadingNoteCard: View {
                 } label: {
                     Image(systemName: "link")
                 }
-                .buttonStyle(.borderless).help("插入书库片段").accessibilityLabel("插入书库片段")
+                .buttonStyle(.borderless).help("引用阅读笔记").accessibilityLabel("引用阅读笔记")
                 if model.currentReadingNotes.contains(where: { $0.id == session.id }) {
                     Button {
                         model.deleteReadingNote(session.id)

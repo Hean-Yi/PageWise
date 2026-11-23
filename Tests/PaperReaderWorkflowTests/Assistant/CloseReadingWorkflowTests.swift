@@ -4,7 +4,7 @@ import Testing
 
 @testable import PaperReaderUI
 
-private let comparisonText = "An attention benchmark compared matched inputs under different masking rules."
+private let comparisonText = "我的 attention 实验笔记：比较两种 masking 策略时，还需要对齐输入。"
 private let closeReadingSources: [(dimension: CloseReadingDimension, quote: String)] = [
     (.thesis, "The output is a weighted mixture of values."),
     (.concept, "The question you are trying to answer becomes the query."),
@@ -24,7 +24,7 @@ private actor CloseReadingTransport: HTTPTransport {
             let anchorText: String
         }
         let passages: [Passage]
-        let comparisons: [Passage]
+        let readingNotes: [Passage]
     }
 
     enum Output { case annotated, outlineOnly, inventedQuotes }
@@ -41,7 +41,7 @@ private actor CloseReadingTransport: HTTPTransport {
         let body = try JSONDecoder().decode(Request.self, from: request.httpBody ?? Data())
         let payload = try #require(body.messages.last?.content)
         let input = try JSONDecoder().decode(Window.self, from: Data(payload.utf8))
-        let comparison = try #require(input.comparisons.first { $0.anchorText.contains(comparisonText) })
+        let comparison = try #require(input.readingNotes.first { $0.anchorText.contains(comparisonText) })
         #expect(comparison.source == "L1" && input.passages.first?.source == "P1")
         var annotations: [[String: Any]] = []
         var stages: [[String: Any]] = []
@@ -94,13 +94,18 @@ private actor CloseReadingTransport: HTTPTransport {
     let file = root.appendingPathComponent("attention.pdf")
     try DemoPaper.write(to: file)
     let id = try #require(await reader.importURLs([file]).first)
-    let block = TextBlock(sourcePage: -1, text: comparisonText)
+    let block = TextBlock(sourcePage: -1, text: "This attention benchmark measures masking policies.")
     var other = Paper(
         title: "Attention benchmark", digest: "comparison-fixture", originalPath: "other.pdf",
         pageCount: 1, blocks: [block], warnings: [], canReflow: true)
     other.htmlReading = try await HTMLReadingStore().append(
         [.init(block: block, translation: nil)], to: nil, paper: other, root: root)
     try #require(await reader.save(adding: other))
+    reader.select(other.id)
+    let scope = try reader.discussionNoteScope(for: other.id)
+    let anchor = Evidence(id: "primary", title: other.title, text: block.text, paperID: other.id, blockID: block.id)
+    _ = try await reader.saveDiscussionNote(
+        in: scope, sources: [(anchor, block.text)], markdown: comparisonText, requestID: UUID())
     reader.select(id)
     return (reader, id, other)
 }
@@ -117,13 +122,12 @@ private actor CloseReadingTransport: HTTPTransport {
     #expect(overview.markdown.contains("全文论证骨架"))
     for stage in CloseReadingStage.allCases { #expect(overview.markdown.contains("**" + stage.title + "**")) }
     let ids = try #require(report.closeReadingNoteIDs)
-    #expect(Set(ids).count == 5 && snapshot.readingNotes.count == 6)
+    #expect(Set(ids).count == 5 && snapshot.readingNotes.count == 7)
     let notes = try ids.map { id in try #require(snapshot.readingNotes.first { $0.id == id }) }
     #expect(notes.compactMap(\.dimension) == CloseReadingDimension.allCases)
     #expect(Set(notes.compactMap { $0.anchors.first?.key }) == ["original-0", "original-1"])
     for (note, item) in zip(notes, closeReadingSources) {
-        let original = try #require(note.citations?.first { $0.paperID == id })
-        #expect(original.quote == item.quote && original.anchors == note.anchors)
+        #expect(note.citations?.allSatisfy { $0.readingNoteID != nil } == true)
         let anchor = try #require(note.anchors.first)
         #expect(
             snapshot.highlights.contains {
@@ -133,7 +137,8 @@ private actor CloseReadingTransport: HTTPTransport {
         let citation = try #require(note.citations?.first { $0.paperID == comparison.id })
         #expect(note.markdown.contains(citation.url.absoluteString))
         let preview = try await reader.previewLocalPassage(noteID: note.id, citationID: citation.id)
-        #expect(preview.quote == comparisonText && preview.title == comparison.title && reader.selectedPaperID == id)
+        #expect(
+            preview.noteMarkdown == comparisonText && preview.title == comparison.title && reader.selectedPaperID == id)
     }
     let edited = try #require(notes.last)
     reader.openReadingNote(edited)
@@ -147,13 +152,15 @@ private actor CloseReadingTransport: HTTPTransport {
     let reopened = try await restored.runCloseReading(id)
     #expect(await api.requests == 1)
     #expect(reopened.id == report.id && reopened.closeReadingNoteIDs == ids)
-    #expect(restored.currentReadingNotes.count == 6 && restored.currentHighlights.count == snapshot.highlights.count)
+    #expect(
+        restored.currentReadingNotes.count == 6
+            && restored.currentHighlights.count == snapshot.highlights.filter { $0.paperID == id }.count)
     let retained = try #require(restored.currentReadingNotes.first { $0.id == edited.id })
     #expect(retained.markdown == revised && retained.anchors == edited.anchors && retained.dimension == .method)
     let target = try #require(retained.citations?.first { $0.paperID == comparison.id })
     let preview = try await restored.previewLocalPassage(noteID: retained.id, citationID: target.id)
     try await restored.openLocalPassage(preview)
-    #expect(restored.selectedPaperID == comparison.id && restored.jumpPassageAnchors == target.anchors)
+    #expect(restored.selectedPaperID == comparison.id && restored.requestedReadingNote == target.readingNoteID)
 }
 
 @Test @MainActor func closeReadingWorkflowSavesAnOutlineWithVerifiedSourcesWhenThereAreNoParagraphNotes() async throws {
@@ -162,9 +169,9 @@ private actor CloseReadingTransport: HTTPTransport {
     let (reader, id, _) = try await closeReadingLibrary(root: root, api: CloseReadingTransport(.outlineOnly))
     let report = try await reader.runCloseReading(id)
     let disk = try await reader.store.load()
-    let overview = try #require(disk.readingNotes.first)
+    let overview = try #require(disk.readingNotes.first { $0.id == report.readingNoteID })
     #expect(disk.chats.map(\.id) == [report.id] && report.readingNoteID == overview.id)
-    #expect(disk.readingNotes.count == 1 && overview.dimension == nil && (report.closeReadingNoteIDs ?? []).isEmpty)
+    #expect(disk.readingNotes.count == 2 && overview.dimension == nil && (report.closeReadingNoteIDs ?? []).isEmpty)
     let citations = try #require(overview.citations)
     #expect(Set(citations.map(\.quote)) == Set(closeReadingSources.map(\.quote)))
     #expect(citations.allSatisfy { $0.paperID == id })
@@ -199,6 +206,8 @@ private func closeReadingWorkflowFailuresLeaveNoPartialNotesOrReport(
     #expect(await api.requests == 1 && !reader.busyAI && reader.closeReadingTask == nil)
     let disk = try await reader.store.load()
     for snapshot in [reader.state, disk] {
-        #expect(snapshot.readingNotes.isEmpty && snapshot.highlights.isEmpty && snapshot.chats.isEmpty)
+        #expect(
+            snapshot.readingNotes.filter { $0.paperID == id }.isEmpty
+                && snapshot.highlights.filter { $0.paperID == id }.isEmpty && snapshot.chats.isEmpty)
     }
 }

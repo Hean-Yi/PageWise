@@ -8,9 +8,10 @@ public struct Evidence: Identifiable, Codable, Sendable {
     public var blockID: UUID?
     public var sourcePage: Int?
     public var notePath: String?
+    public var readingNoteID: UUID?
     public init(
         id: String, title: String, text: String, paperID: UUID? = nil, blockID: UUID? = nil,
-        sourcePage: Int? = nil, notePath: String? = nil
+        sourcePage: Int? = nil, notePath: String? = nil, readingNoteID: UUID? = nil
     ) {
         self.id = id
         self.title = title
@@ -19,5 +20,6 @@ public struct Evidence: Identifiable, Codable, Sendable {
         self.blockID = blockID
         self.sourcePage = sourcePage
         self.notePath = notePath
+        self.readingNoteID = readingNoteID
     }
 }

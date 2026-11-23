@@ -106,7 +106,7 @@ private actor HTMLResponses: HTTPTransport {
         canReflow: true)
     paper.translatedBlockCount = 1
     paper.translatedPages = [PageArtifact(blockIDs: [block.id], sourcePage: -1, relativePath: "final.pdf")]
-    let evidence = Retriever.context(question: "evidence", selection: "", current: paper, others: [], notes: [])
+    let evidence = Retriever.context(question: "evidence", selection: "", current: paper, notes: [])
     #expect(evidence.first?.blockID == block.id)
     #expect(evidence.first?.sourcePage == nil)
     #expect(PaperPageLocator.position(sourcePage: -1, blockID: block.id, mode: "translated", in: paper) != nil)

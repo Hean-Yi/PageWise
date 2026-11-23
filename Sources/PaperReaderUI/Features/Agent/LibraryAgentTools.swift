@@ -20,12 +20,15 @@ struct AgentNoteRequest: Sendable {
 
 enum AgentSourceTarget: Hashable {
     case candidate(String)
+    case readingNote(UUID)
     case block(UUID, UUID)
     case paper(UUID, Int?)
     case card(UUID)
 
     init(_ card: AgentCard) {
-        if let candidate = card.candidateID {
+        if let note = card.readingNoteID {
+            self = .readingNote(note)
+        } else if let candidate = card.candidateID {
             self = .candidate(candidate)
         } else if let paper = card.paperID, let block = card.blockID {
             self = .block(paper, block)
@@ -75,7 +78,8 @@ extension LibraryAgent {
                 throw ReaderError.message("读者要求精读全文。请使用 close_read_paper。")
             }
             let sources = try quotations.map { part -> (evidence: Evidence, quote: String) in
-                guard let source = card(part.resultID), source.kind == .evidence, let evidence = evidence(for: source)
+                guard let source = card(part.resultID), source.kind == .evidence, source.readingNoteID == nil,
+                    let evidence = evidence(for: source)
                 else {
                     throw ReaderError.message("请先读取本地论文，再引用已登记的原文。")
                 }
@@ -89,8 +93,9 @@ extension LibraryAgent {
             onSubject(evidence.title)
             let links = try references.map { reference -> NoteLinkRequest in
                 guard let registered = card(reference.passage.resultID), registered.kind == .evidence,
-                    let evidence = self.evidence(for: registered), evidence.paperID != nil
-                else { throw ReaderError.message("链接只能引用从本地论文读到的片段。") }
+                    registered.readingNoteID != nil,
+                    let evidence = self.evidence(for: registered)
+                else { throw ReaderError.message("请先用 search_reading_notes 检索书库笔记，再引用笔记中的文字。") }
                 return NoteLinkRequest(evidence: evidence, quote: reference.passage.quote, label: reference.label)
             }
             let linked = try await reader.attachNoteLinks(to: markdown, references: links)
@@ -110,7 +115,9 @@ extension LibraryAgent {
             var selected: [AgentPresentedResult] = []
             var cards: [AgentCard] = []
             for item in items {
-                guard let card = card(item.id) else {
+                guard let card = card(item.id),
+                    card.noteModifiedAt == nil || evidence(for: card) != nil
+                else {
                     throw ReaderError.message("展示项中有未登记的结果，请使用工具返回的 result_id 重新选择。")
                 }
                 if seen.insert(AgentSourceTarget(card)).inserted {
@@ -144,6 +151,28 @@ extension LibraryAgent {
                     ToolRecord(card: card, pageCount: reader.state.papers.first { $0.id == hit.paperID }?.pageCount),
                     card
                 )
+            }
+            let outcome = try result(pairs, truncated: hits.count > limit)
+            paperRegistry.formUnion(outcome.cards.compactMap(\.paperID))
+            return outcome
+        case .searchReadingNotes(let query):
+            onSubject(query)
+            let limit = min(max(0, limits.maxResults), 20)
+            let hits = try await reader.readingNoteEvidence(query: query, limit: limit + 1)
+            try check(epoch)
+            let pairs = hits.prefix(limit).compactMap { hit -> (ToolRecord, AgentCard)? in
+                guard let id = hit.readingNoteID, let paperID = hit.paperID,
+                    let note = reader.referencedReadingNote(id: id, paperID: paperID),
+                    ReadingNoteMemoryIndex.searchableBody(note.markdown).contains(hit.text)
+                else { return nil }
+                var card = AgentCard(kind: .evidence, title: hit.title)
+                card.paperID = hit.paperID
+                card.readingNoteID = id
+                card.noteModifiedAt = note.modifiedAt
+                card.sourcePage = hit.sourcePage.map { $0 + 1 }
+                card.subtitle = "阅读笔记"
+                card.excerpt = hit.text
+                return (ToolRecord(card: card), card)
             }
             let outcome = try result(pairs, truncated: hits.count > limit)
             paperRegistry.formUnion(outcome.cards.compactMap(\.paperID))
@@ -308,6 +337,7 @@ private struct ToolRecord: Encodable {
     var resultID: UUID
     var paperID: String?
     var candidateID: String?
+    var readingNoteID: UUID?
     var title: String
     var authors: String?
     var year: String?
@@ -323,6 +353,7 @@ private struct ToolRecord: Encodable {
         self.year = year
         paperID = card.paperID?.uuidString
         candidateID = card.candidateID
+        readingNoteID = card.readingNoteID
         title = card.title
         sourcePage = card.sourcePage
         self.pageCount = pageCount
@@ -336,6 +367,7 @@ private struct ToolRecord: Encodable {
         case resultID = "result_id"
         case paperID = "paper_id"
         case candidateID = "candidate_id"
+        case readingNoteID = "reading_note_id"
         case sourcePage = "source_page"
         case pageCount = "page_count"
         case blockID = "block_id"

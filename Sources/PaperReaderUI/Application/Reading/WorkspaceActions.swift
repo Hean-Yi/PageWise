@@ -84,6 +84,9 @@ extension ReaderModel {
         guard let id = evidence.paperID, !pendingImportIDs.contains(id),
             let document = state.papers.first(where: { $0.id == id })
         else { return nil }
+        if let noteID = evidence.readingNoteID {
+            return referencedReadingNote(id: noteID, paperID: id)?.anchors.first?.key
+        }
         if let index = evidence.sourcePage, index >= 0, index < document.pageCount {
             return "original-\(index)"
         }
@@ -110,6 +113,12 @@ extension ReaderModel {
     @discardableResult
     public func jump(to evidence: Evidence) -> Bool {
         guard let paperID = evidence.paperID, let key = evidencePageKey(for: evidence) else { return false }
+        if let noteID = evidence.readingNoteID {
+            guard let note = referencedReadingNote(id: noteID, paperID: paperID) else { return false }
+            if selectedPaperID != paperID { select(paperID) }
+            openReadingNote(note)
+            return requestedReadingNote == noteID
+        }
         if key.hasPrefix("original-") { pdfBilingual.close() }
         navigateToStablePage(key, paperID: paperID)
         return selectedPaperID == paperID && pageKeys[safe: visiblePage] == key

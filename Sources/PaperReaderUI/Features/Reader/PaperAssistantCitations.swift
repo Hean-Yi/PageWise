@@ -75,8 +75,16 @@ struct PaperAssistantCitations: View {
         }
     }
 
+    private func currentExcerpt(_ source: Evidence) -> String {
+        guard let id = source.readingNoteID, let paperID = source.paperID else { return source.text }
+        guard let note = model.referencedReadingNote(id: id, paperID: paperID) else { return "" }
+        let body = ReadingNoteMemoryIndex.searchableBody(note.markdown)
+        return body.contains(source.text) ? source.text : ReadingNoteSummary.text(body)
+    }
+
     private func processRow(_ source: Evidence) -> some View {
         let canNavigate = model.evidencePageKey(for: source) != nil
+        let excerpt = currentExcerpt(source)
         let key = "process-" + source.id
         let expanded = expandedExcerpts.contains(key)
         return VStack(alignment: .leading, spacing: 4) {
@@ -97,15 +105,15 @@ struct PaperAssistantCitations: View {
                         .imageScale(.small).accessibilityHidden(true)
                 }.contentShape(Rectangle())
             }
-            .buttonStyle(.plain).disabled(!canNavigate && source.text.isEmpty)
-            if expanded { Text(source.text).textSelection(.enabled) }
+            .buttonStyle(.plain).disabled(!canNavigate && excerpt.isEmpty)
+            if expanded { Text(excerpt).textSelection(.enabled) }
         }
     }
 
     private func card(_ source: Evidence) -> some View {
         let key = model.evidencePageKey(for: source)
-        let isNote = source.notePath != nil && source.paperID == nil
-        let excerpt = source.text
+        let isNote = source.readingNoteID != nil || source.notePath != nil
+        let excerpt = currentExcerpt(source)
         let expanded = expandedExcerpts.contains(source.id)
         let canExpand = key == nil && !excerpt.isEmpty
         let marker =
@@ -113,10 +121,11 @@ struct PaperAssistantCitations: View {
             ? source.sourcePage.map { "第 \($0 + 1) 页" } : nil
         let metadata = [source.id, marker].compactMap { $0 }.joined(separator: " · ")
         let subject = isNote ? "笔记" : (key == nil ? "摘录" : "原文")
-        let tool = "引用" + subject
+        let tool = source.readingNoteID != nil && excerpt.isEmpty ? "笔记已不可用" : "引用" + subject
         let tile = AssistantToolTile(
             tool: tool, systemImage: isNote ? "note.text" : "quote.opening", title: source.title,
-            detail: expanded || excerpt.isEmpty ? nil : previews[source.id],
+            detail: expanded || excerpt.isEmpty
+                ? nil : (source.readingNoteID == nil ? previews[source.id] : ReadingNoteSummary.excerpt(excerpt)),
             metadata: metadata,
             accessory: key != nil ? "chevron.forward" : (canExpand ? (expanded ? "chevron.up" : "chevron.down") : nil))
         return Group {

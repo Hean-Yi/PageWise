@@ -25,7 +25,6 @@ final class PDFBilingualSession {
     private(set) var notice: String?
     private(set) var error: String?
     private(set) var focusedID: String?
-    private(set) var hoveredID: String?
     private(set) var sourceFocusRevision = 0
     private(set) var revealRevision = 0
     var followsScroll = true
@@ -38,7 +37,6 @@ final class PDFBilingualSession {
     private(set) var selectionRequestRevision = 0
     private(set) var selectionSource: String?
     private(set) var selectionTranslation: String?
-    var activeID: String? { hoveredID ?? focusedID }
     private var excerptRanges: [NSRange] = []
     var selectionContextID: String? {
         guard selectionSource != nil, !excerptRanges.isEmpty else { return nil }
@@ -143,7 +141,6 @@ final class PDFBilingualSession {
         releasePages()
         pause()
         isLoading = false
-        hoveredID = nil
         illustrations = []
         sourceIllustration = nil
         pageIndex = -1
@@ -220,7 +217,6 @@ final class PDFBilingualSession {
         pdfScrollID = nil
         translationSelectedIDs = []
         pdfSelectedIDs = []
-        hoveredID = nil
         sourceIllustration = nil
         selectionSource = nil
         selectionTranslation = nil
@@ -366,14 +362,12 @@ final class PDFBilingualSession {
 
     func focus(_ id: String?) {
         sourceIllustration = nil
-        hoveredID = nil
         focusedID = id
         revealRevision &+= 1
     }
 
     func focusFromPDF(_ id: String) {
         sourceIllustration = nil
-        hoveredID = nil
         focusedID = id
         sourceFocusRevision &+= 1
     }
@@ -404,10 +398,6 @@ final class PDFBilingualSession {
 
     func selectFromPDF(_ ids: [String]) {
         if pdfSelectedIDs != ids { pdfSelectedIDs = ids }
-    }
-
-    func hover(_ id: String?) {
-        if hoveredID != id { hoveredID = id }
     }
 
     func matches(_ model: ReaderModel) -> Bool {

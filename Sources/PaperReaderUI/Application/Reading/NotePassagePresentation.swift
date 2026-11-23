@@ -39,8 +39,11 @@ extension ReaderModel {
                 range: NSRange(location: from, length: to - from), didInsert: didInsert))
     }
 
-    func insertNotePassage(_ choice: LocalPassageChoice, into draft: NotePassageDraft) async throws {
-        let citation = try await makeLocalPassageCitation(choice: choice)
+    func insertNotePassage(_ choice: Evidence, into draft: NotePassageDraft) async throws {
+        guard let target = choice.readingNoteID, target != draft.noteID else {
+            throw ReaderError.message("请选择另一条阅读笔记。")
+        }
+        let citation = try await makeLocalPassageCitation(evidence: choice, quote: choice.text)
         try Task.checkCancellation()
         guard case .picker(let active) = notePassageSheet, active.id == draft.id,
             let paper, paper.id == draft.paperID,
@@ -49,11 +52,12 @@ extension ReaderModel {
             let range = Range(draft.range, in: draft.markdown)
         else { throw ReaderError.message("笔记内容或阅读位置已变化，请重新插入引用。") }
         let selection = String(draft.markdown[range]).trimmingCharacters(in: .whitespacesAndNewlines)
-        let title = choice.evidence.title
-        let shortTitle = title.count > 48 ? String(title.prefix(47)) + "…" : title
+        let excerpt = ReadingNoteSummary.text(choice.text)
+        let title = excerpt.isEmpty ? choice.title : excerpt
+        let shortTitle = title.count > 36 ? String(title.prefix(35)) + "…" : title
         // Replacing a selected Markdown link should never expose its old destination as the new label.
         let replacesLink = selection.localizedCaseInsensitiveContains("paperreader://passage/")
-        let label = selection.isEmpty || replacesLink ? shortTitle + " · " + choice.location : selection
+        let label = selection.isEmpty || replacesLink ? shortTitle : selection
         let link = citation.markdown(label: label)
         let updated = draft.markdown.replacingCharacters(in: range, with: link)
         try insertLocalPassageCitation(citation, noteID: draft.noteID, anchors: draft.anchors, markdown: updated)

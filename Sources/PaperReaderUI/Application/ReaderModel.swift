@@ -21,7 +21,7 @@ public final class ReaderModel {
     public var noteRevision = 0
     public var savedNoteRevision = 0
     public var noteSaveFailed = false
-    @ObservationIgnored var verifiedPassageChoices: [LocalPassageCitation] = []
+    let readingNoteIndex = ReadingNoteMemoryIndex()
     @ObservationIgnored var noteSaveTask: Task<Void, Never>?
     public var htmlSelection: [HTMLTextSelection] = []
     public var usesHTMLReading: Bool { mode == "translated" && paper?.htmlReading != nil }

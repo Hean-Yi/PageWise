@@ -14,10 +14,9 @@
         let anchor = NoteAnchor(key: "original-0", target: "pdf", text: "word", start: 40, end: 44)
         var opened: UUID?
         var canvas = PDFSentenceTextCanvas(
-            sentences: [sentence], translations: ["s": "对照"], layout: .paragraph, fontSize: 18, activeID: nil,
-            focusedID: nil,
+            sentences: [sentence], translations: ["s": "对照"], layout: .paragraph, fontSize: 18, focusedID: nil,
             focusRevision: 0, followsScroll: false, sourceScrollID: nil, sourceScrollRevision: 0, pdfSelectedIDs: [],
-            onScroll: { _ in }, onSelection: { _ in }, onFocus: { _ in }, onHover: { _ in },
+            onScroll: { _ in }, onSelection: { _ in }, onFocus: { _ in },
             inlineNotes: [.init(id: id, anchors: [anchor], color: nil)], onOpenNote: { opened = $0 })
         let coordinator = canvas.makeCoordinator()
         let web = coordinator.makeView()
@@ -80,9 +79,9 @@
             imagePNG: nil, originalText: .init(kind: .references, paragraphs: ["[1] A < B.", "[2] Second title."]))
         let canvas = PDFSentenceTextCanvas(
             sentences: [sentence], translations: ["s": "正文。"], layout: .paragraph, fontSize: 18,
-            activeID: nil, focusedID: nil, focusRevision: 0, followsScroll: false, sourceScrollID: nil,
+            focusedID: nil, focusRevision: 0, followsScroll: false, sourceScrollID: nil,
             sourceScrollRevision: 0, pdfSelectedIDs: [], onScroll: { _ in }, onSelection: { _ in }, onFocus: { _ in },
-            onHover: { _ in }, illustrations: [byline, references])
+            illustrations: [byline, references])
         let coordinator = canvas.makeCoordinator()
         let web = coordinator.makeView()
         defer { coordinator.stop(web) }
@@ -123,10 +122,10 @@
             PDFSentenceTextCanvas(
                 sentences: sentences, translations: translations, layout: stacked ? .stacked : .split,
                 fontSize: stacked ? 19 : 16,
-                activeID: "b", focusedID: "b",
+                focusedID: "b",
                 focusRevision: 1, followsScroll: true, sourceScrollID: nil, sourceScrollRevision: 0,
                 pdfSelectedIDs: ["c"],
-                onScroll: { _ in }, onSelection: { selection = $0 }, onFocus: { chosen = $0 }, onHover: { _ in })
+                onScroll: { _ in }, onSelection: { selection = $0 }, onFocus: { chosen = $0 })
         }
         let initial = ["b": "中间的重复句。", "c": "中间的重复句。"]
         let first = canvas(translations: initial, stacked: false)
@@ -167,7 +166,8 @@
                   && document.images.length===0 && document.body.textContent.includes("<img src='x'>")
                   && b===window.original && getSelection().toString()==='中间'
                   && getComputedStyle(b.firstChild).display==='block' && getComputedStyle(b.lastChild).fontSize==='19px'
-                  && b.classList.contains('active');
+                  && b.getAttribute('aria-pressed')==='true'
+                  && getComputedStyle(b).backgroundColor!==getComputedStyle(document.getElementById('a')).backgroundColor;
                 """,
                 arguments: [:], in: nil, contentWorld: .defaultClient) as? Bool
         #expect(preserved == true)
@@ -206,10 +206,9 @@
             -> PDFSentenceTextCanvas
         {
             PDFSentenceTextCanvas(
-                sentences: sentences, translations: translations, layout: layout, fontSize: 19, activeID: "s1",
-                focusedID: "s1", focusRevision: 1, followsScroll: true, sourceScrollID: nil, sourceScrollRevision: 0,
-                pdfSelectedIDs: [], onScroll: { _ in }, onSelection: { selected = $0 }, onFocus: { focus = $0 },
-                onHover: { _ in })
+                sentences: sentences, translations: translations, layout: layout, fontSize: 19, focusedID: "s1",
+                focusRevision: 1, followsScroll: true, sourceScrollID: nil, sourceScrollRevision: 0,
+                pdfSelectedIDs: [], onScroll: { _ in }, onSelection: { selected = $0 }, onFocus: { focus = $0 })
         }
         let partial = ["s1": "第二句。", "s4": "<img> 是原文。"]
         let view = canvas(partial)
@@ -233,10 +232,18 @@
               && en.textContent==='Alpha < One. Bravo two. Charlie three. Delta four.'
               && zh.textContent==='待译第二句。待译' && zh.querySelectorAll('.pending').length===2
               && second.firstChild.textContent==='Echo five.' && second.lastChild.textContent==='<img> 是原文。'
-              && document.images.length===0 && document.querySelectorAll('.active').length===2
-              && Array.from(document.querySelectorAll('.active')).every(node=>node.dataset.sentence==='s1');
+              && document.images.length===0 && document.querySelectorAll('[aria-pressed="true"]').length===2
+              && Array.from(document.querySelectorAll('[aria-pressed="true"]')).every(node=>node.dataset.sentence==='s1');
             """)
         #expect(paragraphs)
+        let retainedFocus = try await evaluate(
+            """
+            const zh=document.querySelector('.zh[data-sentence=s4]');
+            zh.dispatchEvent(new PointerEvent('pointerover',{bubbles:true,pointerType:'mouse'}));
+            return !zh.matches('[aria-pressed="true"]') &&
+              [...document.querySelectorAll('[aria-pressed="true"]')].every(el=>el.dataset.sentence==='s1');
+            """)
+        #expect(retainedFocus && focus == nil)
         for side in ["en", "zh"] {
             focus = nil
             _ = try await evaluate("document.querySelector('.\(side)[data-sentence=s4]').click();return true")
@@ -275,7 +282,7 @@
         let restored = try await evaluate(
             """
             const el=document.querySelector('#s1');
-            return el.classList.contains('active') && el.getAttribute('aria-pressed')==='true'
+            return el.getAttribute('aria-pressed')==='true'
               && el.textContent==='Bravo two.第二句。'
               && getSelection().anchorNode===document.querySelector('#s3 .en').firstChild
               && getSelection().focusNode===document.querySelector('#s4 .en').firstChild;
@@ -305,9 +312,9 @@
             rows: [PDFSourceSentence], translations: [String: String], layout: PDFSentenceTextCanvas.Layout
         ) -> PDFSentenceTextCanvas {
             PDFSentenceTextCanvas(
-                sentences: rows, translations: translations, layout: layout, fontSize: 16, activeID: nil,
-                focusedID: nil, focusRevision: 0, followsScroll: false, sourceScrollID: nil, sourceScrollRevision: 0,
-                pdfSelectedIDs: [], onScroll: { _ in }, onSelection: { _ in }, onFocus: { _ in }, onHover: { _ in },
+                sentences: rows, translations: translations, layout: layout, fontSize: 16, focusedID: nil,
+                focusRevision: 0, followsScroll: false, sourceScrollID: nil, sourceScrollRevision: 0,
+                pdfSelectedIDs: [], onScroll: { _ in }, onSelection: { _ in }, onFocus: { _ in },
                 illustrations: [figure, table], onRevealIllustration: { revealed = $0 })
         }
         let initial = canvas(rows: sentences, translations: [:], layout: .paragraph)
@@ -379,11 +386,10 @@
         var movements: [String] = []
         func canvas(sourceID: String?, revision: Int) -> PDFSentenceTextCanvas {
             PDFSentenceTextCanvas(
-                sentences: sentences, translations: translations, layout: .split, fontSize: 16, activeID: nil,
-                focusedID: nil,
+                sentences: sentences, translations: translations, layout: .split, fontSize: 16, focusedID: nil,
                 focusRevision: 0, followsScroll: true, sourceScrollID: sourceID, sourceScrollRevision: revision,
                 pdfSelectedIDs: [], onScroll: { movements.append($0) }, onSelection: { _ in },
-                onFocus: { _ in }, onHover: { _ in })
+                onFocus: { _ in })
         }
         let first = canvas(sourceID: nil, revision: 0)
         let coordinator = first.makeCoordinator()

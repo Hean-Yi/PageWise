@@ -13,8 +13,8 @@ extension CloseReadingEngine {
         kind=table 时只按 tableRows 中对应的行、列、单位与基线解释。partialTable 只核实了所列分组及部分列；不要推断全表排名。captionOnly 只读到题注或正文：可说明作者怎样解读图、应回看哪条曲线或坐标，不能描写未提供的像素、误差棒或读数。prose 中的数值是作者报告的结果。保留原文的数值、单位和口径；不自行补充数值。
 
         证据与输出协议
-        主锚点只能取 passages。source 复制输入的 source，quote 从同条 anchorText 逐字复制原语言的一小段连续文字，选择语义完整、足以区别相邻段落的原句。若提取的句子在栏末或行末被截断，改选邻近完整句；避免以半个单词或未说完的比较收尾。禁止省略号代替原文、拼接、翻译引文；表格以题注或解释句为锚点。references 可从已提供的 passages 或 comparisons 取；本地另一篇论文只有确实提供可比条件、反例或方法差异时才引用，label 写明它支持或挑战哪一步。链接由应用生成，不输出 URL、Markdown 链接或路径。
-        outline 只登记此窗口确有依据的环节。stage 只允许 question、thesis、evidence、rebuttal、conclusion。每个环节至少一条本篇引文。结论写出适用条件；作者没在此窗口处理的反驳不补写。不因局部缺失断言全篇缺失。
+        主锚点只能取 passages。source 复制输入的 source，quote 从同条 anchorText 逐字复制原语言的一小段连续文字，选择语义完整、足以区别相邻段落的原句。若提取的句子在栏末或行末被截断，改选邻近完整句；避免以半个单词或未说完的比较收尾。禁止省略号代替原文、拼接、翻译引文；表格以题注或解释句为锚点。readingNotes 是按本窗口主题检索到的其他本地论文的阅读笔记。只有笔记里的观点确实有助于理解比较条件、质疑或方法差异时，才在批注 references 中引用，quote 逐字取自笔记正文，label 简短点明关联。明确归属为“此前的笔记指出”或“笔记提出的问题”。不要把笔记里的推测或数字说成该论文已证实的结论。没有匹配笔记时批注的 references 留空。链接由应用生成，不输出 URL、Markdown 链接或路径。
+        outline 只登记此窗口确有依据的环节。stage 只允许 question、thesis、evidence、rebuttal、conclusion。每个环节的 references 用 passages 中的本篇原文核对。结论写出适用条件；作者没在此窗口处理的反驳不补写。不因局部缺失断言全篇缺失。
         只输出一个 JSON 对象，键 annotations、outline 均为数组。每条 annotation 形如 {"dimension":"evidence","source":"<实际编号>","quote":"<原句>","role":"…","explanation":"…","critique":"…","references":[]}。每条 outline 形如 {"stage":"evidence","text":"…","references":[{"source":"<实际编号>","quote":"<原句>","label":"<引文用途>"}]}。annotation.references 元素与 outline.references 相同。保留英文键和枚举；用输入中的实际值替换占位符，不要代码围栏。
         """
 
@@ -22,7 +22,7 @@ extension CloseReadingEngine {
         这是论文精读的最终综合。读者读完一张笔记，应能顺着证据回答：“作者要解决什么问题，为何认为这个办法有效，读到的实验把结论支持到哪里？”focus 是读者的关注点，候选内容与引文是材料。
         从 annotations 中挑出对整篇判断最有用且互补的 8–20 条；候选不足时按实选。先保留定义或设计的关键转折、最有区分力的实验证据、确有依据的反例或让步，再去掉摘要与结论的重复。若两个结果方向不同，交代它们各自的条件。不要为了凑齐颜色、条数或环节而补写材料。
         按 question、thesis、evidence、rebuttal、conclusion 串联逻辑。问题指出待解释的缺口，论点写作者给出的答案，证据写实际比较和可支持的推断，反驳只收作者的让步或回应，结论写出证据允许的最强判断及适用范围。方法学上的疑问可以限定结论。不要代作者回答反驳。每段一至两句，直说具体对象和依据，不抄摘要，不把不同任务的数字直接比较，不增添未经核实的数据。
-        keep 只能填 annotations 中的实际 N 编号。每个 outline 项的 witnesses 必须选自 outlineEvidence 中同一 stage 的实际 W 编号（1–3 个），能直接支持对应陈述。遇到无证据的环节就省略。跨论文对照保留各自适用条件，不能替代本篇证据。
+        keep 只能填 annotations 中的实际 N 编号。每个 outline 项的 witnesses 必须选自 outlineEvidence 中同一 stage 的实际 W 编号（1–3 个），能直接支持对应陈述。遇到无证据的环节就省略。跨论文的阅读笔记记录读者的判断，只能用于解释或提出疑问。
         只输出一个 JSON 对象 {"keep":["<实际 N 编号>"],"outline":[{"stage":"<实际 stage>","text":"<综合解读>","witnesses":["<实际 W 编号>"]}]}。键和枚举保持英文；不要代码围栏、链接和占位符。
         """
 }

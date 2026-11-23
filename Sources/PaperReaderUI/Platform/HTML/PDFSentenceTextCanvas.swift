@@ -9,7 +9,6 @@ import WebKit
     let translations: [String: String]
     let layout: Layout
     let fontSize: Int
-    let activeID: String?
     let focusedID: String?
     let focusRevision: Int
     let followsScroll: Bool
@@ -19,7 +18,6 @@ import WebKit
     let onScroll: (String) -> Void
     let onSelection: ([String]) -> Void
     let onFocus: (String?) -> Void
-    let onHover: (String?) -> Void
     var illustrations: [PDFReadingIllustration] = []
     var onRevealIllustration: ((PDFReadingIllustration) -> Void)?
     var copyTableText: (String) -> Bool = { text in
@@ -56,7 +54,6 @@ import WebKit
         private var translated: [String: String] = [:]
         private var displayedLayout: Layout?
         private var displayedFontSize: Int?
-        private var active: String?
         private var focused: String?
         private var revision = -1
         private var follow: Bool?
@@ -136,7 +133,6 @@ import WebKit
                 displayedNotes = parent.inlineNotes
             }
             if changed || windowChanged || layoutChanged || displayedFontSize != parent.fontSize
-                || active != parent.activeID
                 || focused != parent.focusedID
                 || revision != parent.focusRevision
             {
@@ -144,13 +140,12 @@ import WebKit
                     parent.focusedID != nil
                     && (focused != parent.focusedID || layoutChanged || revision != parent.focusRevision)
                 view.callAsyncJavaScript(
-                    "window.sentenceReader.show(fontSize, active, focused, scroll)",
+                    "window.sentenceReader.show(fontSize, focused, scroll)",
                     arguments: [
-                        "fontSize": parent.fontSize, "active": parent.activeID ?? "",
+                        "fontSize": parent.fontSize,
                         "focused": parent.focusedID ?? "", "scroll": scroll,
                     ],
                     in: nil, in: .defaultClient, completionHandler: nil)
-                active = parent.activeID
                 focused = parent.focusedID
                 revision = parent.focusRevision
                 displayedLayout = parent.layout
@@ -374,7 +369,6 @@ import WebKit
             let id = raw.isEmpty ? nil : raw
             switch event["action"] as? String {
             case "focus": latest.onFocus(id)
-            case "hover": latest.onHover(id)
             case "scroll":
                 if latest.followsScroll, latest.layout == .split, let id { latest.onScroll(id) }
             default: break
@@ -409,7 +403,7 @@ extension PDFSentenceTextCanvas {
         main{max-width:45rem;margin:auto;padding:19px clamp(18px,4vw,38px) 60px;overflow-wrap:anywhere}
         p{margin:0 0 1em}
         [role="button"]{border-radius:3px;box-decoration-break:clone;-webkit-box-decoration-break:clone}
-        .active,.related,.counterpart{background:var(--active)}
+        [aria-pressed="true"],.related,.counterpart{background:var(--active)}
         [role="button"]:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
         .en{display:none}.stacked .pair{display:block;padding:4px 6px;margin:0 -6px 12px}
         .stacked .en{display:block;font:16px/1.55 Georgia,"Times New Roman",serif;color:var(--en);margin-bottom:3px}
@@ -491,7 +485,7 @@ extension PDFSentenceTextCanvas {
         (() => {
           const main=document.querySelector('main'), pairs=new Map();
           let figures=[];
-          let hot='', active='', focused='', track=false, userScroll=false, scrollTimer=0, lastScroll='';
+          let focused='', track=false, userScroll=false, scrollTimer=0, lastScroll='';
           let lastSelection=[], related=[], order=[], paragraphMode=false, revealLanguage='en';
           let inlineNoteRanges=new WeakMap();
           let flow=null;
@@ -502,7 +496,6 @@ extension PDFSentenceTextCanvas {
           const send=(action,id)=>post({action,id});
           const pairAt=node=>node?.closest?.('[data-sentence]');
           const sideOf=node=>node?.closest('.en,.source-line') ? 'en' : 'zh';
-          function hover(id) { if (id!==hot) {hot=id; send('hover',id);} }
           function focus(node) {
             revealLanguage=sideOf(node)==='en' ? 'zh' : 'en';
             const id=node.dataset.sentence;
@@ -609,8 +602,6 @@ extension PDFSentenceTextCanvas {
             event.clipboardData.setData('text/plain', plain);
             event.preventDefault();
           });
-          main.addEventListener('pointerover',e=>{if(e.pointerType==='mouse') hover(pairAt(e.target)?.dataset.sentence||'');});
-          main.addEventListener('pointerleave',()=>hover(''));
           main.addEventListener('click',e=>{
             const note=e.target.closest('[data-reading-note]');
             if (note) {send('note',note.dataset.readingNote);return;}
@@ -842,7 +833,7 @@ extension PDFSentenceTextCanvas {
               if (changingStructure) {
                 revealLanguage='en';
                 for (const pair of pairs.values()) {
-                  for (const node of [pair.en,pair.zh,pair.button]) node.classList.remove('active','related','counterpart');
+                  for (const node of [pair.en,pair.zh,pair.button]) node.classList.remove('related','counterpart');
                 }
                 if (anchorNode?.nodeType===Node.TEXT_NODE && focusNode?.nodeType===Node.TEXT_NODE
                     && anchorNode.isConnected && focusNode.isConnected
@@ -851,14 +842,12 @@ extension PDFSentenceTextCanvas {
                 }
               }
             },
-            show(fontSize,id,pinned,scroll) {
+            show(fontSize,id,scroll) {
               document.documentElement.style.setProperty('--zh-size',fontSize+'px');
               updateTableWidths();
-              for (const el of targets(active)) el.classList.remove('active');
               for (const el of targets(focused)) el.setAttribute('aria-pressed','false');
-              active=id; focused=pinned;
+              focused=id;
               for (const el of targets(focused)) el.setAttribute('aria-pressed','true');
-              for (const el of targets(active)) el.classList.add('active');
               if (scroll) reveal(focused);
             },
             sync(enabled,scrollID,selected) {

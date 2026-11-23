@@ -30,8 +30,8 @@ struct NotePassageSheetView: View {
 
     private var title: String {
         switch sheet {
-        case .picker: "引用书库片段"
-        case .preview: "原文片段"
+        case .picker: "引用阅读笔记"
+        case .preview: "引用预览"
         }
     }
 }
@@ -39,50 +39,30 @@ struct NotePassageSheetView: View {
 private struct NotePassagePicker: View {
     let model: ReaderModel
     let draft: NotePassageDraft
-    @State private var paperID: UUID
     @State private var query = ""
-    @State private var page = ""
-    @State private var choices: [LocalPassageChoice] = []
+    @State private var choices: [Evidence] = []
     @State private var loading = true
     @State private var error: String?
     @State private var insertion: Task<Void, Never>?
 
-    init(model: ReaderModel, draft: NotePassageDraft) {
-        self.model = model
-        self.draft = draft
-        _paperID = State(initialValue: draft.paperID)
-    }
-
-    private struct Search: Equatable {
-        let paperID: UUID
-        let query: String
-        let page: String
-    }
-
     var body: some View {
-        let search = Search(paperID: paperID, query: query, page: page)
         VStack(alignment: .leading, spacing: 10) {
-            Picker("论文", selection: $paperID) {
-                ForEach(model.state.papers) { Text($0.title).tag($0.id) }
-            }.pickerStyle(.menu).onChange(of: paperID) { _, _ in page = "" }
             HStack {
                 Image(systemName: "magnifyingglass").foregroundStyle(ReaderTheme.muted)
-                TextField("查找原文", text: $query).textFieldStyle(.plain)
-                Divider().frame(height: 17)
-                TextField("页码", text: $page).textFieldStyle(.plain).frame(width: 42).accessibilityLabel("限定原页")
+                TextField("搜索笔记或论文标题", text: $query).textFieldStyle(.plain)
             }
             .padding(9).background(ReaderTheme.canvas, in: RoundedRectangle(cornerRadius: 8))
             Group {
                 if let error {
                     Text(error).foregroundStyle(ReaderTheme.muted)
                 } else if loading {
-                    ProgressView().accessibilityLabel("查找本地原文")
+                    ProgressView().accessibilityLabel("搜索阅读笔记")
                 } else if choices.isEmpty {
-                    Text("没有找到对应的原文片段").foregroundStyle(ReaderTheme.muted)
+                    Text(query.isEmpty ? "暂无其他阅读笔记" : "没有找到匹配的笔记").foregroundStyle(ReaderTheme.muted)
                 } else {
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: 0) {
-                            ForEach(choices, id: \.id) { choice in
+                            ForEach(choices) { choice in
                                 Button {
                                     insertion = Task {
                                         defer { insertion = nil }
@@ -95,9 +75,12 @@ private struct NotePassagePicker: View {
                                 } label: {
                                     HStack(spacing: 10) {
                                         VStack(alignment: .leading, spacing: 4) {
-                                            Text(choice.location).font(.caption).foregroundStyle(ReaderTheme.muted)
-                                            Text(choice.quote).font(.callout).lineLimit(3).multilineTextAlignment(
-                                                .leading)
+                                            Text(verbatim: choice.title).font(.caption).foregroundStyle(
+                                                ReaderTheme.muted
+                                            ).lineLimit(1)
+                                            Text(verbatim: choice.text).font(.callout).lineLimit(3)
+                                                .multilineTextAlignment(
+                                                    .leading)
                                         }
                                         Spacer(minLength: 0)
                                         Image(systemName: "plus").foregroundStyle(ReaderTheme.accent)
@@ -111,23 +94,14 @@ private struct NotePassagePicker: View {
                 }
             }.frame(maxWidth: .infinity, minHeight: 210, maxHeight: 300)
         }
-        .task(id: search) {
+        .task(id: query) {
             loading = true
             error = nil
-            choices = []
             do {
-                let trimmed = search.page.trimmingCharacters(in: .whitespaces)
-                let number = Int(trimmed)
-                if !trimmed.isEmpty {
-                    guard let number, let document = model.state.papers.first(where: { $0.id == search.paperID }),
-                        number >= 1, number <= document.pageCount
-                    else { throw ReaderError.message("请输入论文范围内的原页页码。") }
-                }
-                if !search.query.isEmpty { try await Task.sleep(for: .milliseconds(220)) }
-                let results = try await model.localPassageChoices(
-                    paperID: search.paperID, query: search.query, pageIndex: number.map { $0 - 1 })
+                if !query.isEmpty { try await Task.sleep(for: .milliseconds(180)) }
+                let results = try await model.readingNoteEvidence(query: query, limit: 31)
                 try Task.checkCancellation()
-                choices = results
+                choices = Array(results.lazy.filter { $0.readingNoteID != draft.noteID }.prefix(30))
                 loading = false
             } catch {
                 guard !Task.isCancelled else { return }
@@ -153,11 +127,15 @@ private struct NotePassagePreviewView: View {
                 Text(preview.title).font(.headline)
                 Text(preview.location).font(.caption).foregroundStyle(ReaderTheme.muted)
                 ScrollView {
-                    (Text(verbatim: preview.before).foregroundColor(ReaderTheme.muted)
-                        + Text(verbatim: preview.quote).fontWeight(.semibold).foregroundColor(ReaderTheme.ink)
-                        + Text(verbatim: preview.after).foregroundColor(ReaderTheme.muted))
-                        .font(.body).lineSpacing(4).textSelection(.enabled).frame(
-                            maxWidth: .infinity, alignment: .leading)
+                    if let markdown = preview.noteMarkdown {
+                        AssistantMarkdownText(markdown: markdown)
+                    } else {
+                        (Text(verbatim: preview.before).foregroundColor(ReaderTheme.muted)
+                            + Text(verbatim: preview.quote).fontWeight(.semibold).foregroundColor(ReaderTheme.ink)
+                            + Text(verbatim: preview.after).foregroundColor(ReaderTheme.muted))
+                            .font(.body).lineSpacing(4).textSelection(.enabled).frame(
+                                maxWidth: .infinity, alignment: .leading)
+                    }
                 }.frame(maxHeight: 230)
                 HStack {
                     Spacer()
@@ -169,7 +147,7 @@ private struct NotePassagePreviewView: View {
                             } catch { self.error = error.localizedDescription }
                         }
                     } label: {
-                        Label("打开原文", systemImage: "arrow.up.forward")
+                        Label(preview.readingNoteID == nil ? "打开原文" : "打开笔记", systemImage: "arrow.up.forward")
                     }
                     .buttonStyle(.borderedProminent).tint(ReaderTheme.accent)
                 }
@@ -177,7 +155,7 @@ private struct NotePassagePreviewView: View {
                 ProgressView().accessibilityLabel("核对引文")
             }
         }
-        .task(id: citationID) {
+        .task(id: model.noteRevision) {
             preview = nil
             error = nil
             do { preview = try await model.previewLocalPassage(noteID: noteID, citationID: citationID) } catch {

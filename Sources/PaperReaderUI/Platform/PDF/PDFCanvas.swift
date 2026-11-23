@@ -36,7 +36,6 @@ struct PDFCanvas: View {
         return PDFSentenceDisplay(
             isVisible: acceptsSentenceInput,
             sentences: session.matches(model) && acceptsSentenceInput ? session.sentences : [],
-            activeID: session.activeID,
             focusedID: session.focusedID, revealRevision: session.revealRevision,
             selectedIDs: session.translationSelectedIDs, scrollID: session.pdfScrollID,
             scrollRevision: session.pdfScrollRevision,
@@ -50,7 +49,6 @@ struct PDFCanvas: View {
 struct PDFSentenceDisplay {
     let isVisible: Bool
     let sentences: [PDFSourceSentence]
-    let activeID: String?
     let focusedID: String?
     let revealRevision: Int
     let selectedIDs: [String]
@@ -64,14 +62,12 @@ private final class ReaderPDFView: PDFView {
     var copyTextProvider: (() -> String?)?
 
     #if os(macOS)
-        var sentencePointer: ((CGPoint, Bool) -> Void)?
-        var sentencePointerExited: (() -> Void)?
+        var sentenceClick: ((CGPoint) -> Void)?
         var notePointer: ((CGPoint) -> Void)?
         var observesNoteInput = false
-        private var noteClickStart: CGPoint?
+        private var clickStart: CGPoint?
         var observesSentenceInput = false
         private var eventMonitor: Any?
-        private var pointerWasInside = false
 
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
@@ -80,37 +76,27 @@ private final class ReaderPDFView: PDFView {
             guard window != nil else { return }
             // PDFKit's inner document view handles mouse tracking itself. Observe this window's
             // events without consuming them so text selection, links and scrolling keep working.
-            eventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .leftMouseUp, .mouseMoved]) {
+            eventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .leftMouseUp]) {
                 [weak self] event in
                 guard let self, self.observesSentenceInput || self.observesNoteInput, let window = self.window,
                     event.window === window, window.attachedSheet == nil
                 else { return event }
                 let point = self.convert(event.locationInWindow, from: nil)
                 let inside = self.visibleRect.contains(point)
-                if self.observesNoteInput && event.type == .leftMouseDown {
+                if event.type == .leftMouseDown {
                     let content = window.contentView
                     let hit = content.flatMap { $0.hitTest($0.convert(event.locationInWindow, from: nil)) }
-                    self.noteClickStart =
+                    self.clickStart =
                         inside && event.clickCount == 1 && (hit?.isDescendant(of: self) == true || hit === self)
                         ? point : nil
-                }
-                if event.type == .leftMouseUp {
-                    if self.observesNoteInput, inside, let start = self.noteClickStart,
-                        hypot(start.x - point.x, start.y - point.y) < 3
-                    {
-                        self.notePointer?(point)
+                } else {
+                    defer { self.clickStart = nil }
+                    guard inside, let start = self.clickStart, hypot(start.x - point.x, start.y - point.y) < 3 else {
+                        return event
                     }
-                    self.noteClickStart = nil
-                    return event
+                    if self.observesSentenceInput { self.sentenceClick?(point) }
+                    if self.observesNoteInput { self.notePointer?(point) }
                 }
-                if inside && self.observesSentenceInput {
-                    if event.type == .mouseMoved || event.clickCount == 1 {
-                        self.sentencePointer?(point, event.type == .leftMouseDown)
-                    }
-                } else if self.pointerWasInside {
-                    self.sentencePointerExited?()
-                }
-                self.pointerWasInside = inside
                 return event
             }
         }
@@ -196,16 +182,10 @@ final class PDFCoordinator: NSObject, @preconcurrency PDFPageOverlayViewProvider
         #endif
         self.view = view
         #if os(macOS)
-            view.sentencePointer = { [weak self] point, clicked in
-                guard let self else { return }
-                let hit = self.sentence(at: point)
-                if clicked, let hit {
-                    self.model.pdfBilingual.focusFromPDF(hit.id)
-                } else {
-                    self.model.pdfBilingual.hover(hit?.id)
-                }
+            view.sentenceClick = { [weak self] point in
+                guard let self, let hit = self.sentence(at: point) else { return }
+                self.model.pdfBilingual.focusFromPDF(hit.id)
             }
-            view.sentencePointerExited = { [weak self] in self?.model.pdfBilingual.hover(nil) }
             view.notePointer = { [weak self] point in self?.openNote(at: point) }
         #else
             let tap = UITapGestureRecognizer(target: self, action: #selector(tappedPDF(_:)))
@@ -476,7 +456,7 @@ final class PDFCoordinator: NSObject, @preconcurrency PDFPageOverlayViewProvider
     }
 
     private func updateSentenceFocus(in view: PDFView, display: PDFSentenceDisplay, becameVisible: Bool) {
-        let ids = display.selectedIDs.isEmpty ? [display.activeID].compactMap { $0 } : display.selectedIDs
+        let ids = display.selectedIDs.isEmpty ? [display.focusedID].compactMap { $0 } : display.selectedIDs
         let active = ids.isEmpty ? [] : display.sentences.filter { ids.contains($0.id) }
         let visibleIDs = active.map(\.id)
         if displayedSentenceIDs != visibleIDs {

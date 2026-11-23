@@ -4,7 +4,8 @@ import Foundation
 public enum ReadingNoteIntent {
     private static let quotation = try! NSRegularExpression(
         pattern: #"“([^”]+)”|「([^」]+)」|『([^』]+)』|‘([^’]+)’|"([^"]+)"|\x60([^\x60]+)\x60"#)
-    private static let marking = #"(?:标出|标记|标注|标画|圈出|高亮|画线|划线|画出|引用|highlight|underline|mark|quote)"#
+    private static let marking =
+        #"(?:标出|标记|标注|标画|圈出|高亮|画线|划线|画出|引用(?:本篇|当前论文|本文)?原文|highlight|underline|mark|quote\s+(?:the\s+)?(?:source|passage))"#
 
     public static func isRequested(_ question: String) -> Bool {
         let withoutCode = question.replacingOccurrences(

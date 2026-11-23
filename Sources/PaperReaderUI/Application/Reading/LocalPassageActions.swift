@@ -9,12 +9,21 @@ struct LocalPassagePreview: Identifiable, Equatable, Sendable {
     let before: String
     let quote: String
     let after: String
+    var readingNoteID: UUID?
+    var noteMarkdown: String?
 }
 
 extension ReaderModel {
     func makeLocalPassageCitation(evidence: Evidence, quote: String) async throws -> LocalPassageCitation {
         guard let paperID = evidence.paperID, evidence.notePath == nil, !quote.isEmpty, quote.utf8.count <= 8_000
         else { throw ReaderError.message("请选择本地论文中的一段原文。") }
+        if let id = evidence.readingNoteID {
+            guard let paper = state.papers.first(where: { $0.id == paperID }),
+                let note = referencedReadingNote(id: id, paperID: paperID),
+                evidence.text.contains(quote), ReadingNoteMemoryIndex.searchableBody(note.markdown).contains(quote)
+            else { throw ReaderError.message("这段引文与书库笔记的当前内容不符。") }
+            return LocalPassageCitation(note: note, digest: paper.digest, quote: quote)
+        }
         let scope = try discussionNoteScope(for: paperID)
         let location = try await verifiedDiscussionLocation(in: scope, sources: [(evidence, quote)])
         return LocalPassageCitation(
@@ -22,38 +31,24 @@ extension ReaderModel {
             anchors: location.anchors, quote: quote)
     }
 
-    func makeLocalPassageCitation(choice: LocalPassageChoice) async throws -> LocalPassageCitation {
-        let citation: LocalPassageCitation
-        if let id = choice.evidence.paperID, let index = choice.evidence.sourcePage, !choice.pdfRanges.isEmpty {
-            let scope = try discussionNoteScope(for: id)
-            let located = try await PDFReadingNoteLocator().locate(
-                quote: choice.quote, pageIndex: index,
-                in: root.appendingPathComponent(scope.originalPath), selectedRanges: choice.pdfRanges)
-            try validateDiscussionScope(scope)
-            citation = LocalPassageCitation(
-                paperID: id, digest: scope.digest, contentVersion: scope.digest + ":original-0",
-                anchors: located.map(\.anchor), quote: choice.quote)
-        } else {
-            citation = try await makeLocalPassageCitation(evidence: choice.evidence, quote: choice.quote)
-        }
-        verifiedPassageChoices = Array(verifiedPassageChoices.suffix(15)) + [citation]
-        return citation
-    }
-
     func validateNoteCitations(_ citations: [LocalPassageCitation], markdown: String) async throws {
-        guard citations.count <= 16 else { throw ReaderError.message("一条笔记最多可引用十六个原文片段。") }
+        guard citations.count <= 16 else { throw ReaderError.message("一条笔记最多可登记十六个引用。") }
         var authorized = Set<String>()
         for citation in citations {
             let url = citation.url.absoluteString.lowercased()
             guard authorized.insert(url).inserted, markdown.localizedCaseInsensitiveContains(url) else {
                 throw ReaderError.message("笔记中的引文与登记的本地来源不符。")
             }
-            _ = try await resolvedLocalPassage(citation)
+            if citation.readingNoteID == nil {
+                _ = try await resolvedLocalPassage(citation)
+            } else {
+                try validateLocalPassageTargets([citation])
+            }
         }
         // Links in prose, including pasted and simulated tool output, cannot name another note's destination.
         for match in markdown.matches(of: /(?i)paperreader:[^\s)<>\]]*/) {
             guard authorized.contains(String(match.output).lowercased()) else {
-                throw ReaderError.message("笔记含有未登记的本地引用，请从书库插入原文。")
+                throw ReaderError.message("笔记含有未登记的本地引用，请从书库选择笔记。")
             }
         }
     }
@@ -65,13 +60,13 @@ extension ReaderModel {
         guard markdown.localizedCaseInsensitiveContains(citation.url.absoluteString)
         else { throw ReaderError.message("目标引文已不可用，请重新选择。") }
         let registered = currentReadingNotes.first { $0.id == noteID }?.citations ?? []
-        guard verifiedPassageChoices.contains(citation) || registered.contains(citation) else {
-            throw ReaderError.message("请选择书库中核对过的原文片段。")
+        guard let target = citation.readingNoteID, target != noteID else {
+            throw ReaderError.message("请选择另一条书库笔记。")
         }
         var used = registered.filter { markdown.localizedCaseInsensitiveContains($0.url.absoluteString) }
         if !used.contains(citation) { used.append(citation) }
         guard used.count <= 16 else {
-            throw ReaderError.message("一条笔记最多可引用十六个原文片段。")
+            throw ReaderError.message("一条笔记最多可登记十六个引用。")
         }
         guard updateReadingNote(id: noteID, anchors: anchors, markdown: markdown),
             let index = state.readingNotes.firstIndex(where: { $0.id == noteID && $0.deletedAt == nil })
@@ -87,6 +82,15 @@ extension ReaderModel {
 
     func validateLocalPassageTargets(_ citations: [LocalPassageCitation]) throws {
         for citation in citations {
+            if let target = citation.readingNoteID {
+                guard let note = referencedReadingNote(id: target, paperID: citation.paperID),
+                    let paper = state.papers.first(where: { $0.id == note.paperID && $0.digest == citation.digest }),
+                    !citation.quote.isEmpty,
+                    ReadingNoteMemoryIndex.searchableBody(note.markdown).contains(citation.quote),
+                    LocalPassageCitation(note: note, digest: paper.digest, quote: citation.quote) == citation
+                else { throw ReaderError.message("引用的书库笔记或摘录已变化。") }
+                continue
+            }
             let unavailable = ReaderError.message("引用的本地原文或阅读版本已不可用。")
             guard let paper = state.papers.first(where: { $0.id == citation.paperID && $0.digest == citation.digest }),
                 !pendingImportIDs.contains(paper.id), let first = citation.anchors.first
@@ -106,12 +110,19 @@ extension ReaderModel {
         guard let note = currentReadingNotes.first(where: { $0.id == noteID }),
             let citation = note.citations?.first(where: { $0.id == citationID }),
             note.markdown.localizedCaseInsensitiveContains(citation.url.absoluteString)
-        else { throw ReaderError.message("这条笔记没有登记该原文链接。") }
+        else { throw ReaderError.message("这条笔记没有登记该链接。") }
         return citation
     }
 
     func previewLocalPassage(noteID: UUID, citationID: UUID) async throws -> LocalPassagePreview {
         let citation = try registeredLocalPassage(noteID: noteID, citationID: citationID)
+        if let id = citation.readingNoteID {
+            let (note, paper) = try noteTarget(citation, id: id)
+            return LocalPassagePreview(
+                id: citationID, noteID: noteID, title: paper.title, location: "阅读笔记",
+                before: "", quote: ReadingNoteMemoryIndex.searchableBody(note.markdown), after: "",
+                readingNoteID: note.id, noteMarkdown: note.markdown)
+        }
         let result = try await resolvedLocalPassage(citation)
         guard try registeredLocalPassage(noteID: noteID, citationID: citationID) == citation else {
             throw ReaderError.message("笔记中的引用已变化。")
@@ -123,6 +134,12 @@ extension ReaderModel {
 
     func openLocalPassage(_ preview: LocalPassagePreview) async throws {
         let citation = try registeredLocalPassage(noteID: preview.noteID, citationID: preview.id)
+        if let id = citation.readingNoteID {
+            let (note, paper) = try noteTarget(citation, id: id)
+            if selectedPaperID != paper.id { select(paper.id) }
+            openReadingNote(note)
+            return
+        }
         _ = try await previewLocalPassage(noteID: preview.noteID, citationID: preview.id)
         guard let paper = state.papers.first(where: { $0.id == citation.paperID && $0.digest == citation.digest }),
             let first = citation.anchors.first
@@ -185,14 +202,40 @@ extension ReaderModel {
 }
 
 extension ReaderModel {
-    func localPassageChoices(paperID: UUID, query: String, pageIndex: Int? = nil) async throws -> [LocalPassageChoice] {
-        guard let paper = state.papers.first(where: { $0.id == paperID }), !pendingImportIDs.contains(paperID)
-        else { throw ReaderError.message("论文已不在本地书库。") }
-        return try await LocalPassageSearch.choices(paper: paper, root: root, query: query, pageIndex: pageIndex)
+    /// Read live note state whenever a recalled result is used; an old tool result cannot revive a deleted note.
+    func referencedReadingNote(id: UUID, paperID: UUID) -> ReadingNote? {
+        guard !pendingImportIDs.contains(paperID), state.papers.contains(where: { $0.id == paperID }) else {
+            return nil
+        }
+        return state.readingNotes.first {
+            $0.id == id && $0.paperID == paperID && $0.deletedAt == nil
+                && !$0.markdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
     }
 
-    func relatedLocalPassages(query: String, excluding paperID: UUID, limit: Int = 6) async throws -> [Evidence] {
-        let candidates = state.papers.filter { $0.id != paperID && !pendingImportIDs.contains($0.id) }
-        return try await LocalPassageSearch.related(query: query, papers: candidates, root: root, limit: limit)
+    private func noteTarget(_ citation: LocalPassageCitation, id: UUID) throws -> (ReadingNote, Paper) {
+        guard let paper = state.papers.first(where: { $0.id == citation.paperID && $0.digest == citation.digest }),
+            let note = referencedReadingNote(id: id, paperID: paper.id),
+            note.contentVersion == citation.contentVersion
+        else { throw ReaderError.message("被引用的阅读笔记已删除或不在本地书库。") }
+        return (note, paper)
+    }
+
+    func readingNoteEvidence(query: String, excluding: UUID? = nil, paperID: UUID? = nil, limit: Int = 6) async throws
+        -> [Evidence]
+    {
+        let titles = Dictionary(
+            state.papers.lazy.filter { !self.pendingImportIDs.contains($0.id) }.map { ($0.id, $0.title) },
+            uniquingKeysWith: { first, _ in first })
+        let hits = try await readingNoteIndex.search(
+            query: query, notes: state.readingNotes, paperTitles: titles,
+            excluding: excluding, paperID: paperID, limit: limit)
+        try Task.checkCancellation()
+        return hits.filter {
+            guard let id = $0.readingNoteID, let paper = $0.paperID,
+                let note = referencedReadingNote(id: id, paperID: paper)
+            else { return false }
+            return ReadingNoteMemoryIndex.searchableBody(note.markdown).contains($0.text)
+        }
     }
 }

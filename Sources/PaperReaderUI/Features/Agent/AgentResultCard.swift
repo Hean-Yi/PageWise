@@ -12,7 +12,7 @@ struct AgentResultCard: View {
     @State private var showsExcerpt = false
 
     private var purpose: (title: String, icon: String) {
-        switch result.purpose {
+        switch card.readingNoteID == nil ? result.purpose : .readingNote {
         case .recommendation: ("推荐论文", "bookmark")
         case .citation: ("引用原文", "quote.opening")
         case .match: ("检索结果", card.kind == .onlineCandidate ? "globe" : "books.vertical")
@@ -73,9 +73,6 @@ struct AgentResultCard: View {
             Button(action: open) { label(accessory: "chevron.forward") }
                 .buttonStyle(AssistantToolButtonStyle(embedded: true)).help(card.title)
                 .accessibilityHint("在阅读器中打开")
-        } else if card.readingNoteID != nil {
-            Label("笔记已删除或不可用", systemImage: "note.text").font(.caption)
-                .foregroundStyle(ReaderTheme.muted).padding(12)
         } else if !card.excerpt.isEmpty {
             Button {
                 showsExcerpt.toggle()
@@ -95,18 +92,17 @@ struct AgentResultCard: View {
 
     private func label(accessory: String?) -> some View {
         let detail: String?
-        if let id = card.readingNoteID {
-            let note = agent.reader.state.readingNotes.first {
-                $0.id == id && $0.paperID == card.paperID && $0.deletedAt == nil
+        if let id = card.readingNoteID, let paperID = card.paperID {
+            detail = agent.reader.referencedReadingNote(id: id, paperID: paperID).map { note in
+                ReadingNoteSummary.text(card.noteModifiedAt == note.modifiedAt ? card.excerpt : note.markdown)
             }
-            detail = note.map { ReadingNoteSummary.text($0.markdown) }
         } else {
             detail = card.kind == .onlineCandidate ? card.authors : (showsExcerpt ? nil : card.excerpt)
         }
         return VStack(alignment: .leading, spacing: 0) {
             AssistantToolTile(
                 tool: purpose.title, systemImage: purpose.icon, title: card.title, detail: detail,
-                metadata: metadata, accessory: accessory, detailLines: card.readingNoteID == nil ? 2 : 1)
+                metadata: metadata, accessory: accessory, detailLines: result.purpose == .readingNote ? 1 : 2)
             if let reason = result.reason, !reason.isEmpty {
                 Text(reason).font(.caption).lineSpacing(2).foregroundStyle(ReaderTheme.ink)
                     .fixedSize(horizontal: false, vertical: true).multilineTextAlignment(.leading)

@@ -29,6 +29,8 @@ import Testing
             in: "请把观点“先看原文”记成笔记，在论文里标出 “A complete paragraph comes directly from the source.” 这句原文。") == [
                 "A complete paragraph comes directly from the source."
             ])
+    #expect(ReadingNoteIntent.requestedQuotations(in: "请标出“primary”，写笔记并引用另一篇里的“预算控制”。") == ["primary"])
+    #expect(ReadingNoteIntent.requestedQuotations(in: "写笔记，引用本篇原文“primary”。") == ["primary"])
     #expect(ReadingNoteIntent.requestedQuotations(in: "标记“a”和“b”，笔记内容写“我们的看法”。") == ["a", "b"])
     #expect(ReadingNoteIntent.requestedQuotations(in: "请把「a」和「b」这两句高亮，再写笔记。") == ["a", "b"])
     #expect(ReadingNoteIntent.requestedQuotations(in: "把“看清边界条件”这一点记为笔记。").isEmpty)
@@ -85,9 +87,15 @@ private actor DiscussionTransport: HTTPTransport {
             let body = try #require(try JSONSerialization.jsonObject(with: Data(input.utf8)) as? [String: Any])
             let passages = try #require(body["passages"] as? [[String: String]])
             let id = try #require(passages.first { $0["text"]?.contains(excerpt) == true }?["id"])
-            let proposal: [String: Any] = [
+            var proposal: [String: Any] = [
                 "markdown": "讨论观点：语境改变了检索所需的证据。", "references": [["source": id, "quote": excerpt]],
             ]
+            if let note = (body["readingNotes"] as? [[String: String]])?.first,
+                let noteID = note["id"], let text = note["text"]
+            {
+                proposal["markdown"] = "比较条件需要核对。{{cite:1}}"
+                proposal["citations"] = [["source": noteID, "quote": text, "label": "先前的审读意见"]]
+            }
             content = String(decoding: try JSONSerialization.data(withJSONObject: proposal), as: UTF8.self)
         } else {
             content = #"{"memory":"复查上下文示例"}"#
@@ -102,8 +110,12 @@ private actor DiscussionTransport: HTTPTransport {
     func stream(for request: URLRequest, onData: @Sendable (Data) async throws -> Void) async throws -> HTTPURLResponse
     {
         let messages = try JSONDecoder().decode(Request.self, from: request.httpBody ?? Data()).messages
-        ordinaryPrompts.append(messages.last?.content ?? "")
-        let message = #"{"choices":[{"delta":{"content":"语境改变了检索所需的证据 [S1]。"},"finish_reason":"stop"}]}"#
+        let prompt = messages.last?.content ?? ""
+        ordinaryPrompts.append(prompt)
+        let noteID = prompt.firstMatch(of: /\[(S[0-9]+)\] [^\n]*书库阅读笔记/)?.1
+        let answer = noteID.map { "先前笔记指出蓝鲸偏差需要控制 [\($0)]。" } ?? "语境改变了检索所需的证据 [S1]。"
+        let event: [String: Any] = ["choices": [["delta": ["content": answer], "finish_reason": "stop"]]]
+        let message = String(decoding: try JSONSerialization.data(withJSONObject: event), as: UTF8.self)
         try await onData(Data(("data: " + message + "\n\ndata: [DONE]\n\n").utf8))
         return HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
     }
@@ -145,6 +157,70 @@ private actor DiscussionTransport: HTTPTransport {
     #expect(reopened.visiblePage == 1)
     reopened.deleteReadingNote(note.id)
     #expect(reopened.currentReadingNotes.isEmpty)
+}
+
+@Test @MainActor func paperDiscussionRecallsAndLinksAnotherPapersSavedNoteAndForgetsItsDeletedContents() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let api = DiscussionTransport()
+    let model = try ReaderModel(root: root, client: ModelClient(transport: api), credentials: WorkflowCredentials())
+    await model.load()
+    var settings = model.modelSettings
+    settings.model = "fixture"
+    try model.saveSettings(settings, key: nil)
+    let file = root.appendingPathComponent("current.pdf")
+    try DemoPaper.write(to: file)
+    let primary = try #require(await model.importURLs([file]).first)
+    let otherRaw = "依照原文，这是本篇独有的未批注灰鲸事实。"
+    let other = Paper(
+        title: "先前读过的实验", digest: "comparison", originalPath: "comparison.pdf", pageCount: 2,
+        blocks: [TextBlock(sourcePage: 0, text: otherRaw)], warnings: [], canReflow: false)
+    try DemoPaper.write(to: root.appendingPathComponent(other.originalPath))
+    try #require(await model.save(adding: other))
+    let anchor = NoteAnchor(key: "original-0", target: "pdf", text: "Attention", start: 0, end: 9)
+    let observation = "排查混杂时，蓝鲸偏差要求固定推理预算。"
+    let memory = ReadingNote(
+        paperID: other.id, contentVersion: other.digest + ":original-0", anchors: [anchor], markdown: observation)
+    _ = try await model.saveAnchoredDiscussionNote(memory, highlights: [])
+    model.select(primary)
+    model.recordVisiblePage(1)
+    await model.ask("我在其他论文的笔记里是如何排查混杂的？")
+    let answer = try #require(model.currentChats.last)
+    let source = try #require(answer.evidence.first { $0.readingNoteID == memory.id })
+    #expect(source.paperID == other.id && source.text == observation)
+    #expect(answer.answer.contains("[\(source.id)]") && answer.evidence.contains { $0.paperID == primary })
+    let prompt = try #require(await api.ordinaryPrompts.last)
+    #expect(prompt.contains(observation) && !prompt.contains(otherRaw))
+    #expect(!answer.evidence.contains { $0.paperID == other.id && $0.readingNoteID == nil })
+    let interest = try #require(model.state.memories.first { $0.sourceID == answer.id })
+    #expect(interest.text.contains(answer.question) && !interest.text.contains("蓝鲸偏差"))
+    #expect(model.jump(to: source))
+    #expect(model.selectedPaperID == other.id && model.requestedReadingNote == memory.id)
+    model.select(primary)
+    model.recordVisiblePage(1)
+    await model.ask("请把刚才关于排查混杂的讨论整理成笔记，并引用之前的观点。")
+    let note = try #require(model.currentReadingNotes.first)
+    let link = try #require(note.citations?.first)
+    #expect(link.readingNoteID == memory.id && note.markdown.contains(link.markdown(label: "先前的审读意见")))
+    #expect(note.paperID == primary && note.anchors.first?.key == "original-1")
+    let raw = try #require(await api.notePrompts.last)
+    let payload = try #require(try JSONSerialization.jsonObject(with: Data(raw.utf8)) as? [String: Any])
+    let recalled = try #require(payload["readingNotes"] as? [[String: String]])
+    let anchors = try #require(payload["passages"] as? [[String: String]])
+    #expect(recalled.count == 1 && recalled[0]["id"] == "L1" && recalled[0]["text"] == observation)
+    #expect(anchors.allSatisfy { $0["id"]?.hasPrefix("S") == true && $0["text"] != observation })
+    #expect(!raw.contains(otherRaw))
+    let verified = try await model.previewLocalPassage(noteID: note.id, citationID: link.id)
+    #expect(verified.readingNoteID == memory.id && verified.noteMarkdown == observation)
+    model.select(other.id)
+    model.deleteReadingNote(memory.id)
+    model.select(primary)
+    #expect(!model.jump(to: source))
+    await model.ask("还有什么与排查混杂相关的旧笔记？")
+    let next = try #require(model.currentChats.last)
+    #expect(!next.evidence.contains { $0.readingNoteID == memory.id })
+    let freshPrompt = try #require(await api.ordinaryPrompts.last)
+    #expect(!freshPrompt.contains("蓝鲸偏差") && !freshPrompt.contains(otherRaw))
 }
 
 @Test func historicalChatsWithoutReadingNoteLinksStillDecode() throws {
