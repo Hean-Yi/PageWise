@@ -134,20 +134,46 @@ private actor MetadataTransport: HTTPTransport {
 }
 
 @Test func arxivRecoversFromOneUnspecifiedThrottleAndKeepsCooldownAfterRepeatedThrottling() async throws {
+    struct CooldownProbe: HTTPTransport {
+        let retryAt: Date
+        let transport: MetadataTransport
+
+        func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+            // A delayed test runner can legitimately resume after the deadline. Check at the actual send.
+            #expect(Date() >= retryAt)
+            return try await transport.data(for: request)
+        }
+    }
     for recovers in [true, false] {
         let gate = ArxivMetadataRequests(spacing: .zero, maxAutomaticWait: 0, throttleDelay: 0.05)
-        let transport = MetadataTransport([.http(429), .http(recovers ? 200 : 429)])
+        let transport = MetadataTransport([.http(429), .http(recovers ? 200 : 429), .http(200)])
         let client = ArxivClient(transport: transport, metadataRequests: gate)
+        var retryAt: Date?
         if recovers {
             #expect(try await client.search("attention").isEmpty)
         } else {
-            await #expect(throws: ArxivQueryError.self) { _ = try await client.search("attention") }
-            await #expect(throws: ArxivQueryError.self) { _ = try await client.search("another query") }
+            do {
+                _ = try await client.search("attention")
+                Issue.record("Expected repeated throttling to return a retry deadline")
+            } catch ArxivQueryError.http(429, let until?) {
+                retryAt = until
+            }
         }
         let starts = await transport.starts
         #expect(starts.count == 2)
         if let first = starts.first, let last = starts.last {
             #expect(first.duration(to: last) >= .milliseconds(45))
+        }
+        if let retryAt {
+            let probe = ArxivClient(
+                transport: CooldownProbe(retryAt: retryAt, transport: transport), metadataRequests: gate)
+            do {
+                #expect(try await probe.search("another query").isEmpty)
+                #expect(await transport.starts.count == 3)
+            } catch ArxivQueryError.http(429, let until?) {
+                #expect(until == retryAt)
+                #expect(await transport.starts.count == 2)
+            }
         }
     }
 }
