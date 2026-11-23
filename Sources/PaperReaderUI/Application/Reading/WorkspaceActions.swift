@@ -316,7 +316,6 @@ extension ReaderModel {
                 : current.retainedReadings?.first(where: { $0.readingPages.contains { $0.id.uuidString == pageKey } })?
                     .id
         }
-        readingChoicePresented = false
         guard let paper,
             let position = PaperPageLocator.resolve(pageKey: pageKey, in: paper, excluding: pendingArtifactIDs)
         else {

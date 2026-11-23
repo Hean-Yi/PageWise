@@ -81,7 +81,6 @@ extension ReaderModel {
                 )?.id
         }
         guard let paper, let position = PaperPageLocator.resolve(pageKey: first.key, in: paper) else { return }
-        readingChoicePresented = false
         mode = position.mode
         navigateToPage(position.pageIndex)
         requestedReadingNote = note.id

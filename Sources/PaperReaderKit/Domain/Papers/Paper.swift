@@ -5,6 +5,23 @@ public struct Paper: Identifiable, Codable, Sendable {
     public var title: String
     public var sourceURL: String?
     public var onlineSource: OnlinePaperSource?
+    /// Older online imports may only have their provider URL or an existing source reflow checkpoint.
+    public var usesSourceReflow: Bool {
+        onlineSource != nil || sourceURL != nil || reflowJob?.supportsContinuation == true || hasPublishedSourceReading
+    }
+    public var hasPublishedSourceReading: Bool {
+        guard htmlReading?.sections.isEmpty == false else { return false }
+        if let route = reflowJob?.evidenceRoute { return route == "tex" || route == "html" }
+        // Older snapshots can retain the published source anchors even when the job record is absent.
+        if blocks.contains(where: {
+            $0.texSource != nil || $0.reflowProvenance?.contains { $0.texSource != nil } == true
+        }) {
+            return true
+        }
+        // Early HTML records kept the verified same-version fallback in their warnings.
+        return (onlineSource != nil || sourceURL != nil) && warnings.contains(OnlinePaperSource.sameVersionHTMLNotice)
+            && !blocks.isEmpty && blocks.allSatisfy { $0.sourcePage < 0 }
+    }
     public var digest: String
     public var originalPath: String
     public var pageCount: Int

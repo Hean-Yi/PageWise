@@ -48,7 +48,7 @@ struct PDFBilingualReadingView: View {
                     .accessibilityHidden(!pdfVisible)
                 if session.isOpen && (!peekingAtOriginal || textLayout == .paragraph) {
                     if spread { splitter(width: width).frame(width: 8) }
-                    pane(textLayout: textLayout, allowsSplit: width >= 570)
+                    pane(textLayout: textLayout)
                         // Keep the paragraph canvas at its reading width and scroll position during a source peek.
                         .frame(width: textLayout == .paragraph ? width : nil)
                         .frame(width: peekingAtOriginal ? 0 : nil)
@@ -63,7 +63,7 @@ struct PDFBilingualReadingView: View {
                     Button {
                         peekingAtOriginal = false
                     } label: {
-                        Label(layout == .paragraph ? "返回段落重排" : "返回逐句对照", systemImage: "arrow.uturn.backward")
+                        Label("返回双语重排", systemImage: "arrow.uturn.backward")
                             .font(.callout.weight(.medium)).padding(.horizontal, 6).padding(.vertical, 4)
                     }
                     .buttonStyle(.borderedProminent).tint(ReaderTheme.accent).padding(16)
@@ -114,8 +114,7 @@ struct PDFBilingualReadingView: View {
             }
     }
 
-    private func pane(textLayout: PDFSentenceTextCanvas.Layout, allowsSplit: Bool) -> some View {
-        let split = textLayout == .split
+    private func pane(textLayout: PDFSentenceTextCanvas.Layout) -> some View {
         let paragraphs = textLayout == .paragraph
         let documentStatus = model.selectedPaperID.flatMap { model.pdfDocumentTranslation.status(for: $0) }
         let showsPageAction = !paragraphs && (documentStatus == nil || documentStatus?.phase == .completed)
@@ -128,48 +127,6 @@ struct PDFBilingualReadingView: View {
                     cached[sentence.id].map { (sentence.id, $0) }
                 }) : cached
         return VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 10) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(split ? "简体中文" : (paragraphs ? "英汉段落对照" : "英汉对照")).font(.headline)
-                    Text(pageStatus(total: sentences.count, completed: translations.count))
-                        .font(.caption).foregroundStyle(ReaderTheme.muted).monospacedDigit()
-                }
-                Spacer(minLength: 4)
-                if !split && (paragraphs || !translations.isEmpty) {
-                    Button {
-                        peekingAtOriginal = true
-                    } label: {
-                        Label("查看原页", systemImage: "doc.text.magnifyingglass")
-                    }.help("查看原页").accessibilityLabel("查看原页")
-                }
-                Menu {
-                    Picker("对照布局", selection: $layout) {
-                        Label("段落重排", systemImage: "text.alignleft").tag(PDFBilingualLayoutPreference.paragraph)
-                        Label("逐句上下", systemImage: "rectangle.split.1x2").tag(PDFBilingualLayoutPreference.stacked)
-                        Label("左右并排", systemImage: "rectangle.split.2x1")
-                            .tag(PDFBilingualLayoutPreference.split).disabled(!allowsSplit)
-                        Text("随窗口调整").tag(PDFBilingualLayoutPreference.auto)
-                    }
-                    Divider()
-                    Menu("译文字号") {
-                        Picker("译文字号", selection: $fontSize) {
-                            Text("小").tag(14)
-                            Text("标准").tag(16)
-                            Text("大").tag(19)
-                        }
-                    }
-                    if split {
-                        Toggle(
-                            "跟随原句", isOn: Binding(get: { session.followsScroll }, set: { session.followsScroll = $0 }))
-                    }
-                } label: {
-                    Image(
-                        systemName: paragraphs
-                            ? "text.alignleft" : (split ? "rectangle.split.2x1" : "rectangle.split.1x2"))
-                }.fixedSize().help("对照布局与译文字号").accessibilityLabel("对照布局")
-            }
-            .buttonStyle(.borderless).padding(.horizontal, 22).padding(.vertical, 14)
-            Divider()
             if !paragraphs, let notice = session.notice {
                 Text(notice).font(.caption).foregroundStyle(ReaderTheme.muted)
                     .fixedSize(horizontal: false, vertical: true).padding(.horizontal, 20).padding(.top, 8)
@@ -218,22 +175,6 @@ struct PDFBilingualReadingView: View {
                         }
                         peekingAtOriginal = true
                     }, continuous: paragraphs ? paragraphDocument : nil)
-                if showsPageAction && session.selectionSource == nil && !sentences.isEmpty
-                    && (session.isTranslating || translations.count < sentences.count)
-                {
-                    Divider()
-                    HStack(spacing: 12) {
-                        translationActions(continuing: !translations.isEmpty)
-                        if !session.isTranslating { serviceDisclosure }
-                    }.padding(.horizontal, 20).padding(.vertical, 10)
-                }
-            }
-            if let documentStatus, let paperID = model.selectedPaperID {
-                documentBar(documentStatus, paperID: paperID)
-            } else if paragraphs && session.selectionSource == nil {
-                Divider()
-                Button("翻译全文") { session.setParagraphLayout(true, model: model) }
-                    .buttonStyle(.borderless).padding(.horizontal, 20).padding(.vertical, 10)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -254,71 +195,6 @@ struct PDFBilingualReadingView: View {
             })
     }
 
-    private func documentBar(_ status: PDFDocumentTranslationStatus, paperID: UUID) -> some View {
-        let progress = status.progress
-        return VStack(alignment: .leading, spacing: 6) {
-            Divider()
-            HStack(spacing: 10) {
-                Image(
-                    systemName: status.phase == .completed && progress.partialPages == 0
-                        ? "checkmark.circle" : "character.bubble"
-                )
-                .foregroundStyle(ReaderTheme.accent).accessibilityHidden(true)
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(documentSummary(status)).font(.caption).monospacedDigit()
-                    if case .failed(let reason) = status.phase {
-                        Text(reason).font(.caption).foregroundStyle(ReaderTheme.muted).textSelection(.enabled)
-                    }
-                }
-                Spacer(minLength: 4)
-                switch status.phase {
-                case .needsConfiguration:
-                    Button("设置翻译", action: openSettings)
-                case .running:
-                    Button("暂停") { model.pdfDocumentTranslation.pause(paperID) }
-                case .paused:
-                    Button("继续翻译") { session.resumeDocumentTranslation(model) }
-                case .failed:
-                    if !model.translationSettings.model.isEmpty {
-                        Button("重试") { session.resumeDocumentTranslation(model) }
-                    }
-                    Button("模型设置", action: openSettings)
-                case .completed:
-                    if progress.partialPages > 0 {
-                        Button("重试缺译部分") { session.resumeDocumentTranslation(model) }
-                    }
-                }
-            }
-            .buttonStyle(.borderless).padding(.horizontal, 20).padding(.top, 2).padding(.bottom, 8)
-        }
-    }
-
-    private func documentSummary(_ status: PDFDocumentTranslationStatus) -> String {
-        let progress = status.progress
-        let count = "\(progress.processedPages) / \(progress.pageCount) 页"
-        switch status.phase {
-        case .needsConfiguration: return "配置翻译服务后可自动补译"
-        case .running:
-            if let page = progress.activePageIndex { return "全文 \(count) · 正在处理第 \(page + 1) 页" }
-            return "全文 \(count) · 正在准备"
-        case .paused: return "全文已暂停 · \(count)"
-        case .failed: return "全文翻译中断 · \(count)"
-        case .completed:
-            var parts = ["全文已处理 \(progress.pageCount) 页"]
-            if progress.partialPages > 0 { parts.append("\(progress.partialPages) 页有缺译") }
-            if progress.skippedPages > 0 { parts.append("\(progress.skippedPages) 页保留原版") }
-            return parts.joined(separator: " · ")
-        }
-    }
-
-    private func pageStatus(total: Int, completed: Int) -> String {
-        let page = "原页 \(model.visiblePage + 1)"
-        guard total > 0 else { return page }
-        if completed == 0 { return "\(page) · \(total) 句" }
-        if completed == total { return "\(page) · 已译 \(completed) 句" }
-        return "\(page) · 已译 \(completed) / \(total) 句"
-    }
-
     private func emptyPage(hasSentences: Bool, showsPageAction: Bool) -> some View {
         VStack(spacing: 14) {
             if session.isLoading {
@@ -334,7 +210,8 @@ struct PDFBilingualReadingView: View {
                 Image(systemName: "text.bubble").font(.system(size: 26, weight: .light)).foregroundStyle(
                     ReaderTheme.accent)
                 if showsPageAction {
-                    translationActions(continuing: false)
+                    PDFPageTranslationAction(model: model, openSettings: openSettings)
+                        .buttonStyle(.borderedProminent).tint(ReaderTheme.accent)
                     if !session.isTranslating { serviceDisclosure.multilineTextAlignment(.center) }
                 } else {
                     Text("本页译文就绪后会在这里显示").font(.callout).foregroundStyle(ReaderTheme.muted)
@@ -348,27 +225,6 @@ struct PDFBilingualReadingView: View {
         let name = model.translationSettings.model
         return Text(name.isEmpty ? "配置模型后可翻译本页英文" : "本页英文将发送至 \(name)")
             .font(.caption).foregroundStyle(ReaderTheme.muted).textSelection(.enabled)
-    }
-
-    @ViewBuilder private func translationActions(continuing: Bool) -> some View {
-        if session.isTranslating {
-            HStack(spacing: 8) {
-                ProgressView().controlSize(.small)
-                Text("正在翻译").font(.callout)
-                Button("暂停") { session.pause() }.buttonStyle(.borderless).padding(.leading, 5)
-            }
-        } else {
-            Button {
-                if model.translationSettings.model.isEmpty {
-                    openSettings()
-                } else {
-                    session.translatePage(model, paragraphs: layout == .paragraph)
-                }
-            } label: {
-                Label(continuing ? "继续翻译本页" : "翻译本页", systemImage: "character.bubble")
-                    .padding(.horizontal, 5).padding(.vertical, 3)
-            }.buttonStyle(.borderedProminent).tint(ReaderTheme.accent).disabled(session.isLoading)
-        }
     }
 
     private func selectionResult(_ source: String, sentences: [PDFSourceSentence]) -> some View {

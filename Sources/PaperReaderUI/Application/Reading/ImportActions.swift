@@ -7,8 +7,14 @@ extension ReaderModel {
         moveDuplicateToShelf: Bool = false,
         onlineDownload: DownloadedPublication? = nil
     ) async -> [UUID] {
-        if let onlineDownload,
-            urls.count != 1 || urls.first != onlineDownload.pdfURL || metadata?.id != onlineDownload.candidate.id
+        // Earlier callers supplied the verified candidate and downloaded PDF without a TeX archive.
+        let publication =
+            onlineDownload
+            ?? urls.first.flatMap { url in
+                metadata.map { DownloadedPublication(pdfURL: url, candidate: $0) }
+            }
+        if let publication,
+            urls.count != 1 || urls.first != publication.pdfURL || metadata?.id != publication.candidate.id
         {
             message = "线上资料与导入论文不匹配，未导入。"
             return []
@@ -42,12 +48,12 @@ extension ReaderModel {
                 defer { if !retained { try? FileManager.default.removeItem(at: importedDirectory) } }
                 try Task.checkCancellation()
                 if let existing = state.papers.first(where: { $0.digest == imported.digest }) {
-                    if let onlineDownload, existing.onlineSource?.archivePath == nil,
-                        existing.sourceURL == nil || existing.sourceURL == onlineDownload.candidate.id,
+                    if let publication, existing.onlineSource?.archivePath == nil,
+                        existing.sourceURL == nil || existing.sourceURL == publication.candidate.id,
                         existing.onlineSource == nil
-                            || existing.onlineSource?.candidateID == onlineDownload.candidate.id
+                            || existing.onlineSource?.candidateID == publication.candidate.id
                     {
-                        let attached = try await OnlineSourceStore().attach(onlineDownload, to: existing, root: root)
+                        let attached = try await OnlineSourceStore().attach(publication, to: existing, root: root)
                         guard var latest = state.papers.first(where: { $0.id == existing.id }) else {
                             throw CancellationError()
                         }
@@ -74,8 +80,8 @@ extension ReaderModel {
                     imported.title = metadata.title
                     imported.sourceURL = metadata.id
                 }
-                if let onlineDownload {
-                    imported = try await OnlineSourceStore().attach(onlineDownload, to: imported, root: root)
+                if let publication {
+                    imported = try await OnlineSourceStore().attach(publication, to: imported, root: root)
                 }
                 try Task.checkCancellation()
                 pendingImportIDs.insert(imported.id)
@@ -88,7 +94,7 @@ extension ReaderModel {
                 pendingImportIDs.remove(imported.id)
                 importedIDs.append(imported.id)
                 if selectAfterImport, !Task.isCancelled { select(imported.id) }
-                status = imported.onlineSource == nil ? "已入库 · 阅读原版 PDF" : "已入库 · 可选择原版或 AI 双语重排"
+                status = "已加入书库"
             } catch is CancellationError {
                 status = "已停止导入"
                 return importedIDs

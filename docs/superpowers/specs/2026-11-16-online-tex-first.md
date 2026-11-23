@@ -7,7 +7,7 @@
 ```text
 Online candidate -> versioned PDF + TeX archive
                            |
-                    choose AI reading
+                    choose bilingual reading
                            |
                     static TeX parse
                            |
@@ -16,10 +16,9 @@ Online candidate -> versioned PDF + TeX archive
                     validated blocks -> bilingual HTML
 
 No complete source -> original PDF reader
-Local PDF import   -> original PDF reader
 ```
 
-线上搜索与书库 Agent 共用下载和导入接口。原 PDF 按哈希保存，TeX 包保存版本、路径与摘要；导入阶段不解析、不调用模型。重复 PDF 可补齐来源且保持论文 ID，不覆盖已有阅读内容。
+线上搜索与书库 Agent 共用下载和导入接口。原 PDF 按哈希保存，TeX 包保存版本、路径与摘要。导入阶段不解析、不调用模型。线上补齐来源的本地 PDF 沿用论文 ID 和已有阅读内容，之后从「双语重排」打开源码版。本地导入且尚无线上来源的论文从同一入口打开 PDF 段落或逐句对照。详见 [PDF 阅读设计](2026-11-22-pdf-translation-reading.md)。
 
 选择重排时静态解析包内源文件与资源，支持的包含、宏、公式和表格转换为统一语义块。包外路径、未知动态结构、资源缺失、图件失败均拒绝作为完整 TeX 来源。之后尝试同版本 HTML；仍不可用时显示原因并提供原版，不从 PDF 补文或裁图。
 

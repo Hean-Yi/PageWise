@@ -19,16 +19,14 @@
         paper.onlineSource = OnlinePaperSource(candidateID: "fixture")
         model.state.papers = [paper]
         model.select(paper.id)
-        #expect(!model.showsPDFCanvas)
-        model.readOriginal()
+        #expect(model.showsPDFCanvas)
         model.pdfBilingual.open(model, translatingDocument: true)
         let canvas = PDFCanvas(model: model, penEnabled: false)
         let coordinator = PDFCoordinator(model: model)
         let original = coordinator.makeView()
         func update() { coordinator.update(original, penEnabled: false, focus: canvas.sentenceDisplay) }
         update()
-        #expect(model.pdfBilingual.isOpen && original.document?.pageCount == paper.pageCount)
-        model.pdfBilingual.close()
+        #expect(!model.pdfBilingual.isOpen && original.document?.pageCount == paper.pageCount)
 
         // Deliver the extra update that SwiftUI can send to the original representable during the transition.
         model.mode = "translated"

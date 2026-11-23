@@ -8,6 +8,9 @@ struct ReaderNavigator: View {
     @State private var tab = "outline"
     @State private var query = ""
     @FocusState private var searchFocused: Bool
+    #if os(iOS)
+        @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    #endif
 
     private var sourcePage: Int {
         if model.mode == "original" || model.paper?.canReflow == false { return model.visiblePage }
@@ -17,36 +20,23 @@ struct ReaderNavigator: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Button {
-                model.select(nil)
-                didNavigate()
-            } label: {
-                Label("书库", systemImage: "arrow.left").font(.system(size: 13)).padding(.vertical, 20)
-                    .frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
-            }.buttonStyle(.plain).padding(.horizontal, 22).keyboardShortcut("l", modifiers: [.command, .shift])
-            Text(model.paper?.title ?? "").font(.system(size: 17, weight: .regular, design: .serif))
-                .lineLimit(3).padding(.horizontal, 22).padding(.bottom, 24)
+            #if os(iOS)
+                if horizontalSizeClass == .compact {
+                    Button {
+                        model.select(nil)
+                        didNavigate()
+                    } label: {
+                        Label("书库", systemImage: "arrow.left")
+                    }.buttonStyle(.plain).padding(.horizontal, 16).padding(.top, 12)
+                }
+            #endif
             Picker("论文导航", selection: $tab) {
                 Label("目录", systemImage: "list.bullet.indent").tag("outline")
                 Label("查找", systemImage: "magnifyingglass").tag("search")
-            }.pickerStyle(.segmented).labelsHidden().padding(.horizontal, 16).padding(.bottom, 18)
+            }.pickerStyle(.segmented).labelsHidden().padding(.horizontal, 12).frame(height: 48)
             Divider()
             if tab == "outline" { outline } else { search }
             Spacer(minLength: 0)
-            HStack(spacing: 7) {
-                Image(systemName: "doc.text")
-                Text("\(model.paper?.pageCount ?? 0) 页原文")
-                Spacer()
-                if let paper = model.paper {
-                    Button {
-                        model.toggleFavorite(paper.id)
-                    } label: {
-                        Image(systemName: model.workspace(for: paper.id).isFavorite ? "star.fill" : "star")
-                    }.buttonStyle(.plain)
-                        .help(model.workspace(for: paper.id).isFavorite ? "取消收藏" : "收藏论文")
-                        .accessibilityLabel(model.workspace(for: paper.id).isFavorite ? "取消收藏" : "收藏论文")
-                }
-            }.font(.system(size: 11)).foregroundStyle(ReaderTheme.muted).padding(22)
         }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading).background(ReaderTheme.sidebar)
             .task(id: model.selectedPaperID) { await model.loadNavigation() }
             .onChange(of: findRequest) { _, _ in
@@ -61,12 +51,7 @@ struct ReaderNavigator: View {
 
     private var outline: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                Text(model.navigationItems.contains(where: \.isOutline) ? "目录" : "页面")
-                Spacer()
-                if model.navigationLoading { ProgressView().controlSize(.mini) }
-            }.font(.system(size: 10, weight: .medium)).foregroundStyle(ReaderTheme.muted)
-                .padding(.horizontal, 22).padding(.top, 18).padding(.bottom, 10)
+            if model.navigationLoading { ProgressView().controlSize(.mini).padding(8) }
             ScrollViewReader { scroll in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 3) {
@@ -92,7 +77,7 @@ struct ReaderNavigator: View {
                             }.buttonStyle(.plain).id(item.id)
                                 .accessibilityLabel("\(item.title)，原文第 \(item.sourcePage + 1) 页")
                         }
-                    }.padding(.horizontal, 10)
+                    }.padding(10)
                 }
                 .onChange(of: sourcePage) { _, page in
                     if let item = model.navigationItems.first(where: { $0.sourcePage == page }) {

@@ -217,6 +217,11 @@ private actor SourceFallbackDiscovery: PaperDiscovery {
     await #expect(throws: (any Error).self) {
         try await sourceStore.prepare(paper: noSource, root: root, discovery: SourceFallbackDiscovery())
     }
+    var legacyDownload = paper
+    legacyDownload.sourceURL = candidate.id
+    #expect(legacyDownload.usesSourceReflow)
+    let legacy = try await sourceStore.prepare(paper: legacyDownload, root: root, discovery: discovery)
+    #expect(legacy.route == "html" && legacy.blocks.map(\.text) == ["HTML fallback"])
     try Data("changed".utf8).write(to: root.appendingPathComponent(paper.originalPath))
     await #expect(throws: (any Error).self) {
         try await sourceStore.prepare(paper: attached, root: root, discovery: discovery)

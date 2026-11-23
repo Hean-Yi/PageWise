@@ -38,7 +38,7 @@ import Testing
     let paperID = try #require(await model.importURLs([file]).first)
     #expect(model.mode == "original")
     let session = model.pdfBilingual
-    session.open(model)
+    #expect(model.openBilingualReading(translatingDocument: false))
     try await waitForPageSession { !session.isLoading }
     #expect(await transport.requests == 0)
     let sentence = try #require(session.sentences.first)
@@ -66,6 +66,45 @@ import Testing
     #expect(await transport.requests == calls)
     let stored = try #require(reopened.paper?.originalPath)
     #expect(try Data(contentsOf: root.appendingPathComponent(stored)) == original)
+}
+
+@Test(arguments: [false, true]) @MainActor
+func attachingOnlineMetadataStopsPDFTranslationAndUsesOnlySourceReflow(candidateOnly: Bool) async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let transport = SentenceWorkflowTransport()
+    await transport.holdRequests(true)
+    let model = try ReaderModel(
+        root: root, client: ModelClient(transport: transport), credentials: WorkflowCredentials())
+    await model.load()
+    let url = root.appendingPathComponent("fixture.pdf")
+    try DemoPaper.write(to: url)
+    let id = try #require(await model.importURLs([url]).first)
+    var settings = ModelSettings()
+    settings.model = "fixture"
+    try model.saveSettings(settings, key: "fixture-key")
+    #expect(model.openBilingualReading(translatingDocument: true))
+    let oldJob = try #require(model.pdfDocumentTranslation.status(for: id))
+    try await transport.waitForRequest()
+
+    let candidate = PaperCandidate(
+        id: "https://arxiv.org/abs/2401.00001v1", title: "Online fixture", authors: "", year: "",
+        pdfURL: URL(string: "https://arxiv.org/pdf/2401.00001v1")!)
+    let download = DownloadedPublication(pdfURL: url, candidate: candidate, texArchive: nil)
+    let ids = await model.importURLs(
+        [url], selectAfterImport: false, metadata: candidate, onlineDownload: candidateOnly ? nil : download)
+    #expect(ids == [id] && model.currentEdition?.usesSourceReflow == true)
+    #expect(oldJob.phase == .paused && !model.pdfBilingual.isOpen)
+    #expect(model.pdfDocumentTranslation.status(for: id) == nil)
+    model.pdfBilingual.open(model, translatingDocument: true)
+    model.captureSelection(text: "Sample passage", rects: [[0, 0, 20, 10]], page: 0)
+    model.pdfBilingual.translateSelection(model)
+    model.pdfDocumentTranslation.start(model, paperID: id, page: 0, resuming: true)
+    model.setActive(false)
+    model.setActive(true)
+    await transport.holdRequests(false)
+    #expect(!model.pdfBilingual.isOpen && model.pdfDocumentTranslation.status(for: id) == nil)
+    #expect(await transport.requests == 1)
 }
 
 @Test @MainActor func paragraphTranslationPrioritizesTheOpenPageAndFinishesFromTheLibrary() async throws {

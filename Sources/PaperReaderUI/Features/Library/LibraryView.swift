@@ -157,7 +157,7 @@ public struct LibraryView: View {
             }
         }
         .overlay(alignment: .bottom) {
-            if model.isImporting || !model.translating.isEmpty {
+            if model.isImporting || (!isReading && !model.translating.isEmpty) {
                 HStack(spacing: 10) {
                     if model.isImporting, let progress = model.importProgress {
                         VStack(alignment: .leading, spacing: 6) {

@@ -34,7 +34,8 @@ final class PDFDocumentTranslationController {
 
     func status(for paperID: UUID) -> PDFDocumentTranslationStatus? { jobs[paperID] }
 
-    func start(_ model: ReaderModel, paper: Paper, page: Int, resuming: Bool = false) {
+    func start(_ model: ReaderModel, paperID: UUID, page: Int, resuming: Bool = false) {
+        guard let paper = model.state.papers.first(where: { $0.id == paperID }), !paper.usesSourceReflow else { return }
         let job: PDFDocumentTranslationStatus
         if let existing = jobs[paper.id] {
             prioritize(paper.id, page: page)
@@ -74,6 +75,11 @@ final class PDFDocumentTranslationController {
         job.phase = .paused
     }
 
+    func discard(_ paperID: UUID) {
+        pause(paperID)
+        jobs[paperID] = nil
+    }
+
     func suspend() {
         suspended = true
         for (id, job) in jobs where job.phase == .running {
@@ -98,7 +104,7 @@ final class PDFDocumentTranslationController {
         for (id, previous) in jobs {
             let wasPaused = previous.phase == .paused && !previous.resumeOnActivation
             pause(id)
-            guard let paper = model.state.papers.first(where: { $0.id == id }) else {
+            guard let paper = model.state.papers.first(where: { $0.id == id }), !paper.usesSourceReflow else {
                 jobs[id] = nil
                 continue
             }
@@ -109,7 +115,7 @@ final class PDFDocumentTranslationController {
                 continue
             }
             if resumeVisible, !wasPaused, model.pdfBilingual.matches(model), model.selectedPaperID == id {
-                start(model, paper: paper, page: model.visiblePage, resuming: true)
+                start(model, paperID: id, page: model.visiblePage, resuming: true)
             }
         }
     }

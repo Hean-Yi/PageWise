@@ -2,6 +2,7 @@ import Foundation
 
 /// The original download is retained so a new reading version can be reproduced offline.
 public struct OnlinePaperSource: Codable, Sendable, Equatable {
+    static let sameVersionHTMLNotice = "本次重排使用同版本 HTML。"
     public var candidateID: String
     public var archivePath: String?
     public var archiveDigest: String?

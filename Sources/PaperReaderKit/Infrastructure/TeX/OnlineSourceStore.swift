@@ -39,7 +39,7 @@ public actor OnlineSourceStore {
     public func prepare(paper: Paper, root: URL, discovery: any PaperDiscovery = ArxivClient()) async throws
         -> OnlineReflowEvidence
     {
-        guard let source = paper.onlineSource,
+        guard let source = paper.onlineSource ?? paper.sourceURL.map({ OnlinePaperSource(candidateID: $0) }),
             let identifier = ArxivClient.versionedIdentifier(source.candidateID)
         else { throw ReaderError.message("此论文没有可用的线上源码，请阅读原版 PDF。") }
         let original = try Data(contentsOf: root.appendingPathComponent(paper.originalPath))
@@ -73,7 +73,7 @@ public actor OnlineSourceStore {
             if let blocks = try await discovery.structuredContent(candidate), !blocks.isEmpty,
                 !blocks.contains(where: { $0.hasImageFailure == true })
             {
-                warnings.append("本次重排使用同版本 HTML。")
+                warnings.append(OnlinePaperSource.sameVersionHTMLNotice)
                 return OnlineReflowEvidence(blocks: blocks, route: "html", warnings: warnings)
             }
         } catch is CancellationError { throw CancellationError() } catch {

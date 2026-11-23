@@ -5,7 +5,7 @@ struct ReaderView: View {
     @Bindable var model: ReaderModel
     @Binding var libraryAgentPresented: Bool
     let openSettings: () -> Void
-    @State private var showAssistant = true
+    @State private var showAssistant = false
     @State private var assistantTab = "chat"
     @State private var pageInput = "1"
     @FocusState private var pageFocused: Bool
@@ -36,34 +36,7 @@ struct ReaderView: View {
 
     private func content(width: CGFloat) -> some View {
         VStack(spacing: 0) {
-            VStack(spacing: 12) {
-                if width < 760 {
-                    title
-                    controls(width: width)
-                } else {
-                    HStack(spacing: 24) {
-                        title
-                        controls(width: width)
-                    }
-                }
-            }.padding(.horizontal, 22).padding(.vertical, 14).background(ReaderTheme.canvas)
-            if model.paper?.warnings.isEmpty == false {
-                HStack(spacing: 8) {
-                    Image(systemName: "doc.text").foregroundStyle(ReaderTheme.muted)
-                    Text("部分内容请在原页核对").foregroundStyle(ReaderTheme.muted)
-                    Spacer()
-                    Button {
-                        showWarnings = true
-                    } label: {
-                        Image(systemName: "info.circle")
-                    }
-                    .buttonStyle(.plain).help("查看原因")
-                    .popover(isPresented: $showWarnings) {
-                        Text(model.paper?.warnings.joined(separator: "\n") ?? "")
-                            .font(.callout).padding(20).frame(maxWidth: 360)
-                    }
-                }.font(.caption).padding(.horizontal, 24).padding(.vertical, 10).background(.orange.opacity(0.06))
-            }
+            header(width: width)
             Divider()
             HStack(spacing: 0) {
                 VStack(spacing: 0) {
@@ -73,18 +46,18 @@ struct ReaderView: View {
                                 model: model,
                                 sidebarOpen: (showAssistant && !libraryAgentPresented && width >= 900)
                                     || showAssistantSheet)
-                        } else if model.showsPDFCanvas {
+                        } else if model.showsPDFCanvas, isLocalPDF {
                             PDFBilingualReadingView(
                                 model: model, penEnabled: penEnabled, openSettings: requestSettings,
                                 layout: $pdfLayout, peekingAtOriginal: $peekingAtOriginal)
+                        } else if model.showsPDFCanvas {
+                            PDFCanvas(model: model, penEnabled: penEnabled)
                         }
-                        if model.readingChoicePresented {
-                            ReadingModeChoiceView(model: model, reflow: { translate() })
-                        } else if model.showingReflowLoading {
+                        if model.showingReflowLoading {
                             ReflowLoadingView(model: model)
                         }
                     }.frame(maxWidth: .infinity, maxHeight: .infinity)
-                    readingBar(width: width)
+                    if !model.showingReflowLoading { readingBar(width: width) }
                 }
                 if showAssistant && !model.pdfBilingual.isOpen && !libraryAgentPresented && width >= 900 {
                     Divider()
@@ -126,141 +99,119 @@ struct ReaderView: View {
         model.currentChats + (model.assistantDraft.flatMap { $0.paperID == model.selectedPaperID ? [$0] : nil } ?? [])
     }
 
-    private var title: some View {
-        HStack(spacing: 14) {
+    private var isLocalPDF: Bool { model.currentEdition?.usesSourceReflow == false }
+
+    private func header(width: CGFloat) -> some View {
+        HStack(spacing: 12) {
             Button {
                 model.select(nil)
             } label: {
-                Image(systemName: "chevron.left").font(.system(size: 13, weight: .medium))
+                Label("返回书库", systemImage: "chevron.left")
             }
-            .buttonStyle(.plain).foregroundStyle(ReaderTheme.muted).help("返回书库").accessibilityLabel("返回书库")
-            VStack(alignment: .leading, spacing: 5) {
-                Text(model.paper?.title ?? "").font(.system(size: 14, weight: .semibold)).lineLimit(1)
-                if let paper = model.paper {
-                    Menu {
-                        ForEach([PaperReadingStatus.unread, .reading, .finished], id: \.self) { status in
-                            Button(status.title) { model.setReadingStatus(status, for: paper.id) }
-                        }
-                    } label: {
-                        Text(model.workspace(for: paper.id).status.title).font(.system(size: 10))
-                            .foregroundStyle(ReaderTheme.muted)
-                    }.menuStyle(.borderlessButton).fixedSize().help("阅读状态")
-                }
-            }
+            .labelStyle(.iconOnly).help("返回书库").keyboardShortcut("l", modifiers: [.command, .shift])
+            Text(model.paper?.title ?? "").font(.system(size: 14, weight: .semibold))
+                .lineLimit(1).truncationMode(.tail)
             Spacer(minLength: 0)
-        }
-    }
-
-    private func controls(width: CGFloat) -> some View {
-        HStack(spacing: 14) {
-            ViewThatFits(in: .horizontal) {
-                readingModePicker.pickerStyle(.segmented).fixedSize()
-                readingModePicker.pickerStyle(.menu)
-            }.labelsHidden().accessibilityLabel("阅读模式")
-            if !model.pdfBilingual.isOpen, model.translating.contains(model.selectedPaperID ?? UUID()) {
-                Button(action: model.pauseTranslation) { Image(systemName: "pause.circle") }
-                    .help("暂停重排").accessibilityLabel("暂停重排")
-            } else if model.mode == "translated", let job = model.paper?.reflowJob, job.supportsContinuation,
-                !job.finished
-            {
-                Button(action: { translate() }) {
-                    Label("继续", systemImage: "sparkles")
-                }
-                .help("继续生成源码双语版")
-            }
-            if model.paper?.onlineSource != nil || model.paper?.retainedReadings?.isEmpty == false
-                || model.paper?.previewPages.isEmpty == false
-            {
-                Menu {
-                    if model.paper?.previewPages.isEmpty == false {
-                        Button("旧重排") { setReadingMode("reflow") }
-                        if model.mode == "reflow" && hasBilingualEdition {
-                            Button("双语重排") { setReadingMode("translated") }
-                        }
-                    }
-                    if model.paper?.onlineSource != nil {
-                        Button("重新生成双语版") { translate(regenerate: true) }
-                    }
-                    if let versions = model.state.papers.first(where: { $0.id == model.selectedPaperID })?
-                        .retainedReadings,
-                        !versions.isEmpty
-                    {
-                        Button("当前版本") { model.openRetainedReading(nil) }
-                        ForEach(Array(versions.enumerated()), id: \.element.id) { index, version in
-                            Button("保留版本 \(index + 1)") { model.openRetainedReading(version.id) }
-                        }
-                    }
-                } label: {
-                    Image(systemName: "ellipsis.circle")
-                }
-                .disabled(model.translating.contains(model.selectedPaperID ?? UUID()))
-                .help("阅读版本")
-            }
-            Spacer(minLength: 0).frame(maxWidth: width < 760 ? .infinity : 0)
-            Button {
-                requestNoteSave()
-            } label: {
-                Image(systemName: "square.and.arrow.up")
-            }
-            .help("保存到 Obsidian").accessibilityLabel("保存到 Obsidian")
+            Picker(
+                "阅读模式",
+                selection: Binding(
+                    get: { model.pdfBilingual.isOpen || model.mode != "original" },
+                    set: { selected in setBilingualReading(selected) }
+                )
+            ) {
+                Text("原版").tag(false)
+                Text("双语重排").tag(true)
+            }.pickerStyle(.segmented).labelsHidden().fixedSize().accessibilityLabel("阅读模式")
             Button {
                 toggleAssistant(width: width)
             } label: {
-                Image(systemName: "sidebar.right")
-                    .foregroundStyle(
-                        (showAssistant && !model.pdfBilingual.isOpen) || showAssistantSheet
-                            ? ReaderTheme.accent : ReaderTheme.muted)
-            }.help("助读与笔记").accessibilityLabel("助读与笔记")
-        }.buttonStyle(.borderless).font(.system(size: 14))
-    }
-
-    private var hasBilingualEdition: Bool {
-        model.paper?.htmlReading != nil || model.paper?.translatedPages.isEmpty == false
-            || model.paper?.onlineSource != nil
-    }
-
-    private var readingModePicker: some View {
-        Picker(
-            "阅读模式",
-            selection: Binding(
-                get: { model.pdfBilingual.isOpen ? "pdfBilingual" : model.mode },
-                set: { value in setReadingMode(value) })
-        ) {
-            Text("原版").tag("original")
-            Text(pdfLayout == .paragraph ? "段落重排" : "逐句对照").tag("pdfBilingual")
-                .help(pdfLayout == .paragraph ? "先译当前页，再自动翻译全文" : "查看本页英汉逐句对照")
-            if model.mode == "reflow" {
-                Text("旧重排").tag("reflow")
-            } else if hasBilingualEdition {
-                Text(model.paper?.onlineSource != nil && model.paper?.translatedPages.isEmpty == true ? "源码重排" : "双语重排")
-                    .tag("translated")
-            }
+                Label("助读与笔记", systemImage: "sidebar.right")
+            }.labelStyle(.iconOnly).help("助读与笔记")
+                .foregroundStyle(
+                    (showAssistant && !libraryAgentPresented && width >= 900) || showAssistantSheet
+                        ? ReaderTheme.accent : ReaderTheme.muted)
+            readingMenu(width: width)
+        }
+        .buttonStyle(.borderless).padding(.horizontal, width < 520 ? 12 : 20).frame(height: 48)
+        .background(ReaderTheme.canvas)
+        .alert("阅读提示", isPresented: $showWarnings) {
+            Button("好") {}
+        } message: {
+            Text(model.paper?.warnings.joined(separator: "\n") ?? "")
         }
     }
 
-    private func setReadingMode(_ value: String) {
-        if value == "pdfBilingual" {
-            peekingAtOriginal = false
+    private func setBilingualReading(_ bilingual: Bool) {
+        peekingAtOriginal = false
+        if bilingual {
+            if !model.openBilingualReading(translatingDocument: pdfLayout == .paragraph) { requestSettings() }
+        } else {
+            model.pdfBilingual.close()
             if model.mode != "original" {
                 model.changeMode(to: "original")
                 if model.mode != "original" { model.readOriginal() }
             }
-            model.readingChoicePresented = false
-            model.beginReading()
-            model.pdfBilingual.open(model, translatingDocument: pdfLayout == .paragraph)
-            return
         }
-        model.pdfBilingual.close()
-        if value == "original" {
-            if model.mode != "original" || model.readingChoicePresented { model.readOriginal() }
-        } else if value == "reflow" {
-            model.readingChoicePresented = false
-            model.mode = "reflow"
-        } else if model.paper?.readingPages.isEmpty == false {
-            model.openRetainedReading(model.retainedReadingID)
-        } else {
-            translate()
-        }
+    }
+
+    private func readingMenu(width: CGFloat) -> some View {
+        Menu {
+            if isLocalPDF && model.pdfBilingual.isOpen {
+                PDFBilingualMenuItems(
+                    model: model, layout: $pdfLayout, peekingAtOriginal: $peekingAtOriginal, width: width)
+                Divider()
+            }
+            if let paper = model.currentEdition {
+                let workspace = model.workspace(for: paper.id)
+                Button {
+                    model.toggleFavorite(paper.id)
+                } label: {
+                    Label(
+                        workspace.isFavorite ? "取消收藏" : "收藏论文", systemImage: workspace.isFavorite ? "star.fill" : "star"
+                    )
+                }
+                Menu("阅读状态") {
+                    Picker(
+                        "阅读状态",
+                        selection: Binding(
+                            get: { workspace.status }, set: { model.setReadingStatus($0, for: paper.id) })
+                    ) {
+                        ForEach([PaperReadingStatus.unread, .reading, .finished], id: \.self) { status in
+                            Text(status.title).tag(status)
+                        }
+                    }.pickerStyle(.inline).labelsHidden()
+                }
+                Button(action: requestNoteSave) { Label("保存到 Obsidian", systemImage: "square.and.arrow.up") }
+                if !paper.warnings.isEmpty {
+                    Button {
+                        showWarnings = true
+                    } label: {
+                        Label("阅读提示", systemImage: "info.circle")
+                    }
+                }
+                let olderVersions = paper.retainedReadings ?? []
+                let hasLegacyEdition = !paper.readingPages.isEmpty && !paper.hasPublishedSourceReading
+                if !paper.previewPages.isEmpty || !olderVersions.isEmpty || hasLegacyEdition {
+                    Menu("阅读版本") {
+                        if !paper.previewPages.isEmpty {
+                            Button("旧版固定页", action: model.openFixedPreview)
+                        }
+                        if !paper.readingPages.isEmpty {
+                            Button(hasLegacyEdition ? "已保存的旧双语版" : "当前双语版") { model.openRetainedReading(nil) }
+                        }
+                        ForEach(Array(olderVersions.enumerated()), id: \.element.id) { index, version in
+                            Button("保留版本 \(index + 1)") { model.openRetainedReading(version.id) }
+                        }
+                    }
+                }
+                if paper.usesSourceReflow, !paper.readingPages.isEmpty {
+                    Button("重新生成双语版") { translate(regenerate: true) }
+                        .disabled(model.translating.contains(paper.id))
+                }
+            }
+        } label: {
+            Label("更多阅读选项", systemImage: "ellipsis.circle")
+        }.labelStyle(.iconOnly).fixedSize().help("更多阅读选项")
     }
 
     private func readingBar(width: CGFloat) -> some View {
@@ -270,12 +221,10 @@ struct ReaderView: View {
             if model.pageKeys.isEmpty {
                 Text("等待正文就绪").font(.caption).foregroundStyle(ReaderTheme.muted)
             } else if model.usesHTMLReading {
-                Text("连续阅读 · \(model.visiblePage + 1) / \(model.pageKeys.count) 段")
+                Text("\(model.visiblePage + 1) / \(model.pageKeys.count) 段")
                     .font(.caption).foregroundStyle(ReaderTheme.muted)
             } else {
-                if continuousParagraphs {
-                    Text("连续阅读").foregroundStyle(ReaderTheme.muted)
-                } else {
+                if !continuousParagraphs {
                     Button {
                         model.navigateToPage(model.visiblePage - 1)
                     } label: {
@@ -307,17 +256,23 @@ struct ReaderView: View {
                 .accessibilityLabel(model.isCurrentPageBookmarked ? "移除当前页书签" : "添加当前页书签")
                 .keyboardShortcut("d")
             Spacer()
-            if model.mode == "translated", model.translating.contains(model.selectedPaperID ?? UUID()),
-                !model.showingReflowLoading
+            if model.pdfBilingual.isOpen && isLocalPDF && (model.selectionText.isEmpty || !originalVisible) {
+                PDFTranslationStatusControl(model: model, layout: pdfLayout, openSettings: requestSettings)
+            } else if model.mode == "translated", model.retainedReadingID == nil, let paper = model.currentEdition,
+                paper.usesSourceReflow
             {
-                ProgressView().controlSize(.small)
-                Text("继续生成中").font(.caption).foregroundStyle(ReaderTheme.muted)
-            }
-            if model.mode == "translated", let reason = model.translationPauseReason {
-                Text(reason).font(.caption).foregroundStyle(ReaderTheme.muted).lineLimit(2)
+                if model.translating.contains(paper.id) {
+                    ProgressView().controlSize(.small)
+                    Button("暂停生成", action: model.pauseTranslation)
+                } else if let job = paper.reflowJob, job.supportsContinuation && !job.finished {
+                    if let reason = job.failure {
+                        Text(reason).lineLimit(1).foregroundStyle(ReaderTheme.muted).help(reason)
+                    }
+                    Button("继续生成") { translate() }
+                }
             }
             if !model.selectionText.isEmpty && originalVisible {
-                if model.mode == "original" {
+                if isLocalPDF && model.mode == "original" {
                     Button {
                         model.pdfBilingual.translateSelection(model)
                     } label: {

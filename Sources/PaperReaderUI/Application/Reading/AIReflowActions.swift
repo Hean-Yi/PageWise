@@ -3,7 +3,6 @@ import PaperReaderKit
 
 extension ReaderModel {
     public func readOriginal() {
-        readingChoicePresented = false
         mode = "original"
         visiblePage = 0
         jumpPage = 0
@@ -12,19 +11,58 @@ extension ReaderModel {
 
     public func openRetainedReading(_ id: UUID?) {
         endReading()
+        pdfBilingual.close()
         retainedReadingID = id
-        readingChoicePresented = false
         mode = "translated"
         visiblePage = 0
         jumpPage = 0
         beginReading()
     }
 
+    func openFixedPreview() {
+        guard let current = currentEdition,
+            current.previewPages.contains(where: { !pendingArtifactIDs.contains($0.id) })
+        else { return }
+        endReading()
+        pdfBilingual.close()
+        retainedReadingID = nil
+        mode = "reflow"
+        navigateToPage(0)
+        beginReading()
+    }
+
+    /// Returns false when starting a source translation requires the model settings sheet.
+    @discardableResult
+    func openBilingualReading(translatingDocument: Bool) -> Bool {
+        guard let current = currentEdition else { return true }
+        if mode == "translated", retainedReadingID != nil { return true }
+        if !current.usesSourceReflow {
+            if mode != "original" { changeMode(to: "original") }
+            if mode != "original" { readOriginal() }
+            retainedReadingID = nil
+            pdfBilingual.open(self, translatingDocument: translatingDocument)
+            return true
+        }
+        if current.hasPublishedSourceReading || translating.contains(current.id)
+            || (current.reflowJob?.supportsContinuation == true && current.reflowJob?.finished == true)
+        {
+            openRetainedReading(nil)
+            return true
+        }
+        guard (try? translationSettings.normalized()) != nil else { return false }
+        startAIReflow(regenerate: current.reflowJob.map { !$0.supportsContinuation } ?? false)
+        return true
+    }
+
     public func startAIReflow(regenerate: Bool = false) {
-        guard loaded, let selected = paper, !translating.contains(selected.id) else { return }
+        guard loaded, let selected = currentEdition, !translating.contains(selected.id) else { return }
         let id = selected.id
-        guard selected.onlineSource != nil || (!regenerate && selected.reflowJob?.supportsContinuation == true) else {
-            message = "双语重排需要线上 TeX 或 HTML 来源；此论文可继续阅读原版。"
+        guard selected.usesSourceReflow else {
+            message = "本地论文可在「双语重排」中阅读 PDF 段落对照。"
+            return
+        }
+        if regenerate, selected.onlineSource == nil, selected.sourceURL == nil {
+            message = "此版本缺少线上来源地址，可阅读已保存的版本，或在线重新导入同一篇论文。"
             return
         }
         if !regenerate, let job = selected.reflowJob, !job.supportsContinuation {
@@ -36,7 +74,7 @@ extension ReaderModel {
             return
         }
         endReading()
-        readingChoicePresented = false
+        pdfBilingual.close()
         retainedReadingID = nil
         translationPauseReason = nil
         reflowBodyCount = 0
@@ -259,7 +297,10 @@ extension ReaderModel {
                 }
                 self.translationPauseReason = reason
                 self.status = reason
-                if publication.reflowJob == nil {
+                if publication.reflowJob == nil
+                    || (!cancelled && publication.reflowJob?.evidenceRoute == "preparing"
+                        && publication.readingPages.isEmpty)
+                {
                     self.mode = "original"
                     self.beginReading()
                     if !cancelled { self.message = reason }

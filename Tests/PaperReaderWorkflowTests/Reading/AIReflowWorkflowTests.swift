@@ -157,9 +157,9 @@ private actor JointReflowTransport: HTTPTransport {
     let paper = try #require(model.paper)
     #expect(paper.blocks.isEmpty && paper.htmlReading == nil && paper.reflowJob == nil)
     #expect(!paper.canReflow)
-    #expect(!model.readingChoicePresented)
+    #expect(model.mode == "original")
     model.readOriginal()
-    #expect(!model.readingChoicePresented && model.mode == "original")
+    #expect(model.showsPDFCanvas)
     #expect(await transport.calls == 0)
     #expect(try Data(contentsOf: root.appendingPathComponent(paper.originalPath)) == original)
 }
@@ -279,6 +279,73 @@ private actor JointReflowTransport: HTTPTransport {
     Issue.record("Reflow task did not terminate")
 }
 
+@Test @MainActor func sourcePreparationFailureRestoresOriginalWithoutStartingPDFTranslation() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let transport = JointReflowTransport()
+    let model = try ReaderModel(
+        root: root, client: ModelClient(transport: transport), credentials: WorkflowCredentials())
+    await model.load()
+    var settings = model.modelSettings
+    settings.model = "fixture"
+    try model.saveSettings(settings, key: nil)
+    var paper = Paper(
+        title: "Unversioned", digest: "fixture", originalPath: "unused.pdf", pageCount: 1,
+        blocks: [], warnings: [], canReflow: false)
+    paper.sourceURL = "https://arxiv.org/abs/2401.00001"
+    model.state.papers = [paper]
+    model.select(paper.id)
+    #expect(model.openBilingualReading(translatingDocument: true))
+    try await waitForReflow(model, id: paper.id)
+    #expect(model.mode == "original" && !model.showingReflowLoading)
+    #expect(model.message?.contains("请阅读原版 PDF") == true)
+    #expect(model.currentEdition?.reflowJob?.failure == model.message)
+    #expect(!model.pdfBilingual.isOpen && model.pdfDocumentTranslation.status(for: paper.id) == nil)
+    #expect(await transport.calls == 0)
+}
+
+@Test(arguments: ["tex", "html"]) @MainActor
+func publishedSourceWithoutJobAndRetainedFixedPagesReopenOffline(route: String) async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let transport = JointReflowTransport()
+    let model = try ReaderModel(
+        root: root, client: ModelClient(transport: transport), credentials: WorkflowCredentials())
+    await model.load()
+    var block = TextBlock(sourcePage: -1, text: "Saved source paragraph.")
+    var paper = Paper(
+        title: "Old source version", digest: "fixture", originalPath: "unused.pdf", pageCount: 3,
+        blocks: [], warnings: [], canReflow: true)
+    if route == "tex" {
+        block.texSource = TeXSourceAnchor(archiveDigest: "fixture", mainFile: "main.tex", blockIndex: 0)
+    } else {
+        paper.sourceURL = "https://arxiv.org/abs/2401.00001v1"
+        paper.warnings = ["本次重排使用同版本 HTML。"]
+    }
+    paper.blocks = [block]
+    paper.htmlReading = try await HTMLReadingStore().append(
+        [BilingualBlock(block: block, translation: "保存的译文。")], to: nil, paper: paper, root: root)
+    let retained = RetainedReading(paper: paper)
+    paper.retainedReadings = [retained]
+    let fixed = PageArtifact(blockIDs: [block.id], sourcePage: -1, relativePath: "saved-preview.pdf")
+    paper.previewPages = [fixed]
+    model.state.papers = [paper]
+    model.select(paper.id)
+    #expect(paper.hasPublishedSourceReading && paper.usesSourceReflow)
+    model.readOriginal()
+    #expect(model.openBilingualReading(translatingDocument: true))
+    #expect(model.usesHTMLReading && !model.showingReflowLoading)
+    model.openRetainedReading(retained.id)
+    #expect(model.openBilingualReading(translatingDocument: true))
+    #expect(model.retainedReadingID == retained.id)
+    model.openFixedPreview()
+    #expect(model.mode == "reflow" && model.retainedReadingID == nil)
+    #expect(model.workspace(for: paper.id).position?.pageKey == fixed.id.uuidString)
+    #expect(model.jumpPage == 0 && model.visiblePage == 0)
+    #expect(!model.pdfBilingual.isOpen && model.translating.isEmpty)
+    #expect(await transport.calls == 0)
+}
+
 @Test @MainActor func onlineTeXImportReflowRestartAndRegenerationKeepSourceAndOldReading() async throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: root) }
@@ -315,7 +382,8 @@ private actor JointReflowTransport: HTTPTransport {
     #expect(await transport.calls == 0)
     let sourcePath = try #require(imported.onlineSource?.archivePath)
     #expect(try Data(contentsOf: root.appendingPathComponent(sourcePath)) == source)
-    model.startAIReflow()
+    #expect(model.openBilingualReading(translatingDocument: true))
+    #expect(!model.pdfBilingual.isOpen && model.pdfDocumentTranslation.status(for: id) == nil)
     try await waitForReflow(model, id: id)
     let first = try #require(model.paper?.blocks.first)
     #expect(model.paper?.reflowJob?.evidenceRoute == "tex")
@@ -332,6 +400,11 @@ private actor JointReflowTransport: HTTPTransport {
     #expect(completed.blocks.first?.id == first.id)
     let artifact = try #require(completed.htmlReading)
     let sealed = try Data(contentsOf: root.appendingPathComponent(artifact.relativePath))
+    let completedRequests = await transport.calls
+    reopened.readOriginal()
+    #expect(reopened.openBilingualReading(translatingDocument: true))
+    #expect(reopened.usesHTMLReading && reopened.translating.isEmpty)
+    #expect(await transport.calls == completedRequests)
     reopened.startAIReflow(regenerate: true)
     try await waitForReflow(reopened, id: id)
     #expect(reopened.paper?.reflowJob?.finished == true)

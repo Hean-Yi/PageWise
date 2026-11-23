@@ -78,7 +78,7 @@ final class PDFBilingualSession {
     @ObservationIgnored private var requestID = UUID()
 
     func open(_ model: ReaderModel, translatingDocument: Bool = false) {
-        guard model.mode == "original", model.paper != nil else { return }
+        guard model.mode == "original", model.currentEdition?.usesSourceReflow == false else { return }
         isOpen = true
         loadPage(model)
         if translatingDocument { setParagraphLayout(true, model: model) }
@@ -92,11 +92,11 @@ final class PDFBilingualSession {
     }
 
     func setParagraphLayout(_ enabled: Bool, model: ReaderModel) {
-        guard matches(model), let paper = model.paper else { return }
+        guard matches(model), let paperID = model.selectedPaperID else { return }
         paragraphLayout = enabled
         if enabled {
             prepareParagraphReading(model)
-            model.pdfDocumentTranslation.start(model, paper: paper, page: pageIndex)
+            model.pdfDocumentTranslation.start(model, paperID: paperID, page: pageIndex)
         } else {
             readingParagraphs = false
             maintainWindow(model)
@@ -104,8 +104,8 @@ final class PDFBilingualSession {
     }
 
     func resumeDocumentTranslation(_ model: ReaderModel) {
-        guard matches(model), let paper = model.paper else { return }
-        model.pdfDocumentTranslation.start(model, paper: paper, page: pageIndex, resuming: true)
+        guard matches(model), let paperID = model.selectedPaperID else { return }
+        model.pdfDocumentTranslation.start(model, paperID: paperID, page: pageIndex, resuming: true)
     }
 
     func receiveDocumentTranslations(_ values: [String: String], paperID: UUID, page: Int) {
@@ -315,7 +315,8 @@ final class PDFBilingualSession {
     }
 
     func translateSelection(_ model: ReaderModel) {
-        guard model.mode == "original", !model.pdfSelectionSpansPages, !isTranslating,
+        guard model.mode == "original", model.currentEdition?.usesSourceReflow == false,
+            !model.pdfSelectionSpansPages, !isTranslating,
             let paper = model.paper, !model.selectionText.isEmpty, !model.selectionRects.isEmpty
         else { return }
         let text = model.selectionText

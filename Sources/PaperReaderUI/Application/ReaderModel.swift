@@ -24,7 +24,6 @@ public final class ReaderModel {
     public var usesHTMLReading: Bool { mode == "translated" && paper?.htmlReading != nil }
     public var translationDraft: TranslationDraft?
     public var translationPauseReason: String?
-    public var readingChoicePresented = false
     public var retainedReadingID: UUID?
     public var reflowStages: [UUID: String] = [:]
     public var reflowStartedAt: [UUID: Date] = [:]
@@ -106,8 +105,9 @@ public final class ReaderModel {
         modelSettings = try configurationStore.load()
     }
 
+    var currentEdition: Paper? { state.papers.first(where: { $0.id == selectedPaperID }) }
     public var paper: Paper? {
-        guard let current = state.papers.first(where: { $0.id == selectedPaperID }) else { return nil }
+        guard let current = currentEdition else { return nil }
         if let version = current.retainedReadings?.first(where: { $0.id == retainedReadingID }) {
             return version.projecting(current)
         }
@@ -120,7 +120,7 @@ public final class ReaderModel {
             && paper?.reflowJob?.hasPresentedContent != true
     }
     var showsPDFCanvas: Bool {
-        paper != nil && !usesHTMLReading && !readingChoicePresented && !showingReflowLoading
+        paper != nil && !usesHTMLReading && !showingReflowLoading
     }
     public var activePages: [PageArtifact] {
         guard let paper else { return [] }
@@ -170,14 +170,12 @@ public final class ReaderModel {
         selectedPaperID = id
         retainedReadingID = nil
         reflowBodyCount = 0
-        readingChoicePresented = false
         if let current = state.papers.first(where: { $0.id == id }) {
             let position = workspace(for: current.id).position
             if let key = position?.pageKey, !current.readingPages.contains(where: { $0.id.uuidString == key }) {
                 retainedReadingID =
                     current.retainedReadings?.first(where: { $0.readingPages.contains { $0.id.uuidString == key } })?.id
             }
-            readingChoicePresented = current.onlineSource != nil && current.reflowJob == nil && position == nil
         }
         selectionText = ""
         selectionRects = []
@@ -233,7 +231,12 @@ public final class ReaderModel {
                 try await store.save(snapshot, respectingCancellation: cancellable)
                 if let importedPaper { self.state.papers.insert(importedPaper, at: 0) }
                 if let publication, let index = self.state.papers.firstIndex(where: { $0.id == publication.id }) {
+                    let wasLocal = !self.state.papers[index].usesSourceReflow
                     Self.applyReflow(publication, to: &self.state.papers[index])
+                    if wasLocal, self.state.papers[index].usesSourceReflow {
+                        self.pdfDocumentTranslation.discard(publication.id)
+                        if self.selectedPaperID == publication.id { self.pdfBilingual.close() }
+                    }
                 }
                 if let presentingReflow,
                     let index = self.state.papers.firstIndex(where: { $0.id == presentingReflow.paperID }),

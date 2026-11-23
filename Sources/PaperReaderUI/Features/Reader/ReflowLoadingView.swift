@@ -19,8 +19,6 @@ struct ReflowLoadingView: View {
                 VStack(spacing: 10) {
                     Text(running ? "正在准备双语阅读" : (model.paper?.reflowJob?.finished == true ? "未找到可翻译正文" : "重排已暂停"))
                         .font(.system(size: 25, weight: .medium, design: .serif))
-                    Text(model.paper?.title ?? "").font(.callout).foregroundStyle(ReaderTheme.muted)
-                        .multilineTextAlignment(.center).lineLimit(3).frame(maxWidth: 440)
                 }
                 VStack(spacing: 13) {
                     if running { ProgressView().controlSize(.small) }
@@ -49,34 +47,5 @@ struct ReflowLoadingView: View {
             .padding(36).frame(maxWidth: .infinity, maxHeight: .infinity).background(ReaderTheme.canvas)
             .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: running)
         }
-    }
-}
-
-struct ReadingModeChoiceView: View {
-    let model: ReaderModel
-    let reflow: () -> Void
-    var body: some View {
-        VStack(spacing: 25) {
-            Image(systemName: "book.pages").font(.system(size: 46, weight: .ultraLight)).foregroundStyle(
-                ReaderTheme.accent)
-            Text("开始阅读").font(.system(size: 26, weight: .medium, design: .serif))
-            Text(model.paper?.title ?? "").font(.callout).foregroundStyle(ReaderTheme.muted)
-                .multilineTextAlignment(.center).lineLimit(3).frame(maxWidth: 440)
-            HStack(spacing: 18) {
-                Button(action: model.readOriginal) {
-                    Label("阅读原版", systemImage: "doc.richtext").padding(.horizontal, 12).padding(.vertical, 8)
-                }.buttonStyle(.bordered)
-                Button(action: reflow) {
-                    Label("源码重排", systemImage: "character.book.closed").padding(.horizontal, 12).padding(
-                        .vertical, 8)
-                }.buttonStyle(.borderedProminent)
-            }.controlSize(.large)
-            Text("选择双语重排后才会调用已配置的模型")
-                .font(.caption).foregroundStyle(ReaderTheme.muted)
-            if model.paper?.onlineSource?.archivePath != nil {
-                Text("已保存 TeX 源码，重排时优先使用")
-                    .font(.caption).foregroundStyle(ReaderTheme.muted)
-            }
-        }.padding(30).frame(maxWidth: .infinity, maxHeight: .infinity).background(ReaderTheme.canvas)
     }
 }
