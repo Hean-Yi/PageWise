@@ -377,8 +377,15 @@
             window.p=document.querySelector('section p');window.before=p.outerHTML;window.height=p.getBoundingClientRect().height;
             window.key=p.closest('section').dataset.key;
             window.marks=[{key,target:'source',text:p.textContent.slice(0,10),range:[0,10],color:'red',style:'highlight'},
-              {key,target:'source',text:p.textContent.slice(10,20),range:[10,20],color:'blue',style:'underline'}];
+              {key,target:'source',text:p.textContent.slice(10,20),range:[10,20],color:'blue',style:'underline'},
+              {key,target:'source',text:p.textContent.slice(21),range:[21,p.textContent.length],color:'purple'}];
             paperSelection.highlights(marks);
+            const untouched=CSS.highlights.get('saved-purple-highlight'),fragment=[...untouched][0];
+            const pixels=document.querySelector('#reader-annotation-backgrounds > div:last-child span');
+            const cut=document.createRange();cut.setStart(p.firstChild,3);cut.setEnd(p.firstChild,14);
+            const intact=()=>untouched===CSS.highlights.get('saved-purple-highlight')&&untouched.has(fragment)&&pixels.isConnected;
+            paperSelection.liftRanges([cut]);window.keptUnrelatedPaint=intact();
+            paperSelection.liftRanges([]);window.keptUnrelatedPaint&&=intact();
             window.note={id:'lift-note',anchors:[{key,target:'source',text:p.textContent.slice(3,14),start:3,end:14}],markdown:'A note',html:'<p>A note</p>'};
             paperNotes.sync([note]);paperNotes.open(note.id,true);
             """#)
@@ -392,7 +399,7 @@
                 const lifted=document.querySelector('.note-lift-group');window.group=lifted;
                 const red=[...CSS.highlights.get('saved-red-highlight')];
                 const blue=[...CSS.highlights.get('saved-blue-underline')];
-                return red.length===1 && red[0].startOffset===0 && red[0].endOffset===3
+                return keptUnrelatedPaint && red.length===1 && red[0].startOffset===0 && red[0].endOffset===3
                   && blue.length===1 && blue[0].startOffset===14 && blue[0].endOffset===20
                   && lifted.querySelector('.note-lift-highlight').style.background==='rgb(245, 170, 166)'
                   && lifted.querySelector('.note-lift-underline').style.background==='rgb(181, 213, 248)'

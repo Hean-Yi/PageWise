@@ -14,7 +14,10 @@ enum HTMLNoteStyle {
           .reader-note-card.compact.active{overflow-y:auto}.reader-note-card.compact.active .note-editor{min-height:80px}
           .reader-note-card[hidden]{display:none!important}
           .reader-note-card:not(.active){height:168px;background:#f6f3eb;cursor:pointer}
-          .reader-note-card.active{transform:translateY(-2px);border-color:#c4a68a;box-shadow:0 8px 28px #332d2833;z-index:10;filter:none;opacity:1}
+          .reader-note-card.active{border-color:#c4a68a;box-shadow:0 8px 28px #332d2833;z-index:10;filter:none;opacity:1}
+          .reader-note-card.editing-live{transform:translateY(-2px)}
+          .reader-note-card.at-top{border-top-left-radius:0;border-top-right-radius:0}
+          .reader-note-card.at-bottom{border-bottom-left-radius:0;border-bottom-right-radius:0}
           .reader-note-card header{padding:10px 14px 6px;display:flex;align-items:center;gap:8px;flex-shrink:0;font:12px system-ui;color:#796e60}
           .reader-note-card header strong{margin-right:auto;color:inherit;font-weight:650;white-space:nowrap;flex:none}.reader-note-card header select{min-width:0;max-width:40%;font:inherit}.reader-note-card:not(.active) header select,.reader-note-card:not(.active) header button,.reader-note-card:not(.active) header details{display:none}
           .reader-note-card button{font:inherit;color:inherit;border:0;border-radius:6px;background:transparent;padding:4px 7px;cursor:pointer}

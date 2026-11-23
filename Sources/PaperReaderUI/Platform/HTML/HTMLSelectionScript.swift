@@ -66,7 +66,8 @@ enum HTMLSelectionScript {
             const text=element.getAttribute('alttext') || tex?.textContent || nodes(element).map(n=>n.data.trim()).join('');
             return '[公式] '+text;
           };
-          let parts=[],savedMarks=[],lifted=[];const painted=new Map();
+          let parts=[],savedMarks=[],lifted=[];
+          const entriesByLayer=new Map();
           // WebKit fills inter-line gaps for one multiline Highlight range, but DOM rectangles do not.
           // Give both native paint and the lifted copy the same line fragments, including partial last lines.
           const lineRanges=range=>{
@@ -84,7 +85,7 @@ enum HTMLSelectionScript {
             return result;
           };
           // Temporary paint exclusions never change the saved anchors or published text.
-          const visibleRanges=ranges=>ranges.flatMap(range=>{
+          const visibleRanges=ranges=>!lifted.length?ranges:ranges.flatMap(range=>{
             if(range.startContainer!==range.endContainer)return [range];
             let spans=[[range.startOffset,range.endOffset]];
             for(const cut of lifted){if(cut.startContainer!==range.startContainer)continue;
@@ -108,27 +109,49 @@ enum HTMLSelectionScript {
             const layer=document.createElement('div');layer.id=name==='saved'?'reader-annotation-backgrounds':'reader-selection-backgrounds';
             layer.setAttribute('aria-hidden','true');layer.style.cssText='position:absolute;left:0;top:0;width:100%;height:0;pointer-events:none;z-index:0';document.body.append(layer);backgrounds.set(name,layer);
           }
-          const background=(ranges,color,name)=>{
-            for(const range of ranges.flatMap(lineRanges))for(const r of range.getClientRects()){
-              if(r.width<=.01||r.height<=0)continue;
-              const e=document.createElement('span');e.style.cssText='position:absolute;left:'+(r.left+scrollX)+'px;top:'+(r.top+scrollY)+'px;width:'+r.width+'px;height:'+r.height+'px;background:'+color;backgrounds.get(name).append(e);
-            }
-          };
           const underlineLayer=document.createElement('div');underlineLayer.id='reader-annotation-lines';
           underlineLayer.setAttribute('aria-hidden','true');
           underlineLayer.style.cssText='position:absolute;left:0;top:0;width:100%;height:0;pointer-events:none;z-index:1';
           document.body.append(underlineLayer);
-          const underline=(ranges,color)=>{
-            for(const range of ranges) for(const rect of range.getClientRects()) {
-              if(!rect.width || !rect.height)continue;
-              const line=document.createElement('span');line.style.cssText='position:absolute;pointer-events:none;border-bottom:2px solid '+colors[color]+';left:'+(rect.left+scrollX)+'px;top:'+(rect.bottom+scrollY-2)+'px;width:'+rect.width+'px';
-              underlineLayer.append(line);
+
+          // Each text slice owns its paint in a stable stacking position. Hover can clip
+          // and restore a slice without measuring or replacing highlights in other paragraphs.
+          const paintEntry=entry=>{
+            const {range,highlight,container,color,kind}=entry,visible=visibleRanges([range]);
+            for(const fragment of entry.fragments)highlight.delete(fragment);
+            entry.fragments=visible.flatMap(lineRanges);
+            for(const fragment of entry.fragments)highlight.add(fragment);
+            const pixels=document.createDocumentFragment(),isLine=kind==='underline';
+            for(const fragment of isLine?visible:entry.fragments)for(const rect of fragment.getClientRects()){
+              if(rect.width<=.01||rect.height<=0)continue;
+              const pixel=document.createElement('span');
+              Object.assign(pixel.style,{position:'absolute',left:(rect.left+scrollX)+'px',width:rect.width+'px',
+                top:((isLine?rect.bottom-2:rect.top)+scrollY)+'px'});
+              if(isLine)pixel.style.borderBottom='2px solid '+color;
+              else{pixel.style.height=rect.height+'px';pixel.style.background=color;}
+              pixels.append(pixel);
             }
+            container.replaceChildren(pixels);
+          };
+          const visitOverlaps=(ranges,visit)=>{
+            for(const index of entriesByLayer.values())for(const cut of ranges){
+              for(const entry of index.get(cut.startContainer)||[]){
+                const mark=entry.range,start=Math.max(cut.startOffset,mark.startOffset),end=Math.min(cut.endOffset,mark.endOffset);
+                if(start<end)visit(entry,start,end);
+              }
+            }
+          };
+          const liftRanges=ranges=>{
+            const changed=new Set();
+            visitOverlaps([...lifted,...ranges],entry=>changed.add(entry));
+            lifted=ranges;
+            for(const entry of changed)paintEntry(entry);
           };
           const render = (marks,name,attribute) => {
             backgrounds.get(name)?.replaceChildren();
             if(name==='saved')underlineLayer.replaceChildren();
             root.querySelectorAll('['+attribute+']').forEach(e=>e.removeAttribute(attribute));
+            const index=new Map();entriesByLayer.set(name,index);
             if(!CSS.highlights) return;
             const groups=new Map();
             for(const mark of marks) {
@@ -149,21 +172,25 @@ enum HTMLSelectionScript {
               if(text.slice(start,end)!==mark.text) continue;
               const selected=slices(source,start,end);
               ranges.push(...selected);
-              if(name==='saved' && kind==='underline')underline(visibleRanges(selected),color);
               if(!mark.target && mark.sourceOnly) {
                 const translated=block.querySelector(':scope > .translation:not(.pending)');
-                if(translated) {const linked=slices(nodes(translated),0,translated.textContent.length);ranges.push(...linked);if(kind==='underline')underline(visibleRanges(linked),color);}
+                if(translated)ranges.push(...slices(nodes(translated),0,translated.textContent.length));
               }
             }
-            if(name==='saved') for(const key of [...CSS.highlights.keys()]) if(key==='saved' || key.startsWith('saved-')) {CSS.highlights.delete(key);painted.delete(key);}
+            if(name==='saved') for(const key of [...CSS.highlights.keys()]) if(key==='saved' || key.startsWith('saved-')) CSS.highlights.delete(key);
             if(!groups.has(name)) groups.set(name,[]);
             for(const [group,ranges] of groups) {
-              painted.set(group,ranges);
-              const visible=visibleRanges(ranges),selected=name==='reader-selection';
-              if(selected||!group.endsWith('-underline'))background(visible,selected?'rgba(35,42,50,.22)':colors[group==='saved'?'yellow':group.split('-')[1]],name);
-              const highlight=new Highlight(...visible.flatMap(lineRanges));
-              // Composite the translucent selection above every saved annotation, regardless of insertion order.
-              highlight.priority=name==='reader-selection' ? 100 : 0;
+              const selected=name==='reader-selection',kind=group.endsWith('-underline')?'underline':'highlight';
+              const color=selected?'rgba(35,42,50,.22)':colors[group==='saved'?'yellow':group.split('-')[1]];
+              const layer=kind==='underline'?underlineLayer:backgrounds.get(name),batch=document.createDocumentFragment();
+              const highlight=new Highlight();highlight.priority=selected?100:0;
+              for(const range of ranges){
+                const container=document.createElement('div'),entry={range,container,highlight,fragments:[],kind,color,selected};
+                const node=range.startContainer;
+                if(!index.has(node))index.set(node,[]);
+                index.get(node).push(entry);paintEntry(entry);batch.append(container);
+              }
+              layer.append(batch);
               CSS.highlights.set(group,highlight);
             }
           };
@@ -280,15 +307,15 @@ enum HTMLSelectionScript {
             return text.slice(part.start,part.end)===part.text ? slices(source,part.start,part.end) : [];
           };
           window.paperSelection={
-            liftPaint(ranges){const result=[];for(const [name,marks] of painted){
-              const selected=name==='reader-selection',kind=name.endsWith('-underline')?'underline':'highlight',color=selected?'rgba(35,42,50,.22)':colors[name==='saved'?'yellow':name.split('-')[1]];
-              if(!color)continue;
-              for(const r of ranges)for(const mark of marks){if(r.startContainer!==mark.startContainer||mark.startContainer!==mark.endContainer)continue;
-                const start=Math.max(r.startOffset,mark.startOffset),end=Math.min(r.endOffset,mark.endOffset);if(end<=start)continue;
-                const range=document.createRange();range.setStart(r.startContainer,start);range.setEnd(r.endContainer,end);result.push({range,color,kind,selected});
-              }
-            }return result.sort((a,b)=>Number(a.selected)-Number(b.selected));},
-            liftRanges(ranges){lifted=ranges;render(savedMarks,'saved','data-reader-saved');paint();},
+            liftPaint(ranges){
+              const result=[];
+              visitOverlaps(ranges,({range:mark,color,kind,selected},start,end)=>{
+                const range=document.createRange();range.setStart(mark.startContainer,start);range.setEnd(mark.startContainer,end);
+                result.push({range,color,kind,selected});
+              });
+              return result.sort((a,b)=>Number(a.selected)-Number(b.selected));
+            },
+            liftRanges,
             highlights(marks){savedMarks=marks;render(marks,'saved','data-reader-saved');window.paperAnnotationMenu?.refresh();window.paperNotes?.layout();},
             refresh(){render(savedMarks,'saved','data-reader-saved');paint();},
             clear(){getSelection()?.removeAllRanges();parts=[];paint();window.paperAnnotationMenu?.hide();},

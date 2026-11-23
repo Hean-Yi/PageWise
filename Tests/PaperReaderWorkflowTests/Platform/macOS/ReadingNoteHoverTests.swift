@@ -4,41 +4,61 @@
     import WebKit
     @testable import PaperReaderUI
 
-    @Test @MainActor func wrappedNoteHoverCanCrossToFloatingPreviewWithoutMovingIt() async throws {
+    @MainActor private func withNoteHoverReader(
+        width: CGFloat, blockCount: Int = 1, check: @MainActor (WKWebView) async throws -> Void
+    ) async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let model = try ReaderModel(root: root)
         await model.load()
         let text = String(repeating: "We compare the same capacity on the held-out validation set. ", count: 5)
-        let block = TextBlock(sourcePage: 0, text: text)
+        let blocks = (0..<blockCount).map { TextBlock(sourcePage: $0, text: text) }
         var paper = Paper(
-            title: "Hover fixture", digest: "hover", originalPath: "unused.pdf", pageCount: 1, blocks: [block],
+            title: "Hover fixture", digest: "hover", originalPath: "unused.pdf", pageCount: blockCount, blocks: blocks,
             warnings: [], canReflow: true)
         paper.htmlReading = try await HTMLReadingStore().append(
-            [BilingualBlock(block: block, translation: "比较相同容量下的验证结果。")],
+            blocks.map { BilingualBlock(block: $0, translation: "比较相同容量下的验证结果。") },
             to: nil, paper: paper, root: root)
         model.state.papers = [paper]
         model.select(paper.id)
         let coordinator = HTMLCoordinator(model: model)
         let web = coordinator.makeView()
         defer { coordinator.stop(web) }
-        web.frame = CGRect(x: 0, y: 0, width: 1050, height: 800)
+        web.frame = CGRect(x: 0, y: 0, width: width, height: 800)
         coordinator.update(web)
-        func run(_ script: String) async throws -> Any? {
-            try await web.callAsyncJavaScript(script, arguments: [:], in: nil, contentWorld: .defaultClient)
-        }
         for _ in 0..<300 {
-            if (try? await run("return !!window.paperNotes")) as? Bool == true { break }
+            if (try? await web.evaluateJavaScript("!!window.paperNotes", in: nil, contentWorld: .defaultClient))
+                as? Bool == true
+            {
+                break
+            }
             try await Task.sleep(for: .milliseconds(10))
         }
-        _ = try await run(NoteHoverFixture.install)
-        web.frame.size.width = 700
-        for direction in ["below", "above"] {
-            let result = try await run("return await hoverFixture('\(direction)')") as? String
-            #expect(result == "ok")
+        try await check(web)
+    }
+
+    @Test @MainActor func wrappedNoteHoverCanCrossToFloatingPreviewWithoutMovingIt() async throws {
+        try await withNoteHoverReader(width: 1050) { web in
+            @MainActor func run(_ script: String) async throws -> Any? {
+                try await web.callAsyncJavaScript(script, arguments: [:], in: nil, contentWorld: .defaultClient)
+            }
+            _ = try await run(NoteHoverFixture.install)
+            web.frame.size.width = 700
+            for direction in ["below", "above"] {
+                let result = try await run("return await hoverFixture('\(direction)')") as? String
+                #expect(result == "ok")
+            }
+            web.frame.size.width = 1500
+            #expect(try await run("return await hoverMargin()") as? String == "ok")
         }
-        web.frame.size.width = 1500
-        #expect(try await run("return await hoverMargin()") as? String == "ok")
+    }
+
+    @Test @MainActor func marginNoteHoverTracksWrappedTextAndCardWithoutMeasuringOtherPages() async throws {
+        try await withNoteHoverReader(width: 1500, blockCount: 12) { web in
+            let failures = try await web.callAsyncJavaScript(
+                MarginNoteHoverFixture.check, arguments: [:], in: nil, contentWorld: .defaultClient)
+            #expect(failures as? [String] == [])
+        }
     }
 
     enum NoteHoverFixture {

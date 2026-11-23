@@ -5,7 +5,7 @@ enum HTMLNotesScript {
         (()=>{
           const root=document.getElementById('reader'),selection=window.paperSelection,layout=window.paperNoteLayout,menu=document.getElementById('annotation-menu');
           const layer=document.createElement('div');layer.id='reader-note-layer';document.body.append(layer);
-          const records=new Map();let active=null,editing=null,sidebar=true,reverse=false,queued=false,pointer=null,lastStatus='已保存';
+          const records=new Map();let active=null,editing=null,sidebar=true,reverse=false,queued=false,restingDirty=true,displayed=null,pointer=null,lastStatus='已保存';
           const send=v=>window.webkit.messageHandlers.reader.postMessage({...v,paperID:document.body.dataset.paperId});
           const normalize=a=>a.map(p=>({key:p.key,target:p.target,text:p.text,start:p.start??p.range?.[0],end:p.end??p.range?.[1]}));
           const same=(a,b)=>JSON.stringify(normalize(a))===JSON.stringify(normalize(b));
@@ -30,9 +30,9 @@ enum HTMLNotesScript {
               if(!e.editor)e.editor=PaperNoteEditor.create(e.input,e.markdown,()=>store(e),finish);
               e.input.value=e.markdown;if(e.html)e.editor.preview(e.markdown,e.html);e.input.focus({preventScroll:true});
             }
-            schedule();
+            schedule(false);
           };
-          const leave=()=>{if(active&&!editing){active=null;schedule();}};
+          const leave=()=>{cancelCrossing();if(active&&!editing){active=null;schedule(false);}};
           const button=(text,handler,label=text)=>{const b=document.createElement('button');b.type='button';b.textContent=text;b.setAttribute('aria-label',label);b.onclick=event=>{event.stopPropagation();handler();};return b;};
           const make=note=>{
             const e={...note,persisted:false};e.card=document.createElement('article');e.card.className='reader-note-card';e.card.hidden=true;e.card.dataset.noteId=e.id;e.card.tabIndex=0;e.card.setAttribute('aria-label',e.dimensionTitle||'阅读笔记');
@@ -54,45 +54,75 @@ enum HTMLNotesScript {
               send({kind:'noteInsertPassage',id:e.id,anchors:e.anchors,markdown:e.input.value,from:e.editor.selectionStart,to:e.editor.selectionEnd});
             },'引用阅读笔记');
             const done=button('完成',finish);done.className='note-done';e.footer.append(e.status,insert,done);e.card.append(header,e.input,e.content,e.summary,e.footer);
-            e.card.addEventListener('mouseenter',()=>{if(!editing&&(active!==e.id||!reverse))activate(e.id,false,true);});
+            e.card.addEventListener('mouseenter',()=>{cancelCrossing();if(!editing&&(active!==e.id||!reverse))activate(e.id,false,true);});
             e.card.addEventListener('focusin',()=>{if(!editing&&(active!==e.id||!reverse))activate(e.id,false,true);});
             e.card.addEventListener('click',event=>{if(event.target.closest('button,.note-editor,a,summary,select,#annotation-menu'))return;if(editing!==e.id)activate(e.id,true,true);});
             e.card.addEventListener('keydown',event=>{if(event.target===e.card&&(event.key==='Enter'||event.key===' ')){event.preventDefault();activate(e.id,true,true);}});
             body(e);layer.append(e.card);records.set(e.id,e);return e;
           };
           const showUndo=()=>{let b=document.getElementById('reader-note-undo');if(!b){b=button('笔记已删除 · 撤销',()=>{send({kind:'noteUndo'});b.remove();});b.id='reader-note-undo';document.body.append(b);}};
-          const arrange=()=>{
-            queued=false;const occupied=[],items=[...records.values()].sort((a,b)=>(a.id===active?-1:0)-(b.id===active?-1:0)||((document.getElementById('block-'+a.anchors[0].key)?.compareDocumentPosition(document.getElementById('block-'+b.anchors[0].key))||0)&Node.DOCUMENT_POSITION_FOLLOWING?-1:1));let chosen=null;
+          const bySection=new Map();
+          const show=(e,position,documentTop)=>{
+            e.card.hidden=!position;if(!position)return;
+            e.card.classList.toggle('compact',position.height<300);e.card.dataset.placement=position.side;
+            e.card.classList.toggle('at-top',position.clip==='top');e.card.classList.toggle('at-bottom',position.clip==='bottom');
+            Object.assign(e.card.style,{position:position.fixed?'fixed':'absolute',left:position.left+'px',top:documentTop+'px',
+              width:position.width+'px',height:position.height+'px',maxHeight:position.height+'px'});
+          };
+          const restoreSlot=e=>{
+            e.previewBox=null;e.card.classList.remove('active');show(e,e.slot,e.slot?.top);
+          };
+          const arrangeSlots=()=>{
+            bySection.clear();const occupied=[];
+            const index=new Map([...root.querySelectorAll('section[data-key]')].map((s,i)=>[s.dataset.key,i]));
+            const items=[...records.values()].sort((a,b)=>(index.get(a.anchors[0].key)??Infinity)-(index.get(b.anchors[0].key)??Infinity));
             for(const e of items){
-              const isActive=e.id===active,isEditor=editing===e.id;
-              e.card.classList.toggle('active',isActive);
-              if(sidebar&&!isActive){e.slot=null;e.card.hidden=true;continue;}
-              const previewHeight=width=>{
+              for(const key of new Set(e.anchors.map(a=>a.key))){if(!bySection.has(key))bySection.set(key,[]);bySection.get(key).push(e);}
+              const slot=sidebar?null:layout.place(e.anchors,168,false,occupied,true);
+              if(slot)occupied.push(slot);
+              e.slot=slot?{...slot,top:slot.top+scrollY}:null;
+              if(e.id!==active)restoreSlot(e);
+            }
+            layout.rebuildWaves(items);
+          };
+          const arrange=()=>{
+            queued=false;const entry=records.get(active);
+            if(restingDirty){restingDirty=false;arrangeSlots();}
+            else if(displayed&&displayed!==entry)restoreSlot(displayed);
+            displayed=entry;
+            let position=null;
+            if(entry){
+              const e=entry,isEditor=editing===e.id;
+              e.card.classList.add('active');
+              const measure=width=>{
                 e.card.hidden=false;e.card.style.width=width+'px';e.card.style.height='auto';e.card.style.maxHeight='none';
                 return Math.max(e.slot?168:100,e.card.offsetHeight);
               };
-              const height=isEditor?420:isActive?previewHeight:168;
-              let position=layout.place(e.anchors,height,sidebar,occupied,!isActive,isActive&&!isEditor?e.slot:null);
-              if(!position&&isEditor){position={left:Math.max(16,innerWidth-366),top:16,width:350,height:Math.min(420,innerHeight-32),side:'floating'};}
-              if(!position){e.slot=null;e.previewBox=null;e.card.hidden=true;continue;}
-              e.card.hidden=false;e.card.classList.toggle('compact',position.height<300);
-              position.fixed=isEditor;
-              const top=position.top+(isEditor?0:scrollY),box={left:position.left,top,right:position.left+position.width,bottom:top+position.height};
-              // A hovered margin card expands from its own resting slot. Its target never
-              // animates away from a pointer crossing over from the highlighted text.
-              if(!isActive)e.slot={top,side:position.side};
-              e.previewBox=isActive&&!isEditor?box:null;
-              Object.assign(e.card.style,{position:isEditor?'fixed':'absolute',left:position.left+'px',top:top+'px',
-                width:position.width+'px',height:position.height+'px',maxHeight:position.height+'px'});
-              e.card.dataset.placement=position.side;
-              occupied.push({...position,right:box.right,bottom:position.top+position.height});if(isActive)chosen=position;
+              const slot=e.slot,top=slot?slot.top-scrollY:0;
+              // A clipped margin card keeps every visible pixel of its resting hit target.
+              // Its text anchor may already have scrolled completely out of view.
+              if(!isEditor&&slot&&top<innerHeight&&top+slot.height>0){
+                const clipped=top<0||top+slot.height>innerHeight;
+                const height=Math.min(measure(slot.width),420,clipped?innerHeight:innerHeight-top);
+                const previewTop=clipped?Math.max(0,Math.min(top,innerHeight-height)):top;
+                position={...slot,top:previewTop,height,clip:clipped?(top<0?'top':'bottom'):null};
+              }else{
+                position=layout.place(e.anchors,isEditor?420:measure,sidebar,[]);
+                if(!position&&isEditor)position={left:Math.max(16,innerWidth-366),top:16,width:350,height:Math.min(420,innerHeight-32),side:'floating'};
+              }
+              if(position){
+                position.fixed=isEditor;
+                const documentTop=position.top+(isEditor?0:scrollY);
+                show(e,position,documentTop);
+                e.previewBox=isEditor?null:{left:position.left,top:documentTop,right:position.left+position.width,bottom:documentTop+position.height,side:position.side};
+              }else{restoreSlot(e);active=null;displayed=null;}
             }
-            const entry=records.get(active),opening=!!entry?.entrance;
-            layout.decorate([...records.values()],entry,chosen,opening?false:reverse,opening);
-            if(opening&&chosen){entry.entrance=false;emerge(entry,chosen);}
-            if(entry?.needsFocus&&chosen){entry.needsFocus=false;entry.input.focus({preventScroll:true});}
+            const opening=!!entry?.entrance;
+            layout.decorate(displayed,position,opening?false:reverse,opening);
+            if(opening&&position){entry.entrance=false;emerge(entry,position);}
+            if(entry?.needsFocus&&position){entry.needsFocus=false;entry.input.focus({preventScroll:true});}
             const crossing=pendingCrossing;pendingCrossing=null;
-            if(crossing&&entry?.id===crossing.id&&!editing&&!layout.inBridge(entry.anchors,entry.previewBox,crossing.x,crossing.y))leave();
+            if(crossing&&entry?.id===crossing.id&&!editing)cross(entry,crossing.x,crossing.y,crossing.previous);
           };
           const emerge=(e,position)=>{
             e.emergeAnimation?.cancel();
@@ -111,13 +141,18 @@ enum HTMLNotesScript {
             const release=()=>{if(e.emergeAnimation!==animation)return;e.card.style.willChange='';e.card.style.transformOrigin='';e.emergeAnimation=null;layout.endEntrance(e.id);};
             animation.finished.then(release,release);
           };
-          function schedule(){if(!queued){queued=true;requestAnimationFrame(()=>{if(queued)arrange();});setTimeout(()=>{if(queued)arrange();},32);}}
+          function schedule(full=true){
+            if(full)restingDirty=true;
+            if(queued)return;queued=true;
+            const run=()=>{cancelAnimationFrame(frame);clearTimeout(timer);arrange();};
+            const frame=requestAnimationFrame(run),timer=setTimeout(run,32);
+          }
           const begin=()=>{
             const anchors=normalize(selection.parts());if(!anchors.length)return;
             const existing=[...records.values()].find(e=>same(e.anchors,anchors));
             const e=existing||make({id:crypto.randomUUID().toUpperCase(),anchors,markdown:'',html:''});activate(e.id,true);
           };
-          const hits=(x,y,precise=false)=>[...records.values()].filter(e=>layout.hit(e.anchors,x,y,precise));
+          const hits=(target,x,y,precise=false)=>(bySection.get(target.closest?.('section[data-key]')?.dataset.key)||[]).filter(e=>layout.hit(e.anchors,x,y,precise));
           const setChoices=matches=>{for(const e of matches){e.choices.replaceChildren();e.choices.classList.toggle('note-hidden',matches.length<2);for(const [index,item] of matches.entries()){const o=document.createElement('option');o.value=item.id;o.textContent=(index+1)+' · '+(item.dimensionTitle||'笔记');o.selected=e.id===item.id;e.choices.append(o);}}};
           document.addEventListener('pointerdown',event=>{
             pointer={x:event.clientX,y:event.clientY};
@@ -126,7 +161,7 @@ enum HTMLNotesScript {
           },true);
           root.addEventListener('click',event=>{
             if(!pointer||Math.hypot(event.clientX-pointer.x,event.clientY-pointer.y)>4||!getSelection().isCollapsed)return;
-            const matches=hits(event.clientX,event.clientY,true);setChoices(matches);
+            const matches=hits(event.target,event.clientX,event.clientY,true);setChoices(matches);
             if(matches.length){event.preventDefault();event.stopImmediatePropagation();activate(matches[0].id,true);return;}
             for(const mark of selection.projectedMarks()){
               const parts=normalize(mark.parts.map(p=>({...p,key:mark.key})));
@@ -137,22 +172,49 @@ enum HTMLNotesScript {
               const e=make({id:crypto.randomUUID().toUpperCase(),anchors,markdown:'',html:''});activate(e.id,true);return;
             }
           },true);
-          let pendingCrossing=null;
+          let pendingCrossing=null,crossingTimer=null,lastPoint=null,scrollCheck=false;
+          const cancelCrossing=()=>{clearTimeout(crossingTimer);crossingTimer=null;pendingCrossing=null;};
+          const cross=(e,x,y,previous)=>{
+            if(!layout.inBridge(e.anchors,e.previewBox,x,y)){leave();return;}
+            if(e.previewBox?.side==='floating')return;
+            // The gap is only a passage. Resting over unmarked prose always releases it.
+            const direction=(e.previewBox.side==='right'?1:-1)*(reverse?-1:1);
+            if(previous&&(x-previous.x)*direction < -2){leave();return;}
+            if(!crossingTimer||previous&&(x-previous.x)*direction>0){
+              clearTimeout(crossingTimer);crossingTimer=setTimeout(leave,160);
+            }
+          };
+          const track=(target,x,y,previous,scrolled=false)=>{
+            const card=target?.closest?.('.reader-note-card');
+            if(card){cancelCrossing();if(active!==card.dataset.noteId||!reverse)activate(card.dataset.noteId,false,true);return;}
+            const matches=target?hits(target,x,y):[];
+            if(matches.length){
+              cancelCrossing();
+              const e=matches.find(m=>m.id===active)||matches[0];
+              if(active!==e.id){setChoices(matches);activate(e.id);}
+              else if(reverse){reverse=false;layout.reverse(false);}
+              return;
+            }
+            const e=records.get(active);
+            if(!e||scrolled){leave();return;}
+            if(!e.previewBox&&queued){pendingCrossing={id:e.id,x,y,previous};return;}
+            cross(e,x,y,previous);
+          };
           document.addEventListener('pointermove',event=>{
             if(editing||event.buttons||event.pointerType==='touch')return;
-            const x=event.clientX,y=event.clientY,card=event.target.closest?.('.reader-note-card');
-            pendingCrossing=null;
-            if(card){if(active!==card.dataset.noteId||!reverse)activate(card.dataset.noteId,false,true);return;}
-            const matches=hits(x,y);
-            if(matches.length){if(active!==matches[0].id){setChoices(matches);activate(matches[0].id);}return;}
-            const e=records.get(active);
-            if(e&&!e.previewBox&&queued){pendingCrossing={id:e.id,x,y};return;}
-            if(!e||!layout.inBridge(e.anchors,e.previewBox,x,y))leave();
+            const x=event.clientX,y=event.clientY,previous=lastPoint;lastPoint={x,y};track(event.target,x,y,previous);
           });
-          document.addEventListener('mouseleave',leave);
+          document.addEventListener('mouseleave',()=>{lastPoint=null;leave();});
           document.addEventListener('keydown',event=>{if(event.key==='Escape'&&active)finish();});
-          const resized=()=>{layout.invalidate();for(const e of records.values()){e.slot=null;e.previewBox=null;}schedule();};
-          window.addEventListener('resize',resized);document.addEventListener('scroll',()=>layout.scrolled(),{passive:true});
+          const resized=()=>{layout.invalidate();schedule();};
+          window.addEventListener('resize',resized);
+          document.addEventListener('scroll',()=>{
+            layout.scrolled();
+            if(lastPoint&&!editing&&!scrollCheck){scrollCheck=true;requestAnimationFrame(()=>{
+              scrollCheck=false;if(!lastPoint||editing)return;
+              const {x,y}=lastPoint;track(document.elementFromPoint(x,y),x,y,null,true);
+            });}
+          },{passive:true});
           new ResizeObserver(resized).observe(root);document.fonts?.ready.then(resized);document.fonts?.addEventListener('loadingdone',resized);
           // The appendix follows the published reader; it never becomes a paper section or an annotation anchor.
           let appendix=null,appendixBody=null,appendixSource='';
@@ -177,10 +239,15 @@ enum HTMLNotesScript {
               let changed=false;const ids=new Set(notes.map(n=>n.id));
               for(const [id,e] of records)if(e.persisted&&!ids.has(id)&&editing!==id){e.editor?.destroy();e.card.remove();records.delete(id);changed=true;}
               for(const note of notes){let e=records.get(note.id);if(!e){e=make(note);changed=true;}e.persisted=true;
-                if(editing!==e.id){if(e.markdown!==note.markdown){e.html='';changed=true;}e.markdown=note.markdown;e.anchors=note.anchors;e.html=note.html||e.html;body(e);}
+                if(editing===e.id)continue;
+                if(e.anchors!==note.anchors&&!same(e.anchors,note.anchors)){e.anchors=note.anchors;changed=true;}
+                const markdownChanged=e.markdown!==note.markdown;
+                if(markdownChanged||note.html&&note.html!==e.html){
+                  e.markdown=note.markdown;e.html=note.html||'';body(e);changed=true;
+                }
               }if(changed)schedule();
             },
-            preview(id,source,html){if(appendix?.dataset.noteId===id&&appendixSource===source){summary(id,source,html);return;}const e=records.get(id);if(!e||e.markdown!==source)return;e.html=html;e.content.style.whiteSpace='normal';body(e);e.editor?.preview(source,html);if(active===id&&!editing)schedule();},
+            preview(id,source,html){if(appendix?.dataset.noteId===id&&appendixSource===source){summary(id,source,html);return;}const e=records.get(id);if(!e||e.markdown!==source)return;e.html=html;e.content.style.whiteSpace='normal';body(e);e.editor?.preview(source,html);if(active===id&&!editing)schedule(false);},
             previewError(id){const e=records.get(id);if(e){e.content.textContent=e.markdown;e.status.textContent='预览失败，源码已保留';}},
             saved(status){lastStatus=status;for(const e of records.values())e.status.textContent=status;},
             insertPassage(id,source,from,to,markdown){return editing===id&&records.get(id)?.editor?.insertPassage(source,from,to,markdown);},
