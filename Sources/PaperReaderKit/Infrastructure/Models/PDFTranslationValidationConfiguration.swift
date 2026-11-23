@@ -1,6 +1,6 @@
 import Foundation
 
-/// An explicitly marked Mac acceptance build may use its isolated library's local credential for a live PDF test.
+/// An explicitly marked Mac acceptance build may use its isolated library's local credential for live PDF and source translation tests.
 public struct PDFTranslationValidationConfiguration: Sendable {
     public let settings: ModelSettings
     let key: String

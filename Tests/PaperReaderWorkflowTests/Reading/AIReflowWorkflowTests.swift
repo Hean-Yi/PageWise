@@ -164,6 +164,36 @@ private actor JointReflowTransport: HTTPTransport {
     #expect(try Data(contentsOf: root.appendingPathComponent(paper.originalPath)) == original)
 }
 
+@Test(arguments: [false, true])
+@MainActor func sourceReflowUsesTheLocalTranslationKeyWithOrWithoutSavedSettings(saved: Bool) async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    var approved = ModelSettings()
+    approved.baseURL = "https://api.deepseek.com"
+    approved.model = "deepseek-flash"
+    let local = PDFTranslationValidationConfiguration(settings: approved, key: "local-test-only")
+    let credentials = WorkflowCredentials()
+    credentials.values = [:]
+    let transport = JointReflowTransport()
+    let model = try ReaderModel(
+        root: root, client: ModelClient(transport: transport), credentials: credentials, translationValidation: local)
+    await model.load()
+    if saved { try model.saveSettings(approved, key: nil) }
+    #expect(try await model.modelKey(for: model.translationSettings).isEmpty)
+    var paper = Paper(
+        title: "Source fixture", digest: "fixture", originalPath: "unused.pdf", pageCount: 1, blocks: [],
+        warnings: [], canReflow: true)
+    paper.reflowJob = ReflowJob(sources: [TextBlock(sourcePage: 0, text: "A complete source paragraph.")])
+    paper.reflowJob?.evidenceRoute = "tex"
+    model.state.papers = [paper]
+    model.select(paper.id)
+    model.startAIReflow()
+    try await waitForReflow(model, id: paper.id)
+    #expect(await transport.models == [approved.model])
+    #expect(model.paper?.reflowJob?.finished == true)
+    #expect(model.paper?.translations.count == 1)
+}
+
 @Test @MainActor func coldLoaderAppearsBeforeCredentialReadOrCheckpointCreation() async throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: root) }

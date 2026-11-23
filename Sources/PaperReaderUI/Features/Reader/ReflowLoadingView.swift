@@ -67,7 +67,7 @@ struct ReadingModeChoiceView: View {
                     Label("阅读原版", systemImage: "doc.richtext").padding(.horizontal, 12).padding(.vertical, 8)
                 }.buttonStyle(.bordered)
                 Button(action: reflow) {
-                    Label("AI 双语重排", systemImage: "character.book.closed").padding(.horizontal, 12).padding(
+                    Label("源码重排", systemImage: "character.book.closed").padding(.horizontal, 12).padding(
                         .vertical, 8)
                 }.buttonStyle(.borderedProminent)
             }.controlSize(.large)

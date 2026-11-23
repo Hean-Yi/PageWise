@@ -44,9 +44,9 @@ public final class ReaderModel {
     let pdfBilingual = PDFBilingualSession()
     let pdfDocumentTranslation = PDFDocumentTranslationController()
     let pdfTranslations: PDFSentenceTranslationStore
-    let pdfValidation: PDFTranslationValidationConfiguration?
-    var pdfTranslationSettings: ModelSettings {
-        if modelSettings.model.isEmpty, let pdfValidation { return pdfValidation.settings }
+    let translationValidation: PDFTranslationValidationConfiguration?
+    var translationSettings: ModelSettings {
+        if modelSettings.model.isEmpty, let translationValidation { return translationValidation.settings }
         return modelSettings
     }
     public var visiblePage = 0 {
@@ -87,7 +87,8 @@ public final class ReaderModel {
     public init(
         root: URL? = nil, client: ModelClient = ModelClient(),
         credentials: any ModelCredentialStore = DeviceModelCredentials(),
-        pageTextLocator: any FixedPageTextLocating = PDFPageTextLocator()
+        pageTextLocator: any FixedPageTextLocating = PDFPageTextLocator(),
+        translationValidation: PDFTranslationValidationConfiguration? = nil
     ) throws {
         self.client = client
         self.pageTextLocator = pageTextLocator
@@ -97,7 +98,7 @@ public final class ReaderModel {
             .appendingPathComponent("PaperReader", isDirectory: true)
         self.root = location
         pdfTranslations = PDFSentenceTranslationStore(root: location)
-        pdfValidation = PDFTranslationValidationConfiguration.load(root: location)
+        self.translationValidation = translationValidation ?? PDFTranslationValidationConfiguration.load(root: location)
         store = try LibraryStore(directory: location)
         importer = PDFImporter(root: location)
         vault = VaultService(root: location)
@@ -117,6 +118,9 @@ public final class ReaderModel {
             && (paper?.reflowJob?.supportsContinuation == true
                 || selectedPaperID.map { translating.contains($0) } == true)
             && paper?.reflowJob?.hasPresentedContent != true
+    }
+    var showsPDFCanvas: Bool {
+        paper != nil && !usesHTMLReading && !readingChoicePresented && !showingReflowLoading
     }
     public var activePages: [PageArtifact] {
         guard let paper else { return [] }
@@ -157,7 +161,10 @@ public final class ReaderModel {
         Task { await flushReadingNotes() }
         requestedReadingNote = nil
         let changedPaper = selectedPaperID != id
-        if changedPaper { pdfBilingual.close() }
+        if changedPaper {
+            pdfBilingual.close()
+            translationPauseReason = nil
+        }
         invalidateSearchNavigation()
         endReading()
         selectedPaperID = id
@@ -332,7 +339,7 @@ public final class ReaderModel {
     public func saveSettings(_ draft: ModelSettings, key: String?, removeKey: Bool = false) throws -> String? {
         let result = try configurationStore.save(draft, key: key, removeKey: removeKey)
         let changed = modelSettings != result.settings || removeKey || key?.isEmpty == false
-        let previous = pdfTranslationSettings
+        let previous = translationSettings
         modelSettings = result.settings
         if changed {
             pdfBilingual.settingsChanged(self, previous: previous, credentialRemoved: removeKey)

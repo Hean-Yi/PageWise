@@ -31,7 +31,7 @@ extension ReaderModel {
             message = "旧 PDF 转换任务已停用，已有内容保留。获取线上源码后可重新生成。"
             return
         }
-        guard (try? modelSettings.normalized()) != nil else {
+        guard (try? translationSettings.normalized()) != nil else {
             message = "请先在模型设置中保存服务地址、模型和密钥。"
             return
         }
@@ -52,8 +52,8 @@ extension ReaderModel {
                 if self.translationDraft?.paperID == id { self.translationDraft = nil }
             }
             do {
-                let settings = self.modelSettings
-                let key = try await self.modelKey(for: settings)
+                let settings = self.translationSettings
+                let key = try await self.translationKey(for: settings)
                 guard !key.isEmpty else { throw ReaderError.message("请在模型设置中保存 API Key。") }
                 guard var current = self.state.papers.first(where: { $0.id == id }) else { return }
                 if current.reflowJob == nil || regenerate {
@@ -97,12 +97,12 @@ extension ReaderModel {
                     job.id == jobID
                 {
                     try Task.checkCancellation()
-                    guard self.modelSettings == settings else { throw CancellationError() }
+                    guard self.translationSettings == settings else { throw CancellationError() }
                     if job.evidenceRoute == "preparing" {
                         self.reflowStages[id] = "解析 TeX 源码与图件"
                         let evidence = try await OnlineSourceStore().prepare(paper: current, root: self.root)
                         try Task.checkCancellation()
-                        guard self.modelSettings == settings,
+                        guard self.translationSettings == settings,
                             var publication = self.state.papers.first(where: { $0.id == id }),
                             publication.reflowJob?.id == jobID
                         else { throw CancellationError() }
@@ -203,7 +203,7 @@ extension ReaderModel {
                         }
                     } catch ModelStreamFailure.outputLimit {
                         try Task.checkCancellation()
-                        guard self.modelSettings == settings,
+                        guard self.translationSettings == settings,
                             let latest = self.state.papers.first(where: { $0.id == id })?.reflowJob,
                             latest.id == jobID
                         else { throw CancellationError() }
@@ -220,7 +220,7 @@ extension ReaderModel {
                         continue
                     } catch AIReflowFailure.invalidStructure where structureRetries < 2 {
                         try Task.checkCancellation()
-                        guard self.modelSettings == settings else { throw CancellationError() }
+                        guard self.translationSettings == settings else { throw CancellationError() }
                         usingRecovery = true
                         let completed =
                             self.state.papers.first(where: { $0.id == id })?.reflowJob?.completedSourceIDs.count ?? 0
@@ -253,12 +253,16 @@ extension ReaderModel {
                 let reason = cancelled ? "已暂停，可从已保存进度继续" : error.localizedDescription
                 publication.reflowJob?.failure = reason
                 _ = await self.save(publishingReflow: publication)
-                self.translationPauseReason = reason
                 self.reflowStages[id] = reason
+                guard self.selectedPaperID == id, self.mode == "translated", self.retainedReadingID == nil else {
+                    return
+                }
+                self.translationPauseReason = reason
                 self.status = reason
                 if publication.reflowJob == nil {
                     self.mode = "original"
-                    self.message = reason
+                    self.beginReading()
+                    if !cancelled { self.message = reason }
                 }
             }
         }
@@ -266,7 +270,7 @@ extension ReaderModel {
 
     private func persistAIPlan(_ plan: AIReflowPlan, paperID: UUID, jobID: UUID, settings: ModelSettings) async throws {
         try Task.checkCancellation()
-        guard modelSettings == settings else { throw CancellationError() }
+        guard translationSettings == settings else { throw CancellationError() }
         guard var publication = state.papers.first(where: { $0.id == paperID }), publication.reflowJob?.id == jobID
         else { throw CancellationError() }
         publication.reflowJob?.acceptedPlan = plan
@@ -277,7 +281,7 @@ extension ReaderModel {
     private func setAIDraft(block: TextBlock, text: String, paperID: UUID, jobID: UUID, settings: ModelSettings) throws
     {
         try Task.checkCancellation()
-        guard modelSettings == settings else { throw CancellationError() }
+        guard translationSettings == settings else { throw CancellationError() }
         guard state.papers.first(where: { $0.id == paperID })?.reflowJob?.id == jobID else { throw CancellationError() }
         translationDraft = TranslationDraft(paperID: paperID, block: block, text: text)
     }
@@ -286,7 +290,7 @@ extension ReaderModel {
         _ pair: BilingualBlock, sourceIDs: [UUID], paperID: UUID, jobID: UUID, settings: ModelSettings
     ) async throws {
         try Task.checkCancellation()
-        guard modelSettings == settings else { throw CancellationError() }
+        guard translationSettings == settings else { throw CancellationError() }
         guard let current = state.papers.first(where: { $0.id == paperID }), let job = current.reflowJob,
             job.id == jobID
         else { throw CancellationError() }
@@ -302,7 +306,7 @@ extension ReaderModel {
             artifact = try await HTMLReadingStore().append([pair], to: current.htmlReading, paper: current, root: root)
         }
         try Task.checkCancellation()
-        guard modelSettings == settings else { throw CancellationError() }
+        guard translationSettings == settings else { throw CancellationError() }
         guard var publication = state.papers.first(where: { $0.id == paperID }), publication.reflowJob?.id == jobID
         else { throw CancellationError() }
         publication.htmlReading = artifact

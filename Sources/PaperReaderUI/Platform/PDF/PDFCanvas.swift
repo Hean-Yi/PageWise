@@ -10,9 +10,9 @@ struct PDFCanvas: View {
     let model: ReaderModel
     var penEnabled: Bool
     var acceptsSentenceInput = true
-    var body: some View {
+    var sentenceDisplay: PDFSentenceDisplay {
         let session = model.pdfBilingual
-        let focus = PDFSentenceDisplay(
+        return PDFSentenceDisplay(
             isVisible: acceptsSentenceInput,
             sentences: session.matches(model) && acceptsSentenceInput ? session.sentences : [],
             activeID: session.activeID,
@@ -20,11 +20,13 @@ struct PDFCanvas: View {
             selectedIDs: session.translationSelectedIDs, scrollID: session.pdfScrollID,
             scrollRevision: session.pdfScrollRevision,
             illustration: acceptsSentenceInput && session.matches(model) ? session.sourceIllustration : nil)
-        PlatformPDF(model: model, penEnabled: penEnabled, focus: focus)
+    }
+    var body: some View {
+        PlatformPDF(model: model, penEnabled: penEnabled, focus: sentenceDisplay)
     }
 }
 
-private struct PDFSentenceDisplay {
+struct PDFSentenceDisplay {
     let isVisible: Bool
     let sentences: [PDFSourceSentence]
     let activeID: String?
@@ -111,11 +113,11 @@ private final class ReaderPDFView: PDFView {
 #endif
 
 @MainActor
-private final class PDFCoordinator: NSObject, @preconcurrency PDFPageOverlayViewProvider {
+final class PDFCoordinator: NSObject, @preconcurrency PDFPageOverlayViewProvider {
     let model: ReaderModel
     weak var view: PDFView?
     var displayedDocument: PDFDisplayDocument?
-    var identity = ""
+    var displayedURLs: [URL]?
     var keys: [String] = []
     var highlightIDs: Set<UUID> = []
     var penEnabled = false
@@ -181,11 +183,11 @@ private final class PDFCoordinator: NSObject, @preconcurrency PDFPageOverlayView
             (view as? ReaderPDFView)?.observesSentenceInput = !focus.sentences.isEmpty
         #endif
         view.isInMarkupMode = penEnabled
-        // SwiftUI may update the old representable once after the reader is dismissed.
-        guard model.paper != nil, !model.usesHTMLReading else {
+        // SwiftUI can still update this representable while it is being replaced by the loading view.
+        guard model.showsPDFCanvas, let currentPaperID = model.selectedPaperID else {
             view.document = nil
             displayedDocument = nil
-            identity = ""
+            displayedURLs = nil
             keys = []
             paperID = nil
             highlightIDs = []
@@ -198,22 +200,22 @@ private final class PDFCoordinator: NSObject, @preconcurrency PDFPageOverlayView
             #endif
             return
         }
-        let newIdentity = model.pageURLs.map(\.path).joined(separator: "|")
-        if identity != newIdentity {
+        let urls = model.pageURLs
+        if displayedURLs != urls || paperID != currentPaperID {
             let oldPage = model.visiblePage
             displayedSentenceIDs = []
             revealRevision = nil
             revealedIllustrationID = nil
-            identity = newIdentity
+            displayedURLs = urls
             keys = model.pageKeys
-            paperID = model.selectedPaperID
+            paperID = currentPaperID
             #if os(iOS)
                 for canvas in canvases.values { toolPicker.removeObserver(canvas) }
                 canvases = [:]
             #endif
             let document: PDFDocument
             do {
-                let loaded = try PDFDisplayDocument.load(urls: model.pageURLs, expectedPageCount: keys.count)
+                let loaded = try PDFDisplayDocument.load(urls: urls, expectedPageCount: keys.count)
                 displayedDocument = loaded
                 document = loaded.document
             } catch {
@@ -221,9 +223,9 @@ private final class PDFCoordinator: NSObject, @preconcurrency PDFPageOverlayView
                 displayedDocument = nil
                 highlightIDs = []
                 let message = error.localizedDescription
-                Task { @MainActor [weak model] in
-                    guard let model, !model.usesHTMLReading,
-                        model.pageURLs.map(\.path).joined(separator: "|") == newIdentity
+                Task { @MainActor [weak model, keys] in
+                    guard let model, model.showsPDFCanvas, model.selectedPaperID == currentPaperID,
+                        model.pageURLs == urls, model.pageKeys == keys
                     else { return }
                     model.message = message
                 }
@@ -268,7 +270,7 @@ private final class PDFCoordinator: NSObject, @preconcurrency PDFPageOverlayView
             view.clearSelection()
             view.go(to: page)
             Task { @MainActor [weak self] in
-                guard let self, self.isVisible, self.identity == newIdentity, self.model.jumpPage == index,
+                guard let self, self.isVisible, self.displayedURLs == urls, self.model.jumpPage == index,
                     self.paperID == self.model.selectedPaperID, self.keys == self.model.pageKeys
                 else { return }
                 self.model.recordVisiblePage(index)

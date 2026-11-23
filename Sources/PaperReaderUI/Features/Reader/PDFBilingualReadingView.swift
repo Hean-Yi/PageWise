@@ -279,7 +279,7 @@ struct PDFBilingualReadingView: View {
                 case .paused:
                     Button("继续翻译") { session.resumeDocumentTranslation(model) }
                 case .failed:
-                    if !model.pdfTranslationSettings.model.isEmpty {
+                    if !model.translationSettings.model.isEmpty {
                         Button("重试") { session.resumeDocumentTranslation(model) }
                     }
                     Button("模型设置", action: openSettings)
@@ -345,7 +345,7 @@ struct PDFBilingualReadingView: View {
     }
 
     private var serviceDisclosure: some View {
-        let name = model.pdfTranslationSettings.model
+        let name = model.translationSettings.model
         return Text(name.isEmpty ? "配置模型后可翻译本页英文" : "本页英文将发送至 \(name)")
             .font(.caption).foregroundStyle(ReaderTheme.muted).textSelection(.enabled)
     }
@@ -359,7 +359,7 @@ struct PDFBilingualReadingView: View {
             }
         } else {
             Button {
-                if model.pdfTranslationSettings.model.isEmpty {
+                if model.translationSettings.model.isEmpty {
                     openSettings()
                 } else {
                     session.translatePage(model, paragraphs: layout == .paragraph)

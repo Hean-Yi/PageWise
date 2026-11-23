@@ -73,13 +73,13 @@ struct ReaderView: View {
                                 model: model,
                                 sidebarOpen: (showAssistant && !libraryAgentPresented && width >= 900)
                                     || showAssistantSheet)
-                        } else if !model.showingReflowLoading && !model.readingChoicePresented {
+                        } else if model.showsPDFCanvas {
                             PDFBilingualReadingView(
                                 model: model, penEnabled: penEnabled, openSettings: requestSettings,
                                 layout: $pdfLayout, peekingAtOriginal: $peekingAtOriginal)
                         }
                         if model.readingChoicePresented {
-                            ReadingModeChoiceView(model: model, reflow: translate)
+                            ReadingModeChoiceView(model: model, reflow: { translate() })
                         } else if model.showingReflowLoading {
                             ReflowLoadingView(model: model)
                         }
@@ -157,17 +157,16 @@ struct ReaderView: View {
                 readingModePicker.pickerStyle(.segmented).fixedSize()
                 readingModePicker.pickerStyle(.menu)
             }.labelsHidden().accessibilityLabel("阅读模式")
-            if model.translating.contains(model.selectedPaperID ?? UUID()) {
+            if !model.pdfBilingual.isOpen, model.translating.contains(model.selectedPaperID ?? UUID()) {
                 Button(action: model.pauseTranslation) { Image(systemName: "pause.circle") }
                     .help("暂停重排").accessibilityLabel("暂停重排")
-            } else if model.paper?.reflowJob?.finished != true,
-                (model.paper?.reflowJob == nil && model.paper?.onlineSource != nil)
-                    || model.paper?.reflowJob?.supportsContinuation == true
+            } else if model.mode == "translated", let job = model.paper?.reflowJob, job.supportsContinuation,
+                !job.finished
             {
-                Button(action: translate) {
-                    Label(model.paper?.reflowJob == nil ? "AI 重排" : "继续", systemImage: "sparkles")
+                Button(action: { translate() }) {
+                    Label("继续", systemImage: "sparkles")
                 }
-                .help("AI 双语重排 / 继续")
+                .help("继续生成源码双语版")
             }
             if model.paper?.onlineSource != nil || model.paper?.retainedReadings?.isEmpty == false
                 || model.paper?.previewPages.isEmpty == false
@@ -180,9 +179,7 @@ struct ReaderView: View {
                         }
                     }
                     if model.paper?.onlineSource != nil {
-                        Button("重新生成双语版") {
-                            if configured { model.startAIReflow(regenerate: true) } else { requestSettings() }
-                        }
+                        Button("重新生成双语版") { translate(regenerate: true) }
                     }
                     if let versions = model.state.papers.first(where: { $0.id == model.selectedPaperID })?
                         .retainedReadings,
@@ -235,7 +232,8 @@ struct ReaderView: View {
             if model.mode == "reflow" {
                 Text("旧重排").tag("reflow")
             } else if hasBilingualEdition {
-                Text("双语重排").tag("translated")
+                Text(model.paper?.onlineSource != nil && model.paper?.translatedPages.isEmpty == true ? "源码重排" : "双语重排")
+                    .tag("translated")
             }
         }
     }
@@ -309,11 +307,13 @@ struct ReaderView: View {
                 .accessibilityLabel(model.isCurrentPageBookmarked ? "移除当前页书签" : "添加当前页书签")
                 .keyboardShortcut("d")
             Spacer()
-            if model.translating.contains(model.selectedPaperID ?? UUID()), !model.showingReflowLoading {
+            if model.mode == "translated", model.translating.contains(model.selectedPaperID ?? UUID()),
+                !model.showingReflowLoading
+            {
                 ProgressView().controlSize(.small)
                 Text("继续生成中").font(.caption).foregroundStyle(ReaderTheme.muted)
             }
-            if let reason = model.translationPauseReason {
+            if model.mode == "translated", let reason = model.translationPauseReason {
                 Text(reason).font(.caption).foregroundStyle(ReaderTheme.muted).lineLimit(2)
             }
             if !model.selectionText.isEmpty && originalVisible {
@@ -484,7 +484,13 @@ struct ReaderView: View {
     private var configured: Bool {
         (try? model.modelSettings.normalized()) != nil
     }
-    private func translate() { if configured { model.startAIReflow() } else { requestSettings() } }
+    private func translate(regenerate: Bool = false) {
+        if (try? model.translationSettings.normalized()) != nil {
+            model.startAIReflow(regenerate: regenerate)
+        } else {
+            requestSettings()
+        }
+    }
     private func send() {
         guard configured else {
             requestSettings()

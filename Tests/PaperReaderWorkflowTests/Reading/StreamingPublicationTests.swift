@@ -1,7 +1,8 @@
 import Foundation
 import PaperReaderKit
-import PaperReaderUI
 import Testing
+
+@testable import PaperReaderUI
 
 private actor NoRequestTransport: HTTPTransport {
     var calls = 0
@@ -62,4 +63,52 @@ private actor NoRequestTransport: HTTPTransport {
     }
     #expect(await transport.calls == 0)
     #expect(model.paper?.translatedBlockCount == 0)
+}
+
+@Test(arguments: [false, true])
+@MainActor func failedSourcePreparationKeepsTheReadersNewSelection(switchPaper: Bool) async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let credentials = PendingCredentials()
+    let transport = NoRequestTransport()
+    let model = try ReaderModel(root: root, client: ModelClient(transport: transport), credentials: credentials)
+    await model.load()
+    var source = Paper(
+        title: "Source", digest: "source", originalPath: "original.pdf", pageCount: 2,
+        blocks: [], warnings: [], canReflow: true)
+    source.onlineSource = OnlinePaperSource(candidateID: "https://arxiv.org/abs/0000.00000v1")
+    var other = Paper(
+        title: "Published", digest: "other", originalPath: "other.pdf", pageCount: 2,
+        blocks: [], warnings: [], canReflow: true)
+    other.translatedPages = [PageArtifact(blockIDs: [], sourcePage: 0, relativePath: "published.pdf")]
+    model.state.papers = [source, other]
+    model.select(source.id)
+    var settings = model.modelSettings
+    settings.model = "test"
+    try model.saveSettings(settings, key: nil)
+    model.startAIReflow()
+    let task = try #require(model.translationTasks[source.id])
+    for _ in 0..<100 {
+        if credentials.waiting { break }
+        try await Task.sleep(for: .milliseconds(10))
+    }
+    let pendingKey = try #require(credentials.continuation)
+    if switchPaper {
+        model.select(other.id)
+        model.openRetainedReading(nil)
+    } else {
+        model.readOriginal()
+        model.navigateToPage(1)
+    }
+    pendingKey.resume(returning: "")
+    credentials.continuation = nil
+    await task.value
+    #expect(model.selectedPaperID == (switchPaper ? other.id : source.id))
+    #expect(model.mode == (switchPaper ? "translated" : "original"))
+    #expect(model.visiblePage == (switchPaper ? 0 : 1))
+    #expect(model.message == nil)
+    #expect(model.translationPauseReason == nil)
+    #expect(model.reflowStages[source.id]?.contains("API Key") == true)
+    #expect(await transport.calls == 0)
+    await model.flushReadingPosition()
 }
