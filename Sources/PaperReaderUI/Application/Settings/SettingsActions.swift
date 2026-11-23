@@ -2,6 +2,10 @@ import Foundation
 import PaperReaderKit
 
 extension ReaderModel {
+    func usesLocalPDFTranslationKey(for settings: ModelSettings) -> Bool {
+        pdfValidation?.key(for: settings) != nil
+    }
+
     func modelKey(for settings: ModelSettings) async throws -> String {
         try await configurationStore.keyForRequest(settings)
     }
@@ -14,6 +18,8 @@ extension ReaderModel {
         let testKey: String
         if removeKey {
             testKey = ""
+        } else if enteredKey.isEmpty, let localKey = pdfValidation?.key(for: settings) {
+            testKey = localKey
         } else if enteredKey.isEmpty {
             testKey = try await configurationStore.keyForDraftRequest(settings)
         } else {

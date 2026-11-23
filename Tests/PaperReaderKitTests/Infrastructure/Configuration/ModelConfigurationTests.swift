@@ -41,6 +41,23 @@ import Testing
     #expect(throws: (any Error).self) { try ModelSettings().normalized() }
 }
 
+@Test func localPDFTestKeyMatchesOnlyConfiguredEndpointAndModel() {
+    var approved = ModelSettings()
+    approved.baseURL = "https://api.deepseek.com"
+    approved.model = "deepseek-flash"
+    let local = PDFTranslationValidationConfiguration(settings: approved, key: "fixture")
+    var draft = approved
+    draft.baseURL = "https://API.DEEPSEEK.COM:443/chat/completions/"
+    #expect(local.key(for: draft) == "fixture")
+    draft.model = "another-model"
+    #expect(local.key(for: draft) == nil)
+    draft.model = approved.model
+    for address in ["https://example.invalid", "https://api.deepseek.com/other", "http://api.deepseek.com"] {
+        draft.baseURL = address
+        #expect(local.key(for: draft) == nil)
+    }
+}
+
 @Test @MainActor func configurationMigratesLegacyAndDoesNotReuseKeyForChangedAddress() throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)

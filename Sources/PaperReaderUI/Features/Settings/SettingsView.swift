@@ -21,9 +21,10 @@ struct SettingsView: View {
 
     init(model: ReaderModel) {
         self.model = model
-        _draft = State(initialValue: model.modelSettings)
-        _savedSettings = State(initialValue: model.modelSettings)
-        let isGLM = (try? model.modelSettings.endpointURL()) == (try? ModelSettings().endpointURL())
+        let settings = model.pdfTranslationSettings
+        _draft = State(initialValue: settings)
+        _savedSettings = State(initialValue: settings)
+        let isGLM = (try? settings.endpointURL()) == (try? ModelSettings().endpointURL())
         _provider = State(initialValue: isGLM ? "glm" : "custom")
     }
 
@@ -31,6 +32,7 @@ struct SettingsView: View {
         guard let endpoint = try? draft.endpointURL() else { return false }
         return endpoint == (try? savedSettings.endpointURL())
     }
+    private var usesLocalPDFKey: Bool { model.usesLocalPDFTranslationKey(for: draft) }
     private var canReuseKey: Bool { hasSavedKey && sameEndpoint && !removeKey }
     private var keyStatus: String {
         if removeKey { return "保存后移除" }
@@ -74,6 +76,12 @@ struct SettingsView: View {
         .onChange(of: draft) { _, _ in feedback = nil }
         .onChange(of: draft.baseURL) { _, _ in
             provider = (try? draft.endpointURL()) == (try? ModelSettings().endpointURL()) ? "glm" : "custom"
+        }
+        .onChange(of: usesLocalPDFKey) { _, usesLocal in
+            if usesLocal {
+                key = ""
+                removeKey = false
+            }
         }
         .onChange(of: key) { _, _ in feedback = nil }
         .onChange(of: removeKey) { _, _ in feedback = nil }
@@ -127,6 +135,23 @@ struct SettingsView: View {
                 }
             }
         }.disabled(isTesting)
+        if usesLocalPDFKey {
+            card {
+                LabeledContent {
+                    Text("已从本机 .env 读取").font(.subheadline).foregroundStyle(ReaderTheme.accent)
+                } label: {
+                    Label("PDF 翻译测试密钥", systemImage: "key.horizontal").font(.headline)
+                }
+            }
+        } else {
+            keychainCard
+        }
+        Label("Chat Completions", systemImage: "network")
+            .font(.caption).foregroundStyle(.secondary)
+            .help(usesLocalPDFKey ? "PDF 翻译使用此接口。" : "翻译与问答使用此接口，相关文字及检索片段将发送给该服务。")
+    }
+
+    private var keychainCard: some View {
         card {
             HStack {
                 Label("API Key", systemImage: "key.horizontal").font(.headline)
@@ -156,9 +181,6 @@ struct SettingsView: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
         }.disabled(isTesting)
-        Label("Chat Completions", systemImage: "network")
-            .font(.caption).foregroundStyle(.secondary)
-            .help("翻译与问答使用此接口，相关文字及检索片段将发送给该服务。")
     }
 
     @ViewBuilder private var notesForm: some View {
@@ -226,6 +248,10 @@ struct SettingsView: View {
     }
 
     private func refreshKeyStatus() {
+        if model.usesLocalPDFTranslationKey(for: savedSettings) {
+            hasSavedKey = false
+            return
+        }
         Task {
             do { hasSavedKey = try await model.hasSavedAPIKey() } catch { showError(error) }
         }
@@ -267,7 +293,7 @@ struct SettingsView: View {
             do {
                 try await model.testModelConnection(snapshot, key: testKey, removeKey: shouldRemove)
                 feedbackIsError = false
-                feedback = "连接成功 · 保存后生效"
+                feedback = usesLocalPDFKey && snapshot == savedSettings ? "连接成功" : "连接成功 · 保存后生效"
             } catch is CancellationError {
                 // Closing the settings cancels the test without surfacing an error.
             } catch { if !Task.isCancelled { showError(error) } }

@@ -122,7 +122,7 @@ final class PDFDocumentTranslationController {
             url: model.root.appendingPathComponent(paper.originalPath), documentHash: paper.digest,
             pageCount: paper.pageCount, store: model.pdfTranslations, settings: settings, client: model.client,
             key: {
-                if let key = validation?.key { return key }
+                if let key = validation?.key(for: settings) { return key }
                 return try await configuration.keyForRequest(settings)
             })
         return PDFDocumentTranslationStatus(queue, pageCount: paper.pageCount, preferredPage: page)

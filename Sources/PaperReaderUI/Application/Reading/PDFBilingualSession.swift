@@ -423,7 +423,7 @@ final class PDFBilingualSession {
                 let result = try await model.pdfTranslations.translate(
                     documentHash: paper.digest, sentences: items, settings: settings, client: model.client,
                     key: {
-                        if let key = model.pdfValidation?.key { return key }
+                        if let key = model.pdfValidation?.key(for: settings) { return key }
                         return try await model.modelKey(for: settings)
                     },
                     onUpdate: { values in await update(values) })

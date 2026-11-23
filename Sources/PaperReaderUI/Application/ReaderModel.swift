@@ -45,7 +45,10 @@ public final class ReaderModel {
     let pdfDocumentTranslation = PDFDocumentTranslationController()
     let pdfTranslations: PDFSentenceTranslationStore
     let pdfValidation: PDFTranslationValidationConfiguration?
-    var pdfTranslationSettings: ModelSettings { pdfValidation?.settings ?? modelSettings }
+    var pdfTranslationSettings: ModelSettings {
+        if modelSettings.model.isEmpty, let pdfValidation { return pdfValidation.settings }
+        return modelSettings
+    }
     public var visiblePage = 0 {
         didSet {
             if oldValue != visiblePage, mode == "original", let id = selectedPaperID {
