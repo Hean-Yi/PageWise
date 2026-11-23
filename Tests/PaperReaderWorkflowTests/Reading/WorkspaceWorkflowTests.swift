@@ -387,6 +387,82 @@ import Testing
     await model.flushReadingPosition()
 }
 
+@Test @MainActor func citationsResolveVerifiedPagesAndRetainedSourceBlocksBeforeNavigating() async throws {
+    let root = workspaceDirectory()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let model = try ReaderModel(root: root)
+    await model.load()
+    var paper = workspacePaper()
+    let oldBlock = TextBlock(sourcePage: -1, text: "An archived section without a PDF page.")
+    var previous = paper
+    previous.blocks = [oldBlock]
+    previous.translatedPages = [PageArtifact(blockIDs: [oldBlock.id], sourcePage: -1, relativePath: "old.pdf")]
+    let older = RetainedReading(paper: previous)
+    paper.retainedReadings = [older]
+    model.state.papers = [paper]
+    model.select(paper.id)
+    let saved = Evidence(id: "S1", title: paper.title, text: oldBlock.text, paperID: paper.id, blockID: oldBlock.id)
+    #expect(model.jump(to: saved))
+    #expect(model.mode == "translated" && model.retainedReadingID == older.id)
+    let key = try #require(older.readingPages.first?.id.uuidString)
+    #expect(model.workspace(for: paper.id).position?.pageKey == key)
+    let sources = [
+        Evidence(id: "S2", title: "A note", text: "Note excerpt", notePath: "/fixture/note.md"),
+        Evidence(id: "S3", title: paper.title, text: "Missing page", paperID: paper.id, sourcePage: 99),
+        Evidence(id: "S4", title: "Removed paper", text: "Excerpt", paperID: UUID(), sourcePage: 0),
+        Evidence(id: "S5", title: paper.title, text: "No published source", paperID: paper.id, blockID: UUID()),
+    ]
+    for source in sources {
+        #expect(!model.jump(to: source))
+        #expect(model.workspace(for: paper.id).position?.pageKey == key)
+    }
+    let original = Evidence(id: "S6", title: paper.title, text: "A PDF page", paperID: paper.id, sourcePage: 1)
+    model.selectedSection = "memory"
+    #expect(model.jump(to: original))
+    #expect(model.selectedSection == "library")
+    #expect(model.mode == "original" && model.visiblePage == 1)
+    await model.flushReadingPosition()
+}
+
+@Test func citationPreviewUsesSelectedTextThenQuestionPhrasesFromTheSavedEvidence() {
+    let evidence =
+        "A different benchmark measures long context. Another subsection discusses historical settings. "
+        + "Web Navigation: Bundled Web Shopping. Bundled Web Shopping tests recall of earlier purchases. "
+        + "Agents must remember previous specifications."
+    let focused = CitationExcerpt(question: "第 3.1 节里，Bundled Web Shopping 如何考查记忆？", selection: "")
+    #expect(focused.preview(of: evidence) == "Bundled Web Shopping tests recall of earlier purchases.")
+    let repeatedLabel = "Bundled Web Shopping. " + String(repeating: "A different result. ", count: 10)
+    #expect(focused.preview(of: repeatedLabel + evidence) == "Bundled Web Shopping tests recall of earlier purchases.")
+    let selected = CitationExcerpt(question: "What is Bundled Web Shopping?", selection: "previous specifications")
+    #expect(selected.preview(of: evidence) == "Agents must remember previous specifications.")
+    let absent = CitationExcerpt(question: "What is Hindsight?", selection: "Missing evidence")
+    #expect(absent.preview(of: evidence) == String(evidence.prefix(160)))
+    let substring = CitationExcerpt(question: "Shopping", selection: "")
+    let unmatched = "Different first paragraph. A later passage mentions windowshopping."
+    #expect(substring.preview(of: unmatched) == unmatched)
+    #expect(substring.preview(of: unmatched + " Video shopping requires recall.") == "Video shopping requires recall.")
+}
+
+@Test func inlineCitationsLinkOnlyCompleteMarkersInTheirOwnTurn() throws {
+    let evidence = ["S1", "S2", "S10"].map { Evidence(id: $0, title: "Source", text: "Passage") }
+    let answer = "实验 [S10] / [S1][S10]；[S100]。[link](https://example.org) [S2"
+    var turn = ChatTurn(paperID: UUID(), question: "Why?", selection: "", answer: answer, evidence: evidence)
+    let display = CitedAssistantAnswer(turn)
+    #expect(String(display.text.characters) == answer)
+    #expect(display.cited.map(\.id) == ["S10", "S1"])
+    #expect(display.related.map(\.id) == ["S2"])
+    #expect(display.links.count == 2)
+    let markers = display.text.runs.compactMap { run in
+        run.link.map { (String(display.text[run.range].characters), display.links[$0]?.id) }
+    }
+    #expect(markers.map { $0.0 } == ["[S10]", "[S1]", "[S10]"])
+    #expect(markers.map { $0.1 } == ["S10", "S1", "S10"])
+    turn.answer += "]"
+    #expect(CitedAssistantAnswer(turn).cited.map(\.id) == ["S10", "S1", "S2"])
+    let persisted = try JSONDecoder().decode(ChatTurn.self, from: JSONEncoder().encode(turn))
+    #expect(Set(CitedAssistantAnswer(persisted).links.keys) == Set(CitedAssistantAnswer(turn).links.keys))
+}
+
 @Test @MainActor func leavingPaperFlushesLatestVisiblePageWithoutWaitingForDebounce() async throws {
     let root = workspaceDirectory()
     defer { try? FileManager.default.removeItem(at: root) }

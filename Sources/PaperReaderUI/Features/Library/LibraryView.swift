@@ -6,6 +6,7 @@ public struct LibraryView: View {
     @Bindable var model: ReaderModel
     @State private var agent: LibraryAgent
     @State private var assistantTab: AssistantTab?
+    @State private var paperOpenedFromAgent: UUID?
     @State private var paperQuestion = ""
     @State private var askSave = false
     @State private var agentDraft = ""
@@ -63,7 +64,10 @@ public struct LibraryView: View {
             .onChange(of: model.selectedPaperID) { _, id in
                 if id != nil { preferredColumn = .detail }
                 paperQuestion = ""
-                if assistantTab != nil { assistantTab = isReading ? .paper : .library }
+                if assistantTab != nil, id == nil || id != paperOpenedFromAgent {
+                    assistantTab = isReading ? .paper : .library
+                }
+                paperOpenedFromAgent = nil
             }
             .onChange(of: scenePhase) { _, phase in
                 #if os(macOS)
@@ -129,22 +133,28 @@ public struct LibraryView: View {
             let width = proxy.size.width
             let inline = width >= 840
             let sidebarWidth = min(340, max(1, width - 36))
-            workspaceContent
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .padding(.trailing, inline && assistantTab != nil ? sidebarWidth : 0)
-                .overlay(alignment: .trailing) {
-                    if let assistantTab {
-                        WorkspaceAssistantSidebar(
-                            model: model, agent: agent, isReading: isReading, tab: isReading ? assistantTab : .library,
-                            select: { self.assistantTab = $0 }, question: $paperQuestion, agentDraft: $agentDraft,
-                            openSettings: { showSettings = true }, saveNote: { askSave = true },
-                            didNavigate: { if !inline { self.assistantTab = nil } }
-                        )
-                        .frame(width: sidebarWidth)
-                        .shadow(color: inline ? .clear : .black.opacity(0.1), radius: 8, x: -3)
-                        .accessibilityAction(.escape) { self.assistantTab = nil }
-                    }
+            ZStack(alignment: .trailing) {
+                workspaceContent
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .padding(.trailing, inline && assistantTab != nil ? sidebarWidth : 0)
+                if let assistantTab {
+                    WorkspaceAssistantSidebar(
+                        model: model, agent: agent, isReading: isReading, tab: isReading ? assistantTab : .library,
+                        select: { self.assistantTab = $0 }, question: $paperQuestion, agentDraft: $agentDraft,
+                        openSettings: { showSettings = true }, saveNote: { askSave = true },
+                        didNavigate: {
+                            if !inline {
+                                self.assistantTab = nil
+                            } else if assistantTab == .library {
+                                paperOpenedFromAgent = model.selectedPaperID
+                            }
+                        }
+                    )
+                    .frame(width: sidebarWidth)
+                    .shadow(color: inline ? .clear : .black.opacity(0.1), radius: 8, x: -3)
+                    .accessibilityAction(.escape) { self.assistantTab = nil }
                 }
+            }
         }
         .confirmationDialog("将本次讨论整理到笔记？", isPresented: $askSave, titleVisibility: .visible) {
             Button("包含讨论，保存笔记") { Task { await model.saveToObsidian(includeDiscussion: true) } }

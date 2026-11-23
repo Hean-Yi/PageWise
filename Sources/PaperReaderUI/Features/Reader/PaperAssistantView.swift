@@ -14,40 +14,33 @@ struct PaperAssistantView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 24) {
-                    if displayedChats.isEmpty {
-                        VStack(spacing: 0) {
-                            prompt("核心贡献", icon: "lightbulb", question: "这篇论文主要解决什么问题，有哪些核心贡献？")
-                            prompt(
-                                "方法思路", icon: "point.3.connected.trianglepath.dotted",
-                                question: "这篇论文的方法是如何工作的？")
-                            prompt("局限与不足", icon: "scope", question: "这项方法有哪些局限？")
+            ScrollViewReader { scroll in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 24) {
+                        if displayedChats.isEmpty {
+                            VStack(spacing: 0) {
+                                prompt("核心贡献", icon: "lightbulb", question: "这篇论文主要解决什么问题，有哪些核心贡献？")
+                                prompt(
+                                    "方法思路", icon: "point.3.connected.trianglepath.dotted",
+                                    question: "这篇论文的方法是如何工作的？")
+                                prompt("局限与不足", icon: "scope", question: "这项方法有哪些局限？")
+                            }
                         }
-                    }
-                    ForEach(displayedChats) { turn in
-                        VStack(alignment: .leading, spacing: 14) {
-                            Text(turn.question).font(.callout.weight(.medium)).padding(12).frame(
-                                maxWidth: .infinity, alignment: .leading
-                            )
-                            .background(ReaderTheme.elevated, in: RoundedRectangle(cornerRadius: 12))
-                            Text(turn.answer).font(.callout).textSelection(.enabled).lineSpacing(5)
-                            DisclosureGroup("来源 · \(turn.evidence.count)") {
-                                ForEach(turn.evidence) { source in
-                                    Button {
-                                        model.jump(to: source)
-                                        didNavigate()
-                                    } label: {
-                                        Text(
-                                            "[\(source.id)] \(source.title)\(source.sourcePage.map { " · p.\($0 + 1)" } ?? "")"
-                                        )
-                                        .font(.caption).lineLimit(2).multilineTextAlignment(.leading)
-                                    }.buttonStyle(.plain).padding(.vertical, 5)
+                        ForEach(displayedChats) { turn in
+                            VStack(alignment: .leading, spacing: 14) {
+                                Text(turn.question).font(.callout.weight(.medium)).padding(12).frame(
+                                    maxWidth: .infinity, alignment: .leading
+                                )
+                                .background(ReaderTheme.elevated, in: RoundedRectangle(cornerRadius: 12))
+                                PaperAssistantCitations(turn: turn, model: model, didNavigate: didNavigate) {
+                                    sourceID in
+                                    scroll.scrollTo(
+                                        AssistantCitationAnchor(turn: turn.id, source: sourceID), anchor: .top)
                                 }
-                            }.font(.caption).foregroundStyle(ReaderTheme.muted)
+                            }
                         }
-                    }
-                }.padding(20)
+                    }.padding(20)
+                }
             }
             composer
         }

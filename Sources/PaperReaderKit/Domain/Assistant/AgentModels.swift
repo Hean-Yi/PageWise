@@ -32,11 +32,14 @@ public enum AgentImportState: String, Sendable {
 }
 
 public struct AgentActivity: Identifiable, Sendable {
-    public enum Status: String, Sendable { case running, succeeded, failed }
-    public var id = UUID()
+    public enum Status: String, Sendable { case running, succeeded, failed, cancelled }
+    public let id = UUID()
     public var toolName: String
+    public var subject: String?
     public var status: Status = .running
-    public var resultCount: Int?
+    public var cardIDs: [UUID] = []
+    public var resultCount: Int? { status == .succeeded ? cardIDs.count : nil }
+    public var isTruncated = false
     public var message: String?
     public init(toolName: String) { self.toolName = toolName }
 }
@@ -50,6 +53,12 @@ public struct AgentTurn: Identifiable, Sendable {
     public var error: String?
     public var isCancelled = false
     public init(question: String) { self.question = question }
+
+    /// Cards remain owned by the turn so later imports update every appearance of a candidate.
+    public func cards(for activity: AgentActivity) -> [AgentCard] {
+        let ids = Set(activity.cardIDs)
+        return cards.filter { ids.contains($0.id) }
+    }
 }
 
 public struct AgentLimits: Sendable {

@@ -168,6 +168,8 @@ func changingAgentServiceOrModelStartsFreshWireHistoryAndKeepsDisplayedTurns(cha
     #expect(turn.error == nil)
     #expect(turn.activities.count == 3)
     #expect(turn.activities.allSatisfy { $0.status == .succeeded })
+    #expect(turn.activities.map(\.subject) == ["attention", "Attention · 第 2 页", "Attention · 第 2 页"])
+    #expect(turn.activities.flatMap(\.cardIDs) == turn.cards.map(\.id))
     #expect(turn.cards.filter { $0.kind == .evidence }.first?.blockID == block.id)
     #expect(reader.selectedPaperID == nil)
     let navigation = try #require(turn.cards.first { $0.kind == .navigation })
@@ -209,6 +211,9 @@ func changingAgentServiceOrModelStartsFreshWireHistoryAndKeepsDisplayedTurns(cha
     agent.send("查找")
     try await eventually { !agent.isRunning }
     #expect(agent.turns[0].activities.filter { $0.status == .failed }.count == 5)
+    #expect(
+        agent.turns[0].activities.filter { $0.status == .failed }.allSatisfy { $0.subject == nil && $0.cardIDs.isEmpty }
+    )
     #expect(agent.turns[0].cards.count == 1)
     #expect(await discovery.searchCount == 0)
     #expect(await discovery.downloadCount == 0)
@@ -229,6 +234,51 @@ func changingAgentServiceOrModelStartsFreshWireHistoryAndKeepsDisplayedTurns(cha
     try await eventually { !agent.isRunning }
     #expect(agent.turns[0].cards.isEmpty)
     #expect(agent.turns[0].activities[0].resultCount == 0)
+}
+
+@Test @MainActor func repeatedLibrarySearchGroupsResultsAndOpensUnmappedSourceSection() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let reader = try await makeAgentReader(root)
+    let blocks = ["Opening text", "Spaced retrieval"].map { TextBlock(sourcePage: -1, text: $0) }
+    var source = Paper(
+        title: "Session Memory", digest: "memory", originalPath: "memory.pdf", pageCount: 2,
+        blocks: blocks, warnings: [], canReflow: true)
+    let sections = blocks.map {
+        PageArtifact(id: $0.id, blockIDs: [$0.id], sourcePage: -1, relativePath: "reading.html")
+    }
+    source.htmlReading = HTMLReadingArtifact(relativePath: "reading.html", sections: sections, assets: [])
+    let other = Paper(
+        title: "Memory Survey", digest: "survey", originalPath: "survey.pdf", pageCount: 1, blocks: [], warnings: [],
+        canReflow: false)
+    reader.state.papers = [source, other]
+    let client = ScriptedLibraryModel { _, count in
+        if count == 1 {
+            return .init(
+                role: "assistant",
+                toolCalls: ["memory", "retrieval", "nomatches"].map { word in
+                    .init(id: word, name: "search_library", arguments: "{\"query\":\"\(word)\"}")
+                })
+        }
+        return .init(role: "assistant", content: "完成")
+    }
+    let agent = LibraryAgent(reader: reader, client: client)
+    agent.send("查找内容")
+    try await eventually { !agent.isRunning }
+    let turn = try #require(agent.turns.first)
+    #expect(turn.activities.map(\.subject) == ["memory", "retrieval", "nomatches"])
+    #expect(turn.activities.map(\.resultCount) == [2, 1, 0])
+    #expect(Set(turn.activities.map(\.id)).count == 3)
+    for activity in turn.activities { #expect(turn.cards(for: activity).map(\.id) == activity.cardIDs) }
+    let card = try #require(turn.cards(for: turn.activities[1]).first)
+    #expect(card.sourcePage == nil && card.blockID == blocks[1].id)
+    #expect(agent.canOpen(card) && agent.open(cardID: card.id))
+    #expect(reader.mode == "translated" && reader.pageKeys[reader.visiblePage] == sections[1].id.uuidString)
+    reader.select(other.id)
+    reader.state.papers[0].htmlReading = nil
+    #expect(!agent.canOpen(card) && !agent.open(cardID: card.id))
+    #expect(reader.selectedPaperID == other.id)
+    await reader.flushReadingPosition()
 }
 
 @Test @MainActor func libraryAgentImportRequiresClickDeduplicatesAndKeepsReaderPosition() async throws {
@@ -394,6 +444,7 @@ func changingAgentServiceOrModelStartsFreshWireHistoryAndKeepsDisplayedTurns(cha
     try await eventually { !noResults.isRunning }
     #expect(noResults.turns[0].cards.isEmpty)
     #expect(noResults.turns[0].activities[0].resultCount == 0)
+    #expect(noResults.turns[0].activities[0].isTruncated)
 }
 
 @Test @MainActor func cancellingOneImportDoesNotCancelAnActiveAnswer() async throws {
@@ -706,7 +757,13 @@ private actor DelayedHistorySearch: PaperDiscovery {
     let agent = LibraryAgent(reader: reader, client: client, discovery: discovery)
     agent.send("old question")
     try await eventually { await discovery.waiting }
+    let running = try #require(agent.turns[0].activities.last)
+    #expect(running.status == .running && running.subject == "attention" && running.cardIDs.isEmpty)
     if reset { agent.reset() } else { agent.cancel() }
+    if !reset {
+        let stopped = try #require(agent.turns[0].activities.last)
+        #expect(stopped.id == running.id && stopped.status == .cancelled && stopped.cardIDs.isEmpty)
+    }
     agent.send("new question")
     try await eventually { !agent.isRunning }
     await discovery.release()

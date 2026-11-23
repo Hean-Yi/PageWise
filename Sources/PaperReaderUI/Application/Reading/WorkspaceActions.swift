@@ -64,6 +64,43 @@ extension ReaderModel {
         navigateToStablePage(highlight.pageKey, paperID: highlight.paperID)
     }
 
+    /// Resolve a saved citation before changing the reader. The PDF is immutable and source
+    /// blocks without a verified PDF page can also belong to a retained reading edition.
+    func evidencePageKey(for evidence: Evidence) -> String? {
+        guard let id = evidence.paperID, !pendingImportIDs.contains(id),
+            let document = state.papers.first(where: { $0.id == id })
+        else { return nil }
+        if let index = evidence.sourcePage, index >= 0, index < document.pageCount {
+            return "original-\(index)"
+        }
+        guard let blockID = evidence.blockID else { return nil }
+        func matchingPage(in pages: [PageArtifact]) -> String? {
+            pages.first { !pendingArtifactIDs.contains($0.id) && $0.blockIDs.contains(blockID) }?.id.uuidString
+        }
+        if selectedPaperID == id, retainedReadingID != nil, let paper,
+            let key = matchingPage(in: paper.readingPages)
+        {
+            return key
+        }
+        if document.canReflow,
+            let key = matchingPage(in: document.readingPages) ?? matchingPage(in: document.previewPages)
+        {
+            return key
+        }
+        for retained in document.retainedReadings ?? [] {
+            if let key = matchingPage(in: retained.readingPages) { return key }
+        }
+        return nil
+    }
+
+    @discardableResult
+    public func jump(to evidence: Evidence) -> Bool {
+        guard let paperID = evidence.paperID, let key = evidencePageKey(for: evidence) else { return false }
+        if key.hasPrefix("original-") { pdfBilingual.close() }
+        navigateToStablePage(key, paperID: paperID)
+        return selectedPaperID == paperID && pageKeys[safe: visiblePage] == key
+    }
+
     public func navigateToPage(_ pageIndex: Int) {
         guard pageKeys.indices.contains(pageIndex) else { return }
         applyPosition(ReaderPosition(mode: mode, pageKey: pageKeys[pageIndex], pageIndex: pageIndex))
@@ -346,7 +383,7 @@ extension ReaderModel {
 
     private func navigateToStablePage(_ pageKey: String, paperID: UUID) {
         guard state.papers.contains(where: { $0.id == paperID }) else { return }
-        if selectedPaperID != paperID { select(paperID) }
+        if selectedPaperID != paperID || selectedSection != "library" { select(paperID) }
         if let current = state.papers.first(where: { $0.id == paperID }) {
             retainedReadingID =
                 current.readingPages.contains(where: { $0.id.uuidString == pageKey })

@@ -69,8 +69,9 @@ extension ReaderModel {
                 "[\($0.id)] \($0.title) / \($0.sourcePage.map { "原文第 \($0 + 1) 页" } ?? ($0.paperID == nil ? "笔记" : "论文结构块（原文页码未核对）"))\n\($0.text)"
             }.joined(separator: "\n\n")
             let memory = state.memories.filter { !$0.deleted }.suffix(8).map(\.text).joined(separator: "\n")
-            assistantDraft = ChatTurn(
+            var turn = ChatTurn(
                 paperID: paper.id, question: question, selection: selection, answer: "", evidence: evidence)
+            assistantDraft = turn
             let answer = try await client.completeStream(
                 settings: config, key: key,
                 system:
@@ -91,8 +92,7 @@ extension ReaderModel {
                     sanitized.replaceSubrange(full, with: "[未验证引用]")
                 }
             }
-            let turn = ChatTurn(
-                paperID: paper.id, question: question, selection: selection, answer: sanitized, evidence: evidence)
+            turn.answer = sanitized
             assistantDraft = nil
             state.chats.append(turn)
             await save()

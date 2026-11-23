@@ -8,6 +8,7 @@ struct LibraryAgentView: View {
     let openSettings: () -> Void
     let didNavigate: () -> Void
     @FocusState private var composerFocused: Bool
+    @State private var hasMoreBelow = false
 
     private var isConfigured: Bool {
         (try? model.modelSettings.normalized()) != nil
@@ -21,8 +22,10 @@ struct LibraryAgentView: View {
                         if agent.turns.isEmpty {
                             welcome
                         } else {
-                            ForEach(agent.turns) { turn in conversation(turn) }
-                            if agent.isRunning {
+                            ForEach(agent.turns) { turn in conversation(turn).id(turn.id) }
+                            if agent.isRunning, agent.turns.last?.activities.last?.status != .running,
+                                agent.turns.last?.answer.isEmpty == true
+                            {
                                 HStack(spacing: 8) {
                                     ProgressView().controlSize(.mini)
                                     Text("正在思考…").font(.system(size: 11)).foregroundStyle(ReaderTheme.muted)
@@ -32,8 +35,29 @@ struct LibraryAgentView: View {
                         Color.clear.frame(height: 1).id("agent-bottom")
                     }.padding(20)
                 }
-                .onChange(of: agent.turns.count) { _, _ in proxy.scrollTo("agent-bottom", anchor: .bottom) }
-                .onChange(of: agent.turns.last?.answer) { _, _ in proxy.scrollTo("agent-bottom", anchor: .bottom) }
+                .onScrollGeometryChange(for: Bool.self) { geometry in
+                    geometry.contentSize.height - geometry.visibleRect.maxY > 48
+                } action: { _, hasMore in
+                    hasMoreBelow = hasMore
+                }
+                .overlay(alignment: .bottomTrailing) {
+                    if hasMoreBelow, !agent.turns.isEmpty {
+                        Button {
+                            proxy.scrollTo("agent-bottom", anchor: .bottom)
+                        } label: {
+                            Image(systemName: "arrow.down")
+                                .font(.callout.weight(.medium))
+                                .frame(width: 34, height: 34).background(ReaderTheme.surface, in: Circle())
+                                .overlay { Circle().strokeBorder(ReaderTheme.line) }
+                        }
+                        .buttonStyle(.plain).foregroundStyle(ReaderTheme.ink)
+                        .help("前往最新消息").accessibilityLabel("前往最新消息")
+                        .padding(.trailing, 15).padding(.bottom, 6)
+                    }
+                }
+                .onChange(of: agent.turns.last?.id) { _, id in
+                    if let id { proxy.scrollTo(id, anchor: .top) }
+                }
             }
             composer.padding(16)
         }
@@ -59,17 +83,18 @@ struct LibraryAgentView: View {
             Text(turn.question).font(.system(size: 13)).lineSpacing(4).textSelection(.enabled)
                 .padding(13).frame(maxWidth: .infinity, alignment: .leading)
                 .background(ReaderTheme.elevated, in: RoundedRectangle(cornerRadius: 12))
-            if !turn.activities.isEmpty { AgentActivityLog(activities: turn.activities) }
+            if !turn.activities.isEmpty {
+                VStack(spacing: 7) {
+                    ForEach(turn.activities) { activity in
+                        AgentActivityCard(
+                            activity: activity, cards: turn.cards(for: activity), agent: agent, didNavigate: didNavigate
+                        )
+                    }
+                }
+            }
             if !turn.answer.isEmpty {
                 Text(answerText(turn.answer)).font(.system(size: 13)).lineSpacing(5).textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            ForEach(turn.cards) { card in
-                AgentResultCard(
-                    card: card,
-                    open: { if agent.open(cardID: card.id) { didNavigate() } },
-                    importPaper: { agent.confirmImport(cardID: card.id) },
-                    stopImport: { agent.cancelImport(cardID: card.id) })
             }
             if let error = turn.error {
                 VStack(alignment: .leading, spacing: 8) {
@@ -80,7 +105,7 @@ struct LibraryAgentView: View {
                         composerFocused = true
                     }.buttonStyle(.plain).font(.system(size: 11)).foregroundStyle(ReaderTheme.accent)
                 }
-            } else if turn.isCancelled {
+            } else if turn.isCancelled, turn.activities.last?.status != .cancelled {
                 Text("已停止").font(.system(size: 11)).foregroundStyle(ReaderTheme.muted)
             }
         }

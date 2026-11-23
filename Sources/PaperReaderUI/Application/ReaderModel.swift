@@ -322,25 +322,6 @@ public final class ReaderModel {
         highlightSaveTask = Task { await save() }
     }
 
-    public func jump(to evidence: Evidence) {
-        if let id = evidence.paperID {
-            select(id)
-            guard selectedPaperID == id else { return }
-            if let page = evidence.sourcePage {
-                navigateToSourcePage(page, blockID: evidence.blockID, preferredMode: mode)
-            } else if let blockID = evidence.blockID, let paper,
-                let page = paper.readingPages.first(where: { $0.blockIDs.contains(blockID) }),
-                let position = PaperPageLocator.resolve(pageKey: page.id.uuidString, in: paper)
-            {
-                navigateToSourcePage(page.sourcePage, blockID: blockID, preferredMode: position.mode)
-            } else {
-                message = "此证据的重排页尚未生成，原文页码未核对。"
-            }
-        } else if let path = evidence.notePath {
-            message = "参考笔记：\(URL(fileURLWithPath: path).lastPathComponent)\n\n\(evidence.text)"
-        }
-    }
-
     @discardableResult
     public func saveSettings(_ draft: ModelSettings, key: String?, removeKey: Bool = false) throws -> String? {
         let result = try configurationStore.save(draft, key: key, removeKey: removeKey)

@@ -4,20 +4,21 @@ import PaperReaderKit
 struct AgentToolOutcome {
     var content: String
     var cards: [AgentCard]
-    var count: Int
+    var truncated: Bool
     var message: String?
 }
 
 extension LibraryAgent {
-    func execute(_ call: AgentToolCall, epoch: UUID) async throws -> AgentToolOutcome {
+    func execute(_ call: AgentToolCall, epoch: UUID, onSubject: (String) -> Void) async throws -> AgentToolOutcome {
         let arguments = try AgentToolArguments.parse(
             name: call.function.name, json: call.function.arguments, limits: limits)
         try check(epoch)
         switch arguments {
         case .searchLibrary(let query):
-            let hits = LibraryAgentSearch.search(
-                query, papers: reader.state.papers, limit: min(max(0, limits.maxResults), 20))
-            let pairs = hits.map { hit -> (ToolRecord, AgentCard) in
+            onSubject(query)
+            let limit = min(max(0, limits.maxResults), 20)
+            let hits = LibraryAgentSearch.search(query, papers: reader.state.papers, limit: limit + 1)
+            let pairs = hits.prefix(limit).map { hit -> (ToolRecord, AgentCard) in
                 var card = AgentCard(kind: hit.blockID == nil ? .localPaper : .evidence, title: hit.title)
                 card.paperID = hit.paperID
                 card.blockID = hit.blockID
@@ -29,11 +30,12 @@ extension LibraryAgent {
                     card
                 )
             }
-            let outcome = try result(pairs)
+            let outcome = try result(pairs, truncated: hits.count > limit)
             paperRegistry.formUnion(outcome.cards.compactMap(\.paperID))
             return outcome
         case .readPaper(let id, let page):
             let paper = try registeredPaper(id, page: page)
+            onSubject("\(paper.title) · 第 \(page) 页")
             let blocks = paper.blocks.filter { $0.sourcePage == page - 1 }
             let pairs = blocks.prefix(min(max(0, limits.maxResults), 20)).map { block -> (ToolRecord, AgentCard) in
                 var card = AgentCard(kind: .evidence, title: paper.title)
@@ -46,29 +48,34 @@ extension LibraryAgent {
             }
             return try result(
                 pairs, truncated: blocks.count > pairs.count || blocks.contains { $0.text.count > 2_000 },
-                message: blocks.isEmpty ? "该页没有可提取的正文；不能据此判断图像内容。" : nil)
+                message: blocks.isEmpty ? "这一页暂无已索引的正文。" : nil)
         case .searchOnline(let query):
+            onSubject(query)
             guard limits.maxResults > 0 else { return try result([], truncated: true) }
             let found = try await discovery.search(query)
             try check(epoch)
             var seen: Set<String> = []
-            var pairs: [(ToolRecord, AgentCard)] = []
-            for raw in found.prefix(40) {
-                guard let candidate = ArxivClient.verified(raw), seen.insert(candidate.id).inserted else { continue }
+            let verified = found.prefix(40).compactMap(ArxivClient.verified).filter { seen.insert($0.id).inserted }
+            let pairs = verified.prefix(min(limits.maxResults, 20)).map { candidate -> (ToolRecord, AgentCard) in
                 let id = candidateIDs[candidate.id] ?? UUID().uuidString
                 var card = candidateCard(candidate, id: id)
                 if let paperID = importedPapers[id], reader.state.papers.contains(where: { $0.id == paperID }) {
                     card.importState = .imported
                     card.paperID = paperID
                 }
-                pairs.append((ToolRecord(card: card, authors: candidate.authors, year: candidate.year), card))
-                candidates[id] = candidate
-                candidateIDs[candidate.id] = id
-                if pairs.count >= min(max(0, limits.maxResults), 20) { break }
+                return (ToolRecord(card: card, authors: candidate.authors, year: candidate.year), card)
             }
-            return try result(pairs, truncated: found.count > pairs.count)
+            let outcome = try result(pairs, truncated: found.count > 40 || verified.count > pairs.count)
+            for (card, candidate) in zip(outcome.cards, verified) {
+                if let id = card.candidateID {
+                    candidates[id] = candidate
+                    candidateIDs[candidate.id] = id
+                }
+            }
+            return outcome
         case .prepareImport(let id):
             guard let candidate = candidates[id] else { throw ReaderError.message("候选ID不属于本次会话，请先在线检索。") }
+            onSubject(candidate.title)
             var card = candidateCard(candidate, id: id)
             if let paperID = importedPapers[id], reader.state.papers.contains(where: { $0.id == paperID }) {
                 card.importState = .imported
@@ -90,6 +97,7 @@ extension LibraryAgent {
                 message: message)
         case .openPaper(let id, let page):
             let paper = try registeredPaper(id, page: page)
+            onSubject(page.map { "\(paper.title) · 第 \($0) 页" } ?? paper.title)
             var card = AgentCard(kind: .navigation, title: paper.title)
             card.paperID = paper.id
             card.sourcePage = page
@@ -135,7 +143,7 @@ extension LibraryAgent {
             let data = try JSONEncoder().encode(payload)
             if data.count <= limits.maxToolResultBytes {
                 return AgentToolOutcome(
-                    content: String(decoding: data, as: UTF8.self), cards: pairs.map(\.1), count: pairs.count,
+                    content: String(decoding: data, as: UTF8.self), cards: pairs.map(\.1), truncated: truncated,
                     message: message)
             }
             guard !pairs.isEmpty else { throw ReaderError.message("工具结果长度上限过小，无法提供结果。") }
