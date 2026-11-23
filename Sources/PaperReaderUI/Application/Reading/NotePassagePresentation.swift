@@ -30,9 +30,12 @@ extension ReaderModel {
         noteID: UUID, anchors: [NoteAnchor], source: String, from: Int, to: Int,
         didInsert: @escaping @MainActor (String) -> Void
     ) {
-        guard let paper, from >= 0, from <= to, to <= source.utf16.count, !anchors.isEmpty
+        guard let paper, from >= 0, from <= to, to <= source.utf16.count,
+            !anchors.isEmpty || (presentedDocumentSummary ?? currentDocumentSummary)?.id == noteID
         else { return }
-        let version = htmlAnnotationVersion ?? (paper.digest + ":original-0")
+        let version =
+            currentReadingNotes.first(where: { $0.id == noteID })?.contentVersion
+            ?? htmlAnnotationVersion ?? (paper.digest + ":original-0")
         notePassageSheet = .picker(
             NotePassageDraft(
                 noteID: noteID, paperID: paper.id, version: version, anchors: anchors, markdown: source,
@@ -47,7 +50,9 @@ extension ReaderModel {
         try Task.checkCancellation()
         guard case .picker(let active) = notePassageSheet, active.id == draft.id,
             let paper, paper.id == draft.paperID,
-            (htmlAnnotationVersion ?? (paper.digest + ":original-0")) == draft.version,
+            (draft.anchors.isEmpty
+                ? (presentedDocumentSummary ?? currentDocumentSummary)?.contentVersion
+                : htmlAnnotationVersion ?? (paper.digest + ":original-0")) == draft.version,
             currentReadingNotes.first(where: { $0.id == draft.noteID })?.markdown ?? "" == draft.markdown,
             let range = Range(draft.range, in: draft.markdown)
         else { throw ReaderError.message("笔记内容或阅读位置已变化，请重新插入引用。") }

@@ -115,3 +115,5 @@ Swift Package 自动递归发现每个 target 目录下的 Swift 文件。当前
 `Infrastructure/HTML/Mathematics` 在 JavaScriptCore 中用随包 KaTeX 编译静态 MathML；图片模块保留 SVG 与受支持位图/PDF 图件，拒绝活动资源。第三方资源与许可证随 `Resources` 分发。
 
 快照 v9 显式清除未完成 TeX/HTML 任务的旧窗口计划与窗口提交索引，避免已删除元数据改变来源摘要后阻断恢复；已完成来源 ID、已发布内容和用户记录不变。下一次继续只规划未发布部分。
+
+书库快照 v10 按已保存精读报告的笔记 ID 识别旧的全文总结，保留 Markdown 和引用，并把其位置迁到文末。文末页属于阅读器，原始 PDF 与已发布 HTML 的页码、段落和批注坐标沿用原有版本。

@@ -17,10 +17,10 @@ extension ReaderModel {
         }
     }
 
-    func showCloseReading(_ paperID: UUID, focus: String = "") async {
+    func showCloseReading(_ paperID: UUID, focus: String = "", regenerate: Bool = false) async {
         do {
             let existing = existingCloseReading(for: paperID, focus: focus)
-            let turn = try await runCloseReading(paperID, focus: focus)
+            let turn = try await runCloseReading(paperID, focus: focus, regenerate: regenerate)
             if existing != nil {
                 let ids = [turn.readingNoteID].compactMap { $0 } + (turn.closeReadingNoteIDs ?? [])
                 let notes = currentReadingNotes
@@ -34,8 +34,10 @@ extension ReaderModel {
         } catch { message = error.localizedDescription }
     }
 
-    func runCloseReading(_ paperID: UUID, focus: String = "") async throws -> ChatTurn {
-        if let existing = existingCloseReading(for: paperID, focus: focus) { return existing }
+    func runCloseReading(_ paperID: UUID, focus: String = "", regenerate: Bool = false) async throws -> ChatTurn {
+        let existing = existingCloseReading(for: paperID, focus: focus)
+        if let existing, !regenerate { return existing }
+        let focus = focus.isEmpty && regenerate && existing?.question != "AI 精读" ? (existing?.question ?? focus) : focus
         guard closeReadingTask == nil, !busyAI else { throw ReaderError.message("助读正在处理请求，请稍后再试。") }
         let scope = try discussionNoteScope(for: paperID)
         guard let document = paperID == selectedPaperID ? paper : state.papers.first(where: { $0.id == paperID })
@@ -80,7 +82,6 @@ extension ReaderModel {
         async throws -> ChatTurn
     {
         var insertions: [AnchoredNoteInsertion] = []
-        var firstSource: DiscussionNoteSource?
         var skipped = 0
         var verified: [String: LocalPassageCitation] = [:]
         func citation(_ evidence: Evidence, _ quote: String) async throws -> LocalPassageCitation {
@@ -101,7 +102,8 @@ extension ReaderModel {
                 let source = (evidence: annotation.source, quote: annotation.quote)
                 var refs: [LocalPassageCitation] = []
                 var links: [String] = []
-                for ref in annotation.references where ref.evidence.readingNoteID != nil {
+                for ref in annotation.references
+                where ref.evidence.paperID == scope.paperID || ref.evidence.readingNoteID != nil {
                     let item = try await citation(ref.evidence, ref.quote)
                     if !refs.contains(where: { $0.id == item.id }) {
                         refs.append(item)
@@ -113,44 +115,56 @@ extension ReaderModel {
                     in: scope, sources: [source], markdown: body,
                     requestID: UUID(), citations: refs, dimension: annotation.dimension)
                 insertions.append(insertion)
-                if firstSource == nil { firstSource = source }
             } catch is CancellationError { throw CancellationError() } catch {
                 try validateDiscussionScope(scope)
                 skipped += 1
             }
         }
-        var outline = ["# 全文论证骨架"]
+        var outline: [String] = []
         var outlineRefs: [LocalPassageCitation] = []
+        var omittedStages = 0
         for item in analysis.outline {
             try Task.checkCancellation()
+            var references: [LocalPassageCitation] = []
             var links: [String] = []
-            for ref in item.references {
+            for ref in item.references where ref.evidence.paperID == scope.paperID && ref.evidence.readingNoteID == nil
+            {
                 if let source = try? await citation(ref.evidence, ref.quote) {
-                    if firstSource == nil && ref.evidence.paperID == scope.paperID {
-                        firstSource = (ref.evidence, ref.quote)
-                    }
-                    if !outlineRefs.contains(where: { $0.id == source.id }) { outlineRefs.append(source) }
+                    references.append(source)
                     links.append(source.markdown(label: ref.label))
                 }
             }
-            let located = links.count == item.references.count
-            let text = located ? item.text : "该环节的引文未能在本地核实。"
-            outline.append(
-                "**\(item.stage.title)**　" + text + (links.isEmpty ? "" : "\n\n" + links.joined(separator: " · ")))
+            guard !links.isEmpty, links.count == item.references.count else {
+                omittedStages += 1
+                continue
+            }
+            for source in references where !outlineRefs.contains(where: { $0.id == source.id }) {
+                outlineRefs.append(source)
+            }
+            outline.append("**\(item.stage.title)**　" + item.text + "\n\n" + links.joined(separator: " · "))
         }
         try Task.checkCancellation()
-        guard let firstSource else { throw ReaderError.message("没有批注或论证引文通过原文定位校验。可以选中一段原文，单独询问助读。") }
-        let summary = try await prepareDiscussionNote(
-            in: scope, sources: [firstSource],
-            markdown: outline.joined(separator: "\n\n"), requestID: UUID(), citations: outlineRefs)
-        let coverage = analysis.coverage + (skipped == 0 ? "" : " · \(skipped) 条批注未通过原文核对")
+        try validateDiscussionScope(scope)
+        guard !insertions.isEmpty || !outline.isEmpty else {
+            throw ReaderError.message("没有批注或论证引文通过原文定位校验。可以选中一段原文，单独询问助读。")
+        }
+        let coverage =
+            analysis.coverage + (skipped == 0 ? "" : " · \(skipped) 条批注未通过原文核对")
+            + (omittedStages == 0 ? "" : " · \(omittedStages) 项总结缺少可定位的依据")
         var report = ChatTurn(
             paperID: scope.paperID, question: focus.isEmpty ? "AI 精读" : focus, selection: "",
             answer: coverage, evidence: [])
         report.closeReadingVersion = closeReadingVersion(for: scope)
-        report.readingNoteID = summary.note.id
         report.closeReadingNoteIDs = insertions.map(\.note.id)
-        insertions.append(summary)
+        if let version = outlineRefs.first?.contentVersion {
+            let body = (["# 全文论证骨架"] + outline).joined(separator: "\n\n")
+            try await validateNoteCitations(outlineRefs, markdown: body)
+            var note = ReadingNote(paperID: scope.paperID, contentVersion: version, anchors: [], markdown: body)
+            note.placement = .documentEnd
+            note.citations = outlineRefs
+            report.readingNoteID = note.id
+            insertions.append(AnchoredNoteInsertion(note: note, highlights: [], scope: scope))
+        }
         guard await save(cancellable: true, closeReading: (insertions, report)),
             let saved = state.chats.first(where: { $0.id == report.id })
         else {

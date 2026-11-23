@@ -54,8 +54,7 @@ private actor CloseReadingTransport: HTTPTransport {
             ]
             annotations.append([
                 "dimension": item.dimension.rawValue, "source": passage.source, "quote": quote,
-                "role": "界定作者在本段讨论的现象。", "explanation": "这里描述的是观察到的关系。",
-                "critique": "需要对照条件才能分辨原因。", "references": [reference],
+                "analysis": item.quote + " 此前对照实验的笔记提出了核对输入条件的问题。", "references": [reference],
             ])
             stages.append([
                 "stage": CloseReadingStage.allCases[index].rawValue, "text": "这一环节给出了核对原文的依据。",
@@ -175,7 +174,14 @@ private actor CloseReadingTransport: HTTPTransport {
     let citations = try #require(overview.citations)
     #expect(Set(citations.map(\.quote)) == Set(closeReadingSources.map(\.quote)))
     #expect(citations.allSatisfy { $0.paperID == id })
-    #expect(citations.contains { $0.anchors == overview.anchors })
+    #expect(overview.isDocumentSummary && overview.anchors.isEmpty)
+    #expect(disk.highlights.allSatisfy { $0.paperID != id })
+    #expect(reader.currentDocumentSummary?.id == overview.id)
+    #expect(reader.inlineReadingNotes.isEmpty)
+    #expect(reader.updateDocumentSummary(id: overview.id, markdown: overview.markdown + "\n\n个人补充。"))
+    await reader.flushReadingNotes()
+    #expect(
+        try await reader.store.load().readingNotes.first { $0.id == overview.id }?.markdown.hasSuffix("个人补充。") == true)
     for stage in CloseReadingStage.allCases { #expect(overview.markdown.contains("**" + stage.title + "**")) }
     let source = try #require(citations.last)
     let preview = try await reader.previewLocalPassage(noteID: overview.id, citationID: source.id)
@@ -210,4 +216,62 @@ private func closeReadingWorkflowFailuresLeaveNoPartialNotesOrReport(
             snapshot.readingNotes.filter { $0.paperID == id }.isEmpty
                 && snapshot.highlights.filter { $0.paperID == id }.isEmpty && snapshot.chats.isEmpty)
     }
+}
+
+@Test @MainActor func rerunningSameFocusKeepsEditsAndDoesNotRestoreDeletedPassageNotes() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let api = CloseReadingTransport()
+    let (reader, id, _) = try await closeReadingLibrary(root: root, api: api)
+    let first = try await reader.runCloseReading(id, focus: "实验")
+    let notes = try #require(first.closeReadingNoteIDs)
+    let edited = try #require(reader.currentReadingNotes.first { $0.id == notes.first })
+    let removed = try #require(notes.last)
+    let markIndex = try #require(reader.state.highlights.firstIndex { $0.paperID == id })
+    reader.state.highlights[markIndex].color = .purple
+    let originalMarks = reader.currentHighlights
+    let revised = edited.markdown + "\n\n我重新核对过这段原文。"
+    let citation = try #require(edited.citations?.first)
+    reader.openReadingNote(edited)
+    try #require(reader.updateReadingNote(id: edited.id, anchors: edited.anchors, markdown: revised))
+    reader.deleteReadingNote(removed)
+    await reader.flushReadingNotes()
+    let next = try await reader.runCloseReading(id, regenerate: true)
+    let kept = try #require(next.closeReadingNoteIDs)
+    #expect(
+        first.id != next.id && first.question == next.question && kept.contains(edited.id) && !kept.contains(removed))
+    #expect(reader.currentReadingNotes.first { $0.id == edited.id }?.markdown == revised)
+    #expect(!reader.inlineReadingNotes.contains { $0.id == removed })
+    #expect(reader.existingCloseReading(for: id)?.id == next.id && reader.state.chats.count == 2)
+    let restored = try ReaderModel(root: root, client: ModelClient(transport: api), credentials: WorkflowCredentials())
+    await restored.load()
+    restored.select(id)
+    #expect(restored.currentHighlights.map(\.id) == originalMarks.map(\.id))
+    #expect(restored.currentHighlights.map(\.color) == originalMarks.map(\.color))
+    #expect(restored.currentReadingNotes.first { $0.id == edited.id }?.markdown == revised)
+    #expect(try await restored.previewLocalPassage(noteID: edited.id, citationID: citation.id).quote == comparisonText)
+    #expect(!restored.currentReadingNotes.contains { $0.id == removed })
+    reader.undoReadingNoteDeletion()
+    await reader.flushReadingNotes()
+    #expect(reader.inlineReadingNotes.contains { $0.id == removed })
+    #expect(try await reader.store.load().readingNotes.first { $0.id == removed }?.deletedAt == nil)
+    #expect(await api.requests == 2)
+}
+
+@Test @MainActor func explicitPaperSummarySavesClickableSourcesWithoutMarkingAParagraph() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let (reader, id, _) = try await closeReadingLibrary(root: root, api: CloseReadingTransport())
+    let scope = try reader.discussionNoteScope(for: id)
+    let quote = closeReadingSources[0].quote
+    let source = Evidence(id: "S1", title: "Fixture", text: quote, paperID: id, sourcePage: 0)
+    let request = "把全文总结成笔记"
+    let note = try await reader.saveDiscussionNote(
+        in: scope, sources: [(source, quote)], markdown: "输出由各值加权形成。", requestID: UUID(), instruction: request)
+    #expect(note.isDocumentSummary && note.anchors.isEmpty && reader.inlineReadingNotes.isEmpty)
+    #expect(reader.currentHighlights.isEmpty)
+    let citation = try #require(note.citations?.first)
+    #expect(try await reader.previewLocalPassage(noteID: note.id, citationID: citation.id).quote == quote)
+    let hit = try #require(try await reader.readingNoteEvidence(query: "加权", paperID: id).first)
+    #expect(reader.jump(to: hit) && reader.requestedReadingNote == note.id)
 }

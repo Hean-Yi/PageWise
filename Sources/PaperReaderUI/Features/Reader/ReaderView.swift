@@ -38,7 +38,7 @@ struct ReaderView: View {
                 if model.showingReflowLoading { ReflowLoadingView(model: model) }
             }.frame(maxWidth: .infinity, maxHeight: .infinity)
                 .overlay(alignment: .bottomTrailing) {
-                    if model.mode == "original", let session = model.pdfNoteEditor,
+                    if model.presentedSummaryID == nil, model.mode == "original", let session = model.pdfNoteEditor,
                         session.note.paperID == model.selectedPaperID
                     {
                         GeometryReader { proxy in
@@ -52,7 +52,13 @@ struct ReaderView: View {
                         }
                     }
                 }
-            if !model.showingReflowLoading { readingBar(width: width) }
+                .accessibilityHidden(model.presentedDocumentSummary != nil)
+                .overlay {
+                    if let summary = model.presentedDocumentSummary {
+                        DocumentSummaryPage(model: model, note: summary).id(summary.id)
+                    }
+                }
+            if !model.showingReflowLoading && model.presentedDocumentSummary == nil { readingBar(width: width) }
         }
         .onChange(of: model.visiblePage) { _, page in
             if !pageFocused { pageInput = "\(page + 1)" }
@@ -108,6 +114,7 @@ struct ReaderView: View {
     }
 
     private func setBilingualReading(_ bilingual: Bool) {
+        model.closeDocumentSummary()
         peekingAtOriginal = false
         if bilingual {
             if !model.openBilingualReading(translatingDocument: pdfLayout == .paragraph) { openSettings() }
@@ -213,6 +220,13 @@ struct ReaderView: View {
                         Image(systemName: "chevron.right")
                     }
                     .disabled(model.visiblePage >= model.pageKeys.count - 1).help("下一页").accessibilityLabel("下一页")
+                }
+            }
+            if model.visiblePage == model.pageKeys.count - 1, let summary = model.currentDocumentSummary {
+                Button {
+                    model.openReadingNote(summary)
+                } label: {
+                    Label("文末总结", systemImage: "doc.append").labelStyle(.titleAndIcon)
                 }
             }
             Button(action: model.toggleBookmark) {

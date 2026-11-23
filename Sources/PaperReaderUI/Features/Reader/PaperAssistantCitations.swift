@@ -52,10 +52,11 @@ struct PaperAssistantCitations: View {
                         didNavigate()
                     } label: {
                         AssistantToolTile(
-                            tool: turn.closeReadingVersion == nil ? "已记入原文" : "精读笔记", systemImage: "note.text",
-                            title: turn.closeReadingVersion == nil
-                                ? ReadingNoteSummary.excerpt(note.anchors.first?.text ?? "阅读笔记") : "全文论证骨架",
-                            detail: turn.closeReadingVersion == nil ? ReadingNoteSummary.text(note.markdown) : nil,
+                            tool: note.isDocumentSummary ? "文末总结" : "已记入原文", systemImage: "note.text",
+                            title: note.isDocumentSummary
+                                ? ReadingNoteSummary.text(note.markdown)
+                                : ReadingNoteSummary.excerpt(note.anchors.first?.text ?? "阅读笔记"),
+                            detail: note.isDocumentSummary ? nil : ReadingNoteSummary.text(note.markdown),
                             metadata: note.anchors.count > 1 ? "\(note.anchors.count) 处" : nil,
                             accessory: "chevron.forward", detailLines: 1)
                     }.buttonStyle(AssistantToolButtonStyle()).accessibilityHint("定位并打开阅读笔记")

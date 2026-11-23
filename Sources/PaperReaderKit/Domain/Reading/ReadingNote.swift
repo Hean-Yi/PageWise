@@ -17,6 +17,9 @@ public struct NoteAnchor: Codable, Sendable, Equatable, Hashable {
 }
 
 public struct ReadingNote: Identifiable, Codable, Sendable, Equatable {
+    public enum Placement: String, Codable, Sendable {
+        case documentEnd
+    }
     public var id: UUID
     public var paperID: UUID
     public var contentVersion: String
@@ -24,6 +27,9 @@ public struct ReadingNote: Identifiable, Codable, Sendable, Equatable {
     public var citations: [LocalPassageCitation]?
     public var markdown: String
     public var dimension: CloseReadingDimension?
+    /// Ordinary notes use their passage anchors. Document summaries own their citations separately.
+    public var placement: Placement?
+    public var isDocumentSummary: Bool { placement == .documentEnd }
     public var createdAt: Date
     public var modifiedAt: Date
     /// Soft deletion supports undo without discarding the user's source text.

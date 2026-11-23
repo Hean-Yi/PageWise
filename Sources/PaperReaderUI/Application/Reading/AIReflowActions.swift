@@ -3,6 +3,7 @@ import PaperReaderKit
 
 extension ReaderModel {
     public func readOriginal() {
+        closeDocumentSummary()
         mode = "original"
         visiblePage = 0
         jumpPage = 0
@@ -10,6 +11,7 @@ extension ReaderModel {
     }
 
     public func openRetainedReading(_ id: UUID?) {
+        closeDocumentSummary()
         endReading()
         pdfBilingual.close()
         retainedReadingID = id

@@ -62,7 +62,7 @@ struct ReaderNavigator: View {
     var body: some View {
         let items = model.displayedNavigationItems
         let groups = chapters(from: items)
-        let active = activeItem(in: items)
+        let active = model.presentedDocumentSummary == nil ? activeItem(in: items) : nil
         let expandable = Set(groups.filter { !$0.children.isEmpty }.map(\.id))
         let pageList = groups.isEmpty && !items.isEmpty
         return VStack(alignment: .leading, spacing: 0) {
@@ -194,6 +194,21 @@ struct ReaderNavigator: View {
                             }
                         }
                     }.padding(.horizontal, 8).padding(.bottom, 12)
+                }
+                if let summary = model.currentDocumentSummary {
+                    Divider().padding(.horizontal, 16)
+                    Button {
+                        model.openReadingNote(summary)
+                        didNavigate()
+                    } label: {
+                        Label("文末总结", systemImage: "doc.append")
+                            .frame(maxWidth: .infinity, alignment: .leading).padding(12).contentShape(Rectangle())
+                    }.buttonStyle(.plain)
+                        .background(
+                            model.presentedSummaryID == summary.id ? ReaderTheme.elevated : .clear,
+                            in: RoundedRectangle(cornerRadius: 7)
+                        )
+                        .padding(.horizontal, 8)
                 }
             }
             .onChange(of: groups.first?.id, initial: true) { _, first in

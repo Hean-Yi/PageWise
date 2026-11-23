@@ -129,3 +129,33 @@ private let versionOneWorkspaceFixture = Data(
       "reading": [{"id": "00000000-0000-0000-0000-000000000009", "paperID": "00000000-0000-0000-0000-000000000001", "start": 1234, "end": 1294, "manual": true}]
     }
     """#.utf8)
+
+@Test func versionNineMovesOnlyReportedSummariesAndPreservesEditsCitationsAndMarks() throws {
+    let paperID = UUID()
+    let anchor = NoteAnchor(key: "original-0", target: "pdf", text: "test", start: 0, end: 4)
+    let citation = LocalPassageCitation(
+        paperID: paperID, digest: "fixture", contentVersion: "fixture:original-0", anchors: [anchor], quote: "test")
+    var old = ReadingNote(
+        paperID: paperID, contentVersion: citation.contentVersion, anchors: [anchor], markdown: "自己改的标题")
+    old.citations = [citation]
+    old.modifiedAt = old.createdAt.addingTimeInterval(10)
+    let ordinary = ReadingNote(
+        paperID: paperID, contentVersion: old.contentVersion, anchors: [anchor], markdown: "# 全文论证骨架")
+    var report = ChatTurn(paperID: paperID, question: "审读", selection: "", answer: "", evidence: [])
+    report.readingNoteID = old.id
+    report.closeReadingNoteIDs = [ordinary.id]
+    report.closeReadingVersion = old.contentVersion
+    var state = LibraryState()
+    state.version = 9
+    state.chats = [report]
+    state.readingNotes = [ordinary, old]
+    state.highlights = [Highlight(paperID: paperID, pageKey: anchor.key, pageIndex: 0, text: anchor.text, rects: [])]
+    let migrated = try JSONDecoder().decode(LibraryState.self, from: JSONEncoder().encode(state))
+    let summary = try #require(migrated.readingNotes.last)
+    #expect(summary.isDocumentSummary && summary.anchors.isEmpty && summary.id == old.id)
+    #expect(summary.markdown == old.markdown && summary.modifiedAt == old.modifiedAt && summary.citations == [citation])
+    #expect(migrated.readingNotes.first == ordinary && migrated.highlights.map(\.id) == state.highlights.map(\.id))
+    #expect(
+        try JSONDecoder().decode(LibraryState.self, from: JSONEncoder().encode(migrated)).readingNotes
+            == migrated.readingNotes)
+}

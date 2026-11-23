@@ -11,9 +11,7 @@ public enum CloseReadingEngine {
         let dimension: CloseReadingDimension
         let source: String
         let quote: String
-        let role: String
-        let explanation: String
-        let critique: String
+        let analysis: String
         let references: [Quotation]?
     }
 
@@ -64,6 +62,7 @@ public enum CloseReadingEngine {
         let windows: Int
         let passages: [Input]
         let readingNotes: [Input]
+        let alreadyDiscussed: [String]
     }
 
     public static func run(
@@ -75,6 +74,7 @@ public enum CloseReadingEngine {
         let corpus = try await CloseReadingCorpus.read(paper: paper, root: root, progress: progress)
         guard !corpus.windows.isEmpty else { throw ReaderError.message("这篇论文缺少可定位的本地原文，无法精读。") }
         var notes = [CloseReadingAnnotation]()
+        var seenAnalyses = Set<String>()
         var stages = [CloseReadingOutlineItem]()
         var rejected = 0
         var unreadable: [Int] = []
@@ -97,7 +97,8 @@ public enum CloseReadingEngine {
             }
             let input = Window(
                 paper: name, focus: focus, window: index + 1, windows: corpus.windows.count,
-                passages: passages.map(Input.init), readingNotes: memory.map(Input.init))
+                passages: passages.map(Input.init), readingNotes: memory.map(Input.init),
+                alreadyDiscussed: notes.suffix(8).map { String($0.markdown.prefix(180)) })
             let batch: Batch
             do {
                 batch = try await request(
@@ -118,9 +119,7 @@ public enum CloseReadingEngine {
             for record in (batch.annotations ?? []).prefix(8) {
                 guard let item = record.value, let passage = registry[item.source],
                     passage.evidence.paperID == paper.id,
-                    let quote = exact(item.quote, in: passage), let role = plain(item.role, limit: 360),
-                    let explanation = plain(item.explanation, limit: 1_400),
-                    let critique = plain(item.critique, limit: 1_400)
+                    let quote = exact(item.quote, in: passage), let body = plain(item.analysis, limit: 1_400)
                 else {
                     rejected += 1
                     continue
@@ -134,25 +133,26 @@ public enum CloseReadingEngine {
                 let extra =
                     linked
                     .filter { $0.evidence.id != passage.evidence.id || $0.quote != quote }
-                let evidence = [passage.evidence.text, tableEvidence(passage)] + extra.map(\.quote)
-                guard
-                    numbersAreGrounded(
-                        [role, explanation, critique].joined(separator: "\n"),
-                        in: evidence.joined(separator: "\n"))
-                else {
+                let evidence =
+                    [passage.evidence.text, tableEvidence(passage)]
+                    + extra.map {
+                        $0.quote + "\n" + (registry[$0.evidence.id].map(tableEvidence) ?? "")
+                    }
+                guard numbersAreGrounded(body, in: evidence.joined(separator: "\n")) else {
                     rejected += 1
                     continue
                 }
-                if notes.contains(where: {
-                    $0.source.blockID == passage.evidence.blockID && $0.source.sourcePage == passage.evidence.sourcePage
-                        && $0.quote == quote
-                }) {
+                // Leave one new insight per registered passage. Preserve numbers and mathematical
+                // symbols when comparing prose: two results can differ only by a sign.
+                let analysis = readerProse(body, citing: linked.map(\.evidence) + [passage.evidence])
+                let key = analysis.filter { !$0.isWhitespace }.lowercased()
+                if notes.contains(where: { $0.source.id == passage.evidence.id }) || !seenAnalyses.insert(key).inserted
+                {
                     continue
                 }
-                let body = "**段落作用**　" + role + "\n\n" + explanation + "\n\n**审读**　" + critique
                 notes.append(
                     .init(
-                        dimension: item.dimension, source: passage.evidence, quote: quote, markdown: body,
+                        dimension: item.dimension, source: passage.evidence, quote: quote, markdown: analysis,
                         references: extra))
             }
             for record in (batch.outline ?? []).prefix(10) {
@@ -160,14 +160,14 @@ public enum CloseReadingEngine {
                 let requested = item.references ?? []
                 let refs = requested.prefix(3).compactMap { citation($0, in: registry) }
                 guard refs.count == requested.count else { continue }
-                guard let text = plain(item.text, limit: 720), refs.contains(where: { $0.evidence.paperID == paper.id })
+                guard let text = plain(item.text, limit: 720), !refs.isEmpty,
+                    refs.allSatisfy({ $0.evidence.paperID == paper.id })
                 else { continue }
                 let proof = refs.map { $0.quote + "\n" + (registry[$0.evidence.id].map(tableEvidence) ?? "") }.joined(
                     separator: "\n")
                 guard numbersAreGrounded(text, in: proof) else { continue }
-                let ordered =
-                    refs.filter { $0.evidence.paperID == paper.id } + refs.filter { $0.evidence.paperID != paper.id }
-                stages.append(.init(stage: item.stage, text: text, references: ordered))
+                stages.append(
+                    .init(stage: item.stage, text: readerProse(text, citing: refs.map(\.evidence)), references: refs))
             }
         }
         if corpus.windows.count > 1 && (!notes.isEmpty || !stages.isEmpty) {
@@ -188,9 +188,21 @@ public enum CloseReadingEngine {
             }
             throw ReaderError.message("已检查原文，但模型没有返回能逐字定位的批注或论证依据。")
         }
-        let outline = CloseReadingStage.allCases.map { stage in
-            stages.first { $0.stage == stage }
-                ?? .init(stage: stage, text: "已读材料中未定位到明确的\(stage.title)依据。", references: [])
+        let outline = CloseReadingStage.allCases.compactMap { stage -> CloseReadingOutlineItem? in
+            var texts: [String] = []
+            var refs: [CloseReadingReference] = []
+            // A single window may report the default experiment and its matched control as
+            // separate evidence items. Keep both observations with their witnesses.
+            for item in stages where item.stage == stage && !texts.contains(item.text) {
+                let added = item.references.filter { ref in
+                    !refs.contains(where: { $0.evidence.id == ref.evidence.id && $0.quote == ref.quote })
+                }
+                guard !added.isEmpty, refs.count + added.count <= 3 else { continue }
+                refs += added
+                texts.append(item.text)
+            }
+            guard !texts.isEmpty else { return nil }
+            return .init(stage: stage, text: texts.joined(separator: "\n\n"), references: refs)
         }
         var coverage = corpus.coverage
         if !unreadable.isEmpty {
@@ -223,6 +235,24 @@ public enum CloseReadingEngine {
         return .init(
             evidence: passage.evidence, quote: quote,
             label: item.label.flatMap { plain($0, limit: 80) } ?? passage.evidence.title)
+    }
+
+    // Models sometimes repeat a transport ID in their prose even when supplying the citation.
+    // Keep genuine paper terminology (e.g. a condition called P2) and let the UI link the sources.
+    private static let sourceMention = try! NSRegularExpression(
+        pattern: #"(?<![A-Za-z0-9_])([PL]\d+)(?![A-Za-z0-9_])"#)
+
+    private static func readerProse(_ text: String, citing sources: [Evidence]) -> String {
+        let original = text as NSString
+        let result = NSMutableString(string: text)
+        for match in sourceMention.matches(in: text, range: NSRange(location: 0, length: original.length)).reversed() {
+            let id = original.substring(with: match.range)
+            guard let source = sources.first(where: { $0.id == id }),
+                !sources.contains(where: { $0.text.contains(id) })
+            else { continue }
+            result.replaceCharacters(in: match.range, with: source.readingNoteID == nil ? "原文" : "此前的笔记")
+        }
+        return result as String
     }
 
     // Links are constructed by the app after checking evidence. Free prose cannot introduce
@@ -281,6 +311,38 @@ public enum CloseReadingEngine {
                 return false
             }
         }
+        // A note comparing two controlled experiments can mention just the gaps. Accept each
+        // percentage-point gap only if one registered excerpt gives an unambiguous percentage pair.
+        // Combining numbers from different excerpts or computing arbitrary scalar differences
+        // would also validate unrelated outcomes.
+        var pairedDifferences = Set<Decimal>()
+        for excerpt in evidence.split(separator: "\n") {
+            let percents = values(String(excerpt)).filter { $0.hasSuffix("%") }
+            guard percents.count == 2 else { continue }
+            let pair = percents.compactMap {
+                Decimal(string: String($0.dropLast()), locale: Locale(identifier: "en_US_POSIX"))
+            }
+            if pair.count == 2 { pairedDifferences.insert(abs(pair[0] - pair[1])) }
+        }
+        let sources = normalized(evidence) as NSString
+        let reported = Set(
+            percentagePointValue.matches(in: sources as String, range: NSRange(location: 0, length: sources.length)).map
+            {
+                canonical(sources.substring(with: $0.range(at: 1)))
+            })
+        let remainder = mutable as String
+        for match in percentagePointValue.matches(in: remainder, range: NSRange(remainder.startIndex..., in: remainder))
+            .reversed()
+        {
+            let digits = (remainder as NSString).substring(with: match.range(at: 1))
+            if let value = Decimal(string: digits, locale: Locale(identifier: "en_US_POSIX")),
+                pairedDifferences.contains(value)
+            {
+                mutable.replaceCharacters(in: match.range(at: 1), with: "")
+            } else if !reported.contains(canonical(digits)) {
+                return false
+            }
+        }
         return values(mutable as String).isSubset(of: proof)
     }
 
@@ -288,6 +350,9 @@ public enum CloseReadingEngine {
         pattern:
             #"(\d+(?:\.\d+)?)%[^。.!?；;\d%\n]{1,24}(\d+(?:\.\d+)?)%[^。.!?；;\d%\n]{1,26}(\d+(?:\.\d+)?)\s*(?:个?百分点|percentage points)"#,
         options: [.caseInsensitive])
+
+    private static let percentagePointValue = try! NSRegularExpression(
+        pattern: #"(?<![\d.])(\d+(?:\.\d+)?)\s*(?:个?百分点|percentage points?)"#, options: [.caseInsensitive])
 
     /// A percent-marked leaf column supplies the unit for each value in that column alone.
     private static func tableEvidence(_ passage: CloseReadingPassage) -> String {
@@ -337,16 +402,22 @@ public enum CloseReadingEngine {
     ) async throws
         -> ([CloseReadingAnnotation], [CloseReadingOutlineItem])
     {
+        // Give short papers room to carry both sides of a comparison, while bounding the
+        // synthesis request for a book-length corpus with hundreds of verified witnesses.
+        let noteLength = min(400, 32_000 / max(notes.count, 1))
+        let stageLength = min(320, 24_000 / max(stages.count, 1))
+        let quoteCount = notes.count + stages.reduce(0) { $0 + $1.references.count }
+        let quoteLength = min(240, 36_000 / max(quoteCount, 1))
         let candidates = notes.enumerated().map { i, note in
             SynthesisCandidate(
                 id: "N\(i + 1)", stage: nil, dimension: note.dimension.rawValue,
-                summary: String(note.markdown.prefix(170)), quotes: [String(note.quote.prefix(110))])
+                summary: String(note.markdown.prefix(noteLength)), quotes: [String(note.quote.prefix(quoteLength))])
         }
         let witnesses = stages.enumerated().map { i, stage in
             SynthesisCandidate(
                 id: "W\(i + 1)", stage: stage.stage.rawValue, dimension: nil,
-                summary: String(stage.text.prefix(130)),
-                quotes: stage.references.prefix(1).map { String($0.quote.prefix(110)) })
+                summary: String(stage.text.prefix(stageLength)),
+                quotes: stage.references.map { String($0.quote.prefix(quoteLength)) })
         }
         let input = SynthesisInput(paper: paper, focus: focus, annotations: candidates, outlineEvidence: witnesses)
         let known = Set(candidates.map(\.id))
@@ -356,7 +427,8 @@ public enum CloseReadingEngine {
             validate: { result in
                 let selected = result.keep ?? []
                 return (result.keep != nil || result.outline != nil)
-                    && (known.isEmpty || selected.contains(where: known.contains))
+                    && (known.isEmpty || selected.contains(where: known.contains)
+                        || (selected.isEmpty && !stages.isEmpty && result.outline?.contains { $0.value != nil } == true))
             })
         let ids = Set((result.keep ?? []).prefix(24))
         let selected = zip(notes, candidates).filter { ids.contains($0.1.id) }.map { $0.0 }
@@ -371,7 +443,12 @@ public enum CloseReadingEngine {
                     in: supporting.map { $0.text + " " + $0.references.map(\.quote).joined(separator: " ") }.joined(
                         separator: " "))
             else { return nil }
-            let refs = supporting.compactMap { $0.references.first }
+            var refs: [CloseReadingReference] = []
+            for ref in supporting.flatMap(\.references)
+            where !refs.contains(where: { $0.evidence.id == ref.evidence.id && $0.quote == ref.quote }) {
+                refs.append(ref)
+            }
+            guard refs.count <= 3 else { return nil }
             return .init(stage: item.stage, text: text, references: refs)
         }
         // Fall back only to an already verified account of that stage, never to unregistered witnesses.

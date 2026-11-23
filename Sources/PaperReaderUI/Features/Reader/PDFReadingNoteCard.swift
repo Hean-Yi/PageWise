@@ -41,7 +41,8 @@ struct PDFReadingNoteCard: View {
                 .font(.caption).foregroundStyle(ReaderTheme.muted).lineLimit(2)
                 .padding(.horizontal, 14).padding(.vertical, 8)
             Divider()
-            PDFReadingNoteEditor(model: model, session: session, citationRequest: citationRequest).id(session.id)
+            StandaloneReadingNoteEditor(model: model, note: session.note, citationRequest: citationRequest).id(
+                session.id)
             Divider()
             HStack {
                 if model.noteSaveFailed {

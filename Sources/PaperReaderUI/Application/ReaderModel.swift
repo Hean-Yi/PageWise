@@ -15,6 +15,8 @@ public final class ReaderModel {
     public var selectionHTMLRange: [Int]?
     var notePassageSheet: NotePassageSheet?
     var pdfNoteEditor: PDFNoteEditorSession?
+    var presentedSummaryID: UUID?
+    var editingDocumentSummary = false
     public var requestedReadingNote: UUID?
     public var readingNoteNavigationToken = UUID()
     public var lastDeletedNoteID: UUID?
@@ -170,6 +172,7 @@ public final class ReaderModel {
         if let id, pendingImportIDs.contains(id) { return }
         if let id, !state.papers.contains(where: { $0.id == id }) { return }
         Task { await flushReadingNotes() }
+        closeDocumentSummary()
         pdfNoteEditor = nil
         requestedReadingNote = nil
         let changedPaper = selectedPaperID != id
@@ -246,8 +249,32 @@ public final class ReaderModel {
                 var additions: [ReadingNote] = []
                 var noteMarks: [Highlight] = []
                 var report = closeReading?.report
+                let priorIDs: Set<UUID> =
+                    report.map { next in
+                        Set(
+                            snapshot.chats.filter {
+                                $0.paperID == next.paperID && $0.closeReadingVersion == next.closeReadingVersion
+                                    && $0.question == next.question
+                            }.flatMap { $0.closeReadingNoteIDs ?? [] })
+                    } ?? []
                 let insertions = closeReading?.notes ?? insertingNote.map { [$0] } ?? []
                 for insertion in insertions {
+                    // Respect edits and deletions when a new run revisits the exact passage.
+                    if !priorIDs.isEmpty, !insertion.note.isDocumentSummary,
+                        let index = report?.closeReadingNoteIDs?.firstIndex(of: insertion.note.id),
+                        let previous = snapshot.readingNotes.last(where: {
+                            priorIDs.contains($0.id) && $0.contentVersion == insertion.note.contentVersion
+                                && $0.anchors == insertion.note.anchors
+                                && ($0.deletedAt != nil || $0.createdAt != $0.modifiedAt)
+                        })
+                    {
+                        if previous.deletedAt != nil {
+                            report?.closeReadingNoteIDs?.remove(at: index)
+                        } else {
+                            report?.closeReadingNoteIDs?[index] = previous.id
+                        }
+                        continue
+                    }
                     try self.validateLocalPassageTargets(insertion.note.citations ?? [])
                     if let scope = insertion.scope {
                         try self.validateDiscussionScope(

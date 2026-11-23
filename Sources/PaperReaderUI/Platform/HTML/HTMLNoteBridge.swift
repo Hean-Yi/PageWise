@@ -37,19 +37,34 @@ final class HTMLNoteBridge {
             sidebar = sidebarOpen
             call(view, "window.paperNotes?.sidebar(open)", ["open": sidebarOpen])
         }
-        let notes = model.displayedHTMLReadingNotes
+        let paragraphNotes = model.displayedHTMLReadingNotes
+        let summary = model.currentDocumentSummary
+        let notes = paragraphNotes + [summary].compactMap { $0 }
         if snapshot != notes {
+            let previous = snapshot
             snapshot = notes
             let ids = Set(notes.map(\.id))
             for id in Array(previewCache.keys) where !ids.contains(id) { previewCache[id] = nil }
-            let values: [[String: Any]] = notes.map { note in
-                [
-                    "id": note.id.uuidString, "markdown": note.markdown, "anchors": note.anchors.map(Self.anchor),
-                    "dimensionTitle": note.dimension?.title ?? "",
-                    "html": previewCache[note.id].flatMap { $0.matches(note) ? $0.html : nil } ?? "",
-                ]
+            if previous?.filter({ !$0.isDocumentSummary }) != paragraphNotes {
+                let values: [[String: Any]] = paragraphNotes.map { note in
+                    [
+                        "id": note.id.uuidString, "markdown": note.markdown, "anchors": note.anchors.map(Self.anchor),
+                        "dimensionTitle": note.dimension?.title ?? "",
+                        "html": previewCache[note.id].flatMap { $0.matches(note) ? $0.html : nil } ?? "",
+                    ]
+                }
+                call(view, "window.paperNotes?.sync(notes)", ["notes": values])
             }
-            call(view, "window.paperNotes?.sync(notes)", ["notes": values])
+            if previous?.last(where: \.isDocumentSummary) != summary {
+                call(
+                    view, "window.paperNotes?.summary(id,source,html)",
+                    [
+                        "id": summary?.id.uuidString ?? "", "source": summary?.markdown ?? "",
+                        "html": summary.flatMap { note in
+                            previewCache[note.id].flatMap { $0.matches(note) ? $0.html : nil }
+                        } ?? "",
+                    ])
+            }
             for note in notes where previewCache[note.id]?.matches(note) != true {
                 tasks[note.id]?.cancel()
                 let expectedPaper = note.paperID
@@ -62,9 +77,9 @@ final class HTMLNoteBridge {
                         let preview = Preview(source: note.markdown, passages: passages, html: html)
                         try Task.checkCancellation()
                         guard let view, self.model.selectedPaperID == expectedPaper,
-                            self.model.displayedHTMLReadingNotes.contains(where: {
+                            self.snapshot?.contains(where: {
                                 $0.id == note.id && preview.matches($0)
-                            })
+                            }) == true
                         else { return }
                         self.previewCache[note.id] = preview
                         self.call(
@@ -83,7 +98,7 @@ final class HTMLNoteBridge {
             call(view, "window.paperNotes?.saved(status)", ["status": status])
         }
         if let id = model.requestedReadingNote, navigationToken != model.readingNoteNavigationToken,
-            notes.contains(where: { $0.id == id })
+            paragraphNotes.contains(where: { $0.id == id })
         {
             navigationToken = model.readingNoteNavigationToken
             call(view, "window.paperNotes?.open(id,true)", ["id": id.uuidString])
@@ -93,6 +108,11 @@ final class HTMLNoteBridge {
     func receive(_ value: [String: Any], view: WKWebView) {
         guard value["paperID"] as? String == model.selectedPaperID?.uuidString else { return }
         switch value["kind"] as? String {
+        case "noteEditSummary":
+            if let summary = model.currentDocumentSummary, value["id"] as? String == summary.id.uuidString {
+                model.openReadingNote(summary)
+                model.editingDocumentSummary = true
+            }
         case "notePreviewPassage":
             guard let raw = value["id"] as? String, let id = UUID(uuidString: raw),
                 let destination = value["passage"] as? String, let passage = UUID(uuidString: destination)

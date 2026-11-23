@@ -21,7 +21,9 @@ enum HTMLNotesScript {
           };
           const activate=(id,edit=false,backwards=false)=>{
             if(editing&&editing!==id){if(!edit)return;finish();}
-            const e=records.get(id);if(!e)return;active=id;reverse=backwards;
+            const e=records.get(id);if(!e)return;
+            if(!edit&&active===id){reverse=backwards;layout.reverse(backwards);return;}
+            active=id;e.previewBox=null;reverse=backwards;
             if(edit){
               e.entrance=editing!==id;e.needsFocus=true;editing=id;e.tabs.classList.remove('note-hidden');e.footer.classList.remove('note-hidden');e.card.classList.add('editing-live');e.input.classList.remove('note-hidden');e.content.classList.add('note-hidden');
               selection.restore(e.anchors);menu.classList.add('note-docked');e.card.prepend(menu);menu.hidden=false;window.paperAnnotationMenu.refresh();
@@ -61,21 +63,36 @@ enum HTMLNotesScript {
           const showUndo=()=>{let b=document.getElementById('reader-note-undo');if(!b){b=button('笔记已删除 · 撤销',()=>{send({kind:'noteUndo'});b.remove();});b.id='reader-note-undo';document.body.append(b);}};
           const arrange=()=>{
             queued=false;const occupied=[],items=[...records.values()].sort((a,b)=>(a.id===active?-1:0)-(b.id===active?-1:0)||((document.getElementById('block-'+a.anchors[0].key)?.compareDocumentPosition(document.getElementById('block-'+b.anchors[0].key))||0)&Node.DOCUMENT_POSITION_FOLLOWING?-1:1));let chosen=null;
-            for(const e of items){const isActive=e.id===active,wasActive=e.card.classList.contains('active'),oldRect=!e.card.hidden?e.card.getBoundingClientRect():null;e.card.classList.toggle('active',isActive);
-              if(sidebar&&!isActive){e.card.hidden=true;continue;}
-              const height=isActive?(editing===e.id?420:Math.min(420,Math.max(100,e.content.scrollHeight+52))):168;
-              let position=layout.place(e.anchors,height,sidebar,occupied,!isActive);
-              if(!position&&editing===e.id){position={left:Math.max(16,innerWidth-366),top:16,width:350,height:Math.min(420,innerHeight-32),side:'floating'};}
-              if(!position||(!isActive&&position.side==='floating')){e.card.hidden=true;continue;}
-              e.card.hidden=false;e.card.classList.toggle('compact',position.height<300);position.fixed=editing===e.id;e.card.style.position=position.fixed?'fixed':'absolute';e.card.style.left=position.left+'px';e.card.style.top=(position.top+(position.fixed?0:scrollY))+'px';e.card.style.width=position.width+'px';e.card.style.maxHeight=Math.max(oldRect?.height||0,position.height)+'px';e.card.style.height=position.height+'px';e.card.dataset.placement=position.side;
-              if(e.entrance){e.moveAnimation?.cancel();e.card.style.maxHeight=position.height+'px';}
-              else if(oldRect&&wasActive!==isActive&&!matchMedia('(prefers-reduced-motion:reduce)').matches){const next=e.card.getBoundingClientRect(),dy=isActive?-2:0;e.moveAnimation?.cancel();e.moveAnimation=e.card.animate([{height:oldRect.height+'px',transform:'translate('+(oldRect.left-next.left)+'px,'+(oldRect.top-next.top+dy)+'px)'},{height:position.height+'px',transform:'translate(0,'+dy+'px)'}],{duration:isActive?180:160,easing:'cubic-bezier(.2,.7,.2,1)'});e.moveAnimation.onfinish=()=>{e.card.style.maxHeight=position.height+'px';};}else if(e.moveAnimation?.playState!=='running')e.card.style.maxHeight=position.height+'px';
-              occupied.push({...position,right:position.left+position.width,bottom:position.top+position.height});if(isActive)chosen=position;
+            for(const e of items){
+              const isActive=e.id===active,isEditor=editing===e.id;
+              e.card.classList.toggle('active',isActive);
+              if(sidebar&&!isActive){e.slot=null;e.card.hidden=true;continue;}
+              const previewHeight=width=>{
+                e.card.hidden=false;e.card.style.width=width+'px';e.card.style.height='auto';e.card.style.maxHeight='none';
+                return Math.max(e.slot?168:100,e.card.offsetHeight);
+              };
+              const height=isEditor?420:isActive?previewHeight:168;
+              let position=layout.place(e.anchors,height,sidebar,occupied,!isActive,isActive&&!isEditor?e.slot:null);
+              if(!position&&isEditor){position={left:Math.max(16,innerWidth-366),top:16,width:350,height:Math.min(420,innerHeight-32),side:'floating'};}
+              if(!position){e.slot=null;e.previewBox=null;e.card.hidden=true;continue;}
+              e.card.hidden=false;e.card.classList.toggle('compact',position.height<300);
+              position.fixed=isEditor;
+              const top=position.top+(isEditor?0:scrollY),box={left:position.left,top,right:position.left+position.width,bottom:top+position.height};
+              // A hovered margin card expands from its own resting slot. Its target never
+              // animates away from a pointer crossing over from the highlighted text.
+              if(!isActive)e.slot={top,side:position.side};
+              e.previewBox=isActive&&!isEditor?box:null;
+              Object.assign(e.card.style,{position:isEditor?'fixed':'absolute',left:position.left+'px',top:top+'px',
+                width:position.width+'px',height:position.height+'px',maxHeight:position.height+'px'});
+              e.card.dataset.placement=position.side;
+              occupied.push({...position,right:box.right,bottom:position.top+position.height});if(isActive)chosen=position;
             }
             const entry=records.get(active),opening=!!entry?.entrance;
             layout.decorate([...records.values()],entry,chosen,opening?false:reverse,opening);
             if(opening&&chosen){entry.entrance=false;emerge(entry,chosen);}
-            if(entry?.needsFocus&&chosen){entry.needsFocus=false;entry.input.focus();}
+            if(entry?.needsFocus&&chosen){entry.needsFocus=false;entry.input.focus({preventScroll:true});}
+            const crossing=pendingCrossing;pendingCrossing=null;
+            if(crossing&&entry?.id===crossing.id&&!editing&&!layout.inBridge(entry.anchors,entry.previewBox,crossing.x,crossing.y))leave();
           };
           const emerge=(e,position)=>{
             e.emergeAnimation?.cancel();
@@ -101,7 +118,7 @@ enum HTMLNotesScript {
             const e=existing||make({id:crypto.randomUUID().toUpperCase(),anchors,markdown:'',html:''});activate(e.id,true);
           };
           const hits=(x,y,precise=false)=>[...records.values()].filter(e=>layout.hit(e.anchors,x,y,precise));
-          const setChoices=matches=>{for(const e of matches){e.choices.replaceChildren();e.choices.classList.toggle('note-hidden',matches.length<2);for(const item of matches){const o=document.createElement('option');o.value=item.id;o.textContent=(item.markdown||'空白笔记').slice(0,24);o.selected=e.id===item.id;e.choices.append(o);}}};
+          const setChoices=matches=>{for(const e of matches){e.choices.replaceChildren();e.choices.classList.toggle('note-hidden',matches.length<2);for(const [index,item] of matches.entries()){const o=document.createElement('option');o.value=item.id;o.textContent=(index+1)+' · '+(item.dimensionTitle||'笔记');o.selected=e.id===item.id;e.choices.append(o);}}};
           document.addEventListener('pointerdown',event=>{
             pointer={x:event.clientX,y:event.clientY};
             if(event.target.closest('.reader-note-card,#annotation-menu'))return;
@@ -120,23 +137,42 @@ enum HTMLNotesScript {
               const e=make({id:crypto.randomUUID().toUpperCase(),anchors,markdown:'',html:''});activate(e.id,true);return;
             }
           },true);
-          let lastPointer=null;
+          let pendingCrossing=null;
           document.addEventListener('pointermove',event=>{
-            if(editing||event.buttons)return;
-            const card=event.target.closest?.('.reader-note-card');
-            if(card){if(active!==card.dataset.noteId||!reverse)activate(card.dataset.noteId,false,true);lastPointer={x:event.clientX,y:event.clientY};return;}
-            const matches=hits(event.clientX,event.clientY);
-            if(matches.length){if(active!==matches[0].id){setChoices(matches);activate(matches[0].id);}lastPointer={x:event.clientX,y:event.clientY};return;}
+            if(editing||event.buttons||event.pointerType==='touch')return;
+            const x=event.clientX,y=event.clientY,card=event.target.closest?.('.reader-note-card');
+            pendingCrossing=null;
+            if(card){if(active!==card.dataset.noteId||!reverse)activate(card.dataset.noteId,false,true);return;}
+            const matches=hits(x,y);
+            if(matches.length){if(active!==matches[0].id){setChoices(matches);activate(matches[0].id);}return;}
             const e=records.get(active);
-            if(!e||!layout.inBridge(e.anchors,e.card,event.clientX,event.clientY,lastPointer))leave();
-            lastPointer={x:event.clientX,y:event.clientY};
+            if(e&&!e.previewBox&&queued){pendingCrossing={id:e.id,x,y};return;}
+            if(!e||!layout.inBridge(e.anchors,e.previewBox,x,y))leave();
           });
           document.addEventListener('mouseleave',leave);
           document.addEventListener('keydown',event=>{if(event.key==='Escape'&&active)finish();});
-          window.addEventListener('resize',schedule);document.addEventListener('scroll',()=>layout.scrolled(),{passive:true});new ResizeObserver(schedule).observe(root);document.fonts?.ready.then(schedule);
+          const resized=()=>{layout.invalidate();for(const e of records.values()){e.slot=null;e.previewBox=null;}schedule();};
+          window.addEventListener('resize',resized);document.addEventListener('scroll',()=>layout.scrolled(),{passive:true});
+          new ResizeObserver(resized).observe(root);document.fonts?.ready.then(resized);document.fonts?.addEventListener('loadingdone',resized);
+          // The appendix follows the published reader; it never becomes a paper section or an annotation anchor.
+          let appendix=null,appendixBody=null,appendixSource='';
+          const summary=(id,source,html)=>{
+            if(!id){appendix?.remove();appendix=null;appendixBody=null;return;}
+            if(!appendix){
+              appendix=document.createElement('article');appendix.id='reader-document-summary';appendix.setAttribute('aria-label','文末总结');
+              const head=document.createElement('header'),title=document.createElement('strong');title.textContent='文末总结';
+              head.append(title,button('编辑',()=>send({kind:'noteEditSummary',id:appendix.dataset.noteId}),'编辑文末总结'));
+              appendixBody=document.createElement('div');appendix.append(head,appendixBody);root.after(appendix);
+              PaperNoteEditor.bindPassages(appendix,passage=>send({kind:'notePreviewPassage',id:appendix.dataset.noteId,passage}));
+            }
+            appendix.dataset.noteId=id;appendixSource=source;
+            if(html){appendixBody.innerHTML=html;appendixBody.style.whiteSpace='normal';}
+            else{appendixBody.textContent=source;appendixBody.style.whiteSpace='pre-wrap';}
+          };
           window.paperNotes={
+            summary,
             begin,editing:()=>!!editing,preservingSelection:()=>!!editing,
-            sidebar(open){sidebar=open;schedule();},
+            sidebar(open){if(sidebar!==open){sidebar=open;resized();}},
             sync(notes){
               let changed=false;const ids=new Set(notes.map(n=>n.id));
               for(const [id,e] of records)if(e.persisted&&!ids.has(id)&&editing!==id){e.editor?.destroy();e.card.remove();records.delete(id);changed=true;}
@@ -144,7 +180,7 @@ enum HTMLNotesScript {
                 if(editing!==e.id){if(e.markdown!==note.markdown){e.html='';changed=true;}e.markdown=note.markdown;e.anchors=note.anchors;e.html=note.html||e.html;body(e);}
               }if(changed)schedule();
             },
-            preview(id,source,html){const e=records.get(id);if(!e||e.markdown!==source)return;e.html=html;e.content.style.whiteSpace='normal';body(e);e.editor?.preview(source,html);if(active===id&&!editing)schedule();},
+            preview(id,source,html){if(appendix?.dataset.noteId===id&&appendixSource===source){summary(id,source,html);return;}const e=records.get(id);if(!e||e.markdown!==source)return;e.html=html;e.content.style.whiteSpace='normal';body(e);e.editor?.preview(source,html);if(active===id&&!editing)schedule();},
             previewError(id){const e=records.get(id);if(e){e.content.textContent=e.markdown;e.status.textContent='预览失败，源码已保留';}},
             saved(status){lastStatus=status;for(const e of records.values())e.status.textContent=status;},
             insertPassage(id,source,from,to,markdown){return editing===id&&records.get(id)?.editor?.insertPassage(source,from,to,markdown);},

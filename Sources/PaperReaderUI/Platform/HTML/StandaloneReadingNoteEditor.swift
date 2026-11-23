@@ -2,16 +2,18 @@ import PaperReaderKit
 import SwiftUI
 import WebKit
 
-/// The source PDF hosts the same bundled Markdown editor, styles and offline formula compiler as HTML margin notes.
-@MainActor struct PDFReadingNoteEditor {
+/// Shared standalone presentation for PDF notes and the full-paper closing page.
+@MainActor struct StandaloneReadingNoteEditor {
     let model: ReaderModel
-    let session: PDFNoteEditorSession
+    let note: ReadingNote
+    var readOnly = false
+    var onDone: (() -> Void)?
     var citationRequest = 0
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
     @MainActor final class Coordinator: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
-        let editor: PDFReadingNoteEditor
+        let editor: StandaloneReadingNoteEditor
         private let renderer = NoteMarkdownRenderer()
         private weak var view: WKWebView?
         private var previewTask: Task<Void, Never>?
@@ -20,13 +22,13 @@ import WebKit
         private var lastRequest = 0
         private var pendingRequest = 0
 
-        init(_ editor: PDFReadingNoteEditor) {
+        init(_ editor: StandaloneReadingNoteEditor) {
             self.editor = editor
             lastRequest = editor.citationRequest
             pendingRequest = editor.citationRequest
             source =
-                editor.model.currentReadingNotes.first { $0.id == editor.session.id }?.markdown
-                ?? editor.session.note.markdown
+                editor.model.currentReadingNotes.first { $0.id == editor.note.id }?.markdown
+                ?? editor.note.markdown
         }
 
         func makeView() -> WKWebView {
@@ -55,12 +57,24 @@ import WebKit
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             let js = """
                 const send = message => window.webkit.messageHandlers.pdfNote.postMessage(message);
-                window.pdfEditor = window.PaperNoteEditor.create(document.querySelector('.note-editor'), source,
-                    text => send({text}), () => send({done:true}));
+                const host = document.querySelector('.note-editor');
+                document.body.classList.toggle('summary-page', summary);
+                if (readOnly) {
+                    host.className = 'note-content';
+                    host.style.whiteSpace = 'pre-wrap';
+                    host.textContent = source;
+                } else {
+                    window.pdfEditor = window.PaperNoteEditor.create(host, source,
+                        text => send({text}), () => send({done:true}));
+                    window.pdfEditor.focus();
+                }
                 window.PaperNoteEditor.bindPassages(document, passage => send({passage}));
-                window.pdfEditor.focus();
                 """
-            webView.callAsyncJavaScript(js, arguments: ["source": source], in: nil, in: .defaultClient) {
+            webView.callAsyncJavaScript(
+                js,
+                arguments: ["source": source, "readOnly": editor.readOnly, "summary": editor.note.isDocumentSummary],
+                in: nil, in: .defaultClient
+            ) {
                 [weak self] result in
                 guard let self else { return }
                 if case .failure = result {
@@ -87,12 +101,14 @@ import WebKit
         func userContentController(
             _ userContentController: WKUserContentController, didReceive message: WKScriptMessage
         ) {
-            let note = editor.session.note
-            guard message.frameInfo.isMainFrame, editor.model.pdfNoteEditor?.id == note.id,
+            let note = editor.note
+            let displayed =
+                note.isDocumentSummary ? editor.model.presentedDocumentSummary?.id : editor.model.pdfNoteEditor?.id
+            guard message.frameInfo.isMainFrame, displayed == note.id,
                 note.paperID == editor.model.selectedPaperID,
                 let value = message.body as? [String: Any]
             else { return }
-            if value["pick"] as? Bool == true, let source = value["markdown"] as? String,
+            if !editor.readOnly, value["pick"] as? Bool == true, let source = value["markdown"] as? String,
                 let from = value["from"] as? Int, let to = value["to"] as? Int
             {
                 editor.model.pickNotePassage(noteID: note.id, anchors: note.anchors, source: source, from: from, to: to)
@@ -106,13 +122,17 @@ import WebKit
                 }
             } else if let raw = value["passage"] as? String, let passage = UUID(uuidString: raw) {
                 editor.model.presentNotePassage(noteID: note.id, citationID: passage)
-            } else if let text = value["text"] as? String {
-                if editor.model.updateReadingNote(id: note.id, anchors: note.anchors, markdown: text) {
+            } else if !editor.readOnly, let text = value["text"] as? String {
+                let saved =
+                    note.isDocumentSummary
+                    ? editor.model.updateDocumentSummary(id: note.id, markdown: text)
+                    : editor.model.updateReadingNote(id: note.id, anchors: note.anchors, markdown: text)
+                if saved {
                     source = text
                     preview()
                 }
             } else if value["done"] as? Bool == true {
-                editor.model.closePDFReadingNote()
+                if let onDone = editor.onDone { onDone() } else { editor.model.closePDFReadingNote() }
             }
         }
 
@@ -124,13 +144,16 @@ import WebKit
                 do {
                     try await Task.sleep(for: .milliseconds(100))
                     let ids =
-                        editor.model.currentReadingNotes.first { $0.id == editor.session.id }?.citations?.map(\.id)
+                        editor.model.currentReadingNotes.first { $0.id == editor.note.id }?.citations?.map(\.id)
                         ?? []
                     let html = try await renderer.renderReadingNote(expected, passageIDs: Set(ids))
                     try Task.checkCancellation()
                     guard expected == source, let view else { return }
                     view.callAsyncJavaScript(
-                        "window.pdfEditor?.preview(source,html)", arguments: ["source": expected, "html": html],
+                        """
+                        if (window.pdfEditor) window.pdfEditor.preview(source, html);
+                        else { const body = document.querySelector('.note-content'); body.innerHTML = html; body.style.whiteSpace = 'normal'; }
+                        """, arguments: ["source": expected, "html": html],
                         in: nil, in: .defaultClient, completionHandler: nil)
                 } catch {}
             }
@@ -147,13 +170,17 @@ import WebKit
             <meta http-equiv="Content-Security-Policy" content="default-src 'none';style-src 'unsafe-inline';base-uri 'none';form-action 'none'">
             <style>html,body{margin:0;height:100%;overflow:hidden;color-scheme:light dark}
             body article.reader-note-card.active{position:static;border:0;box-shadow:none;border-radius:0;width:100%;max-width:none;max-height:none;height:100%;transform:none}
-            .note-editor{height:100%}</style></head><body><article class="reader-note-card active"><div class="note-editor"></div></article></body></html>
+            .note-editor{height:100%}
+            .summary-page article.reader-note-card.active{background:transparent}
+            .summary-page article.reader-note-card .note-content,.summary-page article.reader-note-card .cm-scroller{box-sizing:border-box;padding:32px max(24px,calc((100vw - 660px)/2)) 64px;font:17px/1.8 system-ui}
+            .summary-page .note-content h1{font:600 1.65em/1.35 ui-serif,serif;margin:0 0 1.2em}
+            .summary-page .note-content p{margin:0 0 1.15em}</style></head><body><article class="reader-note-card active"><div class="note-editor"></div></article></body></html>
             """
     }
 }
 
 #if os(macOS)
-    extension PDFReadingNoteEditor: NSViewRepresentable {
+    extension StandaloneReadingNoteEditor: NSViewRepresentable {
         func makeNSView(context: Context) -> WKWebView { context.coordinator.makeView() }
         func updateNSView(_ view: WKWebView, context: Context) {
             context.coordinator.updateCitationRequest(citationRequest, in: view)
@@ -161,7 +188,7 @@ import WebKit
         static func dismantleNSView(_ view: WKWebView, coordinator: Coordinator) { coordinator.stop() }
     }
 #else
-    extension PDFReadingNoteEditor: UIViewRepresentable {
+    extension StandaloneReadingNoteEditor: UIViewRepresentable {
         func makeUIView(context: Context) -> WKWebView { context.coordinator.makeView() }
         func updateUIView(_ view: WKWebView, context: Context) {
             context.coordinator.updateCitationRequest(citationRequest, in: view)

@@ -1,7 +1,7 @@
 import Foundation
 
 public struct LibraryState: Codable, Sendable {
-    public static let currentVersion = 9
+    public static let currentVersion = 10
     public var version = currentVersion
     public var papers: [Paper] = []
     public var readingNotes: [ReadingNote] = []
@@ -68,6 +68,17 @@ public struct LibraryState: Codable, Sendable {
             {
                 papers[index].reflowJob?.acceptedPlan = nil
                 papers[index].reflowJob?.committedBlockIDs = []
+            }
+        }
+        // v9 summaries were attached to the first checked passage. The report, not the editable
+        // Markdown heading, identifies the summary. Historical highlights have no owner IDs.
+        if storedVersion < 10 {
+            let summaries = Dictionary(grouping: chats.filter { $0.closeReadingVersion != nil }, by: \.paperID)
+                .mapValues { Set($0.compactMap(\.readingNoteID)) }
+            for index in readingNotes.indices
+            where summaries[readingNotes[index].paperID]?.contains(readingNotes[index].id) == true {
+                readingNotes[index].placement = .documentEnd
+                readingNotes[index].anchors = []
             }
         }
         try validateOrdering()

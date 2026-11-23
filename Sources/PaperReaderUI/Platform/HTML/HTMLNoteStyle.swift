@@ -4,20 +4,25 @@ enum HTMLNoteStyle {
     static let source = #"""
         (()=>{
           const style=document.createElement('style');style.textContent=`
+          #reader-document-summary{box-sizing:border-box;max-width:740px;min-height:85vh;margin:64px auto 0;padding:30px clamp(16px,4vw,42px) 80px;border-top:1px solid #baae9d;font:17px/1.8 system-ui;overflow-wrap:anywhere;break-before:page}
+          #reader-document-summary header{display:flex;align-items:center;justify-content:space-between;margin-bottom:30px;font:600 14px system-ui}
+          #reader-document-summary button{font:inherit;color:inherit;cursor:pointer;border:1px solid #b8ac9a;border-radius:7px;background:transparent;padding:5px 12px}
+          #reader-document-summary h1{font:600 1.65em/1.35 ui-serif,serif;margin:0 0 1em}#reader-document-summary p{margin:0 0 1.1em}
+          #reader-document-summary a[data-passage]{cursor:pointer;color:inherit;text-underline-offset:.2em;text-decoration:underline dotted}
           #reader-note-layer{position:absolute;top:0;left:0;width:100%;height:0;pointer-events:none;z-index:800}
           .reader-note-card{position:absolute;box-sizing:border-box;pointer-events:auto;width:240px;max-width:calc(100vw - 32px);max-height:min(420px,calc(100vh - 32px));display:flex;flex-direction:column;background:#faf8f3;color:#39352f;border:1px solid #ddd5c7;border-radius:14px;box-shadow:0 4px 16px #332d2818;font:15px/1.55 system-ui;overflow:hidden;transition:box-shadow .16s ease,opacity .12s ease;transform:translateY(0)}
           .reader-note-card.compact.active{overflow-y:auto}.reader-note-card.compact.active .note-editor{min-height:80px}
           .reader-note-card[hidden]{display:none!important}
-          .reader-note-card:not(.active){height:168px;opacity:.8;background:#eeebe5;cursor:pointer}
+          .reader-note-card:not(.active){height:168px;background:#f6f3eb;cursor:pointer}
           .reader-note-card.active{transform:translateY(-2px);border-color:#c4a68a;box-shadow:0 8px 28px #332d2833;z-index:10;filter:none;opacity:1}
           .reader-note-card header{padding:10px 14px 6px;display:flex;align-items:center;gap:8px;flex-shrink:0;font:12px system-ui;color:#796e60}
-          .reader-note-card header strong{margin-right:auto;color:inherit;font-weight:600}
+          .reader-note-card header strong{margin-right:auto;color:inherit;font-weight:650;white-space:nowrap;flex:none}.reader-note-card header select{min-width:0;max-width:40%;font:inherit}.reader-note-card:not(.active) header select,.reader-note-card:not(.active) header button,.reader-note-card:not(.active) header details{display:none}
           .reader-note-card button{font:inherit;color:inherit;border:0;border-radius:6px;background:transparent;padding:4px 7px;cursor:pointer}
           .reader-note-card button:hover{background:#e8e1d6}.reader-note-card button:focus-visible{outline:2px solid #a34c33}
           .reader-note-card .note-content{padding:8px 14px 14px;overflow:auto;min-height:0;overflow-wrap:anywhere;flex:1}
           .reader-note-card:not(.active) .note-content{display:none}
-          .reader-note-card .note-summary{display:none;padding:0 14px 12px;font:15px/24px system-ui;color:#777067;overflow-wrap:anywhere}
-          .reader-note-card:not(.active) .note-summary{display:-webkit-box;-webkit-line-clamp:5;-webkit-box-orient:vertical;overflow:hidden;height:120px;flex-shrink:0;filter:blur(.1px)}
+          .reader-note-card .note-summary{display:none;padding:0 14px 12px;font:15px/24px system-ui;color:inherit;overflow-wrap:anywhere}
+          .reader-note-card:not(.active) .note-summary{display:-webkit-box;-webkit-line-clamp:5;-webkit-box-orient:vertical;overflow:hidden;height:120px;flex-shrink:0}
           .reader-note-card:not(.active) header{height:34px;box-sizing:border-box;padding:8px 14px 4px}
           .reader-note-card .note-content>*:first-child{margin-top:0}.reader-note-card .note-content>*:last-child{margin-bottom:0}
           .reader-note-card p,.reader-note-card blockquote,.reader-note-card pre{margin:0 0 .7em}

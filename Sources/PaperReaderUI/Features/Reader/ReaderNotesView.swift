@@ -37,17 +37,21 @@ struct ReaderNotesView: View {
                     didNavigate()
                 } label: {
                     VStack(alignment: .leading, spacing: 7) {
-                        if let dimension = note.dimension {
+                        if note.isDocumentSummary {
+                            Label("文末总结", systemImage: "doc.append").font(.caption)
+                        } else if let dimension = note.dimension {
                             Label {
                                 Text(dimension.title)
                             } icon: {
                                 Circle().fill(dimension.swatch).frame(width: 8, height: 8)
                             }.font(.caption)
                         }
-                        Text(ReadingNoteSummary.excerpt(note.anchors.first?.text ?? "")).font(.system(size: 11))
-                            .foregroundStyle(
-                                ReaderTheme.muted
-                            ).lineLimit(2)
+                        if let quote = note.anchors.first?.text {
+                            Text(ReadingNoteSummary.excerpt(quote)).font(.system(size: 11))
+                                .foregroundStyle(
+                                    ReaderTheme.muted
+                                ).lineLimit(2)
+                        }
                         Text(note.markdown.isEmpty ? "空白笔记" : ReadingNoteSummary.text(note.markdown)).font(
                             .system(size: 13)
                         ).lineLimit(1)

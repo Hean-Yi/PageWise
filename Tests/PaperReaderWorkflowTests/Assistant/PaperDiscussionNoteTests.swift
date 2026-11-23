@@ -236,3 +236,12 @@ private actor DiscussionTransport: HTTPTransport {
     #expect(ReadingNoteSummary.text("- **重点**与[依据](https://example.com)") == "重点与依据")
     #expect(ReadingNoteSummary.text(String(repeating: "x", count: 1_000)).count == 80)
 }
+
+@Test func onlyExplicitWholePaperNotesGoToTheEndOfTheDocument() {
+    for command in ["把全文总结成笔记", "写一份全文总结笔记", "write a summary note for the paper"] {
+        #expect(ReadingNoteIntent.requestsDocumentSummary(command))
+    }
+    for command in ["总结全文", "把这句话整理成笔记", "写笔记：说明全文总结中遗漏的对照。", "请标记“论文总结”并写笔记。", "不要保存全文总结笔记"] {
+        #expect(!ReadingNoteIntent.requestsDocumentSummary(command))
+    }
+}

@@ -18,12 +18,8 @@ extension ReaderModel {
     var inlinePDFNotes: [PDFInlineNote] {
         guard let paper = currentEdition else { return [] }
         let version = paper.digest + ":original-0"
-        let summaries = Set(
-            state.chats.compactMap { turn in
-                turn.paperID == paper.id && turn.closeReadingVersion != nil ? turn.readingNoteID : nil
-            })
-        let local = currentReadingNotes.reversed().filter {
-            $0.contentVersion == version && $0.anchors.first?.pdfPageIndex != nil && !summaries.contains($0.id)
+        let local = inlineReadingNotes.reversed().filter {
+            $0.contentVersion == version && $0.anchors.first?.pdfPageIndex != nil
         }
         let ordered = local.filter { $0.dimension == nil } + local.filter { $0.dimension != nil }
         var seen = Set<[NoteAnchor]>()

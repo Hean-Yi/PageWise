@@ -69,7 +69,7 @@ import WebKit
         ], markdown: "")
     let draft = PDFNoteEditorSession(note: note, marks: [])
     reader.pdfNoteEditor = draft
-    let editor = PDFReadingNoteEditor(model: reader, session: draft).makeCoordinator()
+    let editor = StandaloneReadingNoteEditor(model: reader, note: draft.note).makeCoordinator()
     let web = editor.makeView()
     defer { editor.stop() }
     web.frame = CGRect(x: 0, y: 0, width: 370, height: 220)
@@ -111,7 +111,8 @@ import WebKit
         try await PDFReadingNoteLocator().locate(quote: quote, pageIndex: 0, in: url).first?.anchor)
     var paragraph = ReadingNote(paperID: id, contentVersion: version, anchors: [anchor], markdown: "论点批注")
     paragraph.dimension = .thesis
-    let summary = ReadingNote(paperID: id, contentVersion: version, anchors: [anchor], markdown: "已编辑的骨架标题")
+    var summary = ReadingNote(paperID: id, contentVersion: version, anchors: [], markdown: "已编辑的骨架标题")
+    summary.placement = .documentEnd
     var report = ChatTurn(paperID: id, question: "AI 精读", selection: "", answer: "", evidence: [])
     report.closeReadingVersion = version
     report.readingNoteID = summary.id
@@ -134,7 +135,7 @@ import WebKit
     #expect(reader.inlinePDFNotes.map(\.id) == [manual.id])
     #expect(coordinator.openNote(at: point) && reader.pdfNoteEditor?.id == manual.id)
     reader.openReadingNote(summary)
-    #expect(reader.pdfNoteEditor?.id == summary.id)
+    #expect(reader.pdfNoteEditor == nil && reader.requestedReadingNote == summary.id)
 }
 
 @Test(arguments: [AnnotationStyle.underline, .highlight]) @MainActor

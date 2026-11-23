@@ -6,27 +6,29 @@ enum HTMLNoteLayoutScript {
           const root=document.getElementById('reader'),selection=window.paperSelection;
           const ns='http://www.w3.org/2000/svg';
           const svg=document.createElementNS(ns,'svg');svg.id='reader-note-decoration';svg.setAttribute('width','100%');svg.setAttribute('height','100%');svg.setAttribute('aria-hidden','true');document.body.append(svg);
-          const hitCache=new WeakMap();
+          let hitCache=new WeakMap();
           const rects=anchors=>{const result=anchors.flatMap(a=>selection.rangesFor(a).flatMap(r=>a.target.startsWith('object:') ? [r.getBoundingClientRect()] : [...r.getClientRects()])).filter(r=>r.width>0&&r.height>0);hitCache.set(anchors,result.map(r=>({left:r.left,right:r.right,top:r.top+scrollY,bottom:r.bottom+scrollY})));return result;};
-          const hitRects=anchors=>{if(!hitCache.has(anchors))rects(anchors);return hitCache.get(anchors).map(r=>({...r,top:r.top-scrollY,bottom:r.bottom-scrollY}));};
+          const hitRects=anchors=>{if(!hitCache.has(anchors))rects(anchors);return hitCache.get(anchors);};
           const visible=r=>r.bottom>8&&r.top<innerHeight-8;
           const intersects=(a,b)=>a.left<b.right+12&&a.right+12>b.left&&a.top<b.bottom+12&&a.bottom+12>b.top;
-          const place=(anchors,height,sidebar,occupied,offscreen=false)=>{
+          const place=(anchors,requestedHeight,sidebar,occupied,offscreen=false,slot=null)=>{
             const all=rects(anchors),rs=offscreen?all:all.filter(visible);if(!rs.length)return null;
             const anchor=rs[0],content=root.querySelector('section')?.getBoundingClientRect()||root.getBoundingClientRect();
-            const cap=Math.max(80,Math.min(420,innerHeight-32));height=Math.min(height,cap);
+            const cap=Math.max(80,Math.min(420,innerHeight-32));
+            const heightFor=width=>Math.min(typeof requestedHeight==='function'?requestedHeight(width):requestedHeight,cap);
             if(!sidebar){
-              for(const side of ['right','left']){
+              for(const side of (slot?.side==='left'?['left','right']:['right','left'])){
                 const available=side==='right' ? innerWidth-content.right-28 : content.left-28;if(available<220)continue;
-                const width=Math.min(240,available),left=side==='right'?content.right+12:content.left-width-12;
+                const width=Math.min(320,available),left=side==='right'?content.right+12:content.left-width-12;
                 const minTop=offscreen?16-scrollY:16,maxBottom=offscreen?document.documentElement.scrollHeight-scrollY-16:innerHeight-16;
-                const candidates=[Math.max(minTop,Math.min(anchor.top,maxBottom-height)),minTop,...occupied.flatMap(o=>[o.bottom+12,o.top-height-12])];
-                const options=candidates.map(top=>({left,top,width,height,right:left+width,bottom:top+height,side,anchor})).filter(r=>r.top>=minTop&&r.bottom<=maxBottom&&!occupied.some(o=>intersects(r,o))).sort((a,b)=>Math.abs(a.top-anchor.top)-Math.abs(b.top-anchor.top));
+                const height=heightFor(width),origin=slot?.side===side?slot.top-scrollY:anchor.top;
+                const candidates=[Math.max(minTop,Math.min(origin,maxBottom-height)),minTop,...occupied.flatMap(o=>[o.bottom+12,o.top-height-12])];
+                const options=candidates.map(top=>({left,top,width,height,right:left+width,bottom:top+height,side,anchor})).filter(r=>r.top>=minTop&&r.bottom<=maxBottom&&!occupied.some(o=>intersects(r,o))).sort((a,b)=>Math.abs(a.top-origin)-Math.abs(b.top-origin));
                 if(options.length)return options[0];
               }
             }
             if(offscreen)return null;
-            const width=Math.min(350,innerWidth-32),last=rs[rs.length-1];
+            const width=Math.min(440,innerWidth-32),last=rs[rs.length-1];let height=heightFor(width);
             // Never cover the chosen text line: use the larger contiguous vertical gap.
             const below=innerHeight-last.bottom-28,above=anchor.top-28;
             let top;
@@ -82,15 +84,27 @@ enum HTMLNoteLayoutScript {
             const dot=(kind,r)=>{const c=document.createElementNS(ns,'circle');c.setAttribute('class',kind);c.setAttribute('r',r);svg.append(c);return c;};
             connection={id:active.id,below,a,b,from,reverse,line,mask,reveal,startDot:dot('note-link-start',2),endDot:dot('note-link-end',3)};updateConnection();
           };
-          const inBridge=(anchors,card,x,y,previous)=>{
-            if(!previous||card.hidden)return false;const box=card.getBoundingClientRect(),rs=hitRects(anchors).filter(visible);if(!rs.length)return false;
-            const a=rs[0],right=box.left>a.right,start=right?a.right:a.left,end=right?box.left:box.right;
-            const t=(x-start)/(end-start);if(t<0||t>1)return false;
-            const low=(a.top-8)*(1-t)+(box.top-8)*t,high=(a.bottom+8)*(1-t)+(box.bottom+8)*t;
-            const towardCard=Math.abs(x-end)<Math.abs(previous.x-end),towardText=Math.abs(x-start)<Math.abs(previous.x-start);
-            return y>=low&&y<=high&&(towardCard||towardText);
+          // The corridor is the convex hull of a text line and the preview. Track document
+          // coordinates so scrolling keeps it aligned without measuring the DOM on pointer moves.
+          const inBridge=(anchors,box,x,y)=>{
+            if(!box)return false;
+            y+=scrollY;
+            return hitRects(anchors).some(a=>{
+              if(a.bottom<scrollY||a.top>scrollY+innerHeight)return false;
+              let low=0,high=1;
+              // Is there a rectangle interpolated between the endpoints containing this point?
+              const clip=(start,end)=>{
+                if(start<0&&end<0)return false;
+                if(start<0)low=Math.max(low,-start/(end-start));
+                if(end<0)high=Math.min(high,start/(start-end));
+                return low<=high;
+              };
+              const pad=6;
+              return clip(x-a.left+pad,x-box.left+pad)&&clip(a.right-x+pad,box.right-x+pad)
+                &&clip(y-a.top+pad,y-box.top+pad)&&clip(a.bottom-y+pad,box.bottom-y+pad);
+            });
           };
-          window.paperNoteLayout={connectionEnd:()=>connection?.end,endEntrance(id){if(connection?.id===id&&connection.b.side==='floating'){for(const n of [connection.line,connection.mask,connection.startDot,connection.endDot])n.remove();connection=null;}},rects,visible,place,decorate,inBridge,scrolled:updateConnection,hit(anchors,x,y,precise=false){const margin=precise?0:3,bottom=precise?0:8;return hitRects(anchors).some(r=>x>=r.left-margin&&x<=r.right+margin&&y>=r.top-margin&&y<=r.bottom+bottom);}};
+          window.paperNoteLayout={invalidate(){hitCache=new WeakMap();},reverse(value){if(connection&&connection.reverse!==value){connection.reverse=value;updateConnection();}},connectionEnd:()=>connection?.end,endEntrance(id){if(connection?.id===id&&connection.b.side==='floating'){for(const n of [connection.line,connection.mask,connection.startDot,connection.endDot])n.remove();connection=null;}},rects,visible,place,decorate,inBridge,scrolled:updateConnection,hit(anchors,x,y,precise=false){const margin=precise?0:3,bottom=precise?0:8;y+=scrollY;return hitRects(anchors).some(r=>x>=r.left-margin&&x<=r.right+margin&&y>=r.top-margin&&y<=r.bottom+bottom);}};
         })();
         """#
 }

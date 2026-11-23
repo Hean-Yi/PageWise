@@ -44,6 +44,13 @@ struct CloseReadingControl: View {
                             model.existingCloseReading(for: id) == nil ? "AI 精读" : "查看精读",
                             systemImage: "text.magnifyingglass")
                     }.disabled(model.busyAI)
+                    if model.existingCloseReading(for: id) != nil {
+                        Button {
+                            Task { await model.showCloseReading(id, regenerate: true) }
+                        } label: {
+                            Image(systemName: "arrow.clockwise")
+                        }.disabled(model.busyAI).help("重新精读").accessibilityLabel("重新精读")
+                    }
                     Spacer()
                     Button {
                         legend.toggle()

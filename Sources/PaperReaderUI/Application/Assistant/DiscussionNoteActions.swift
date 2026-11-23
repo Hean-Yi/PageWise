@@ -150,6 +150,31 @@ extension ReaderModel {
             throw ReaderError.message("跨论文引用须选择书库中的阅读笔记。")
         }
         let sources = try Self.sourcesMatchingInstruction(instruction, proposed: proposed, scope: scope)
+        if ReadingNoteIntent.requestsDocumentSummary(instruction) {
+            var references = citations
+            var links: [String] = []
+            var version: String?
+            for (evidence, quote) in sources {
+                guard evidence.paperID == scope.paperID, evidence.readingNoteID == nil else {
+                    throw ReaderError.message("全文总结需要来自这篇论文的依据。")
+                }
+                let source = try await makeLocalPassageCitation(evidence: evidence, quote: quote)
+                version = version ?? source.contentVersion
+                if !references.contains(source) {
+                    references.append(source)
+                    links.append(source.markdown(label: "原文依据 " + String(links.count + 1)))
+                }
+            }
+            let text = ([body] + links).joined(separator: "\n\n")
+            try await validateNoteCitations(references, markdown: text)
+            try validateDiscussionScope(scope)
+            var note = ReadingNote(
+                id: requestID, paperID: scope.paperID, contentVersion: version ?? closeReadingVersion(for: scope),
+                anchors: [], markdown: text)
+            note.placement = .documentEnd
+            note.citations = references
+            return AnchoredNoteInsertion(note: note, highlights: [], scope: scope)
+        }
         let (version, anchors, marks) = try await verifiedDiscussionLocation(in: scope, sources: sources)
         try await validateNoteCitations(citations, markdown: body)
         try validateDiscussionScope(scope)
@@ -301,7 +326,9 @@ extension ReaderModel {
         _ note: ReadingNote, highlights: [Highlight], scope: DiscussionNoteScope? = nil
     ) async throws -> ReadingNote {
         try Task.checkCancellation()
-        guard !note.anchors.isEmpty, !note.markdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        guard note.isDocumentSummary || !note.anchors.isEmpty,
+            !note.markdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else {
             throw ReaderError.message("没有可保存的笔记正文或原文位置。")
         }
         let insertion = AnchoredNoteInsertion(note: note, highlights: highlights, scope: scope)

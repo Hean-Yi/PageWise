@@ -85,7 +85,8 @@ extension ReaderModel {
             let document = state.papers.first(where: { $0.id == id })
         else { return nil }
         if let noteID = evidence.readingNoteID {
-            return referencedReadingNote(id: noteID, paperID: id)?.anchors.first?.key
+            guard let note = referencedReadingNote(id: noteID, paperID: id) else { return nil }
+            return note.isDocumentSummary ? "summary-" + note.id.uuidString : note.anchors.first?.key
         }
         if let index = evidence.sourcePage, index >= 0, index < document.pageCount {
             return "original-\(index)"
@@ -375,6 +376,7 @@ extension ReaderModel {
     }
 
     private func applyPosition(_ position: ReaderPosition) {
+        closeDocumentSummary()
         invalidateSearchNavigation()
         selectionText = ""
         selectionRects = []

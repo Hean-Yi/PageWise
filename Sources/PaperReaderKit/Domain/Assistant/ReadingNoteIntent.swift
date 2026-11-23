@@ -48,6 +48,15 @@ public enum ReadingNoteIntent {
         let target = #"(?:阅读|论文|本地)?笔记(?:里|中)?(?=$|[，,、。.!！；;：:\s吗？?]|并|然后|同时|标|贴|附|在)"#
         let writeNote =
             #"(?:写|做|作|记|存|保存|记录|整理|添加|新建|创建|生成|归入)(?:为|成|入|到|下|进|一条|一个|一则|一份|一篇|一下|个|条|上|一|我的|在原文旁|\s)*"# + target
+        if contains(#"^(?:写|保存|生成|整理|添加|创建)(?:一篇|一份|一条|个)?(?:全文|全篇|整篇论文|论文)(?:总结|综述|总结性)(?:的)?笔记"#, in: command) {
+            return true
+        }
+        if contains(#"^(?:把|将)(?:全文|全篇|整篇论文|这篇论文)(?:总结|概括|整理)成(?:一份|一篇|一条)?(?:总结|阅读)?笔记"#, in: command) { return true }
+        if contains(#"^(?:总结|概括|梳理)(?:这篇|整篇|全篇|全文|本篇|该论文|这篇论文|本文)"#, in: command),
+            contains(writeNote, in: command)
+        {
+            return true
+        }
         if contains("^" + writeNote, in: command) { return true }
         if contains(#"^(?:把|将|给|为|在|对|针对|高亮|标画|标注|标出|划线|画线)"#, in: command) {
             if contains(writeNote, in: command) { return true }
@@ -63,8 +72,19 @@ public enum ReadingNoteIntent {
         let english = command.replacingOccurrences(
             of: #"^(?:(?:can|could|would) you )?(?:please )?"#, with: "", options: .regularExpression)
         return contains(
-            #"^(?:add|attach|make|write|save|create|take|record)\s+(?:(?:a|an|the|this|these|our|my|me|reading|paper|local|as|to|into|discussion|conclusion|point|in)\s+)*notes?\b|^note (?:this|that) down\b"#,
+            #"^(?:add|attach|make|write|save|create|take|record)\s+(?:(?:a|an|the|this|these|our|my|me|reading|paper|summary|local|as|to|into|discussion|conclusion|point|in)\s+)*notes?\b|^note (?:this|that) down\b"#,
             in: english)
+    }
+
+    /// The text quoted for the note cannot choose its destination.
+    public static func requestsDocumentSummary(_ instruction: String) -> Bool {
+        guard isRequested(instruction) else { return false }
+        let plain = quotation.stringByReplacingMatches(
+            in: instruction, range: NSRange(instruction.startIndex..., in: instruction), withTemplate: "…")
+        let command = String(plain.prefix { $0 != "：" && $0 != ":" }).lowercased()
+        return contains(
+            #"(?:全文|全篇|整篇(?:论文|文章)?|(?:这篇|本篇|该|本)论文|这篇文章|本文|论文)(?:的|做个|做一份|做一个|写一份|写一个|进行|写成|整理成)?(?:整体|总体)?(?:总结|综述|概览)|(?:总结|概括|综述|梳理)(?:一下)?(?:全文|全篇|整篇|(?:这篇|本篇|该)论文|本文)|(?:放|记|写|保存)(?:在|到)(?:全文结尾|文末)(?:的)?(?:总结|笔记)|\b(?:summary (?:note )?(?:of|for) (?:the|this|the entire|the whole) paper|paper summary note)\b"#,
+            in: command)
     }
 
     /// Only quoted passages governed by an explicit markup verb constrain the final source locations.

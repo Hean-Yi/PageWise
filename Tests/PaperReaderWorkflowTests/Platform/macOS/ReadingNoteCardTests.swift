@@ -446,7 +446,7 @@
         let block = TextBlock(sourcePage: 0, text: "A reader can check the evidence.")
         let noteID = UUID()
         let web: WKWebView
-        var pdfCoordinator: PDFReadingNoteEditor.Coordinator?
+        var pdfCoordinator: StandaloneReadingNoteEditor.Coordinator?
         var htmlCoordinator: HTMLCoordinator?
         if pdf {
             let fragments = try await PDFReadingNoteLocator().locate(quote: "Understanding", pageIndex: 0, in: file)
@@ -454,7 +454,7 @@
                 id: noteID, paperID: target, contentVersion: "", anchors: fragments.map(\.anchor), markdown: "")
             let session = PDFNoteEditorSession(note: note, marks: [])
             model.pdfNoteEditor = session
-            let coordinator = PDFReadingNoteEditor(model: model, session: session).makeCoordinator()
+            let coordinator = StandaloneReadingNoteEditor(model: model, note: session.note).makeCoordinator()
             pdfCoordinator = coordinator
             web = coordinator.makeView()
         } else {
@@ -574,6 +574,59 @@
         await model.flushReadingNotes()
         try await model.openLocalPassage(preview)
         #expect(model.selectedPaperID == target && model.visiblePage == 1 && model.pdfNoteEditor?.id == memory.id)
+    }
+
+    @Test @MainActor func documentSummaryFollowsTheHTMLPaperOutsideItsAnnotationLayer() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let model = try ReaderModel(root: directory)
+        await model.load()
+        let block = TextBlock(sourcePage: 0, text: "A paired comparison holds the budget fixed.")
+        var paper = Paper(
+            title: "Budget", digest: "budget", originalPath: "unused.pdf", pageCount: 1,
+            blocks: [block], warnings: [], canReflow: true)
+        let html = try await HTMLReadingStore().append(
+            [BilingualBlock(block: block, translation: "这组对照固定了预算。")], to: nil, paper: paper, root: directory)
+        paper.htmlReading = html
+        paper.translatedBlockCount = 1
+        let version = try #require(html.readingNoteVersion(digest: paper.digest))
+        var summary = ReadingNote(
+            paperID: paper.id, contentVersion: version, anchors: [], markdown: "# Budget comparison")
+        summary.placement = .documentEnd
+        model.state.papers = [paper]
+        model.state.readingNotes = [summary]
+        model.select(paper.id)
+        let coordinator = HTMLCoordinator(model: model)
+        let web = coordinator.makeView()
+        defer { coordinator.stop(web) }
+        coordinator.update(web)
+        try await noteWait {
+            (try? await noteJS(
+                web, "return document.querySelector('#reader + #reader-document-summary h1')?.textContent")) as? String
+                == "Budget comparison"
+        }
+        #expect(
+            try await noteJS(
+                web,
+                "return document.querySelectorAll('#reader > section').length===1 && !document.querySelector('.reader-note-card')"
+            ) as? Bool == true)
+        _ = try await noteJS(web, "document.querySelector('#reader-document-summary button').click()")
+        try await noteWait { model.presentedDocumentSummary?.id == summary.id && model.editingDocumentSummary }
+        #expect(model.updateDocumentSummary(id: summary.id, markdown: "**Edited**"))
+        model.navigateToPage(0)
+        #expect(model.presentedDocumentSummary == nil)
+        coordinator.update(web)
+        try await noteWait {
+            (try? await noteJS(
+                web, "return document.querySelector('#reader-document-summary p strong')?.textContent==='Edited'"))
+                as? Bool == true
+        }
+        model.deleteReadingNote(summary.id)
+        coordinator.update(web)
+        try await noteWait {
+            (try? await noteJS(web, "return !document.querySelector('#reader-document-summary')")) as? Bool == true
+        }
+        await model.flushReadingNotes()
     }
 
     @MainActor private func noteJS(_ web: WKWebView, _ source: String, _ arguments: [String: Any] = [:]) async throws
