@@ -598,12 +598,23 @@
         paper.htmlReading = html
         paper.translatedBlockCount = 1
         let version = try #require(html.readingNoteVersion(digest: paper.digest))
+        let citation = LocalPassageCitation(
+            paperID: paper.id, digest: paper.digest, contentVersion: version,
+            anchors: [
+                NoteAnchor(
+                    key: block.id.uuidString, target: "source", text: block.text, start: 0, end: block.text.utf16.count)
+            ],
+            quote: block.text)
         let markdown = """
             # Budget comparison
 
             ## 怎样比较？
 
+            复核 A \\* B 和 C &amp; D，记入末项。
+
             先检查两个实验的**计算预算**。
+
+            \(citation.markdown(label: "核对原文"))
 
             > 现有对照支持哪种解释？
 
@@ -613,9 +624,12 @@
             | 条件 | 得分 |
             | --- | --- |
             | 等预算 | 42 |
+
+            复核 A \\* B 和 C &amp; D，记入末项。
             """
         var summary = ReadingNote(paperID: paper.id, contentVersion: version, anchors: [], markdown: markdown)
         summary.placement = .documentEnd
+        summary.citations = [citation]
         model.state.papers = [paper]
         model.state.readingNotes = [summary]
         model.select(paper.id)
@@ -650,8 +664,9 @@
                     && getComputedStyle(note).fontFamily===getComputedStyle(printed.querySelector('.translation')).fontFamily;
                 """) as? Bool == true)
         for size in [nil, 19] as [Int?] {
+            model.openReadingNote(summary)
             let standalone = StandaloneReadingNoteEditor(
-                model: model, note: summary, readOnly: true, summaryPDFFontSize: size
+                model: model, note: summary, summaryPDFFontSize: size
             ).makeCoordinator()
             let view = standalone.makeView()
             defer { standalone.stop() }
@@ -664,24 +679,100 @@
                     const p=document.querySelector('.note-prose');
                     return !p.closest('.reader-note-card') && parseFloat(getComputedStyle(p).fontSize)===size;
                     """, ["size": size ?? 17]) as? Bool == true)
+            if size != nil {
+                try await editSummaryByClick(in: view, model: model, note: summary, citation: citation)
+            }
+            model.closeDocumentSummary()
         }
-        _ = try await noteJS(web, "document.querySelector('#reader-document-summary button').click()")
-        try await noteWait { model.presentedDocumentSummary?.id == summary.id && model.editingDocumentSummary }
-        #expect(model.updateDocumentSummary(id: summary.id, markdown: "**Edited**"))
-        model.navigateToPage(0)
-        #expect(model.presentedDocumentSummary == nil)
+        let updated = try #require(model.currentDocumentSummary)
         coordinator.update(web)
         try await noteWait {
-            (try? await noteJS(
-                web, "return document.querySelector('#reader-document-summary p strong')?.textContent==='Edited'"))
-                as? Bool == true
+            (try? await noteJS(web, "return document.querySelector('#reader-document-summary p strong')?.textContent"))
+                as? String == "计算单位预算"
         }
+        try await editSummaryByClick(in: web, model: model, note: updated, citation: citation)
+        #expect(model.presentedDocumentSummary == nil)
+        #expect(model.currentDocumentSummary?.id == summary.id)
         model.deleteReadingNote(summary.id)
         coordinator.update(web)
         try await noteWait {
             (try? await noteJS(web, "return !document.querySelector('#reader-document-summary')")) as? Bool == true
         }
         await model.flushReadingNotes()
+    }
+
+    @MainActor private func editSummaryByClick(
+        in web: WKWebView, model: ReaderModel, note: ReadingNote, citation: LocalPassageCitation
+    ) async throws {
+        _ = try await noteJS(web, "document.querySelector('#reader-document-summary a[data-passage]').click()")
+        try await noteWait {
+            guard case .preview(let source, let target) = model.notePassageSheet else { return false }
+            return source == note.id && target == citation.id
+        }
+        model.notePassageSheet = nil
+        // A drag ends with a click. Keep its selection available for Copy.
+        let selection = try await noteJS(
+            web,
+            """
+            const prose=document.querySelector('#reader-document-summary .note-prose');
+            const strong=prose.querySelector('p strong'), text=strong.firstChild;
+            getSelection().setBaseAndExtent(text,0,text,2);
+            strong.dispatchEvent(new MouseEvent('click',{bubbles:true,detail:1}));
+            return getSelection().toString()==='计算' && !prose.hidden && strong.isConnected;
+            """)
+        try #require(selection as? Bool == true)
+        // The first keystroke belongs exactly where the reader clicked, including inside Markdown formatting.
+        let formatted = note.markdown.replacingOccurrences(of: "**计算", with: "**计算单位")
+        try await insertAtSummaryCaret(in: web, model: model, selector: "p strong", after: "计算", expected: formatted)
+        // Identical visible paragraphs include an escape and an entity that differ in length from their Markdown.
+        // Only the last occurrence should change.
+        let lastMatch = try #require(formatted.range(of: "记入末", options: .backwards))
+        var lastParagraph = formatted
+        lastParagraph.insert(contentsOf: "单位", at: lastMatch.upperBound)
+        try await insertAtSummaryCaret(
+            in: web, model: model, selector: ":scope > p:last-child", after: "记入末", expected: lastParagraph)
+        #expect(model.currentDocumentSummary?.citations?.map(\.id) == [citation.id])
+    }
+
+    @MainActor private func insertAtSummaryCaret(
+        in web: WKWebView, model: ReaderModel, selector: String, after prefix: String, expected: String
+    ) async throws {
+        _ = try await noteJS(
+            web,
+            """
+            const target=document.querySelector('#reader-document-summary .note-prose').querySelector(selector);
+            target.scrollIntoView({block:'center'});
+            const text=target.firstChild, index=text.textContent.indexOf(prefix);
+            if(index<0)throw Error('Missing target in rendered text');
+            const offset=index+prefix.length,caret=document.createRange();
+            caret.setStart(text,offset);caret.collapse(true);
+            getSelection().setBaseAndExtent(text,offset,text,offset);
+            const box=caret.getBoundingClientRect();
+            target.dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true,detail:1,
+                clientX:box.left,clientY:box.top+box.height/2}));
+            """, ["selector": selector, "prefix": prefix])
+        try await noteWait {
+            (try? await noteJS(web, "return document.activeElement.matches('#reader-document-summary .cm-content')"))
+                as? Bool == true
+        }
+        _ = try await noteJS(
+            web,
+            """
+            const e=document.activeElement.closest('.note-editor').noteEditor;
+            e.view.dispatch(e.view.state.replaceSelection('单位'));
+            """)
+        try await noteWait { model.currentDocumentSummary?.markdown == expected }
+        _ = try await noteJS(
+            web,
+            """
+            document.activeElement.dispatchEvent(new KeyboardEvent('keydown',{
+                key:'Escape',code:'Escape',bubbles:true,cancelable:true}));
+            """)
+        try await noteWait {
+            (try? await noteJS(
+                web, "return !!document.querySelector('#reader-document-summary .note-prose:not([hidden]) p strong')"))
+                as? Bool == true
+        }
     }
 
     @MainActor private func noteJS(_ web: WKWebView, _ source: String, _ arguments: [String: Any] = [:]) async throws

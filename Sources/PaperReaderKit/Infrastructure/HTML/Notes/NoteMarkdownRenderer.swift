@@ -12,11 +12,16 @@ public actor NoteMarkdownRenderer {
     }
 
     /// The reader may activate only a passage registered on this particular note.
-    public func renderReadingNote(_ markdown: String, passageIDs: Set<UUID>) throws -> String {
-        try markdownDocument(markdown, passageIDs: passageIDs).body()?.html() ?? ""
+    public func renderReadingNote(_ markdown: String, passageIDs: Set<UUID>, trackSourceRanges: Bool = false) throws
+        -> String
+    {
+        try markdownDocument(markdown, passageIDs: passageIDs, trackSourceRanges: trackSourceRanges).body()?.html()
+            ?? ""
     }
 
-    func markdownDocument(_ markdown: String, passageIDs: Set<UUID>? = nil) throws -> Document {
+    func markdownDocument(_ markdown: String, passageIDs: Set<UUID>? = nil, trackSourceRanges: Bool = false) throws
+        -> Document
+    {
         if engine == nil {
             guard let context = JSContext(),
                 let url = Bundle.module.url(forResource: "marked.umd", withExtension: "js", subdirectory: "Marked")
@@ -26,6 +31,9 @@ public actor NoteMarkdownRenderer {
             engine = context
         }
         guard let context = engine else { throw ReaderError.message("Markdown 预览不可用，源码已保留。") }
+        // Only ranges emitted by our parser survive sanitization, even when a note contains raw HTML.
+        let sourceAttribute = trackSourceRanges ? "data-pr-" + UUID().uuidString.lowercased() : nil
+        context.setObject(sourceAttribute ?? "", forKeyedSubscript: "noteBlockAttribute" as NSString)
         context.evaluateScript("noteMath=[]")
         context.exception = nil
         guard
@@ -47,6 +55,7 @@ public actor NoteMarkdownRenderer {
                 try element.unwrap()
                 continue
             }
+            let blockRange = try sourceAttribute.flatMap { element.hasAttr($0) ? try element.attr($0) : nil }
             for attribute in element.getAttributes()?.asList() ?? [] {
                 let key = attribute.getKey()
                 let permitted =
@@ -56,6 +65,7 @@ public actor NoteMarkdownRenderer {
                     || (element.tagName() == "ol" && key == "start")
                 if !permitted { try element.removeAttr(key) }
             }
+            if let blockRange { try element.attr("data-note-range", blockRange) }
             if element.tagName() == "input" {
                 guard try element.attr("type") == "checkbox" else {
                     try element.remove()
@@ -111,7 +121,20 @@ public actor NoteMarkdownRenderer {
           const i=noteMath.push({text:t.text,raw:t.raw.trimEnd(),display:!!t.display})-1;
           return '<span data-note-math="'+i+'"></span>';
         }
-        marked.use({extensions:[
+        var noteBlockAttribute='';
+        marked.use({hooks:{processAllTokens(tokens){
+          if(!noteBlockAttribute)return tokens;
+          let offset=0;
+          return tokens.map(token=>{
+            const start=offset;offset+=token.raw.length;
+            if(token.type==='space'||token.type==='def')return token;
+            return {type:'noteSourceBlock',token,start,end:offset};
+          });
+        }},extensions:[
+          {name:'noteSourceBlock',level:'block',renderer({token,start,end}){
+            const html=this.parser.parse([token]);
+            return html.replace(/^\s*<[a-z][\w-]*(?=[\s>])/i,tag=>tag+' '+noteBlockAttribute+'="'+start+':'+end+'"');
+          }},
           {name:'noteBlockMath',level:'block',start(src){return src.search(/(?:\$\$|\\\[)/);},
            tokenizer(src){const m=/^\$\$\s*([\s\S]+?)\$\$[ \t]*(?:\n|$)/.exec(src)||/^\\\[\s*([\s\S]+?)\\\][ \t]*(?:\n|$)/.exec(src);
              if(m)return {type:'noteBlockMath',raw:m[0],text:m[1],display:true};},

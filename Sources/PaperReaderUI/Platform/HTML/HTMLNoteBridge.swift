@@ -73,7 +73,8 @@ final class HTMLNoteBridge {
                     do {
                         try await Task.sleep(for: .milliseconds(60))
                         let passages = Set((note.citations ?? []).map(\.id))
-                        let html = try await self.renderer.renderReadingNote(note.markdown, passageIDs: passages)
+                        let html = try await self.renderer.renderReadingNote(
+                            note.markdown, passageIDs: passages, trackSourceRanges: note.isDocumentSummary)
                         let preview = Preview(source: note.markdown, passages: passages, html: html)
                         try Task.checkCancellation()
                         guard let view, self.model.selectedPaperID == expectedPaper,
@@ -108,11 +109,6 @@ final class HTMLNoteBridge {
     func receive(_ value: [String: Any], view: WKWebView) {
         guard value["paperID"] as? String == model.selectedPaperID?.uuidString else { return }
         switch value["kind"] as? String {
-        case "noteEditSummary":
-            if let summary = model.currentDocumentSummary, value["id"] as? String == summary.id.uuidString {
-                model.openReadingNote(summary)
-                model.editingDocumentSummary = true
-            }
         case "notePreviewPassage":
             guard let raw = value["id"] as? String, let id = UUID(uuidString: raw),
                 let destination = value["passage"] as? String, let passage = UUID(uuidString: destination)
@@ -120,7 +116,7 @@ final class HTMLNoteBridge {
             model.presentNotePassage(noteID: id, citationID: passage)
         case "noteInsertPassage":
             guard let raw = value["id"] as? String, let id = UUID(uuidString: raw),
-                let anchors = Self.anchors(value["anchors"]), let markdown = value["markdown"] as? String,
+                let anchors = anchors(for: id, in: value), let markdown = value["markdown"] as? String,
                 let from = value["from"] as? Int, let to = value["to"] as? Int
             else { return }
             model.pickNotePassage(noteID: id, anchors: anchors, source: markdown, from: from, to: to) {
@@ -133,7 +129,7 @@ final class HTMLNoteBridge {
             }
         case "noteChange":
             guard let raw = value["id"] as? String, let id = UUID(uuidString: raw),
-                let markdown = value["markdown"] as? String, let anchors = Self.anchors(value["anchors"]),
+                let markdown = value["markdown"] as? String, let anchors = anchors(for: id, in: value),
                 model.updateReadingNote(id: id, anchors: anchors, markdown: markdown)
             else {
                 call(view, "window.paperNotes?.saved(status)", ["status": "保存失败：笔记位置未核对"])
@@ -163,8 +159,9 @@ final class HTMLNoteBridge {
     private static func anchor(_ a: NoteAnchor) -> [String: Any] {
         ["key": a.key, "target": a.target, "text": a.text, "start": a.start, "end": a.end]
     }
-    private static func anchors(_ value: Any?) -> [NoteAnchor]? {
-        guard let items = value as? [[String: Any]], !items.isEmpty, items.count <= 10_000 else { return nil }
+    private func anchors(for id: UUID, in message: [String: Any]) -> [NoteAnchor]? {
+        guard let items = message["anchors"] as? [[String: Any]], items.count <= 10_000 else { return nil }
+        if items.isEmpty { return model.currentDocumentSummary?.id == id ? [] : nil }
         var result: [NoteAnchor] = []
         for item in items {
             guard let key = item["key"] as? String, let target = item["target"] as? String,

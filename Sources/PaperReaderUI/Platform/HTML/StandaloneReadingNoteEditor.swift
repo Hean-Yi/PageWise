@@ -6,8 +6,7 @@ import WebKit
 @MainActor struct StandaloneReadingNoteEditor {
     let model: ReaderModel
     let note: ReadingNote
-    var readOnly = false
-    var onDone: (() -> Void)?
+    var finishRequest = 0
     var citationRequest = 0
     var summaryPDFFontSize: Int?
 
@@ -22,9 +21,11 @@ import WebKit
         private var ready = false
         private var lastRequest = 0
         private var pendingRequest = 0
+        private var lastFinishRequest = 0
 
         init(_ editor: StandaloneReadingNoteEditor) {
             self.editor = editor
+            lastFinishRequest = editor.finishRequest
             lastRequest = editor.citationRequest
             pendingRequest = editor.citationRequest
             source =
@@ -59,9 +60,10 @@ import WebKit
             let js = """
                 const send = message => window.webkit.messageHandlers.pdfNote.postMessage(message);
                 const host = document.querySelector('[data-note-host]');
-                if (readOnly) {
-                    host.style.whiteSpace = 'pre-wrap';
-                    host.textContent = source;
+                if (summary) {
+                    window.summaryEditor = window.PaperNoteEditor.attachSummary(host,
+                        text => send({text}), editing => send({editing}));
+                    window.summaryEditor.update(source, '');
                 } else {
                     window.pdfEditor = window.PaperNoteEditor.create(host, source,
                         text => send({text}), () => send({done:true}));
@@ -71,7 +73,7 @@ import WebKit
                 """
             webView.callAsyncJavaScript(
                 js,
-                arguments: ["source": source, "readOnly": editor.readOnly],
+                arguments: ["source": source, "summary": editor.note.isDocumentSummary],
                 in: nil, in: .defaultClient
             ) {
                 [weak self] result in
@@ -86,12 +88,19 @@ import WebKit
             }
         }
 
+        func finishSummary(_ request: Int, in view: WKWebView) {
+            guard request != lastFinishRequest else { return }
+            lastFinishRequest = request
+            view.callAsyncJavaScript(
+                "window.summaryEditor?.finish()", arguments: [:], in: nil, in: .defaultClient, completionHandler: nil)
+        }
+
         func updateCitationRequest(_ request: Int, in view: WKWebView) {
             pendingRequest = request
             guard ready, request != lastRequest else { return }
             lastRequest = request
             let script = """
-                const e=window.pdfEditor;
+                const e=window.summaryEditor?.editor ?? window.pdfEditor; if (!e) return;
                 window.webkit.messageHandlers.pdfNote.postMessage({pick:true,markdown:e.value,from:e.selectionStart,to:e.selectionEnd});
                 """
             view.callAsyncJavaScript(script, arguments: [:], in: nil, in: .defaultClient, completionHandler: nil)
@@ -107,7 +116,10 @@ import WebKit
                 note.paperID == editor.model.selectedPaperID,
                 let value = message.body as? [String: Any]
             else { return }
-            if !editor.readOnly, value["pick"] as? Bool == true, let source = value["markdown"] as? String,
+            if note.isDocumentSummary, let editing = value["editing"] as? Bool {
+                editor.model.editingDocumentSummary = editing
+                if !editing { Task { await editor.model.flushReadingNotes() } }
+            } else if value["pick"] as? Bool == true, let source = value["markdown"] as? String,
                 let from = value["from"] as? Int, let to = value["to"] as? Int
             {
                 editor.model.pickNotePassage(noteID: note.id, anchors: note.anchors, source: source, from: from, to: to)
@@ -115,13 +127,13 @@ import WebKit
                     [weak self] link in
                     guard let self, let view else { return }
                     view.callAsyncJavaScript(
-                        "window.pdfEditor?.insertPassage(source,from,to,link)",
+                        "(window.summaryEditor?.editor ?? window.pdfEditor)?.insertPassage(source,from,to,link)",
                         arguments: ["source": source, "from": from, "to": to, "link": link], in: nil,
                         in: .defaultClient, completionHandler: nil)
                 }
             } else if let raw = value["passage"] as? String, let passage = UUID(uuidString: raw) {
                 editor.model.presentNotePassage(noteID: note.id, citationID: passage)
-            } else if !editor.readOnly, let text = value["text"] as? String {
+            } else if let text = value["text"] as? String {
                 let saved =
                     note.isDocumentSummary
                     ? editor.model.updateDocumentSummary(id: note.id, markdown: text)
@@ -131,7 +143,7 @@ import WebKit
                     preview()
                 }
             } else if value["done"] as? Bool == true {
-                if let onDone = editor.onDone { onDone() } else { editor.model.closePDFReadingNote() }
+                editor.model.closePDFReadingNote()
             }
         }
 
@@ -141,17 +153,20 @@ import WebKit
             previewTask = Task { [weak self] in
                 guard let self else { return }
                 do {
-                    if !editor.readOnly { try await Task.sleep(for: .milliseconds(100)) }
+                    if !editor.note.isDocumentSummary || editor.model.editingDocumentSummary {
+                        try await Task.sleep(for: .milliseconds(100))
+                    }
                     let ids =
                         editor.model.currentReadingNotes.first { $0.id == editor.note.id }?.citations?.map(\.id)
                         ?? []
-                    let html = try await renderer.renderReadingNote(expected, passageIDs: Set(ids))
+                    let html = try await renderer.renderReadingNote(
+                        expected, passageIDs: Set(ids), trackSourceRanges: editor.note.isDocumentSummary)
                     try Task.checkCancellation()
                     guard expected == source, let view else { return }
                     view.callAsyncJavaScript(
                         """
-                        if (window.pdfEditor) window.pdfEditor.preview(source, html);
-                        else { const body = document.querySelector('[data-note-host]'); body.innerHTML = html; body.style.whiteSpace = 'normal'; }
+                        if (window.summaryEditor) window.summaryEditor.update(source, html);
+                        else window.pdfEditor?.preview(source, html);
                         """, arguments: ["source": expected, "html": html],
                         in: nil, in: .defaultClient, completionHandler: nil)
                 } catch {}
@@ -169,8 +184,8 @@ import WebKit
             let pdfSize = editor.summaryPDFFontSize
             let pageClass = isSummary ? (pdfSize == nil ? "summary-page" : "summary-page pdf-summary") : ""
             let articleID = isSummary ? #"id="reader-document-summary" aria-label="文末总结""# : ""
-            let articleClass = editor.readOnly ? "" : "reader-note-card active"
-            let contentClass = editor.readOnly ? "note-prose" : "note-editor"
+            let articleClass = isSummary ? "" : "reader-note-card active"
+            let contentClass = isSummary ? "note-prose" : "note-editor"
             return """
                 <!doctype html><html lang="zh-Hans"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
                 <meta http-equiv="Content-Security-Policy" content="default-src 'none';style-src 'unsafe-inline';base-uri 'none';form-action 'none'">
@@ -180,10 +195,6 @@ import WebKit
                 .note-editor{height:100%}
                 body.summary-page{background:light-dark(#faf9f5,#24221f);color:light-dark(#252320,#e4e1da)}
                 body.pdf-summary{background:light-dark(#fffdf8,#2c2b26);color:light-dark(#292822,#f0eee7);--zh-size:\(pdfSize ?? 16)px}
-                .summary-page #reader-document-summary.reader-note-card{position:static;width:100%;height:100%;max-height:none;
-                  border:0;box-shadow:none;border-radius:0;transform:none;background:transparent;color:inherit}
-                .summary-page #reader-document-summary .note-editor{min-height:0;font:inherit}
-                .summary-page #reader-document-summary .cm-scroller{font:inherit;padding:0}
                 </style></head><body class="\(pageClass)"><article \(articleID) class="\(articleClass)"><div class="\(contentClass)" data-note-host></div></article></body></html>
                 """
         }
@@ -195,6 +206,7 @@ import WebKit
         func makeNSView(context: Context) -> WKWebView { context.coordinator.makeView() }
         func updateNSView(_ view: WKWebView, context: Context) {
             context.coordinator.updateCitationRequest(citationRequest, in: view)
+            context.coordinator.finishSummary(finishRequest, in: view)
         }
         static func dismantleNSView(_ view: WKWebView, coordinator: Coordinator) { coordinator.stop() }
     }
@@ -203,6 +215,7 @@ import WebKit
         func makeUIView(context: Context) -> WKWebView { context.coordinator.makeView() }
         func updateUIView(_ view: WKWebView, context: Context) {
             context.coordinator.updateCitationRequest(citationRequest, in: view)
+            context.coordinator.finishSummary(finishRequest, in: view)
         }
         static func dismantleUIView(_ view: WKWebView, coordinator: Coordinator) { coordinator.stop() }
     }

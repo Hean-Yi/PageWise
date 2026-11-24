@@ -156,6 +156,7 @@ enum HTMLNotesScript {
           const setChoices=matches=>{for(const e of matches){e.choices.replaceChildren();e.choices.classList.toggle('note-hidden',matches.length<2);for(const [index,item] of matches.entries()){const o=document.createElement('option');o.value=item.id;o.textContent=(index+1)+' · '+(item.dimensionTitle||'笔记');o.selected=e.id===item.id;e.choices.append(o);}}};
           document.addEventListener('pointerdown',event=>{
             pointer={x:event.clientX,y:event.clientY};
+            if(appendixEditor?.editor && !appendix.contains(event.target))appendixEditor.finish();
             if(event.target.closest('.reader-note-card,#annotation-menu'))return;
             if(editing)finish();
           },true);
@@ -201,7 +202,7 @@ enum HTMLNotesScript {
             cross(e,x,y,previous);
           };
           document.addEventListener('pointermove',event=>{
-            if(editing||event.buttons||event.pointerType==='touch')return;
+            if(editing||appendixEditor?.editor||event.buttons||event.pointerType==='touch')return;
             const x=event.clientX,y=event.clientY,previous=lastPoint;lastPoint={x,y};track(event.target,x,y,previous);
           });
           document.addEventListener('mouseleave',()=>{lastPoint=null;leave();});
@@ -217,23 +218,34 @@ enum HTMLNotesScript {
           },{passive:true});
           new ResizeObserver(resized).observe(root);document.fonts?.ready.then(resized);document.fonts?.addEventListener('loadingdone',resized);
           // The appendix follows the published reader; it never becomes a paper section or an annotation anchor.
-          let appendix=null,appendixBody=null,appendixSource='';
+          let appendix=null,appendixEditor=null;
           const summary=(id,source,html)=>{
-            if(!id){appendix?.remove();appendix=null;appendixBody=null;return;}
-            if(!appendix){
-              appendix=document.createElement('article');appendix.id='reader-document-summary';appendix.lang='zh-Hans';appendix.setAttribute('aria-label','文末总结');
-              const head=document.createElement('header'),title=document.createElement('strong');title.textContent='文末总结';
-              head.append(title,button('编辑',()=>send({kind:'noteEditSummary',id:appendix.dataset.noteId}),'编辑文末总结'));
-              appendixBody=document.createElement('div');appendixBody.className='note-prose';appendix.append(head,appendixBody);root.after(appendix);
-              PaperNoteEditor.bindPassages(appendix,passage=>send({kind:'notePreviewPassage',id:appendix.dataset.noteId,passage}));
+            if(appendix && appendix.dataset.noteId!==id){
+              appendixEditor.destroy();appendix.remove();appendix=null;appendixEditor=null;
             }
-            appendix.dataset.noteId=id;appendixSource=source;
-            if(html){appendixBody.innerHTML=html;appendixBody.style.whiteSpace='normal';}
-            else{appendixBody.textContent=source;appendixBody.style.whiteSpace='pre-wrap';}
+            if(!id)return;
+            if(!appendix){
+              appendix=document.createElement('article');appendix.id='reader-document-summary';appendix.lang='zh-Hans';
+              appendix.dataset.noteId=id;appendix.setAttribute('aria-label','文末总结');
+              const head=document.createElement('header'),title=document.createElement('strong');title.textContent='文末总结';
+              const tools=document.createElement('span');tools.hidden=true;
+              const save=button(lastStatus,flush,'保存阅读笔记');
+              tools.append(save,button('引用笔记',()=>{
+                const e=appendixEditor.editor;
+                if(e)send({kind:'noteInsertPassage',id,anchors:[],markdown:e.value,from:e.selectionStart,to:e.selectionEnd});
+              },'引用阅读笔记'),button('完成',()=>appendixEditor.finish()));
+              head.append(title,tools);
+              const prose=document.createElement('div');prose.className='note-prose';appendix.append(head,prose);root.after(appendix);
+              appendixEditor=PaperNoteEditor.attachSummary(prose,markdown=>send({kind:'noteChange',id,anchors:[],markdown}),active=>{
+                tools.hidden=!active;if(!active)flush();
+              });
+              PaperNoteEditor.bindPassages(appendix,passage=>send({kind:'notePreviewPassage',id,passage}));
+            }
+            appendixEditor.update(source,html);
           };
           window.paperNotes={
             summary,
-            begin,editing:()=>!!editing,preservingSelection:()=>!!editing,
+            begin,editing:()=>!!editing||!!appendixEditor?.editor,preservingSelection:()=>!!editing||!!appendixEditor?.editor,
             sidebar(open){if(sidebar!==open){sidebar=open;resized();}},
             sync(notes){
               let changed=false;const ids=new Set(notes.map(n=>n.id));
@@ -247,10 +259,13 @@ enum HTMLNotesScript {
                 }
               }if(changed)schedule();
             },
-            preview(id,source,html){if(appendix?.dataset.noteId===id&&appendixSource===source){summary(id,source,html);return;}const e=records.get(id);if(!e||e.markdown!==source)return;e.html=html;e.content.style.whiteSpace='normal';body(e);e.editor?.preview(source,html);if(active===id&&!editing)schedule(false);},
+            preview(id,source,html){if(appendix?.dataset.noteId===id){appendixEditor.update(source,html);return;}const e=records.get(id);if(!e||e.markdown!==source)return;e.html=html;e.content.style.whiteSpace='normal';body(e);e.editor?.preview(source,html);if(active===id&&!editing)schedule(false);},
             previewError(id){const e=records.get(id);if(e){e.content.textContent=e.markdown;e.status.textContent='预览失败，源码已保留';}},
-            saved(status){lastStatus=status;for(const e of records.values())e.status.textContent=status;},
-            insertPassage(id,source,from,to,markdown){return editing===id&&records.get(id)?.editor?.insertPassage(source,from,to,markdown);},
+            saved(status){lastStatus=status;for(const e of records.values())e.status.textContent=status;
+              const summaryStatus=appendix?.querySelector('button[aria-label="保存阅读笔记"]');if(summaryStatus)summaryStatus.textContent=status;},
+            insertPassage(id,source,from,to,markdown){
+              if(appendix?.dataset.noteId===id)return appendixEditor.editor?.insertPassage(source,from,to,markdown);
+              return editing===id&&records.get(id)?.editor?.insertPassage(source,from,to,markdown);},
             open(id,edit){const e=records.get(id);if(!e)return;document.getElementById('block-'+e.anchors[0].key)?.scrollIntoView({block:'center'});activate(id,edit);},
             finish,layout:schedule
           };
