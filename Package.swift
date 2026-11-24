@@ -16,7 +16,7 @@ let package = Package(
             name: "PaperReaderKit", dependencies: ["CSQLite", "SwiftSoup"],
             resources: [
                 .copy("Resources/ThirdPartyNotices.txt"), .copy("Resources/KaTeX"), .copy("Resources/Marked"),
-                .copy("Resources/Prompts"),
+                .copy("Resources/Prompts"), .copy("Resources/Samples"),
             ]),
         .target(
             name: "PaperReaderUI", dependencies: ["PaperReaderKit"],

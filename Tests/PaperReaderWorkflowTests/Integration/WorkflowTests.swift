@@ -101,3 +101,21 @@ private struct FakeModelTransport: HTTPTransport {
     model.clearAssistantSelection()
     #expect(model.assistantSelectionText.isEmpty)
 }
+
+@Test @MainActor func quickStartReopensTheInstalledSampleAfterRelaunch() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let reader = try ReaderModel(root: root, credentials: WorkflowCredentials())
+    await reader.load()
+    await reader.addDemo()
+    let first = try #require(reader.paper)
+    #expect(first.pageCount == 2)
+    #expect(reader.mode == "original")
+    let saved = try Data(contentsOf: root.appendingPathComponent(first.originalPath))
+    let next = try ReaderModel(root: root, credentials: WorkflowCredentials())
+    await next.load()
+    await next.addDemo()
+    #expect(next.state.papers.count == 1)
+    #expect(next.selectedPaperID == first.id)
+    #expect(try Data(contentsOf: DemoPaper.fileURL()) == saved)
+}

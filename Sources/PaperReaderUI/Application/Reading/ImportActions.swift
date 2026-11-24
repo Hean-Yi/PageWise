@@ -242,13 +242,7 @@ extension ReaderModel {
 
     public func addDemo() async {
         do {
-            let folder = FileManager.default.temporaryDirectory.appendingPathComponent(
-                "PaperReader-Demo-" + UUID().uuidString)
-            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-            defer { try? FileManager.default.removeItem(at: folder) }
-            let file = folder.appendingPathComponent("Understanding Attention.pdf")
-            try DemoPaper.write(to: file)
-            await importURLs([file])
+            await importURLs([try DemoPaper.fileURL()])
         } catch { message = error.localizedDescription }
     }
 
