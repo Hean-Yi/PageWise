@@ -125,7 +125,13 @@ struct BookshelfItem: View {
     private var workspace: PaperWorkspace { model.workspace(for: paper.id) }
     private var progress: ReadingProgress { .resolve(paper: paper, workspace: workspace) }
     private var highlighted: Bool { hovered || focus != nil }
-    private var showsActions: Bool { highlighted }
+    private var showsActions: Bool {
+        #if os(iOS)
+            true
+        #else
+            highlighted
+        #endif
+    }
 
     var body: some View {
         let progress = self.progress
@@ -179,6 +185,7 @@ struct BookshelfItem: View {
                 .accessibilityAddTraits(.isButton)
                 .accessibilityAction { model.select(paper.id) }
                 .accessibilityAction(named: "预览论文") { showPreview(.pinned(paper.id)) }
+                .accessibilityAction(named: "移到最近删除") { Task { await model.trashPaper(paper.id) } }
                 .help("\(paper.title) · \(progress.label) · 按住空格预览")
             HStack(spacing: 7) {
                 Button {
@@ -257,6 +264,8 @@ struct BookshelfItem: View {
                 }
             }
         }
+        Divider()
+        TrashPaperButton(model: model, paperID: paper.id)
     }
 }
 

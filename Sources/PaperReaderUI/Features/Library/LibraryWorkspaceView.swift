@@ -215,6 +215,10 @@ private struct ShelfWorkspaceContent: View {
                 preview = nil
             }
             .onChange(of: sort) { _, _ in arrangement.end() }
+            .onChange(of: listing.ids) { _, ids in
+                if let preview, !ids.contains(preview.target.paperID) { self.preview = nil }
+                if arrangement.sourceID != nil { arrangement.end() }
+            }
             .onDisappear {
                 arrangement.end()
                 preview = nil
@@ -224,7 +228,7 @@ private struct ShelfWorkspaceContent: View {
                 searchFocused = true
             }
             .onChange(of: onlineSearch.isExpanded) { _, expanded in if expanded { searchFocused = false } }
-            .onChange(of: model.state.shelves) { _, shelves in
+            .onChange(of: model.state.shelves, initial: true) { _, shelves in
                 if let selectedShelfID, !shelves.contains(where: { $0.id == selectedShelfID }) {
                     self.selectedShelfID = nil
                 }

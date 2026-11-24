@@ -208,6 +208,8 @@ struct ReaderView: View {
                         }
                     }
                 }
+                Divider()
+                TrashPaperButton(model: model, paperID: paper.id)
             }
         } label: {
             Image(systemName: "ellipsis").font(.body.weight(.semibold))
