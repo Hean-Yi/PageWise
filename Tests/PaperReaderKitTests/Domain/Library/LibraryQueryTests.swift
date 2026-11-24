@@ -39,6 +39,26 @@ import Testing
     #expect(LibraryQuery.papers(in: state, sort: .title).map(\.id) == [first.id, second.id, third.id])
 }
 
+@Test func continueReadingUsesTheLastActualOpenAcrossShelvesAndStatuses() throws {
+    let earlier = queryPaper("Earlier", added: 1)
+    let latest = queryPaper("Finished in another shelf", added: 2)
+    let unopened = queryPaper("New import", added: 3)
+    let shelf = try Shelf(name: "Methods")
+    var state = LibraryState()
+    state.papers = [earlier, latest, unopened]
+    try state.apply(.create(shelf))
+    try state.apply(.move(paperID: latest.id, shelfID: shelf.id))
+    state.preferredSort = .title
+    #expect(LibraryQuery.lastOpenedPaper(in: state) == nil)
+    state.workspace[earlier.id.uuidString] = PaperWorkspace(
+        isFavorite: true, lastOpenedAt: Date(timeIntervalSince1970: 20))
+    state.workspace[latest.id.uuidString] = PaperWorkspace(
+        status: .finished, lastOpenedAt: Date(timeIntervalSince1970: 30))
+    #expect(LibraryQuery.lastOpenedPaper(in: state)?.id == latest.id)
+    state.papers.removeAll { $0.id == latest.id }
+    #expect(LibraryQuery.lastOpenedPaper(in: state)?.id == earlier.id)
+}
+
 @Test func librarySearchCandidatesIncludeMatchingTitlesOnEveryShelfAndInUnfiledPapers() throws {
     let papers = ["Memory Atlas", "Memory Atlas", "Atlas of Memory", "Memory Methods"].enumerated().map {
         queryPaper($0.element, added: TimeInterval($0.offset))

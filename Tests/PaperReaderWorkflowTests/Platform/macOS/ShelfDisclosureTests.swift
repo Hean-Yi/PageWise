@@ -5,20 +5,6 @@
 
     @testable import PaperReaderUI
 
-    private final class ShelfScrollEvent: NSEvent {
-        var distance: CGFloat = 0
-        override var type: NSEvent.EventType { .scrollWheel }
-        override var scrollingDeltaX: CGFloat { distance }
-        override var scrollingDeltaY: CGFloat { 0 }
-        override var deltaX: CGFloat { distance }
-        override var deltaY: CGFloat { 0 }
-        override var hasPreciseScrollingDeltas: Bool { true }
-        override var phase: NSEvent.Phase { .changed }
-        override var momentumPhase: NSEvent.Phase { [] }
-        override var modifierFlags: NSEvent.ModifierFlags { [] }
-        override var timestamp: TimeInterval { ProcessInfo.processInfo.systemUptime }
-    }
-
     @Test @MainActor func shelfDisclosureWrapsOnlyOnRequestAndKeepsAddAtTheTrailingEdge() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -56,6 +42,13 @@
             let targets = descendants(host).compactMap { $0 as? ShelfDropTargetView }
             return Set(targets.map { $0.convert($0.bounds, to: host).midY.rounded() }).count
         }
+        func waitForRows(wrapped: Bool) async throws {
+            let deadline = ContinuousClock.now + .seconds(2)
+            while (rowCount() > 1) != wrapped, ContinuousClock.now < deadline {
+                host.layoutSubtreeIfNeeded()
+                try await Task.sleep(for: .milliseconds(10))
+            }
+        }
         let expand = try await button("展开全部书架")
         let add = try #require(try await button("新建书架").accessibilityFrame?())
         let disclosure = try #require(expand.accessibilityFrame?())
@@ -65,9 +58,23 @@
         let document = try #require(scroll.documentView)
         try #require(document.bounds.width > scroll.contentSize.width)
         let target = try #require(descendants(host).compactMap { $0 as? ShelfDropTargetView }.first)
-        let event = ShelfScrollEvent()
-        event.distance = -document.bounds.width
-        target.scrollWheel(with: event)
+        // NSEvent(cgEvent:) otherwise inherits the real mouse position, which may be over
+        // another window. Keep the gesture at one screen point as the tab slides underneath.
+        let point = target.convert(CGPoint(x: target.bounds.midX, y: target.bounds.midY), to: nil)
+        let screenPoint = window.convertPoint(toScreen: point)
+        let primary = try #require(NSScreen.screens.first)
+        let pointer = CGPoint(x: screenPoint.x, y: primary.frame.maxY - screenPoint.y)
+        for phase in [CGScrollPhase.began, .changed, .ended] {
+            let wheel = try #require(
+                CGEvent(
+                    scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 2, wheel1: 0,
+                    wheel2: phase == .changed ? -Int32(document.bounds.width.rounded(.up)) : 0, wheel3: 0))
+            wheel.setIntegerValueField(.scrollWheelEventScrollPhase, value: Int64(phase.rawValue))
+            wheel.location = pointer
+            let event = try #require(NSEvent(cgEvent: wheel))
+            target.scrollWheel(with: event)
+            try await Task.sleep(for: .milliseconds(20))
+        }
         let endOffset = document.bounds.width - scroll.contentSize.width
         let deadline = ContinuousClock.now + .seconds(2)
         while scroll.contentView.bounds.minX < endOffset - 1, ContinuousClock.now < deadline {
@@ -78,11 +85,15 @@
         #expect(expand.accessibilityPerformPress?() == true)
 
         let collapse = try await button("收起书架")
+        try await waitForRows(wrapped: true)
         #expect(rowCount() > 1)
+        #expect(descendants(host).contains { $0 === target })
         #expect(try await button("新建书架").accessibilityFrame?() == add)
         #expect(collapse.accessibilityPerformPress?() == true)
         _ = try await button("展开全部书架")
+        try await waitForRows(wrapped: false)
         #expect(rowCount() == 1)
+        #expect(descendants(host).contains { $0 === target })
         #expect(try await button("新建书架").accessibilityFrame?() == add)
     }
 #endif

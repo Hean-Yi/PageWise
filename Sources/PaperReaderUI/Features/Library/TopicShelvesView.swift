@@ -8,6 +8,7 @@ struct TopicShelvesView<SortMenu: View>: View {
     @ViewBuilder let sortMenu: SortMenu
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var expanded = false
+    @State private var stripWidth: CGFloat = 0
     @State private var overflows = false
     @State private var editing = false
     @State private var editingID: UUID?
@@ -19,13 +20,7 @@ struct TopicShelvesView<SortMenu: View>: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .top, spacing: 8) {
-                if expanded {
-                    ShelfRows { shelfItems }
-                        .transition(.identity)
-                } else {
-                    scrollingShelves
-                        .transition(.identity)
-                }
+                scrollingShelves
                 HStack(spacing: 0) {
                     sortMenu.padding(.trailing, 6)
                     if expanded || overflows {
@@ -62,29 +57,46 @@ struct TopicShelvesView<SortMenu: View>: View {
             }
         }
         .animation(ReaderMotion.disclosure(reduceMotion), value: editing)
-        .animation(ReaderMotion.disclosure(reduceMotion), value: selectedShelfID)
     }
 
     private var scrollingShelves: some View {
         ScrollViewReader { reader in
             ScrollView(.horizontal) {
-                HStack(spacing: 4) { shelfItems }
+                // Keep the same focusable buttons and native drop targets when they wrap.
+                ShelfRows { shelfItems }
+                    .frame(width: expanded && stripWidth > 0 ? stripWidth : nil, alignment: .leading)
+                    .animation(ReaderMotion.navigation(reduceMotion), value: selectedShelfID)
             }
+            .fixedSize(horizontal: false, vertical: true)
             .scrollIndicators(.hidden)
-            .frame(height: shelfControlSize)
-            .onScrollGeometryChange(for: Bool.self) { geometry in
+            .onGeometryChange(for: CGFloat.self) {
+                $0.size.width
+            } action: {
+                stripWidth = $0
+            }
+            .onScrollGeometryChange(for: CGFloat.self) { geometry in
                 // Compare against the room available without the disclosure to avoid a resize feedback loop.
                 let available = geometry.containerSize.width + (overflows ? shelfControlSize : 0)
-                return geometry.contentSize.width > available + 0.5
+                return geometry.contentSize.width - available
             } action: { _, overflow in
-                overflows = overflow
+                if !expanded { overflows = overflow > 0.5 }
             }
             .onChange(of: selectedShelfID, initial: true) { previous, selected in
+                // The first unclassified shelf already starts at the leading edge. Enqueuing
+                // another scroll here can pull back a wheel gesture made during first layout.
+                guard !expanded, previous != nil || selected != nil else { return }
                 withAnimation(ReaderMotion.disclosure(reduceMotion || previous == selected)) {
-                    if let selected { reader.scrollTo(selected) } else { reader.scrollTo("unclassified") }
+                    reveal(selected, with: reader)
                 }
             }
+            .onChange(of: expanded) { _, expanded in
+                if !expanded { reveal(selectedShelfID, with: reader) }
+            }
         }
+    }
+
+    private func reveal(_ selected: UUID?, with reader: ScrollViewProxy) {
+        if let selected { reader.scrollTo(selected) } else { reader.scrollTo("unclassified") }
     }
 
     @ViewBuilder private var shelfItems: some View {
@@ -250,16 +262,17 @@ private struct TopicShelfItem: View {
             }
             .foregroundStyle(selected || targeted ? ReaderTheme.accent : ReaderTheme.muted)
             .padding(.horizontal, 10).frame(height: 32)
-            .background(
-                ReaderTheme.accent.opacity(targeted ? 0.14 : selected ? 0.06 : 0),
-                in: RoundedRectangle(cornerRadius: 7)
-            )
-            .overlay(alignment: .bottom) {
+            .background {
                 if selected {
-                    Capsule().fill(ReaderTheme.accent).frame(width: 22, height: 2)
-                        .matchedGeometryEffect(id: "selectedShelf", in: selection, properties: .position)
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(ReaderTheme.accent.opacity(0.09))
+                        .overlay(alignment: .bottom) {
+                            Capsule().fill(ReaderTheme.accent).frame(width: 20, height: 2)
+                        }
+                        .matchedGeometryEffect(id: "selectedShelf", in: selection)
                 }
             }
+            .background(ReaderTheme.accent.opacity(targeted ? 0.14 : 0), in: RoundedRectangle(cornerRadius: 8))
             .overlay {
                 RoundedRectangle(cornerRadius: 7)
                     .strokeBorder(ReaderTheme.accent.opacity(targeted ? 0.8 : 0), lineWidth: 1.5)

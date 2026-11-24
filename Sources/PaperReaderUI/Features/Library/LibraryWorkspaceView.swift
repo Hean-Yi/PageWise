@@ -57,22 +57,7 @@ private struct ShelfListing {
             ? visible.firstIndex {
                 LibraryCollection.finished.includes(state.workspace[$0.id.uuidString] ?? PaperWorkspace(), for: $0)
             } : nil
-        if collection == .all, shelfID == nil {
-            if state.preferredSort == .recent {
-                recent = sorted.first {
-                    guard let workspace = state.workspace[$0.id.uuidString], workspace.position != nil else {
-                        return false
-                    }
-                    return LibraryCollection.reading.includes(workspace, for: $0)
-                }
-            } else {
-                recent = LibraryQuery.papers(in: state, collection: .reading).first {
-                    state.workspace[$0.id.uuidString]?.position != nil
-                }
-            }
-        } else {
-            recent = nil
-        }
+        recent = LibraryQuery.lastOpenedPaper(in: state)
     }
 }
 
@@ -85,6 +70,7 @@ private struct ShelfWorkspaceContent: View {
     let openSample: () -> Void
     let listing: ShelfListing
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.layoutDirection) private var layoutDirection
     @State private var arrangement = CoverArrangement()
     private var sort: LibrarySort { model.state.preferredSort }
     @State private var searchReveal: ShelfSearchReveal?
@@ -99,6 +85,7 @@ private struct ShelfWorkspaceContent: View {
     }
     @State private var preview: Preview?
     @State private var locations = ShelfCoverLocations()
+    @State private var shelfMovesForward = true
 
     @discardableResult private func showPreview(_ target: ShelfPreviewTarget) -> Bool {
         guard arrangement.sourceID == nil, listing.ids.contains(target.paperID),
@@ -168,7 +155,15 @@ private struct ShelfWorkspaceContent: View {
                 VStack(alignment: .leading, spacing: 0) {
                     header(compact: compact).padding(.bottom, compact ? 22 : 30).id(ScrollTarget.header)
                     if let recent = listing.recent {
-                        continueReading(recent).padding(.bottom, 22)
+                        continueReading(recent)
+                            .scrollTransition(
+                                topLeading: reduceMotion ? .identity : .interactive,
+                                bottomTrailing: .identity, axis: .vertical
+                            ) { card, phase in
+                                card.opacity(phase.isIdentity ? 1 : 0.55)
+                                    .offset(y: phase.isIdentity ? 0 : -4)
+                            }
+                            .padding(.bottom, 18)
                     }
                     if collection == .all {
                         TopicShelvesView(
@@ -201,6 +196,11 @@ private struct ShelfWorkspaceContent: View {
                         }
                     }.padding(.top, 5)
                         .animation(ReaderMotion.disclosure(reduceMotion), value: sort)
+                        .transaction(value: selectedShelfID) {
+                            $0.animation = nil
+                            $0.disablesAnimations = true
+                        }
+                        .overlay { shelfArrival }
                     if model.state.papers.isEmpty && collection == .all {
                         HStack(spacing: 14) {
                             Text("也可以拖入 PDF").foregroundStyle(ReaderTheme.muted)
@@ -214,7 +214,6 @@ private struct ShelfWorkspaceContent: View {
                     }
                 }.padding(.horizontal, inset).padding(.top, compact ? 24 : 32).padding(.bottom, 44)
                     .animation(ReaderMotion.disclosure(reduceMotion), value: onlineSearch.isExpanded)
-                    .animation(ReaderMotion.disclosure(reduceMotion), value: selectedShelfID)
                     .animation(ReaderMotion.navigation(reduceMotion), value: collection)
             }
             .allowsHitTesting(preview == nil)
@@ -254,7 +253,11 @@ private struct ShelfWorkspaceContent: View {
                 arrangement.end()
                 preview = nil
             }
-            .onChange(of: selectedShelfID) { _, _ in
+            .onChange(of: selectedShelfID) { previous, selected in
+                let shelves = model.state.shelves
+                let from = shelves.firstIndex { $0.id == previous } ?? -1
+                let to = shelves.firstIndex { $0.id == selected } ?? -1
+                shelfMovesForward = to > from
                 dismissSearchRequest += 1
                 arrangement.end()
                 preview = nil
@@ -274,6 +277,26 @@ private struct ShelfWorkspaceContent: View {
                     self.selectedShelfID = nil
                 }
             }
+    }
+
+    @ViewBuilder private var shelfArrival: some View {
+        if !reduceMotion && preview == nil && arrangement.sourceID == nil {
+            let leftToRight = shelfMovesForward == (layoutDirection == .leftToRight)
+            // A single directional wash reveals the new titles. Covers and their native hit
+            // areas are already at their final positions, including for an immediate Space press.
+            Color.clear.keyframeAnimator(initialValue: 1.0, trigger: selectedShelfID) { _, progress in
+                let start = progress * 1.45 - 0.45
+                let end = start + 0.45
+                LinearGradient(
+                    colors: [.clear, ReaderTheme.canvas.opacity(0.42)],
+                    startPoint: UnitPoint(x: leftToRight ? start : 1 - start, y: 0.5),
+                    endPoint: UnitPoint(x: leftToRight ? end : 1 - end, y: 0.5))
+            } keyframes: { _ in
+                MoveKeyframe(0)
+                CubicKeyframe(1, duration: 0.32)
+            }
+            .allowsHitTesting(false).accessibilityHidden(true)
+        }
     }
 
     private func bookshelfItem(_ paper: Paper, index: Int, columns: Int, width: CGFloat) -> some View {
@@ -359,7 +382,7 @@ private struct ShelfWorkspaceContent: View {
             model.select(paper.id)
         } label: {
             HStack(spacing: 16) {
-                BookCoverView(paper: paper).frame(width: 42)
+                BookCoverView(paper: paper).frame(width: 34)
                 VStack(alignment: .leading, spacing: 6) {
                     HStack {
                         Text("继续阅读").font(.caption.weight(.semibold)).foregroundStyle(ReaderTheme.accent)
@@ -371,9 +394,9 @@ private struct ShelfWorkspaceContent: View {
                         .foregroundStyle(ReaderTheme.ink).lineLimit(2).multilineTextAlignment(.leading)
                 }
                 Spacer(minLength: 0)
-                Image(systemName: "arrow.right").font(.system(size: 15, weight: .regular))
+                ReaderIcon(.openNote, size: 18)
                     .foregroundStyle(ReaderTheme.accent).frame(width: 34, height: 34)
-            }.padding(.horizontal, 18).padding(.vertical, 13)
+            }.padding(.horizontal, 16).padding(.vertical, 10)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(ReaderTheme.surface, in: RoundedRectangle(cornerRadius: 12))
                 .overlay { RoundedRectangle(cornerRadius: 12).strokeBorder(ReaderTheme.line) }

@@ -26,6 +26,10 @@
         let file = root.appendingPathComponent("sample.pdf")
         try DemoPaper.write(to: file)
         let paper = try #require(await model.importURLs([file], selectAfterImport: false, shelfID: shelf).first)
+        let unfiled = Paper(
+            title: "Unclassified fixture", digest: UUID().uuidString, originalPath: "unused.pdf", pageCount: 1,
+            blocks: [], warnings: [], canReflow: false)
+        model.state.papers.append(unfiled)
         let window = PointedWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1150, height: 720), styleMask: [.titled, .resizable],
             backing: .buffered, defer: false)
@@ -54,15 +58,20 @@
             try #require(window.makeFirstResponder(search))
             try #require((window.firstResponder as? NSText)?.isEditable == true)
         }
-        func click(_ type: NSEvent.EventType) throws -> NSEvent {
+        func click(_ type: NSEvent.EventType, on button: ShelfDropTargetView) throws -> NSEvent {
             try #require(
                 NSEvent.mouseEvent(
-                    with: type, location: target.convert(.zero, to: nil), modifierFlags: [],
+                    with: type, location: button.convert(.zero, to: nil), modifierFlags: [],
                     timestamp: 0, windowNumber: window.windowNumber, context: nil, eventNumber: 1, clickCount: 1,
                     pressure: 0))
         }
-        target.mouseDown(with: try click(.leftMouseDown))
-        target.mouseUp(with: try click(.leftMouseUp))
+        let other = try #require(targets.first { $0 !== target })
+        for button in [target, other, target] {
+            button.mouseDown(with: try click(.leftMouseDown, on: button))
+            button.mouseUp(with: try click(.leftMouseUp, on: button))
+            host.layoutSubtreeIfNeeded()
+            try await Task.sleep(for: .milliseconds(20))
+        }
         var cover: PaperDragSourceView?
         repeat {
             host.layoutSubtreeIfNeeded()
@@ -71,6 +80,8 @@
             try await Task.sleep(for: .milliseconds(10))
         } while ContinuousClock.now < deadline
         let visibleCover = try #require(cover)
+        #expect(choice.id == shelf)
+        #expect(!children(host).contains { ($0 as? PaperDragSourceView)?.paperID == unfiled.id })
         let frame = visibleCover.convert(visibleCover.bounds, to: nil)
         window.pointer = CGPoint(x: frame.midX, y: frame.midY)
         let monitor = try #require(children(host).compactMap { $0 as? ShelfPreviewKeys.Monitor }.first)

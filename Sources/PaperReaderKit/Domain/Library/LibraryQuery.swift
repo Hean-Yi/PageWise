@@ -43,6 +43,16 @@ public enum LibrarySort: String, CaseIterable, Identifiable, Codable, Sendable {
 }
 
 public enum LibraryQuery {
+    public static func lastOpenedPaper(in state: LibraryState) -> Paper? {
+        state.papers.lazy.compactMap { paper -> (paper: Paper, opened: Date)? in
+            state.workspace[paper.id.uuidString]?.lastOpenedAt.map { (paper, $0) }
+        }.max { left, right in
+            if left.opened != right.opened { return left.opened < right.opened }
+            if left.paper.addedAt != right.paper.addedAt { return left.paper.addedAt < right.paper.addedAt }
+            return left.paper.id.uuidString > right.paper.id.uuidString
+        }?.paper
+    }
+
     public static func searchCandidates(in state: LibraryState, query: String) -> [Paper] {
         let terms = query.split(whereSeparator: \.isWhitespace)
         guard !terms.isEmpty else { return [] }
