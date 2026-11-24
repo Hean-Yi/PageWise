@@ -9,6 +9,7 @@ struct AssistantToolTile: View {
     var metadata: String?
     var accessory: String?
     var detailLines = 2
+    var searchQuery: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -24,10 +25,10 @@ struct AssistantToolTile: View {
                         .foregroundStyle(ReaderTheme.muted).accessibilityHidden(true)
                 }
             }.font(.caption).foregroundStyle(ReaderTheme.accent)
-            Text(title).font(.callout.weight(.medium)).foregroundStyle(ReaderTheme.ink)
+            SearchMatchText(title, query: searchQuery).font(.callout.weight(.medium)).foregroundStyle(ReaderTheme.ink)
                 .lineLimit(2).fixedSize(horizontal: false, vertical: true)
             if let detail, !detail.isEmpty {
-                Text(detail).font(.caption).foregroundStyle(ReaderTheme.muted)
+                SearchMatchText(detail, query: searchQuery).font(.caption).foregroundStyle(ReaderTheme.muted)
                     .lineLimit(detailLines).fixedSize(horizontal: false, vertical: true)
             }
         }

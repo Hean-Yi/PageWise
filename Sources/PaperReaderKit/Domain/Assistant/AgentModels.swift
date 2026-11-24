@@ -6,6 +6,8 @@ public struct AgentCard: Identifiable, Sendable {
     public var id = UUID()
     public var kind: Kind
     public var title: String
+    /// Query that produced this result, scoped to this card's occurrence in the conversation.
+    public var searchQuery: String?
     public var subtitle = ""
     public var authors: String? = nil
     public var year: String? = nil

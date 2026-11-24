@@ -240,6 +240,40 @@ private func recommendTwoOnlinePapers(_ messages: [AgentMessage], _ count: Int) 
     #expect(await discovery.downloadCount == 0)
 }
 
+@Test @MainActor func repeatedSearchesKeepTheSelectedOccurrencesKeywordsWhenPreparingItsImport() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let reader = try await makeAgentReader(root)
+    let model = ScriptedLibraryModel { messages, count in
+        switch count {
+        case 1: return tool("search_online", #"{"query":"attention"}"#, id: "title")
+        case 2: return tool("search_online", #"{"query":"original fixture"}"#, id: "author")
+        case 3: return try present(candidateResultIDs(in: messages, callID: "title"), id: "selected")
+        case 5:
+            let data = try #require(messages.last?.content?.split(separator: "\n").last)
+            let selected = try JSONDecoder().decode([String: String].self, from: Data(data.utf8))
+            let id = try #require(selected["candidate_id"])
+            return tool("prepare_import", "{\"candidate_id\":\"\(id)\"}", id: "prepare")
+        default: return .init(role: "assistant", content: "已完成。")
+        }
+    }
+    let agent = LibraryAgent(reader: reader, client: model, discovery: AgentDiscoveryFixture())
+    agent.send("按论文标题和作者分别查找")
+    try await eventually { !agent.isRunning }
+    let turn = try #require(agent.turns.first)
+    let searches = turn.activities.filter { $0.toolName == "search_online" }
+    let matches = searches.compactMap { turn.cards(for: $0).first }
+    #expect(matches.map(\.searchQuery) == ["attention", "original fixture"])
+    #expect(Set(matches.compactMap(\.candidateID)).count == 1)
+    let id = try #require(turn.presentedResults.first?.id)
+    #expect(agent.card(id)?.searchQuery == "attention")
+    agent.send("下载这篇", referencing: id)
+    try await eventually { !agent.isRunning }
+    let action = try #require(agent.turns.last?.presentedResults.first)
+    #expect(action.purpose == .importAction)
+    #expect(agent.card(action.id)?.searchQuery == "attention")
+}
+
 @Test(arguments: ["https://api.deepseek.com/v1", "https://api.deepseek.com.example.invalid/v1"])
 @MainActor func processNotesKeepPublicProgressOncePerRoundAndOfficialThinkingThroughFinalAnswer(_ base: String)
     async throws
@@ -1594,6 +1628,7 @@ private actor PublicationWorkflowFixture: PaperDiscovery {
     let parent = try #require(agent.card(rootID))
     let versionID = try #require(parent.alternateVersionIDs.first)
     let version = try #require(agent.card(versionID))
+    #expect(parent.searchQuery == nil && version.searchQuery == nil)
     #expect(!parent.canImport && version.canImport && version.sourceName == "arXiv")
     #expect(await discovery.downloads.isEmpty)
     agent.confirmImport(cardID: version.id)

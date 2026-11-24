@@ -152,6 +152,7 @@ extension LibraryAgent {
             let hits = LibraryAgentSearch.search(query, papers: reader.state.papers, limit: limit + 1)
             let pairs = hits.prefix(limit).map { hit -> (ToolRecord, AgentCard) in
                 var card = AgentCard(kind: hit.blockID == nil ? .localPaper : .evidence, title: hit.title)
+                card.searchQuery = query
                 card.paperID = hit.paperID
                 card.blockID = hit.blockID
                 card.sourcePage = hit.sourcePage
@@ -176,6 +177,7 @@ extension LibraryAgent {
                     ReadingNoteMemoryIndex.searchableBody(note.markdown).contains(hit.text)
                 else { return nil }
                 var card = AgentCard(kind: .evidence, title: hit.title)
+                card.searchQuery = query
                 card.paperID = hit.paperID
                 card.readingNoteID = id
                 card.noteModifiedAt = note.modifiedAt
@@ -233,7 +235,7 @@ extension LibraryAgent {
             }
             try check(epoch)
             onSubject(query)
-            return try onlineResults(report.candidates, limit: limit, notice: report.notice)
+            return try onlineResults(report.candidates, query: query, limit: limit, notice: report.notice)
         case .recommendRelated(let requestedCount):
             guard let seed = recommendationSeed else { throw ReaderError.message("请打开一篇论文，或从推荐卡片追问。") }
             onSubject(seed.title)
@@ -249,6 +251,9 @@ extension LibraryAgent {
             guard candidate.canDownload else { throw ReaderError.message("可以在结果卡打开该记录的来源页。") }
             onSubject(candidate.title)
             var card = candidateCard(candidate, id: id)
+            if let reference = turns.last?.referencedCardID.flatMap({ self.card($0) }), reference.candidateID == id {
+                card.searchQuery = reference.searchQuery
+            }
             if card.importState == .unprepared { card.importState = .ready }
             let message: String
             switch card.importState {
@@ -284,7 +289,9 @@ extension LibraryAgent {
         return paper
     }
 
-    private func onlineResults(_ found: [PaperCandidate], limit: Int, notice: String?) throws -> AgentToolOutcome {
+    private func onlineResults(_ found: [PaperCandidate], query: String? = nil, limit: Int, notice: String?) throws
+        -> AgentToolOutcome
+    {
         var seen: Set<String> = []
         let verified = found.prefix(40).compactMap(\.verified).filter { seen.insert($0.id).inserted }
         var records: [UUID: PaperCandidate] = [:]
@@ -299,7 +306,8 @@ extension LibraryAgent {
             } else {
                 best = candidate
             }
-            let card = candidateCard(best, id: id)
+            var card = candidateCard(best, id: id)
+            card.searchQuery = query
             records[card.id] = best
             return card
         }
@@ -342,8 +350,9 @@ extension LibraryAgent {
         card.candidateID = id
         card.sourceURL = candidate.landingURL
         if candidates[id] != nil,
-            let previous = turns.flatMap(\.cards).last(where: { $0.candidateID == id })
+            let previous = turns.reversed().lazy.compactMap({ $0.cards.last { $0.candidateID == id } }).first
         {
+            card.searchQuery = previous.searchQuery
             card.importState = previous.importState
             card.importError = previous.importError
             card.paperID = previous.paperID

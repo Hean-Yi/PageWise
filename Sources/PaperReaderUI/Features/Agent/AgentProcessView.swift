@@ -139,7 +139,8 @@ struct AgentProcessView: View {
                         let content =
                             ["read_paper", "search_reading_notes"].contains(activity.toolName) && !card.excerpt.isEmpty
                             ? card.excerpt : card.title
-                        Text(content).lineLimit(2).help(content).contextMenu { AgentCopyButton(text: content) }
+                        SearchMatchText(content, query: card.searchQuery)
+                            .lineLimit(2).help(content).contextMenu { AgentCopyButton(text: content) }
                     }
                 }.padding(.leading, 17)
             }

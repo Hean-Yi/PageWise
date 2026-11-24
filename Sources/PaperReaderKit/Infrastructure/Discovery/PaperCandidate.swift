@@ -102,6 +102,14 @@ public struct PaperCandidate: Identifiable, Sendable {
         return url
     }
 
+    static func queryDOI(_ value: String) -> String? {
+        if let url = publicationURL(value), url.host == "doi.org" {
+            return normalizedDOI(String(url.path.dropFirst()))
+        }
+        let raw = value.lowercased().hasPrefix("doi:") ? String(value.dropFirst(4)) : value
+        return normalizedDOI(raw)
+    }
+
     static func normalizedDOI(_ raw: String) -> String? {
         let doi = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard doi.utf8.count <= 1_024, !doi.contains("\\"), !doi.contains("%"),

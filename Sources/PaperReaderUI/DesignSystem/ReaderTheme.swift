@@ -16,6 +16,7 @@ enum ReaderTheme {
     static let ink = adaptive(light: 0x292822, dark: 0xF0EEE7)
     static let muted = adaptive(light: 0x69665E, dark: 0xB6B2A7)
     static let line = adaptive(light: 0xDFDDD3, dark: 0x44413A)
+    static let searchHighlight = adaptive(light: 0xF5DFA5, dark: 0x66502B)
 
     @MainActor static func editorial(_ size: CGFloat, weight: Font.Weight = .regular) -> Font {
         Font(CTFontCreateWithFontDescriptor(editorialDescriptor, size, nil)).weight(weight)

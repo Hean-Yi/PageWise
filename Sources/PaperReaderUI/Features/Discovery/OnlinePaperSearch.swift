@@ -7,8 +7,10 @@ import PaperReaderKit
 public final class OnlinePaperSearch {
     public var query = ""
     public private(set) var scope: PaperSearchScope = .all
-    public private(set) var sourceNotice: String?
-    public private(set) var results: [PaperCandidate] = []
+    private var displayedResult: (query: String, candidates: [PaperCandidate], notice: String?)?
+    var resultQuery: String? { displayedResult?.query }
+    public var sourceNotice: String? { displayedResult?.notice }
+    public var results: [PaperCandidate] { displayedResult?.candidates ?? [] }
     public private(set) var isExpanded = false
     private var activeQuery: String?
     public var isSearching: Bool { activeQuery != nil }
@@ -51,8 +53,7 @@ public final class OnlinePaperSearch {
             }
             cancelSearch()
             targetShelfID = shelfID
-            results = []
-            sourceNotice = nil
+            displayedResult = nil
             searched = false
             failure = nil
             imported = [:]
@@ -88,9 +89,8 @@ public final class OnlinePaperSearch {
         self.scope = scope
         let hadSearch = isSearching || searched || error != nil
         cancelSearch()
-        results = []
+        displayedResult = nil
         failure = nil
-        sourceNotice = nil
         searched = false
         if hadSearch { search() }
     }
@@ -101,9 +101,8 @@ public final class OnlinePaperSearch {
         cancelSearch()
         let token = generation
         activeQuery = term
-        sourceNotice = nil
+        displayedResult = nil
         failure = nil
-        results = []
         searched = false
         searchTask = Task { [weak self] in
             guard let self else { return }
@@ -128,10 +127,10 @@ public final class OnlinePaperSearch {
     }
 
     private func apply(_ result: OnlineDiscoveryResult, generation: UUID) {
-        guard generation == self.generation, !Task.isCancelled else { return }
+        guard generation == self.generation, !Task.isCancelled, let activeQuery else { return }
         var seen: Set<String> = []
-        results = result.candidates.compactMap(\.verified).filter { seen.insert($0.id).inserted }
-        sourceNotice = result.notice
+        let candidates = result.candidates.compactMap(\.verified).filter { seen.insert($0.id).inserted }
+        displayedResult = (activeQuery, candidates, result.notice)
     }
 
     private static func webSearchURL(for term: String, error: any Error) -> URL? {

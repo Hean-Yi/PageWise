@@ -101,9 +101,11 @@ private struct OnlineCandidateCard: View {
         let versions = [candidate] + candidate.alternateVersions
         let item = versions.first { $0.id == selectedVersionID } ?? candidate
         VStack(alignment: .leading, spacing: 10) {
-            Text(item.title).font(.system(size: 15, weight: .medium)).fixedSize(horizontal: false, vertical: true)
+            SearchMatchText(item.title, query: search.resultQuery)
+                .font(.system(size: 15, weight: .medium)).fixedSize(horizontal: false, vertical: true)
             if !item.authors.isEmpty {
-                Text(item.authors).font(.caption).foregroundStyle(ReaderTheme.muted).lineLimit(2)
+                SearchMatchText(item.authors, query: search.resultQuery)
+                    .font(.caption).foregroundStyle(ReaderTheme.muted).lineLimit(2)
             }
             HStack {
                 if !item.year.isEmpty { Text(item.year).font(.caption).foregroundStyle(ReaderTheme.muted) }

@@ -131,7 +131,7 @@ struct AgentResultCard: View {
             .buttonStyle(AssistantToolButtonStyle(embedded: true))
             .accessibilityHint(showsExcerpt ? "收起摘录" : "查看完整摘录")
             if showsExcerpt {
-                Text(card.excerpt).font(.callout).textSelection(.enabled)
+                SearchMatchText(card.excerpt, query: card.searchQuery).font(.callout).textSelection(.enabled)
                     .padding(.horizontal, 12).padding(.bottom, 10)
             }
         } else {
@@ -151,7 +151,8 @@ struct AgentResultCard: View {
         return VStack(alignment: .leading, spacing: 0) {
             AssistantToolTile(
                 tool: purpose.title, systemImage: purpose.icon, title: card.title, detail: detail,
-                metadata: metadata, accessory: accessory, detailLines: result.purpose == .readingNote ? 1 : 2)
+                metadata: metadata, accessory: accessory, detailLines: result.purpose == .readingNote ? 1 : 2,
+                searchQuery: card.searchQuery)
             if let reason = result.reason, !reason.isEmpty {
                 Text(reason).font(.caption).lineSpacing(2).foregroundStyle(ReaderTheme.ink)
                     .fixedSize(horizontal: false, vertical: true).multilineTextAlignment(.leading)

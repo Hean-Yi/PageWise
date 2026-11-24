@@ -165,14 +165,18 @@ private struct OnlineToolReplyEcho: AgentCompleting {
     search.search()
     let oldTask = search.searchTask
     while await discovery.pendingSearch["old"] == nil { await Task.yield() }
-    search.query = "new"
+    search.query = " new "
     search.search()
     while await discovery.pendingSearch["new"] == nil { await Task.yield() }
+    search.query = "unsubmitted edit"
     await discovery.releaseSearch("new", number: 2)
     await search.searchTask?.value
     await discovery.releaseSearch("old", number: 1)
     await oldTask?.value
     #expect(search.results.map(\.id) == [onlineFixtureCandidate(2).id])
+    #expect(search.resultQuery == "new")
+    search.query = ""
+    #expect(search.resultQuery == "new")
     search.query = "closed"
     search.search()
     let closingTask = search.searchTask
@@ -182,6 +186,7 @@ private struct OnlineToolReplyEcho: AgentCompleting {
     await closingTask?.value
     #expect(!search.isExpanded)
     #expect(search.results.isEmpty)
+    #expect(search.resultQuery == nil)
     #expect(!search.searched)
     #expect(!search.isSearching)
     #expect(search.error == nil)

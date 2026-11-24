@@ -40,7 +40,7 @@ actor ScholarlyIndexes {
             .init(name: "rows", value: String(count)),
             .init(name: "select", value: "DOI,title,author,issued,relation,license,link"),
         ]
-        let exactDOI = Self.queryDOI(query)
+        let exactDOI = PaperCandidate.queryDOI(query)
         if let doi = exactDOI {
             items.append(.init(name: "filter", value: "doi:" + doi))
         } else {
@@ -117,16 +117,8 @@ actor ScholarlyIndexes {
         return (query, min(limit, 40))
     }
 
-    private static func queryDOI(_ value: String) -> String? {
-        if let url = PaperCandidate.publicationURL(value), url.host == "doi.org" {
-            return PaperCandidate.normalizedDOI(String(url.path.dropFirst()))
-        }
-        let raw = value.lowercased().hasPrefix("doi:") ? String(value.dropFirst(4)) : value
-        return PaperCandidate.normalizedDOI(raw)
-    }
-
     static func recommendationID(_ value: String) -> String? {
-        if let doi = queryDOI(value) { return "DOI:" + doi }
+        if let doi = PaperCandidate.queryDOI(value) { return "DOI:" + doi }
         let landing = PaperCandidate.publicationURL(value)
         var arxiv = value
         if value.lowercased().hasPrefix("arxiv:") { arxiv = String(value.dropFirst(6)) }
