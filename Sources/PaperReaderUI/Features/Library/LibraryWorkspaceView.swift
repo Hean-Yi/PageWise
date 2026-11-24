@@ -150,6 +150,7 @@ private struct ShelfWorkspaceContent: View {
                     LazyVGrid(columns: columns, alignment: .leading, spacing: 32) {
                         if collection != .reading && collection != .finished {
                             AddPaperCover { onlineSearch.open(shelfID: collection == .all ? selectedShelfID : nil) }
+                                .quickStartTarget(onlineSearch.isExpanded ? nil : .discovery)
                         }
                         ForEach(listing.entries, id: \.element.id) { index, paper in
                             bookshelfItem(

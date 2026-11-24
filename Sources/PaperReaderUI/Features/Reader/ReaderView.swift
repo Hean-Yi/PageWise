@@ -307,6 +307,7 @@ struct ReaderView: View {
                 } label: {
                     Label("添加笔记", systemImage: "square.and.pencil").labelStyle(.iconOnly)
                 }.help("添加笔记").accessibilityLabel("添加笔记")
+                    .quickStartTarget(.annotation)
             }
             if !model.assistantSelectionText.isEmpty {
                 Button(action: explainSelection) {

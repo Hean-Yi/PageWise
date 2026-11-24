@@ -25,6 +25,7 @@ struct CloseReadingControl: View {
                     ProgressView().controlSize(.small)
                     Text(model.closeReadingProgress).font(.caption).lineLimit(2)
                         .frame(maxWidth: .infinity, alignment: .leading)
+                        .quickStartTarget(.assistant)
                     Button {
                         model.closeReadingTask?.cancel()
                     } label: {
@@ -44,6 +45,7 @@ struct CloseReadingControl: View {
                             model.existingCloseReading(for: id) == nil ? "AI 精读" : "查看精读",
                             systemImage: "text.magnifyingglass")
                     }.disabled(model.busyAI)
+                        .quickStartTarget(.assistant)
                     if model.existingCloseReading(for: id) != nil {
                         Button {
                             Task { await model.showCloseReading(id, regenerate: true) }

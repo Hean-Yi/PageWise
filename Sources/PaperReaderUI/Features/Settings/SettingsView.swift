@@ -20,6 +20,7 @@ struct SettingsView: View {
     private enum Field { case model, address, key }
 
     @Bindable var model: ReaderModel
+    private let openGuide: () -> Void
     private let openMemorySource: (UUID) -> Void
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -32,15 +33,17 @@ struct SettingsView: View {
     @State private var hasSavedKey = false
     @State private var removeKey = false
     @State private var chooseFolder = false
+    @State private var confirmLeaveForGuide = false
     @State private var isTesting = false
     @State private var feedback: String?
     @State private var feedbackIsError = false
     @State private var cleanupWarning: String?
     @State private var testTask: Task<Void, Never>?
 
-    init(model: ReaderModel, openMemorySource: @escaping (UUID) -> Void) {
+    init(model: ReaderModel, openGuide: @escaping () -> Void, openMemorySource: @escaping (UUID) -> Void) {
         self.model = model
         self.openMemorySource = openMemorySource
+        self.openGuide = openGuide
         let settings = model.modelSettings
         _draft = State(initialValue: Self.initialDraft(settings))
         _savedSettings = State(initialValue: settings)
@@ -88,6 +91,10 @@ struct SettingsView: View {
         #else
             .presentationSizing(.form)
         #endif
+        .confirmationDialog("放弃未保存的设置并打开引导？", isPresented: $confirmLeaveForGuide, titleVisibility: .visible) {
+            Button("放弃更改并打开", role: .destructive, action: openGuide)
+            Button("继续编辑", role: .cancel) {}
+        }
         .onAppear { refreshKeyStatus() }
         .onChange(of: draft) { _, _ in feedback = nil }
         .onChange(of: usesLocalModelKey) { _, usesLocal in
@@ -145,9 +152,19 @@ struct SettingsView: View {
                 .accessibilityAddTraits(item == category ? .isSelected : [])
             }
             Spacer()
+            guideButton.padding(.horizontal, 10).padding(.bottom, 18)
         }
         .padding(.horizontal, 12).frame(width: 155)
         .background(ReaderTheme.sidebar)
+    }
+
+    private var guideButton: some View {
+        Button {
+            if hasModelEdits { confirmLeaveForGuide = true } else { openGuide() }
+        } label: {
+            Label("快速上手", systemImage: "questionmark.circle")
+        }
+        .buttonStyle(.borderless).foregroundStyle(ReaderTheme.muted).disabled(isTesting)
     }
 
     private var compactNavigation: some View {
@@ -312,6 +329,7 @@ struct SettingsView: View {
                     .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
             }
             HStack(spacing: 12) {
+                if compact { guideButton.labelStyle(.iconOnly) }
                 if category == .model {
                     VStack(alignment: .leading, spacing: 3) {
                         Button(action: testConnection) {

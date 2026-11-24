@@ -48,6 +48,7 @@ struct TopicShelvesView<SortMenu: View>: View {
                             .contentShape(Rectangle())
                     }
                     .help("新建书架").accessibilityLabel("新建书架").disabled(saving)
+                    .quickStartTarget(editing ? nil : .shelves)
                 }
                 .buttonStyle(.plain).font(.system(size: 12, weight: .medium))
                 .foregroundStyle(ReaderTheme.muted)
@@ -56,6 +57,7 @@ struct TopicShelvesView<SortMenu: View>: View {
             }
             if editing {
                 nameEditor
+                    .quickStartTarget(.shelves)
                     .transition(reduceMotion ? .identity : .opacity.combined(with: .offset(y: -6)))
             }
         }

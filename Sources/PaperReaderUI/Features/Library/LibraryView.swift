@@ -12,6 +12,8 @@ public struct LibraryView: View {
     @State private var agentDraft = ""
     @State private var showImporter = false
     @State private var showSettings = false
+    @State private var guide = QuickStartNavigation()
+    @AppStorage("completedQuickStart") private var completedQuickStart = false
     @State private var onlineSearch: OnlinePaperSearch
     @State private var selectedShelfID: UUID?
     @State private var calendarDate = Date()
@@ -37,20 +39,42 @@ public struct LibraryView: View {
 
     public var body: some View {
         navigationSurface
+            .overlayPreferenceValue(QuickStartAnchors.self) { anchors in
+                if let step = guide.step {
+                    GeometryReader { geometry in
+                        QuickStartOverlay(
+                            step: step, targetRect: anchors[step].map { geometry[$0] },
+                            nextTitle: guideNextTitle,
+                            onBack: { moveGuide(-1) }, onNext: { moveGuide(1) }, onSkip: finishGuide)
+                    }
+                }
+            }
             .fileImporter(isPresented: $showImporter, allowedContentTypes: [.pdf], allowsMultipleSelection: true) {
                 result in
                 switch result {
-                case .success(let urls): Task { await model.importURLs(urls) }
-                case .failure(let error): model.message = error.localizedDescription
+                case .success(let urls): importLibraryFiles(urls)
+                case .failure(let error):
+                    if (error as NSError).code != NSUserCancelledError { model.message = error.localizedDescription }
                 }
             }
             .sheet(isPresented: $showSettings) {
-                SettingsView(model: model) { id in
+                SettingsView(
+                    model: model,
+                    openGuide: {
+                        if beginGuide() { showSettings = false }
+                    }
+                ) { id in
                     model.select(id)
                     preferredColumn = .detail
                 }
             }
             #if os(macOS)
+                .focusedSceneValue(
+                    \.quickStartPresentation,
+                    model.loaded && !showSettings
+                        ? Binding(get: { guide.step != nil }, set: { if $0 { beginGuide() } else { finishGuide() } })
+                        : nil
+                )
                 .focusedSceneValue(\.readerSettingsPresentation, $showSettings)
             #endif
             .alert(
@@ -62,7 +86,14 @@ public struct LibraryView: View {
                 Text(model.message ?? "")
             }
             .paperDeletionConfirmation()
-            .task { await model.load() }
+            .task {
+                await model.load()
+                guard model.loaded, !completedQuickStart else { return }
+                if model.state.papers.isEmpty { beginGuide() } else { completedQuickStart = true }
+            }
+            .task(id: guide.step) {
+                if let step = guide.step { await navigateGuide(to: step) }
+            }
             .task(id: model.status) {
                 guard model.loaded, model.status != "仅保存在此设备", !model.isImporting, model.translating.isEmpty else {
                     return
@@ -74,12 +105,18 @@ public struct LibraryView: View {
                 } catch {}
             }
             .onChange(of: model.selectedPaperID) { _, id in
-                if id != nil { preferredColumn = .detail }
+                if let id {
+                    preferredColumn = .detail
+                    guide.chosePaper(id)
+                }
                 paperQuestion = ""
                 if assistantTab != nil, id == nil || id != paperOpenedFromAgent {
                     assistantTab = isReading ? .paper : .library
                 }
                 paperOpenedFromAgent = nil
+            }
+            .onChange(of: model.closeReadingPaperID) { _, activeID in
+                if activeID == nil { guide.resumeDeferredNavigation() }
             }
             .onChange(of: scenePhase) { _, phase in
                 #if os(macOS)
@@ -89,6 +126,80 @@ public struct LibraryView: View {
                 #endif
             }
             .onReceive(timer) { _ in model.tick() }
+    }
+
+    private var guideNextTitle: String? {
+        if guide.deferred != nil { return "等待精读…" }
+        if guide.step == .modelSettings, model.state.papers.isEmpty { return "打开示例" }
+        return nil
+    }
+
+    @discardableResult private func beginGuide() -> Bool {
+        guard model.closeReadingPaperID == nil else {
+            model.status = "精读正在进行，结束后可打开快速上手"
+            return false
+        }
+        guide = QuickStartNavigation(step: .importPaper, paperID: model.selectedPaperID)
+        return true
+    }
+
+    private func finishGuide() {
+        completedQuickStart = true
+        guide = QuickStartNavigation()
+    }
+
+    private func moveGuide(_ distance: Int) {
+        guard let current = guide.step else { return }
+        if let next = QuickStartStep(rawValue: current.rawValue + distance) {
+            if next == .bilingual && model.state.papers.isEmpty && model.isImporting {
+                model.status = "论文正在导入，完成后即可打开"
+                return
+            }
+            guide.request(next, closeReadingActive: model.closeReadingPaperID != nil)
+        } else if distance > 0 {
+            finishGuide()
+        }
+    }
+
+    private func importLibraryFiles(_ urls: [URL]) {
+        let startingStep = guide.step
+        let stayOnShelf = guide.isChoosingPaper
+        Task {
+            let ids = await model.importURLs(urls, selectAfterImport: !stayOnShelf)
+            if stayOnShelf, startingStep == guide.step, let last = ids.last {
+                guide.chosePaper(last)
+            }
+        }
+    }
+
+    private func navigateGuide(to step: QuickStartStep) async {
+        columns = .all
+        switch step {
+        case .importPaper, .discovery, .shelves, .modelSettings, .notebook:
+            if model.selectedPaperID != nil { model.select(nil) }
+            model.selectedSection = "library"
+            collection = .all
+            assistantTab = nil
+            preferredColumn = step == .discovery || step == .shelves ? .detail : .sidebar
+        case .bilingual, .annotation, .assistant:
+            if !isReading {
+                let existing = guide.paperID.flatMap { id in model.state.papers.first { $0.id == id } }
+                if let paper = existing ?? recentPapers.first ?? model.state.papers.first {
+                    model.select(paper.id)
+                } else {
+                    await model.addDemo()
+                    guard !Task.isCancelled, guide.step == step else { return }
+                }
+            }
+            guard let id = model.selectedPaperID else {
+                guide.step = .importPaper
+                return
+            }
+            guide.paperID = id
+            preferredColumn = .detail
+            assistantTab = step == .assistant ? .paper : nil
+            if step == .annotation { model.showOriginalReading() }
+        }
     }
 
     private var navigationSurface: some View {
@@ -135,7 +246,7 @@ public struct LibraryView: View {
         .dropDestination(for: URL.self) { urls, _ in
             let pdfs = urls.filter { $0.isFileURL && $0.pathExtension.lowercased() == "pdf" }
             guard !pdfs.isEmpty else { return false }
-            Task { await model.importURLs(pdfs) }
+            importLibraryFiles(pdfs)
             return true
         } isTargeted: { targeted in
             withAnimation(ReaderMotion.feedback(reduceMotion)) { dragTarget = targeted }
@@ -335,7 +446,8 @@ public struct LibraryView: View {
                     model.endReading()
                     model.selectedSection = "notebooks"
                     preferredColumn = .detail
-                }
+                    if guide.step == .notebook { finishGuide() }
+                }.quickStartTarget(.notebook)
             }
             .animation(ReaderMotion.disclosure(reduceMotion), value: collection)
             .animation(ReaderMotion.disclosure(reduceMotion), value: model.selectedSection)
@@ -375,12 +487,13 @@ public struct LibraryView: View {
                         .background(ReaderTheme.surface, in: RoundedRectangle(cornerRadius: 10))
                         .overlay { RoundedRectangle(cornerRadius: 10).strokeBorder(ReaderTheme.line) }
                 }
+                .quickStartTarget(.importPaper)
                 Button {
                     showSettings = true
                 } label: {
                     Label("设置", systemImage: "gearshape").labelStyle(.iconOnly)
                         .frame(width: 42, height: 42).contentShape(Rectangle())
-                }.help("设置")
+                }.help("设置").quickStartTarget(.modelSettings)
                     #if os(iOS)
                         .keyboardShortcut(",")
                     #endif
@@ -410,5 +523,45 @@ public struct LibraryView: View {
                 }
                 .contentShape(Rectangle())
         }.buttonStyle(.plain).accessibilityAddTraits(selected ? .isSelected : [])
+    }
+}
+
+/// Keeps the chosen paper across library steps, including a multi-file import or a return from search.
+struct QuickStartNavigation {
+    var step: QuickStartStep?
+    var paperID: UUID?
+    private(set) var deferred: QuickStartStep?
+
+    init(step: QuickStartStep? = nil, paperID: UUID? = nil) {
+        self.step = step
+        self.paperID = paperID
+    }
+
+    var isChoosingPaper: Bool { step == .importPaper || step == .discovery || step == .shelves }
+
+    mutating func chosePaper(_ id: UUID) {
+        guard isChoosingPaper, let step else { return }
+        paperID = id
+        self.step = QuickStartStep(rawValue: step.rawValue + 1)
+    }
+
+    mutating func request(_ next: QuickStartStep, closeReadingActive: Bool) {
+        // Leaving the reader cancels its close-reading task. Keep it mounted until its notes finish saving.
+        switch next {
+        case .importPaper, .discovery, .shelves, .modelSettings, .notebook:
+            if closeReadingActive {
+                deferred = next
+                return
+            }
+        default: break
+        }
+        deferred = nil
+        step = next
+    }
+
+    mutating func resumeDeferredNavigation() {
+        guard let deferred else { return }
+        step = deferred
+        self.deferred = nil
     }
 }

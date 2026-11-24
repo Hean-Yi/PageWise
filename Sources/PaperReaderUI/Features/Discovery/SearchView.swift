@@ -52,6 +52,7 @@ struct SearchView: View {
                 Button("查找") { search.search() }.buttonStyle(.borderedProminent)
                     .disabled(!search.canSearch)
             }.padding(14).background(ReaderTheme.surface, in: RoundedRectangle(cornerRadius: 10))
+                .quickStartTarget(.discovery)
             HStack {
                 Text("导入到：\(targetName)").font(.caption).foregroundStyle(ReaderTheme.muted)
                 Spacer()

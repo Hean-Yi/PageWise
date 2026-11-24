@@ -43,6 +43,8 @@ struct PDFCanvas: View {
     }
     var body: some View {
         PlatformPDF(model: model, penEnabled: penEnabled, focus: sentenceDisplay)
+            .quickStartTarget(
+                acceptsSentenceInput && model.mode == "original" && !model.hasPDFNoteSelection ? .annotation : nil)
     }
 }
 

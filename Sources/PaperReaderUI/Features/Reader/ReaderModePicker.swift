@@ -12,6 +12,7 @@ struct ReaderModePicker: View {
         HStack(spacing: 0) {
             segment("原版", bilingualMode: false)
             segment("双语重排", bilingualMode: true)
+                .quickStartTarget(.bilingual)
         }
         .background(alignment: .leading) {
             HStack(spacing: 0) {
