@@ -8,11 +8,10 @@ struct ReadingCalendarView: View {
     @State private var minutes = 20.0
     @State private var addPaper: UUID?
     private var day: DateInterval { Calendar.current.dateInterval(of: .day, for: date)! }
-    private var entries: [ReadingEntry] { model.state.reading.filter { $0.start < day.end && $0.end > day.start } }
-    private var readingMinutes: Int { Int(ReadingMetrics.seconds(entries, during: day) / 60) }
-    private var paperCount: Int { Set(entries.map(\.paperID)).count }
 
     var body: some View {
+        let activity = ReadingMetrics.dailyActivity(model.state.reading, during: day)
+        let stats = statistics(minutes: Int(activity.seconds / 60), paperCount: activity.papers.count)
         ScrollView {
             VStack(alignment: .leading, spacing: 28) {
                 HStack(alignment: .center) {
@@ -30,19 +29,19 @@ struct ReadingCalendarView: View {
                 ViewThatFits(in: .horizontal) {
                     HStack(alignment: .top, spacing: 24) {
                         calendarCard.frame(width: 340)
-                        statistics.frame(minWidth: 240, maxWidth: .infinity, alignment: .leading)
+                        stats.frame(minWidth: 240, maxWidth: .infinity, alignment: .leading)
                     }
                     VStack(alignment: .leading, spacing: 24) {
                         calendarCard
-                        statistics
+                        stats
                     }
                 }
                 HStack {
                     Text("当日阅读").font(.headline)
                     Spacer()
-                    Text("\(entries.count) 条记录").font(.caption).foregroundStyle(ReaderTheme.muted)
+                    Text("\(activity.papers.count) 篇").font(.caption).foregroundStyle(ReaderTheme.muted)
                 }.padding(.top, 8)
-                if entries.isEmpty {
+                if activity.papers.isEmpty {
                     VStack(spacing: 14) {
                         Image(systemName: "book.closed").font(.system(size: 32, weight: .light))
                         Text("暂无阅读记录").font(.subheadline)
@@ -51,10 +50,11 @@ struct ReadingCalendarView: View {
                     .frame(maxWidth: .infinity, minHeight: 160)
                 } else {
                     LazyVStack(spacing: 14) {
-                        ForEach(entries.sorted { $0.start > $1.start }) { entry in
-                            timelineRow(entry)
+                        ForEach(activity.papers) { paper in
+                            timelineRow(paper)
                         }
                     }
+                    .id(day.start)
                 }
             }
             .padding(28).frame(maxWidth: 960, alignment: .leading)
@@ -94,12 +94,12 @@ struct ReadingCalendarView: View {
             .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(ReaderTheme.line))
     }
 
-    private var statistics: some View {
+    private func statistics(minutes: Int, paperCount: Int) -> some View {
         VStack(alignment: .leading, spacing: 24) {
             Text(date.formatted(.dateTime.month(.wide).day().weekday(.wide).locale(Locale(identifier: "zh_CN"))))
                 .font(.subheadline).foregroundStyle(ReaderTheme.muted)
             HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text("\(readingMinutes)")
+                Text("\(minutes)")
                     .font(.system(size: 64, weight: .regular, design: .serif))
                     .foregroundStyle(ReaderTheme.accent)
                     .monospacedDigit()
@@ -118,43 +118,57 @@ struct ReadingCalendarView: View {
         }.padding(22)
     }
 
-    private func timelineRow(_ entry: ReadingEntry) -> some View {
-        let title = model.state.papers.first { $0.id == entry.paperID }?.title ?? "论文"
-        return HStack(alignment: .top, spacing: 12) {
-            Text(entry.start.formatted(date: .omitted, time: .shortened))
-                .font(.system(.caption, design: .monospaced)).foregroundStyle(ReaderTheme.muted)
-                .frame(width: 54, alignment: .trailing).padding(.top, 21)
-            Circle().fill(ReaderTheme.accent).frame(width: 6, height: 6).padding(.top, 24)
-                .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 14) {
+    private func timelineRow(_ paper: ReadingMetrics.PaperActivity) -> some View {
+        let title = model.state.papers.first { $0.id == paper.id }?.title ?? "论文"
+        return VStack(alignment: .leading, spacing: 12) {
+            HStack {
                 Text(title).font(.body.weight(.medium)).lineLimit(2)
-                HStack(spacing: 8) {
-                    Text(
-                        entry.end.timeIntervalSince(entry.start) < 60
-                            ? "不足 1 分钟" : "\(Int(entry.end.timeIntervalSince(entry.start) / 60)) 分钟")
-                    if entry.manual {
-                        Text("补记").padding(.horizontal, 6).padding(.vertical, 2)
-                            .background(ReaderTheme.canvas, in: Capsule())
-                    }
-                    Spacer(minLength: 0)
-                    Button {
-                        model.select(entry.paperID)
-                    } label: {
-                        Image(systemName: "arrow.up.right")
-                    }
-                    .accessibilityLabel("阅读\(title)").help("打开论文")
-                    Button(role: .destructive) {
-                        model.deleteReading(entry.id)
-                    } label: {
-                        Image(systemName: "trash")
-                    }
-                    .accessibilityLabel("删除阅读记录").help("删除记录")
+                Spacer()
+                Button {
+                    model.select(paper.id)
+                } label: {
+                    Image(systemName: "arrow.up.right")
                 }
-                .font(.caption).foregroundStyle(ReaderTheme.muted).buttonStyle(.borderless)
+                .buttonStyle(.borderless).accessibilityLabel("阅读\(title)").help("打开论文")
             }
-            .padding(18).frame(maxWidth: .infinity, alignment: .leading)
-            .background(ReaderTheme.surface, in: RoundedRectangle(cornerRadius: 12))
-            .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(ReaderTheme.line))
+            DisclosureGroup {
+                ForEach(paper.entries) { record in
+                    recordDetail(record)
+                }
+            } label: {
+                HStack {
+                    Text(durationText(paper.seconds))
+                    Spacer()
+                    Text("\(paper.entries.count) 条明细")
+                }
+            }
+            .font(.caption).foregroundStyle(ReaderTheme.muted)
         }
+        .padding(16).frame(maxWidth: .infinity, alignment: .leading)
+        .background(ReaderTheme.surface, in: RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(ReaderTheme.line))
+    }
+
+    private func recordDetail(_ record: ReadingEntry) -> some View {
+        let start = max(day.start, record.start)
+        let end = min(day.end, record.end)
+        let endTime = end == day.end ? "24:00" : end.formatted(date: .omitted, time: .shortened)
+        return HStack(spacing: 8) {
+            Text("\(start.formatted(date: .omitted, time: .shortened)) – \(endTime)").monospacedDigit()
+            if record.manual { Text("补记") }
+            Spacer()
+            Text(durationText(end.timeIntervalSince(start)))
+            Button(role: .destructive) {
+                model.deleteReading(record.id)
+            } label: {
+                Image(systemName: "trash")
+            }
+            .buttonStyle(.borderless).accessibilityLabel("删除阅读记录").help("删除记录")
+        }
+        .padding(.vertical, 3)
+    }
+
+    private func durationText(_ seconds: TimeInterval) -> String {
+        seconds < 60 ? "不足 1 分钟" : "\(Int(seconds / 60)) 分钟"
     }
 }
