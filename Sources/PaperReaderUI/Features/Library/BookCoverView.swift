@@ -104,6 +104,7 @@ struct BookshelfItem: View {
     @Environment(\.requestPaperDeletion) private var requestPaperDeletion
     @Bindable var model: ReaderModel
     let paper: Paper
+    let arrival: ShelfBookArrival
     let recordFrame: (CGRect?) -> Void
     var searchLocated = false
     let previewed: Bool
@@ -135,27 +136,31 @@ struct BookshelfItem: View {
         #endif
     }
 
+    private func placedCover(_ progress: ReadingProgress) -> some View {
+        BookCoverView(paper: paper, progress: progress)
+            .overlay {
+                RoundedRectangle(cornerRadius: 6)
+                    .strokeBorder(ReaderTheme.accent, lineWidth: 2)
+                    .padding(-4)
+                    .opacity(searchLocated ? 1 : 0)
+                    .allowsHitTesting(false)
+                    .animation(ReaderMotion.feedback(reduceMotion), value: searchLocated)
+            }
+            .onGeometryChange(for: CGRect.self) { geometry in
+                geometry.frame(in: .named(ShelfCoverFlight.coordinateSpace))
+            } action: { frame in
+                recordFrame(frame)
+            }
+            .shadow(
+                color: .black.opacity(highlighted ? 0.16 : 0.09), radius: highlighted ? 10 : 4, y: highlighted ? 8 : 3
+            )
+            .modifier(arrival)
+    }
+
     var body: some View {
         let progress = self.progress
         VStack(alignment: .leading, spacing: 15) {
-            BookCoverView(paper: paper, progress: progress)
-                .overlay {
-                    RoundedRectangle(cornerRadius: 6)
-                        .strokeBorder(ReaderTheme.accent, lineWidth: 2)
-                        .padding(-4)
-                        .opacity(searchLocated ? 1 : 0)
-                        .allowsHitTesting(false)
-                        .animation(ReaderMotion.feedback(reduceMotion), value: searchLocated)
-                }
-                .onGeometryChange(for: CGRect.self) { geometry in
-                    geometry.frame(in: .named(ShelfCoverFlight.coordinateSpace))
-                } action: { frame in
-                    recordFrame(frame)
-                }
-                .shadow(
-                    color: .black.opacity(highlighted ? 0.16 : 0.09), radius: highlighted ? 10 : 4,
-                    y: highlighted ? 8 : 3
-                )
+            placedCover(progress)
                 .opacity(previewed ? 0 : 1)
                 .animation(nil, value: previewed)
                 .offset(y: highlighted && !reduceMotion ? -6 : 0)

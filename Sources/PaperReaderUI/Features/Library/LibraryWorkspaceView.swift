@@ -70,7 +70,6 @@ private struct ShelfWorkspaceContent: View {
     let openSample: () -> Void
     let listing: ShelfListing
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.layoutDirection) private var layoutDirection
     @State private var arrangement = CoverArrangement()
     private var sort: LibrarySort { model.state.preferredSort }
     @State private var searchReveal: ShelfSearchReveal?
@@ -85,7 +84,15 @@ private struct ShelfWorkspaceContent: View {
     }
     @State private var preview: Preview?
     @State private var locations = ShelfCoverLocations()
-    @State private var shelfMovesForward = true
+    @State private var arrivalFromTrailing = false
+    private struct ShelfSelection: Equatable {
+        let collection: LibraryCollection
+        let shelfID: UUID?
+    }
+
+    private var selection: ShelfSelection {
+        ShelfSelection(collection: collection, shelfID: collection == .all ? selectedShelfID : nil)
+    }
 
     @discardableResult private func showPreview(_ target: ShelfPreviewTarget) -> Bool {
         guard arrangement.sourceID == nil, listing.ids.contains(target.paperID),
@@ -196,11 +203,21 @@ private struct ShelfWorkspaceContent: View {
                         }
                     }.padding(.top, 5)
                         .animation(ReaderMotion.disclosure(reduceMotion), value: sort)
-                        .transaction(value: selectedShelfID) {
+                        .transaction(value: selection) {
                             $0.animation = nil
                             $0.disablesAnimations = true
                         }
-                        .overlay { shelfArrival }
+                        .keyframeAnimator(initialValue: ShelfBookArrival.duration, trigger: selection) {
+                            [reduceMotion] grid, time in
+                            grid.environment(\.shelfArrivalTime, reduceMotion ? ShelfBookArrival.duration : time)
+                        } keyframes: { _ in
+                            if reduceMotion {
+                                MoveKeyframe(ShelfBookArrival.duration)
+                            } else {
+                                MoveKeyframe(0)
+                                LinearKeyframe(ShelfBookArrival.duration, duration: ShelfBookArrival.duration)
+                            }
+                        }
                     if model.state.papers.isEmpty && collection == .all {
                         HStack(spacing: 14) {
                             Text("也可以拖入 PDF").foregroundStyle(ReaderTheme.muted)
@@ -248,16 +265,18 @@ private struct ShelfWorkspaceContent: View {
                 }
             #endif
         }.coordinateSpace(.named(ShelfCoverFlight.coordinateSpace))
-            .onChange(of: collection) { _, _ in
-                dismissSearchRequest += 1
-                arrangement.end()
-                preview = nil
-            }
-            .onChange(of: selectedShelfID) { previous, selected in
-                let shelves = model.state.shelves
-                let from = shelves.firstIndex { $0.id == previous } ?? -1
-                let to = shelves.firstIndex { $0.id == selected } ?? -1
-                shelfMovesForward = to > from
+            .onChange(of: selection) { previous, selected in
+                if previous.collection == selected.collection {
+                    let shelves = model.state.shelves
+                    let from = shelves.firstIndex { $0.id == previous.shelfID } ?? -1
+                    let to = shelves.firstIndex { $0.id == selected.shelfID } ?? -1
+                    arrivalFromTrailing = to < from
+                } else {
+                    let categories = LibraryCollection.allCases
+                    let from = categories.firstIndex(of: previous.collection) ?? 0
+                    let to = categories.firstIndex(of: selected.collection) ?? 0
+                    arrivalFromTrailing = to < from
+                }
                 dismissSearchRequest += 1
                 arrangement.end()
                 preview = nil
@@ -279,26 +298,6 @@ private struct ShelfWorkspaceContent: View {
             }
     }
 
-    @ViewBuilder private var shelfArrival: some View {
-        if !reduceMotion && preview == nil && arrangement.sourceID == nil {
-            let leftToRight = shelfMovesForward == (layoutDirection == .leftToRight)
-            // A single directional wash reveals the new titles. Covers and their native hit
-            // areas are already at their final positions, including for an immediate Space press.
-            Color.clear.keyframeAnimator(initialValue: 1.0, trigger: selectedShelfID) { _, progress in
-                let start = progress * 1.45 - 0.45
-                let end = start + 0.45
-                LinearGradient(
-                    colors: [.clear, ReaderTheme.canvas.opacity(0.42)],
-                    startPoint: UnitPoint(x: leftToRight ? start : 1 - start, y: 0.5),
-                    endPoint: UnitPoint(x: leftToRight ? end : 1 - end, y: 0.5))
-            } keyframes: { _ in
-                MoveKeyframe(0)
-                CubicKeyframe(1, duration: 0.32)
-            }
-            .allowsHitTesting(false).accessibilityHidden(true)
-        }
-    }
-
     private func bookshelfItem(_ paper: Paper, index: Int, columns: Int, width: CGFloat) -> some View {
         let destination = index + arrangement.offset(for: paper.id)
         // Add-cover occupies the first grid cell but is never a reorder destination.
@@ -309,7 +308,9 @@ private struct ShelfWorkspaceContent: View {
             width: CGFloat(to % columns - from % columns) * (width + 36),
             height: CGFloat(to / columns - from / columns) * (width / 0.70 + 77))
         return BookshelfItem(
-            model: model, paper: paper, recordFrame: { locations.frames[paper.id] = $0 },
+            model: model, paper: paper,
+            arrival: ShelfBookArrival(position: from, columns: columns, fromTrailing: arrivalFromTrailing),
+            recordFrame: { locations.frames[paper.id] = $0 },
             searchLocated: searchReveal?.paperID == paper.id,
             previewed: preview?.target.paperID == paper.id && preview?.flight.awaitingLift == false,
             showPreview: { showPreview($0) }, releasePreview: releasePreview,
