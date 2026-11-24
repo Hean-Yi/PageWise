@@ -113,14 +113,14 @@ public actor PDFReadingNoteLocator {
         return fragments
     }
 
-    private func document(at url: URL, pageIndex: Int) throws -> PDFDocument {
+    func document(at url: URL, pageIndex: Int) throws -> PDFDocument {
         try Task.checkCancellation()
         guard let document = PDFDocument(url: url), !document.isLocked, (0..<document.pageCount).contains(pageIndex)
         else { throw Self.notFound }
         return document
     }
 
-    private static var notFound: ReaderError { .message("未能在所引原页核对这段文字，请选中原文或提供更准确的引文。") }
+    static var notFound: ReaderError { .message("未能在所引原页核对这段文字，请选中原文或提供更准确的引文。") }
     private static var ambiguous: ReaderError { .message("这段文字在所引原页出现多次，请选中原文或提供更长的引文。") }
 
     private static func project(_ match: NSRange, in sentence: PDFSourceSentence, raw: NSString) throws -> [NSRange] {
@@ -153,23 +153,28 @@ public actor PDFReadingNoteLocator {
         return ranges
     }
 
-    private static func fragments(page: PDFPage, pageIndex: Int, ranges: [NSRange]) throws -> [PDFReadingNoteFragment] {
+    static func fragments(page: PDFPage, pageIndex: Int, ranges: [NSRange], keepingWhitespace: Bool = false) throws
+        -> [PDFReadingNoteFragment]
+    {
         guard let raw = page.string as NSString?, raw.length == page.numberOfCharacters, !ranges.isEmpty else {
             throw notFound
         }
         return try ranges.map { range in
             guard range.location >= 0, range.location <= raw.length, range.length > 0,
-                range.length <= raw.length - range.location,
-                let selection = page.selection(for: range)
+                range.length <= raw.length - range.location
             else { throw notFound }
             let text = raw.substring(with: range)
-            let rects = try selection.selectionsByLine().map { line -> [Double] in
+            let whitespace = text.allSatisfy(\.isWhitespace)
+            guard !whitespace || keepingWhitespace else { throw notFound }
+            let lines = page.selection(for: range)?.selectionsByLine() ?? []
+            let rects = try lines.compactMap { line -> [Double]? in
                 let rect = line.bounds(for: page)
+                if whitespace && rect.isEmpty { return nil }
                 guard rect.minX.isFinite, rect.minY.isFinite, rect.width.isFinite, rect.height.isFinite, !rect.isEmpty
                 else { throw notFound }
                 return [rect.minX, rect.minY, rect.width, rect.height]
             }
-            guard !rects.isEmpty, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw notFound }
+            guard !rects.isEmpty || whitespace else { throw notFound }
             return PDFReadingNoteFragment(
                 pageIndex: pageIndex,
                 anchor: NoteAnchor(

@@ -38,3 +38,23 @@ import Testing
     let data = try JSONEncoder().encode(legacy)
     #expect(try JSONDecoder().decode(Highlight.self, from: data).color == nil)
 }
+
+@Test func translationInkEditsOnlyTheSelectedVersionAndTarget() {
+    let id = UUID()
+    func mark(_ text: String, start: Int, target: String, version: String) -> Highlight {
+        var result = Highlight(paperID: id, pageKey: "original-1", pageIndex: 1, text: text, rects: [])
+        result.pdfTranslationTarget = target
+        result.contentVersion = version
+        result.textRange = [start, start + text.utf16.count]
+        return result
+    }
+    let full = mark("均值可能误导", start: 0, target: "translation-a", version: "v1")
+    let old = mark("其他版本译文", start: 0, target: "translation-a", version: "v0")
+    let other = mark("另一个段落", start: 0, target: "translation-b", version: "v1")
+    let selected = mark("可能", start: 2, target: "translation-a", version: "v1")
+    let updated = AnnotationRangeEditor.applying([selected], to: [old, other, full], color: .pink, style: .underline)
+    #expect(Array(updated.prefix(2)) == [old, other])
+    let parts = updated.dropFirst(2).sorted { $0.textRange![0] < $1.textRange![0] }
+    #expect(parts.map(\.text) == ["均值", "可能", "误导"])
+    #expect(parts.map(\.color) == [nil, .pink, nil])
+}

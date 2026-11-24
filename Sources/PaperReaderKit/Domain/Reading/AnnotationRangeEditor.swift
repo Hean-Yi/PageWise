@@ -8,20 +8,23 @@ public enum AnnotationRangeEditor {
     ) -> [Highlight] {
         var result = existing
         for selection in selections {
-            guard let cut = selection.textRange, cut.count == 2, cut[0] < cut[1], selection.htmlTarget != nil else {
+            guard let cut = selection.textRange, cut.count == 2, cut[0] >= 0, cut[0] < cut[1],
+                let target = selection.htmlTarget ?? selection.pdfTranslationTarget
+            else {
                 continue
             }
             result = result.flatMap { mark -> [Highlight] in
                 guard mark.paperID == selection.paperID, mark.pageKey == selection.pageKey,
                     mark.contentVersion == nil || selection.contentVersion == nil
                         || mark.contentVersion == selection.contentVersion,
-                    mark.htmlTarget == selection.htmlTarget, let range = mark.textRange, range.count == 2,
+                    mark.htmlTarget ?? mark.pdfTranslationTarget == target, let range = mark.textRange,
+                    range.count == 2,
                     range[0] < cut[1], cut[0] < range[1]
                 else { return [mark] }
                 guard range[0] >= 0, range[1] - range[0] == mark.text.utf16.count else { return [mark] }
                 var remainder: [Highlight] = []
-                for (start, end) in [(range[0], min(range[1], cut[0])), (max(range[0], cut[1]), range[1])]
-                where start < end {
+                for part in remainderRanges(of: range[0]..<range[1], excluding: IndexSet(integersIn: cut[0]..<cut[1])) {
+                    let (start, end) = (part.lowerBound, part.upperBound)
                     var fragment = mark
                     if !remainder.isEmpty { fragment.id = UUID() }
                     fragment.textRange = [start, end]
@@ -39,5 +42,9 @@ public enum AnnotationRangeEditor {
             }
         }
         return result
+    }
+
+    static func remainderRanges(of range: Range<Int>, excluding cuts: IndexSet) -> IndexSet.RangeView {
+        IndexSet(integersIn: range).subtracting(cuts).rangeView
     }
 }
