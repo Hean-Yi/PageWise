@@ -65,11 +65,14 @@ enum HTMLAnnotationMenuScript {
           menu.addEventListener('mousedown',event=>{holding=true;event.preventDefault();});
           menu.addEventListener('focusin',()=>{holding=true;});
           document.addEventListener('pointerdown',event=>{if(menu.contains(event.target)||event.target.closest?.('.reader-note-card'))return;holding=false;dragging=true;menu.hidden=true;dismissed=false;});
-          document.addEventListener('pointerup',()=>{dragging=false;clearTimeout(timer);timer=setTimeout(show,30);});
+          const endDrag=()=>{dragging=false;clearTimeout(timer);timer=setTimeout(show,30);};
+          document.addEventListener('pointerup',endDrag,true);
+          // WebKit can take over a long press for its native selection handles before a pointerup arrives.
+          document.addEventListener('pointercancel',endDrag,true);
           document.addEventListener('keydown',event=>{if(event.key==='Escape'){menu.hidden=true;dismissed=true;} });
           document.addEventListener('scroll',()=>{if(!menu.hidden)position();}, {passive:true});
           window.addEventListener('resize',()=>{if(!menu.hidden)position();});
-          window.addEventListener('blur',()=>{dismissed=true;menu.hidden=true;});
+          window.addEventListener('blur',()=>{dragging=false;dismissed=true;clearTimeout(timer);menu.hidden=true;});
           window.paperAnnotationMenu={
             selectionChanged(){dismissed=false;menu.querySelector('.bookmark').textContent='添加书签';clearTimeout(timer);timer=setTimeout(show,120);},
             refresh(){refresh();if(!menu.hidden)position();},

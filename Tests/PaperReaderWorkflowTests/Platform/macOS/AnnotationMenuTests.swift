@@ -148,6 +148,66 @@
         model.select(nil)
     }
 
+    @Test(arguments: [false, true])
+    @MainActor func sourceReflowShowsNoteMenuAfterWrappedMouseOrSystemSelection(cancelled: Bool) async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let model = try ReaderModel(root: directory)
+        await model.load()
+        let english = String(repeating: "Compare the two small groups before interpreting the totals. ", count: 4)
+        let chinese = String(repeating: "先比较各组的分母，再解释总量的变化。", count: 8)
+        let block = TextBlock(sourcePage: 0, text: english)
+        var paper = Paper(
+            title: "Wrapped selection", digest: "wrapped", originalPath: "unused.pdf", pageCount: 1,
+            blocks: [block], warnings: [], canReflow: true)
+        paper.htmlReading = try await HTMLReadingStore().append(
+            [BilingualBlock(block: block, translation: chinese)], to: nil, paper: paper, root: directory)
+        model.state.papers = [paper]
+        model.select(paper.id)
+        let coordinator = HTMLCoordinator(model: model)
+        let web = coordinator.makeView()
+        web.frame = CGRect(x: 0, y: 0, width: 530, height: 700)
+        defer { coordinator.stop(web) }
+        coordinator.update(web, sidebarOpen: !cancelled)
+        try await menuWait { (try? await menuJS(web, "return !!window.paperNotes")) as? Bool == true }
+        let multipleLines = try await web.callAsyncJavaScript(
+            """
+            const p=document.querySelector(cancelled ? 'section .translation' : 'section p');
+            const pointer=cancelled?'touch':'mouse',node=p.firstChild;
+            p.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,pointerType:pointer,buttons:1}));
+            // The touch selection handles may continue changing the range after WebKit takes over the gesture.
+            if(cancelled)p.dispatchEvent(new PointerEvent('pointercancel',{bubbles:true,pointerType:pointer}));
+            getSelection().setBaseAndExtent(node,2,node,node.length-3);
+            if(!cancelled)p.dispatchEvent(new PointerEvent('pointerup',{bubbles:true,pointerType:pointer}));
+            return getSelection().getRangeAt(0).getClientRects().length>1;
+            """, arguments: ["cancelled": cancelled], in: nil, contentWorld: .defaultClient)
+        #expect(multipleLines as? Bool == true)
+        try await menuWait {
+            (try? await menuJS(
+                web, "return !document.querySelector('#annotation-menu').hidden")) as? Bool == true
+        }
+        let opened = try await menuJS(
+            web,
+            """
+            const button=document.querySelector('#annotation-menu .add-note'),rect=button.getBoundingClientRect();
+            if(rect.width<=0 || rect.top<0 || rect.bottom>innerHeight)return false;
+            button.click();return paperNotes.editing();
+            """)
+        try #require(opened as? Bool == true)
+        _ = try await menuJS(
+            web,
+            """
+            const editor=document.querySelector('.reader-note-card .note-editor');
+            editor.value='A note from the selection';editor.dispatchEvent(new Event('input',{bubbles:true}));
+            """)
+        try await menuWait { model.currentReadingNotes.count == 1 }
+        let anchor = try #require(model.currentReadingNotes.first?.anchors.first)
+        #expect(anchor.target == (cancelled ? "translation" : "source"))
+        #expect(anchor.key == block.id.uuidString)
+        #expect(anchor.start == 2 && anchor.text == model.selectionText)
+        model.select(nil)
+    }
+
     @MainActor private func menuJS(_ web: WKWebView, _ source: String) async throws -> Any? {
         try await web.callAsyncJavaScript(source, arguments: [:], in: nil, contentWorld: .defaultClient)
     }
