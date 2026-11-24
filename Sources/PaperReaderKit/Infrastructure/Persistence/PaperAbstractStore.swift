@@ -11,10 +11,16 @@ actor PaperAbstractStore {
     enum Source: Hashable, Sendable {
         case pdf(digest: String)
         case publication(digest: String, revision: String)
+        var digest: String {
+            switch self {
+            case .pdf(let digest), .publication(let digest, _): digest
+            }
+        }
     }
 
     private let directory: URL
-    private var pending: [Source: Task<PDFAbstractRecord, any Error>] = [:]
+    private var pending: [Source: (id: UUID, task: Task<PDFAbstractRecord, any Error>)] = [:]
+    private var deletedPaperIDs: Set<UUID> = []
     private var unsaved: [(source: Source, record: PDFAbstractRecord)] = []
 
     init(root: URL) {
@@ -27,13 +33,22 @@ actor PaperAbstractStore {
         return try read(at: fileURL(for: source))
     }
 
-    func record(for source: Source, extract: @escaping @Sendable () async throws -> PDFAbstractRecord) async throws
+    func discard(paperID: UUID, digest: String) {
+        deletedPaperIDs.insert(paperID)
+        for source in pending.keys where source.digest == digest { pending.removeValue(forKey: source)?.task.cancel() }
+        unsaved.removeAll { $0.source.digest == digest }
+    }
+
+    func record(
+        for source: Source, paperID: UUID? = nil, extract: @escaping @Sendable () async throws -> PDFAbstractRecord
+    ) async throws
         -> PDFAbstractRecord
     {
         try Task.checkCancellation()
+        if let paperID, deletedPaperIDs.contains(paperID) { throw CancellationError() }
         let work: Task<PDFAbstractRecord, any Error>
         if let active = pending[source] {
-            work = active
+            work = active.task
         } else {
             let url = fileURL(for: source)
             if let recent = unsaved.first(where: { $0.source == source }) {
@@ -41,14 +56,15 @@ actor PaperAbstractStore {
                 return recent.record
             }
             if let saved = try? read(at: url) { return saved }
+            let token = UUID()
             work = Task {
-                defer { pending[source] = nil }
+                defer { if pending[source]?.id == token { pending[source] = nil } }
                 let result = try await extract()
                 try Task.checkCancellation()
                 persist(result, for: source, at: url)
                 return result
             }
-            pending[source] = work
+            pending[source] = (token, work)
         }
         // The import/backfill may still need this result if a reader dismisses the preview.
         let result = try await work.value

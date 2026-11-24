@@ -1,10 +1,11 @@
+import CryptoKit
 import Foundation
 import Testing
 
 @testable import PaperReaderKit
 @testable import PaperReaderUI
 
-@Test @MainActor func trashRoundTripPreservesFilesAnchorsAndCurrentReadingAcrossRestart() async throws {
+@Test @MainActor func permanentDeletionRemovesOwnedFilesCachesAndNotesWithoutTouchingExternalPDF() async throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: root) }
     let reader = try ReaderModel(root: root, credentials: WorkflowCredentials())
@@ -30,40 +31,34 @@ import Testing
     reader.state.chats = [turn]
     reader.state.memories = [memory]
     reader.state.manualPaperIDs = [id]
-    let bookmark = try #require(reader.currentBookmarks.first)
+    #expect(!reader.currentBookmarks.isEmpty)
+    let cacheKey = SHA256.hash(data: Data(paper.digest.utf8)).map { String(format: "%02x", $0) }.joined()
+    let caches = ["PDFTranslations", "PaperAbstracts/v1"].map { root.appending(path: $0 + "/" + cacheKey) }
+    for cache in caches {
+        try FileManager.default.createDirectory(at: cache, withIntermediateDirectories: true)
+        try Data("derived".utf8).write(to: cache.appending(path: "test"))
+    }
     #expect(try await reader.readingNoteEvidence(query: "Quartz").map(\.readingNoteID) == [note.id])
-    #expect(await reader.trashPaper(id))
+    #expect(await reader.deletePaper(id))
     #expect(reader.paper == nil && reader.selectedPaperID == nil && reader.state.papers.isEmpty)
     #expect(reader.state.readingNotes.isEmpty && reader.state.highlights.isEmpty && reader.state.chats.isEmpty)
     #expect(reader.state.memories.isEmpty && reader.state.reading.isEmpty && reader.state.bookmarks.isEmpty)
     #expect(reader.state.workspace.isEmpty && reader.state.paperShelfIDs.isEmpty && reader.state.manualPaperIDs.isEmpty)
     #expect(try await reader.readingNoteEvidence(query: "Quartz").isEmpty)
-    #expect(reader.state.trashedPapers.map(\.id) == [id])
+    #expect(!FileManager.default.fileExists(atPath: storedPDF.path))
+    #expect(caches.allSatisfy { !FileManager.default.fileExists(atPath: $0.path) })
+    #expect(try Data(contentsOf: pdf) == original)
     await reader.flushReadingPosition()
 
     let reopened = try ReaderModel(root: root, credentials: WorkflowCredentials())
     await reopened.load()
-    let archived = try #require(reopened.state.trashedPapers.first)
-    #expect(try Data(contentsOf: storedPDF) == original && archived.id == id)
-    #expect(await reopened.restorePaper(id))
-    let restored = try await reopened.store.load()
-    #expect(restored.trashedPapers.isEmpty && restored.papers.map(\.id) == [id])
-    #expect(restored.shelfID(for: id) == shelf && restored.manualPaperIDs == [id])
-    #expect(restored.workspace[id.uuidString]?.position?.pageKey == "original-1")
-    #expect(restored.workspace[id.uuidString]?.isFavorite == true)
-    #expect(restored.readingNotes == [note] && restored.highlights == [mark] && restored.bookmarks == [bookmark])
-    #expect(restored.chats.map(\.id) == [turn.id] && restored.memories.map(\.id) == [memory.id])
-    #expect(!restored.reading.isEmpty && restored.reading.allSatisfy { $0.paperID == id && $0.end > $0.start })
-    #expect(try await reopened.readingNoteEvidence(query: "Quartz").map(\.readingNoteID) == [note.id])
-    #expect(await reopened.trashPaper(id))
-    #expect(await !reopened.save(paperTrashChange: .restore(id, deletedAt: archived.deletedAt)))
-    #expect(reopened.state.papers.isEmpty && reopened.state.trashedPapers.count == 1)
-    #expect(await reopened.deleteShelf(shelf))
-    #expect(await reopened.restorePaper(id))
-    #expect(reopened.state.shelfID(for: id) == nil)
+    #expect(reopened.state.papers.isEmpty && reopened.state.readingNotes.isEmpty)
+    let fresh = try #require(await reopened.importURLs([pdf]).first)
+    #expect(fresh != id && reopened.state.readingNotes.isEmpty && reopened.state.bookmarks.isEmpty)
+
 }
 
-@Test @MainActor func failedPaperTrashLeavesTheReaderAndLibraryIntact() async throws {
+@Test @MainActor func failedPermanentDeletionLeavesTheReaderAndLibraryIntact() async throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: root) }
     let reader = try ReaderModel(root: root, credentials: WorkflowCredentials())
@@ -71,11 +66,12 @@ import Testing
     let pdf = root.appendingPathComponent("paper.pdf")
     try DemoPaper.write(to: pdf)
     let id = try #require(await reader.importURLs([pdf]).first)
+    let originalPath = try #require(reader.paper?.originalPath)
     let saved = root.appendingPathExtension("backup")
     try FileManager.default.moveItem(at: root, to: saved)
     defer { try? FileManager.default.moveItem(at: saved, to: root) }
-    #expect(await !reader.trashPaper(id))
-    #expect(reader.paper?.id == id && reader.state.trashedPapers.isEmpty)
+    #expect(await !reader.deletePaper(id))
+    #expect(reader.paper?.id == id && FileManager.default.fileExists(atPath: saved.appending(path: originalPath).path))
     #expect(reader.message?.contains("保存失败") == true)
 }
 
@@ -107,7 +103,7 @@ private actor DelayedPaperAnswer: HTTPTransport {
 }
 
 @Test(arguments: [false, true]) @MainActor
-func deletedPaperIgnoresLateChatOrMemoryEvenAfterImmediateRestore(delayMemory: Bool) async throws {
+func permanentDeletionIgnoresLateChatOrMemoryAfterReimport(delayMemory: Bool) async throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: root) }
     let api = DelayedPaperAnswer(delayMemory: delayMemory)
@@ -122,11 +118,12 @@ func deletedPaperIgnoresLateChatOrMemoryEvenAfterImmediateRestore(delayMemory: B
     let answer = Task { await reader.ask("How is attention described?") }
     for _ in 0..<400 where await !api.waiting { try await Task.sleep(for: .milliseconds(5)) }
     try #require(await api.waiting)
-    #expect(await reader.trashPaper(id))
-    #expect(await reader.restorePaper(id))
+    #expect(await reader.deletePaper(id))
+    let fresh = try #require(await reader.importURLs([pdf]).first)
+    #expect(fresh != id)
     await api.release()
     await answer.value
-    #expect(reader.state.chats.count == (delayMemory ? 1 : 0))
+    #expect(reader.state.chats.isEmpty)
     #expect(reader.state.memories.isEmpty)
     #expect(reader.assistantDraft == nil)
 }

@@ -60,15 +60,18 @@ public actor LibraryStore {
         return state
     }
 
-    public func save(_ state: LibraryState, respectingCancellation: Bool = false) throws {
+    public func save(_ state: LibraryState, respectingCancellation: Bool = false, deleting paper: Paper? = nil) throws {
         if respectingCancellation { try Task.checkCancellation() }
         guard state.version == LibraryState.currentVersion else {
             throw ReaderError.message("不能写入不受支持的书库版本，原有资料已保留。")
         }
-        try state.validateTrash()
         try state.validateShelves()
         try state.validateOrdering()
         let data = try JSONEncoder().encode(state)
+        if let paper {
+            guard !state.papers.contains(where: { $0.id == paper.id }) else { throw ReaderError.message("论文仍在书库中。") }
+            try stageFileRemoval(paper)
+        }
         try Self.database(at: databaseURL) { db in
             try Self.execute(db, "BEGIN IMMEDIATE")
             do {

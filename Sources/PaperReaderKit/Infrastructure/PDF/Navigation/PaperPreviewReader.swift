@@ -6,6 +6,12 @@ public actor PaperPreviewReader {
 
     public init() {}
 
+    public func discard(paper: Paper, root: URL) async {
+        let cache = libraries[root] ?? PaperAbstractStore(root: root)
+        libraries[root] = cache
+        await cache.discard(paperID: paper.id, digest: paper.digest)
+    }
+
     /// New imports and old-library backfill prepare the same records that the preview reads.
     public func prepare(paper: Paper, root: URL) async throws {
         _ = try await material(for: paper, root: root, translationStore: nil)
@@ -64,7 +70,9 @@ public actor PaperPreviewReader {
                     indexed == nil
                     ? true : await translationStore?.hasSavedPage(documentHash: paper.digest, among: 0..<pages) == true
                 if pdf == nil && needsAnchors {
-                    pdf = try await cache.record(for: key) { try PDFAbstractExtractor.extract(url: file, pages: pages) }
+                    pdf = try await cache.record(for: key, paperID: paper.id) {
+                        try PDFAbstractExtractor.extract(url: file, pages: pages)
+                    }
                 }
             } catch {
                 try Task.checkCancellation()
@@ -96,7 +104,9 @@ public actor PaperPreviewReader {
             paper.reflowJob?.finished == true ? "finished" : "open", reference ?? "",
         ].joined(separator: "|")
         do {
-            let record = try await cache.record(for: .publication(digest: paper.digest, revision: revision)) {
+            let record = try await cache.record(
+                for: .publication(digest: paper.digest, revision: revision), paperID: paper.id
+            ) {
                 let parts = front.map {
                     AbstractPassage.Part(text: $0.text, paragraph: $0.id.uuidString, key: $0.id.uuidString)
                 }

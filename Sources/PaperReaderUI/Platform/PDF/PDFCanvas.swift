@@ -572,7 +572,7 @@ final class PDFCoordinator: NSObject, @preconcurrency PDFPageOverlayViewProvider
     }
 
     private func inkURL(_ key: String, ext: String) -> URL? {
-        guard let paperID else { return nil }
+        guard let paperID, model.lastPaperDeletion[paperID] == nil else { return nil }
         return model.root.appendingPathComponent("Papers/\(paperID.uuidString)/Ink/\(key).\(ext)")
     }
 

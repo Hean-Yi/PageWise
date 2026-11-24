@@ -17,9 +17,14 @@ public actor PDFSentenceTranslationStore {
     private let directory: URL
     // An entry means a writer holds this page. Other pages can progress independently.
     private var waiters: [URL: [Waiter]] = [:]
+    private var deletionGenerations: [String: UUID] = [:]
 
     public init(root: URL) {
         directory = root.appendingPathComponent("PDFTranslations", isDirectory: true)
+    }
+
+    public func invalidatePendingWrites(documentHash: String) {
+        deletionGenerations[documentHash] = UUID()
     }
 
     func hasSavedPage(documentHash: String, among pages: Range<Int>) -> Bool {
@@ -52,6 +57,7 @@ public actor PDFSentenceTranslationStore {
         let url = pageURL(documentHash: documentHash, page: first.pageIndex)
         let revision = try revision(for: settings)
         let keys = try sourceKeys(sentences)
+        let generation = deletionGenerations[documentHash]
         try await acquire(url)
         defer { release(url) }
         try Task.checkCancellation()
@@ -79,6 +85,7 @@ public actor PDFSentenceTranslationStore {
                 let translations = try await client.translatePDFBatch(
                     batch, settings: settings, key: credential, corrective: corrective)
                 try Task.checkCancellation()
+                guard deletionGenerations[documentHash] == generation else { throw CancellationError() }
                 guard !translations.isEmpty else { continue }
                 for (id, translation) in translations {
                     if let sourceKey = keys[id] {

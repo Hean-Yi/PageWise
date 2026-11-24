@@ -3,14 +3,13 @@ import Observation
 import PaperReaderKit
 
 enum ReaderOrigin: String {
-    case library, calendar, notebooks, trash
+    case library, calendar, notebooks
 
     var title: String {
         switch self {
         case .library: "书库"
         case .calendar: "阅读日历"
         case .notebooks: "阅读笔记"
-        case .trash: "最近删除"
         }
     }
 }
@@ -57,6 +56,8 @@ public final class ReaderModel {
     public private(set) var pendingArtifactIDs: Set<UUID> = []
     var pendingImportIDs: Set<UUID> = []
     @ObservationIgnored var lastPaperDeletion: [UUID: Date] = [:]
+    @ObservationIgnored var deletedDigests: [String: Date] = [:]
+    @ObservationIgnored var deletedPublications: [String: Date] = [:]
     public private(set) var modelSettings = ModelSettings()
     public var selectionText = ""
     public var selectionRects: [[Double]] = []
@@ -181,7 +182,10 @@ public final class ReaderModel {
         guard !loaded else { return }
         do {
             state = try await store.load()
-            do { try ReadingArtifactCleanup.removeUncommittedFiles(in: root, papers: state.papers) } catch {
+            do {
+                try await store.recoverFileRemovals(keeping: state.papers)
+                try ReadingArtifactCleanup.removeUncommittedFiles(in: root, papers: state.papers)
+            } catch {
                 status = "部分临时文件暂未清理，将在下次打开时重试。"
             }
             if let folder = try? await vault.directory() { vaultName = folder.lastPathComponent }
@@ -246,7 +250,8 @@ public final class ReaderModel {
     }
 
     @discardableResult func save(
-        cancellable: Bool = false, adding importedPaper: Paper? = nil, paperTrashChange: PaperTrashChange? = nil,
+        cancellable: Bool = false, adding importedPaper: Paper? = nil, requestedAt: Date? = nil,
+        publicationID: String? = nil, deletingPaper: UUID? = nil,
         shelfChange: ShelfChange? = nil, importShelfID: UUID? = nil,
         orderChange: LibraryOrderChange? = nil, publishingReflow publication: Paper? = nil,
         linkingPublication link: (paperID: UUID, url: String)? = nil,
@@ -257,8 +262,6 @@ public final class ReaderModel {
         guard loaded else { return false }
         let previous = saveQueue
         let priorDeletion = publication.flatMap { lastPaperDeletion[$0.id] }
-        let trashGeneration: Date? =
-            if case .trash(let id, _) = paperTrashChange { lastPaperDeletion[id] } else { nil }
         let store = store
         let task = Task { @MainActor [weak self] in
             _ = await previous?.value
@@ -267,17 +270,15 @@ public final class ReaderModel {
                 if cancellable { try Task.checkCancellation() }
                 // Take the latest state after preceding writes. Uncommitted imports never enter
                 // public state or unrelated queued snapshots, and are published only after commit.
-                if case .trash(let id, _) = paperTrashChange {
-                    guard self.lastPaperDeletion[id] == trashGeneration else {
-                        throw ReaderError.message("论文的删除状态已变化，请重新选择。")
-                    }
-                    if self.readingPaper == id { self.endReading() }
-                }
+                if let deletingPaper, self.readingPaper == deletingPaper { self.endReading() }
                 var snapshot = self.state
-                if let paperTrashChange { try snapshot.apply(paperTrashChange) }
+                let removed = try deletingPaper.map { try snapshot.removePaper($0) }
                 if let importedPaper {
-                    guard !snapshot.trashedPapers.contains(where: { $0.paper.digest == importedPaper.digest }) else {
-                        throw ReaderError.message("这篇论文已在最近删除中，请恢复原记录。")
+                    if let requestedAt,
+                        self.wasPaperDeleted(
+                            since: requestedAt, digest: importedPaper.digest, publicationID: publicationID)
+                    {
+                        throw ReaderError.message("这次导入期间论文已被删除，请重新选择下载。")
                     }
                     snapshot.papers.insert(importedPaper, at: 0)
                     if let importShelfID {
@@ -356,11 +357,10 @@ public final class ReaderModel {
                     snapshot.highlights += marks
                 }
                 if let report { snapshot.chats.append(report) }
-                try await store.save(snapshot, respectingCancellation: cancellable)
-                if let paperTrashChange {
-                    if case .trash(let id, let date) = paperTrashChange { self.didTrashPaper(id, at: date) }
-                    // Reapply just this paper to live state. Other papers may have been edited during I/O.
-                    try self.state.apply(paperTrashChange)
+                try await store.save(snapshot, respectingCancellation: cancellable, deleting: removed)
+                if let removed {
+                    self.didDeletePaper(removed)
+                    try self.state.removePaper(removed.id)
                 }
                 if !additions.isEmpty { self.state.readingNotes.append(contentsOf: additions) }
                 if !noteMarks.isEmpty { self.state.highlights.append(contentsOf: noteMarks) }
@@ -389,6 +389,7 @@ public final class ReaderModel {
                 self.state.paperShelfIDs = snapshot.paperShelfIDs
                 self.state.manualPaperIDs = snapshot.manualPaperIDs
                 self.state.preferredSort = snapshot.preferredSort
+                if let removed { await self.removeDeletedFiles(removed) }
                 return true
             } catch is CancellationError {
                 return false
