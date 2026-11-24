@@ -15,6 +15,11 @@ import Testing
     #expect(document.documentURL == file)
     let page = try #require(document.page(at: 0))
     #expect(page.string?.contains("Understanding Attention") == true)
+    let last = try #require(document.page(at: document.pageCount - 1))
+    let selected = try #require(last.selection(for: NSRange(location: 0, length: last.numberOfCharacters)))
+    #expect(display.text(for: selected, on: 1) == selected.string)
+    #expect(display.text(for: selected, on: 0) == nil)
+    #expect(display.text(for: selected, on: 2) == nil)
     page.addAnnotation(
         PDFAnnotation(bounds: CGRect(x: 56, y: 200, width: 80, height: 20), forType: .highlight, withProperties: nil))
     #expect(try Data(contentsOf: file) == bytes)
