@@ -5,6 +5,7 @@ struct SearchView: View {
     @Bindable var search: OnlinePaperSearch
     let targetName: String
     @FocusState private var searchFocused: Bool
+    @State private var choosingPDF = false
 
     private func scopeTitle(_ scope: PaperSearchScope) -> String {
         switch scope {
@@ -78,11 +79,19 @@ struct SearchView: View {
             } else if search.searched && search.results.isEmpty && !search.isSearching {
                 Text("未找到论文，试试更短的标题").font(.caption).foregroundStyle(ReaderTheme.muted)
             }
-            ForEach(search.results) { item in OnlineCandidateCard(search: search, candidate: item) }
+            ForEach(search.results) { item in
+                OnlineCandidateCard(search: search, candidate: item) { version in
+                    choosingPDF = search.choosePDF(for: version)
+                }
+            }
         }
         .padding(22).frame(maxWidth: .infinity, alignment: .leading)
         .background(ReaderTheme.elevated.opacity(0.7), in: RoundedRectangle(cornerRadius: 14))
         .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(ReaderTheme.line))
+        .publisherPDFImporter(
+            isPresented: $choosingPDF, importFile: search.importSelectedPDF, onFailure: search.fileSelectionFailed,
+            onCancellation: search.cancelFileSelection
+        )
         .task(id: search.targetShelfID) {
             // Focus after the insertion transition has installed the native text field.
             do { try await Task.sleep(for: .milliseconds(260)) } catch { return }
@@ -95,11 +104,14 @@ struct SearchView: View {
 private struct OnlineCandidateCard: View {
     let search: OnlinePaperSearch
     let candidate: PaperCandidate
+    let choosePDF: (PaperCandidate) -> Void
     @State private var selectedVersionID: String?
 
     var body: some View {
         let versions = [candidate] + candidate.alternateVersions
-        let item = versions.first { $0.id == selectedVersionID } ?? candidate
+        let item =
+            versions.first { $0.id == selectedVersionID } ?? versions.first { $0.id == search.selectedPublicationID }
+            ?? candidate
         VStack(alignment: .leading, spacing: 10) {
             SearchMatchText(item.title, query: search.resultQuery)
                 .font(.system(size: 15, weight: .medium)).fixedSize(horizontal: false, vertical: true)
@@ -107,35 +119,15 @@ private struct OnlineCandidateCard: View {
                 SearchMatchText(item.authors, query: search.resultQuery)
                     .font(.caption).foregroundStyle(ReaderTheme.muted).lineLimit(2)
             }
-            HStack {
-                if !item.year.isEmpty { Text(item.year).font(.caption).foregroundStyle(ReaderTheme.muted) }
-                if versions.count > 1 {
-                    Picker("论文版本", selection: Binding(get: { item.id }, set: { selectedVersionID = $0 })) {
-                        ForEach(versions) { version in
-                            Text(versionLabel(for: version)).tag(version.id)
-                        }
-                    }.pickerStyle(.menu).labelsHidden().fixedSize().controlSize(.small)
-                        .disabled(search.importingID != nil)
-                } else {
-                    Text(item.source.label).font(.caption).foregroundStyle(ReaderTheme.muted)
+            ViewThatFits(in: .horizontal) {
+                HStack {
+                    versionInfo(item, versions: versions)
+                    Spacer(minLength: 12)
+                    actions(for: item)
                 }
-                Spacer()
-                if search.imported[item.id] != nil {
-                    Label("已入库", systemImage: "checkmark.circle.fill").font(.caption).foregroundStyle(
-                        ReaderTheme.accent)
-                } else if search.importingID == item.id {
-                    ProgressView().controlSize(.small)
-                    Button("停止导入") { search.cancelImport() }.buttonStyle(.bordered).controlSize(.small)
-                } else if item.canDownload {
-                    if let url = item.landingURL {
-                        Link(destination: url) { Image(systemName: "arrow.up.right.square") }
-                            .accessibilityLabel("查看来源页").help("查看来源页")
-                    }
-                    Button(search.importErrors[item.id] == nil ? "下载并导入" : "重试导入") { search.confirmImport(item) }
-                        .buttonStyle(.borderedProminent).controlSize(.small).disabled(search.importingID != nil)
-                } else if let url = item.landingURL {
-                    Link(destination: url) { Label(item.landingPageLabel, systemImage: "arrow.up.right.square") }
-                        .buttonStyle(.bordered).controlSize(.small)
+                VStack(alignment: .leading, spacing: 8) {
+                    versionInfo(item, versions: versions)
+                    actions(for: item)
                 }
             }
             if search.importingID == item.id {
@@ -145,8 +137,65 @@ private struct OnlineCandidateCard: View {
             }
             if let error = search.importErrors[item.id] {
                 Text(error).font(.caption).foregroundStyle(ReaderTheme.accent)
+                if item.canDownload, search.importedPaperID(for: item) == nil {
+                    selectPDFButton(item).controlSize(.small)
+                }
             }
         }.padding(16).background(ReaderTheme.surface, in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    private func versionInfo(_ item: PaperCandidate, versions: [PaperCandidate]) -> some View {
+        HStack {
+            if !item.year.isEmpty { Text(item.year).font(.caption).foregroundStyle(ReaderTheme.muted) }
+            if versions.count > 1 {
+                Picker("论文版本", selection: Binding(get: { item.id }, set: { selectedVersionID = $0 })) {
+                    ForEach(versions) { version in
+                        Text(versionLabel(for: version)).tag(version.id)
+                    }
+                }.pickerStyle(.menu).labelsHidden().fixedSize().controlSize(.small)
+                    .disabled(search.importingID != nil)
+            } else {
+                Text(item.source.label).font(.caption).foregroundStyle(ReaderTheme.muted)
+            }
+        }
+    }
+
+    private func actions(for item: PaperCandidate) -> some View {
+        HStack {
+            if let url = item.landingURL {
+                if item.canDownload {
+                    Link(destination: url) { Image(systemName: "arrow.up.right.square") }
+                        .accessibilityLabel(item.landingPageLabel).help(item.landingPageLabel)
+                } else {
+                    Link(destination: url) { Label(item.landingPageLabel, systemImage: "arrow.up.right.square") }
+                        .buttonStyle(.bordered)
+                }
+            }
+            if search.importedPaperID(for: item) != nil {
+                Button {
+                    search.openImported(item)
+                } label: {
+                    Label("在书库打开", systemImage: "checkmark.circle.fill")
+                }.buttonStyle(.bordered)
+            } else if search.importingID == item.id {
+                ProgressView().controlSize(.small)
+                Button("停止导入") { search.cancelImport() }.buttonStyle(.bordered)
+            } else if item.canDownload {
+                Button(search.importErrors[item.id] == nil ? "下载并导入" : "重试导入") { search.confirmImport(item) }
+                    .buttonStyle(.borderedProminent).disabled(search.importingID != nil)
+            } else {
+                selectPDFButton(item)
+            }
+        }.controlSize(.small)
+    }
+
+    private func selectPDFButton(_ item: PaperCandidate) -> some View {
+        Button {
+            choosePDF(item)
+        } label: {
+            PublisherPDFImportLabel()
+        }
+        .buttonStyle(.bordered).disabled(search.importingID != nil)
     }
 
     private func versionLabel(for item: PaperCandidate) -> String {

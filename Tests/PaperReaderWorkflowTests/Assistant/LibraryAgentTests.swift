@@ -1564,7 +1564,8 @@ private actor PublicationWorkflowFixture: PaperDiscovery {
     }
 }
 
-@Test @MainActor func agentPresentsPublicationOnlyAndHonorsExplicitSourceWithoutPreparingImport() async throws {
+@Test(arguments: [false, true]) @MainActor
+func publicationCardImportsTheSelectedPDFOrOpensTheMatchingShelfImport(importFromShelf: Bool) async throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: root) }
     let reader = try await makeAgentReader(root)
@@ -1574,7 +1575,7 @@ private actor PublicationWorkflowFixture: PaperDiscovery {
         case 1: return tool("search_online", #"{"query":"fixture","source":"crossref"}"#, id: "crossref")
         case 2:
             let json = try #require(messages.last?.content)
-            #expect(json.contains("publication_page_only"))
+            #expect(json.contains("select_local_pdf"))
             #expect(!json.contains("candidate_id"))
             return try present(candidateResultIDs(in: messages, callID: "crossref"), id: "show")
         default: return .init(role: "assistant", content: "已找到正式发表版本。")
@@ -1591,7 +1592,29 @@ private actor PublicationWorkflowFixture: PaperDiscovery {
     let scopes = await model.requestLimits
     #expect(scopes.allSatisfy { $0.availableToolNames?.contains("prepare_import") == false })
     agent.confirmImport(cardID: card.id)
+    let file = root.appendingPathComponent("user-selected.pdf")
+    try DemoPaper.write(to: file)
+    agent.importPublisherPDF(file, cardID: UUID())
+    #expect(agent.importTasks.isEmpty && reader.state.papers.isEmpty)
+    if importFromShelf {
+        _ = try await reader.importPublisherPDF(file, for: discovery.publication)
+    } else {
+        agent.importPublisherPDF(root.appendingPathComponent("missing.pdf"), cardID: card.id)
+        try await eventually { agent.card(card.id)?.importState == .failed }
+        #expect(reader.state.papers.isEmpty)
+        agent.importPublisherPDF(file, cardID: card.id)
+        agent.importPublisherPDF(file, cardID: card.id)
+        try await eventually { agent.card(card.id)?.importState == .imported }
+    }
+    let paper = try #require(reader.state.papers.first)
+    let completed = try #require(agent.card(card.id))
+    #expect(reader.state.papers.count == 1 && reader.selectedPaperID == nil)
+    #expect(completed.importState == .imported && completed.paperID == paper.id)
+    #expect(agent.canOpen(completed) && agent.open(cardID: card.id))
+    #expect(reader.selectedPaperID == paper.id)
+    #expect(FileManager.default.fileExists(atPath: file.path))
     #expect(await discovery.downloads.isEmpty)
+    #expect(await model.requests.count == 3)
 }
 
 @Test @MainActor func relatedWorkUsesCurrentPaperAndKeepsVersionChoiceBoundToDownloadAndFollowUp() async throws {
@@ -1631,13 +1654,36 @@ private actor PublicationWorkflowFixture: PaperDiscovery {
     #expect(parent.searchQuery == nil && version.searchQuery == nil)
     #expect(!parent.canImport && version.canImport && version.sourceName == "arXiv")
     #expect(await discovery.downloads.isEmpty)
+    let file = root.appendingPathComponent("publisher.pdf")
+    try DemoPaper.write(to: file)
+    agent.importPublisherPDF(file, cardID: version.id)
+    #expect(agent.importTasks.isEmpty)
+    // The chosen publication waits for the library. The preprint can queue and cancel independently.
+    reader.isImporting = true
+    agent.importPublisherPDF(file, cardID: parent.id)
+    agent.confirmImport(cardID: version.id)
+    #expect(agent.card(parent.id)?.importState == .importing)
+    #expect(agent.card(version.id)?.importState == .queued)
+    agent.cancelImport(cardID: version.id)
+    reader.isImporting = false
+    try await eventually { agent.card(parent.id)?.importState == .imported }
+    #expect(reader.importedPaperID(for: discovery.publication) == agent.card(parent.id)?.paperID)
+    #expect(reader.importedPaperID(for: discovery.version) == nil && agent.card(version.id)?.importState == .cancelled)
     agent.confirmImport(cardID: version.id)
     try await eventually { agent.card(version.id)?.importState == .failed }
     #expect(await discovery.downloads == [discovery.version.id])
-    #expect(agent.card(parent.id)?.importState == .unprepared)
+    #expect(agent.card(parent.id)?.importState == .imported)
+    agent.importPublisherPDF(file, cardID: version.id)
+    try await eventually { agent.card(version.id)?.importState == .imported }
+    #expect(agent.card(parent.id)?.paperID == agent.card(version.id)?.paperID)
+    #expect(reader.importedPaperID(for: discovery.version, includeUserLinked: false) == nil)
+    #expect(await discovery.downloads == [discovery.version.id])
     #expect(agent.prepareFollowUp(cardID: version.id))
     agent.send("以这个预印本为起点继续找", referencing: version.id)
     try await eventually { !agent.isRunning }
     #expect(await discovery.seedSource == discovery.version.id)
     #expect(await discovery.queriedScope == nil)
+    let freshGroup = try #require(agent.turns.last?.cards.first)
+    let freshVersion = try #require(freshGroup.alternateVersionIDs.first.flatMap { agent.card($0) })
+    #expect(freshVersion.canImport && freshVersion.importState == .unprepared)
 }

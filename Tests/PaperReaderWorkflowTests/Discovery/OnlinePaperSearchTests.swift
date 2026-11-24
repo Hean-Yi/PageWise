@@ -16,6 +16,7 @@ private actor InlineDiscoveryFixture: PaperDiscovery {
     let holdSearch: Bool
     let holdDownload: Bool
     let searchResults: [PaperCandidate]
+    let initialResults: [PaperCandidate]?
     var pendingSearch: [String: CheckedContinuation<[PaperCandidate], Never>] = [:]
     var pendingDownload: CheckedContinuation<Void, Never>?
     var downloads = 0
@@ -24,12 +25,19 @@ private actor InlineDiscoveryFixture: PaperDiscovery {
     var returnedURL: URL?
     init(
         source: URL? = nil, holdSearch: Bool = false, holdDownload: Bool = false,
-        searchResults: [PaperCandidate] = [onlineFixtureCandidate()]
+        searchResults: [PaperCandidate] = [onlineFixtureCandidate()], initialResults: [PaperCandidate]? = nil
     ) {
         self.source = source
         self.holdSearch = holdSearch
         self.holdDownload = holdDownload
         self.searchResults = searchResults
+        self.initialResults = initialResults
+    }
+    func discover(
+        _ query: String, scope: PaperSearchScope, limit: Int, onUpdate: @Sendable (OnlineDiscoveryResult) async -> Void
+    ) async throws -> OnlineDiscoveryResult {
+        if let initialResults { await onUpdate(.init(candidates: initialResults)) }
+        return .init(candidates: try await search(query))
     }
     func search(_ query: String) async throws -> [PaperCandidate] {
         if let searchFailure { throw searchFailure }
@@ -51,6 +59,9 @@ private actor InlineDiscoveryFixture: PaperDiscovery {
     }
     func releaseSearch(_ query: String, number: Int) {
         pendingSearch.removeValue(forKey: query)?.resume(returning: [onlineFixtureCandidate(number)])
+    }
+    func releaseSearch(_ query: String, results: [PaperCandidate]) {
+        pendingSearch.removeValue(forKey: query)?.resume(returning: results)
     }
     func releaseDownload() {
         pendingDownload?.resume()
@@ -349,7 +360,7 @@ private struct OnlineToolReplyEcho: AgentCompleting {
     #expect(restarted.state.paperShelfIDs.isEmpty)
 }
 
-@MainActor @Test func onlinePublisherCardCanImportSelectedVersionAndKeepsMetadataOnlyCardReadOnly() async throws {
+@MainActor @Test func onlineAutomaticDownloadRequiresAnOpenPDFForTheSelectedVersion() async throws {
     let model = try await onlineModel()
     defer { try? FileManager.default.removeItem(at: model.root) }
     let source = model.root.appendingPathComponent("fixture.pdf")
@@ -387,6 +398,179 @@ private struct OnlineToolReplyEcho: AgentCompleting {
     let restarted = try ReaderModel(root: model.root)
     await restarted.load()
     #expect(restarted.state.papers.first?.onlineSource == paper.onlineSource)
+}
+
+@MainActor @Test func publisherFileSelectionImportsTheRegisteredVersionIntoTheTargetShelfAndOpensItAfterRestart()
+    async throws
+{
+    let model = try await onlineModel()
+    defer { try? FileManager.default.removeItem(at: model.root) }
+    let pdf = model.root.appendingPathComponent("reader-copy.pdf")
+    try DemoPaper.write(to: pdf)
+    let first = try #require(await model.createShelf(name: "First"))
+    let second = try #require(await model.createShelf(name: "Second"))
+    let publication = PaperCandidate(
+        id: "https://doi.org/10.1234/edition", title: "Published edition", authors: "Ada", year: "2025",
+        source: .crossref)
+    var preprint = onlineFixtureCandidate()
+    preprint.alternateVersions = [publication]
+    let discovery = InlineDiscoveryFixture(searchResults: [preprint])
+    let search = OnlinePaperSearch(reader: model, discovery: discovery)
+    var submitted = publication
+    submitted.title = "Untrusted callback title"
+    search.open(shelfID: first)
+    search.query = "edition"
+    search.search()
+    await search.searchTask?.value
+    #expect(!search.choosePDF(for: preprint))
+    search.importSelectedPDF(pdf)
+    #expect(search.importTask == nil)
+    #expect(search.choosePDF(for: submitted))
+    search.importSelectedPDF(pdf)
+    search.open(shelfID: second)
+    #expect(search.targetShelfID == first)
+    await search.importTask?.value
+    let id = try #require(search.importedPaperID(for: publication))
+    #expect(search.importedPaperID(for: preprint) == nil)
+    #expect(model.selectedPaperID == nil)
+    #expect(model.state.papers.first?.title == publication.title)
+    #expect(model.state.shelfID(for: id) == first)
+    #expect(FileManager.default.fileExists(atPath: pdf.path))
+    search.importSelectedPDF(pdf)
+    #expect(search.importTask == nil)
+
+    let restarted = try ReaderModel(root: model.root, credentials: WorkflowCredentials())
+    await restarted.load()
+    let restoredSearch = OnlinePaperSearch(reader: restarted, discovery: discovery)
+    restoredSearch.open(shelfID: first)
+    restoredSearch.query = "edition"
+    restoredSearch.search()
+    await restoredSearch.searchTask?.value
+    #expect(restoredSearch.importedPaperID(for: publication) == id)
+    restoredSearch.openImported(publication)
+    #expect(restarted.selectedPaperID == id)
+    restoredSearch.open(shelfID: second)
+    restoredSearch.search()
+    await restoredSearch.searchTask?.value
+    #expect(restoredSearch.importedPaperID(for: publication) == nil)
+    #expect(restoredSearch.choosePDF(for: publication))
+    restoredSearch.importSelectedPDF(pdf)
+    await restoredSearch.importTask?.value
+    #expect(restoredSearch.importedPaperID(for: publication) == id)
+    #expect(restarted.state.papers.count == 1 && restarted.state.shelfID(for: id) == second)
+    #expect(await discovery.downloads == 0)
+}
+
+@MainActor @Test func publisherFileSelectionCanCancelAndRetryWithoutLateWritesOrDownloads() async throws {
+    let model = try await onlineModel()
+    defer { try? FileManager.default.removeItem(at: model.root) }
+    let pdf = model.root.appendingPathComponent("reader-copy.pdf")
+    try DemoPaper.write(to: pdf)
+    let candidate = PaperCandidate(
+        id: "https://doi.org/10.1234/edition", title: "Selected publication", authors: "", year: "", source: .crossref)
+    let discovery = InlineDiscoveryFixture(searchResults: [candidate])
+    let search = OnlinePaperSearch(reader: model, discovery: discovery)
+    search.open(shelfID: nil)
+    search.query = "edition"
+    search.search()
+    await search.searchTask?.value
+    #expect(search.choosePDF(for: candidate))
+    search.cancelFileSelection()
+    search.importSelectedPDF(pdf)
+    search.fileSelectionFailed(ReaderError.message("旧文件选择器"))
+    #expect(search.importTask == nil && search.importErrors.isEmpty && model.state.papers.isEmpty)
+    #expect(search.choosePDF(for: candidate))
+    search.importSelectedPDF(pdf)
+    search.close()
+    await search.importTask?.value
+    #expect(!search.isExpanded && !search.closing)
+    #expect(search.imported.isEmpty && model.state.papers.isEmpty)
+    search.importSelectedPDF(pdf)
+    #expect(search.importTask == nil)
+
+    search.open(shelfID: nil)
+    #expect(search.choosePDF(for: candidate))
+    search.importSelectedPDF(model.root.appendingPathComponent("missing.pdf"))
+    await search.importTask?.value
+    #expect(search.importErrors[candidate.id] != nil && search.imported.isEmpty)
+    #expect(search.choosePDF(for: candidate))
+    search.importSelectedPDF(pdf)
+    await search.importTask?.value
+    #expect(search.importErrors[candidate.id] == nil && search.importedPaperID(for: candidate) != nil)
+    #expect(await discovery.downloads == 0)
+}
+
+@MainActor @Test(arguments: [false, true]) func publisherFileSelectionKeepsTheEditionWhenLaterIndexesRerankIt(
+    gainsDownload: Bool
+) async throws {
+    let model = try await onlineModel()
+    defer { try? FileManager.default.removeItem(at: model.root) }
+    let pdf = model.root.appendingPathComponent("reader-copy.pdf")
+    try DemoPaper.write(to: pdf)
+    let chosen = PaperCandidate(
+        id: "https://doi.org/10.1234/edition", title: "Early title", authors: "", year: "", source: .crossref)
+    let discovery = InlineDiscoveryFixture(source: pdf, holdSearch: true, initialResults: [chosen])
+    let search = OnlinePaperSearch(reader: model, discovery: discovery)
+    search.open(shelfID: nil)
+    search.query = "edition"
+    search.search()
+    while await discovery.pendingSearch["edition"] == nil { await Task.yield() }
+    #expect(search.choosePDF(for: chosen))
+    var final = onlineFixtureCandidate()
+    var updated = chosen
+    if gainsDownload {
+        updated.title = "Later record"
+        updated.pdfURL = URL(string: "https://link.springer.com/content/pdf/10.1234/edition.pdf")
+        #expect(updated.canDownload)
+        final.alternateVersions = [updated]
+    }
+    await discovery.releaseSearch("edition", results: [final])
+    await search.searchTask?.value
+    #expect(search.results.flatMap { [$0] + $0.alternateVersions }.contains { $0.id == chosen.id })
+    search.importSelectedPDF(pdf)
+    await search.importTask?.value
+    let paper = try #require(model.state.papers.first)
+    #expect(model.state.papers.count == 1 && paper.title == chosen.title && paper.onlineSource == nil)
+    #expect(search.importedPaperID(for: chosen) == paper.id && search.importedPaperID(for: final) == nil)
+    #expect(await discovery.downloads == 0)
+    if gainsDownload {
+        #expect(search.importedPaperID(for: updated) == nil)
+        search.confirmImport(updated)
+        await search.importTask?.value
+        #expect(await discovery.downloads == 1)
+        #expect(search.importedPaperID(for: updated) == paper.id)
+        #expect(model.state.papers.first?.onlineSource?.candidateID == updated.id)
+    }
+}
+
+@MainActor @Test func failedOpenDownloadOffersFileSelectionAndOpensTheImportedCopy() async throws {
+    let model = try await onlineModel()
+    defer { try? FileManager.default.removeItem(at: model.root) }
+    let pdf = model.root.appendingPathComponent("reader-copy.pdf")
+    try DemoPaper.write(to: pdf)
+    let candidate = PaperCandidate(
+        id: "https://doi.org/10.18653/v1/2025.acl-long.12", title: "Open publication", authors: "", year: "2025",
+        source: .crossref)
+    let discovery = InlineDiscoveryFixture(source: pdf, searchResults: [candidate])
+    await discovery.setFailures(download: true)
+    let search = OnlinePaperSearch(reader: model, discovery: discovery)
+    search.open(shelfID: nil)
+    search.query = "edition"
+    search.search()
+    await search.searchTask?.value
+    #expect(!search.choosePDF(for: candidate))
+    search.confirmImport(candidate)
+    await search.importTask?.value
+    #expect(search.importErrors[candidate.id] != nil)
+    #expect(search.choosePDF(for: candidate))
+    search.importSelectedPDF(pdf)
+    await search.importTask?.value
+    let paper = try #require(model.state.papers.first)
+    #expect(search.importErrors[candidate.id] == nil && search.importedPaperID(for: candidate) == paper.id)
+    #expect(paper.onlineSource == nil)
+    search.openImported(candidate)
+    #expect(model.selectedPaperID == paper.id && model.state.papers.count == 1)
+    #expect(await discovery.downloads == 1)
 }
 
 @MainActor @Test func identicalPublisherPDFGainsPinnedPreprintSourceWithoutLosingCitationOrDuplicatingPaper()

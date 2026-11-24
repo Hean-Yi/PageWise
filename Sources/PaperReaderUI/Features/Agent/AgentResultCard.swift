@@ -16,9 +16,13 @@ struct AgentResultCard: View {
         [group] + group.alternateVersionIDs.compactMap { agent.card($0) }
     }
 
-    private var card: AgentCard {
-        guard let selectedVersion, group.alternateVersionIDs.contains(selectedVersion) else { return group }
-        return agent.card(selectedVersion) ?? group
+    private var selectedCard: AgentCard {
+        if let selectedVersion, group.alternateVersionIDs.contains(selectedVersion),
+            let card = agent.card(selectedVersion)
+        {
+            return card
+        }
+        return agent.currentImportCard(group)
     }
 
     private func versionLabel(_ item: AgentCard) -> String {
@@ -28,7 +32,7 @@ struct AgentResultCard: View {
         return [item.sourceName, version, item.year].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
     }
 
-    private var purpose: (title: String, icon: String) {
+    private func purpose(for card: AgentCard) -> (title: String, icon: String) {
         switch card.readingNoteID == nil ? result.purpose : .readingNote {
         case .recommendation: ("推荐论文", "bookmark")
         case .citation: ("引用原文", "quote.opening")
@@ -39,23 +43,27 @@ struct AgentResultCard: View {
         }
     }
 
-    private var metadata: String? {
+    private func metadata(for card: AgentCard) -> String? {
         if card.kind == .onlineCandidate {
-            return [card.sourceName, card.year].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
+            let link =
+                !card.hasDownload || card.importState == .failed
+                ? PaperCandidate.landingPageLabel(for: card.sourceURL) : nil
+            return [card.sourceName, card.year, link].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
         }
         return card.sourcePage.map { "第 \($0) 页" }
     }
 
     var body: some View {
+        let card = selectedCard
         if card.readingNoteID != nil && !agent.canOpen(card) {
             Label("笔记已删除或原文不可用", systemImage: "note.text")
                 .font(.caption).foregroundStyle(ReaderTheme.muted)
         } else {
-            resultTile
+            resultTile(for: card)
         }
     }
 
-    private var resultTile: some View {
+    private func resultTile(for card: AgentCard) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             if !group.alternateVersionIDs.isEmpty {
                 Menu {
@@ -76,21 +84,14 @@ struct AgentResultCard: View {
                 .menuStyle(.borderlessButton).fixedSize().font(.caption)
                 .padding(.leading, 12).padding(.top, 8).accessibilityLabel("选择论文版本")
             }
-            primaryAction
+            primaryAction(for: card)
             if let error = card.importError {
                 Text(error).font(.caption).foregroundStyle(ReaderTheme.muted)
                     .padding(.horizontal, 12).padding(.bottom, 7).fixedSize(horizontal: false, vertical: true)
             }
             HStack(spacing: 12) {
                 if card.kind == .onlineCandidate {
-                    if card.hasDownload || card.importState == .imported {
-                        importAction
-                    } else if let url = card.sourceURL {
-                        Link(destination: url) {
-                            Label(url.host == "doi.org" ? "查看出版页" : "查看来源页", systemImage: "arrow.up.right")
-                        }
-                        .buttonStyle(.bordered)
-                    }
+                    importAction(for: card)
                     Spacer(minLength: 4)
                 }
                 Button {
@@ -103,30 +104,35 @@ struct AgentResultCard: View {
                 .disabled(agent.isRunning)
             }
             .labelStyle(.titleAndIcon).font(.caption).padding(.horizontal, 12).padding(.bottom, 9)
+            if card.hasDownload && card.importState == .failed {
+                fileImportAction(for: card).font(.caption).padding(.horizontal, 12).padding(.bottom, 9)
+            }
         }
         .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous)).assistantToolSurface()
     }
 
-    @ViewBuilder private var primaryAction: some View {
-        if card.kind == .onlineCandidate && !card.hasDownload {
-            label(accessory: nil)
-        } else if card.kind == .onlineCandidate, let url = card.sourceURL {
+    @ViewBuilder private func primaryAction(for card: AgentCard) -> some View {
+        if card.kind == .onlineCandidate, let url = card.sourceURL {
             Button {
                 openURL(url)
             } label: {
-                label(accessory: "arrow.up.right")
+                label(for: card, accessory: "arrow.up.right")
             }
-            .buttonStyle(AssistantToolButtonStyle(embedded: true)).help("打开《\(card.title)》的来源页")
+            .buttonStyle(AssistantToolButtonStyle(embedded: true)).help(PaperCandidate.landingPageLabel(for: url))
             .accessibilityHint("在浏览器中查看论文")
         } else if agent.canOpen(card) {
-            Button(action: open) { label(accessory: "chevron.forward") }
-                .buttonStyle(AssistantToolButtonStyle(embedded: true)).help(card.title)
-                .accessibilityHint("在阅读器中打开")
+            Button {
+                open(card)
+            } label: {
+                label(for: card, accessory: "chevron.forward")
+            }
+            .buttonStyle(AssistantToolButtonStyle(embedded: true)).help(card.title)
+            .accessibilityHint("在阅读器中打开")
         } else if !card.excerpt.isEmpty {
             Button {
                 showsExcerpt.toggle()
             } label: {
-                label(accessory: showsExcerpt ? "chevron.up" : "chevron.down")
+                label(for: card, accessory: showsExcerpt ? "chevron.up" : "chevron.down")
             }
             .buttonStyle(AssistantToolButtonStyle(embedded: true))
             .accessibilityHint(showsExcerpt ? "收起摘录" : "查看完整摘录")
@@ -135,11 +141,12 @@ struct AgentResultCard: View {
                     .padding(.horizontal, 12).padding(.bottom, 10)
             }
         } else {
-            label(accessory: nil)
+            label(for: card, accessory: nil)
         }
     }
 
-    private func label(accessory: String?) -> some View {
+    private func label(for card: AgentCard, accessory: String?) -> some View {
+        let purpose = purpose(for: card)
         let detail: String?
         if let id = card.readingNoteID, let paperID = card.paperID {
             detail = agent.reader.referencedReadingNote(id: id, paperID: paperID).map { note in
@@ -151,7 +158,8 @@ struct AgentResultCard: View {
         return VStack(alignment: .leading, spacing: 0) {
             AssistantToolTile(
                 tool: purpose.title, systemImage: purpose.icon, title: card.title, detail: detail,
-                metadata: metadata, accessory: accessory, detailLines: result.purpose == .readingNote ? 1 : 2,
+                metadata: metadata(for: card), accessory: accessory,
+                detailLines: result.purpose == .readingNote ? 1 : 2,
                 searchQuery: card.searchQuery)
             if let reason = result.reason, !reason.isEmpty {
                 Text(reason).font(.caption).lineSpacing(2).foregroundStyle(ReaderTheme.ink)
@@ -163,15 +171,15 @@ struct AgentResultCard: View {
         .contentShape(Rectangle()).accessibilityElement(children: .combine)
     }
 
-    private func open() {
+    private func open(_ card: AgentCard) {
         if agent.open(cardID: card.id) { didNavigate() }
     }
 
-    @ViewBuilder private var importAction: some View {
+    @ViewBuilder private func importAction(for card: AgentCard) -> some View {
         switch card.importState {
         case .queued, .downloading, .importing:
             if card.importState == .queued {
-                Label("等待下载", systemImage: "clock").foregroundStyle(ReaderTheme.muted)
+                Label("等待导入", systemImage: "clock").foregroundStyle(ReaderTheme.muted)
             } else {
                 ProgressView().controlSize(.mini)
                 Text(card.importState == .downloading ? "下载中" : "正在入库").foregroundStyle(ReaderTheme.muted)
@@ -184,18 +192,35 @@ struct AgentResultCard: View {
             }
             .buttonStyle(.borderless).help(cancelTitle).accessibilityLabel("\(cancelTitle) \(card.title)")
         case .imported:
-            Button(action: open) { Label("在书库打开", systemImage: "books.vertical") }
-                .buttonStyle(.bordered).disabled(!agent.canOpen(card))
-                .accessibilityHint(card.title)
-        case .unprepared, .ready, .failed, .cancelled:
-            let title = card.importState == .failed || card.importState == .cancelled ? "重新下载" : "下载并导入"
             Button {
-                agent.confirmImport(cardID: card.id)
+                open(card)
             } label: {
-                Label(title, systemImage: "arrow.down.to.line")
+                Label("在书库打开", systemImage: "books.vertical")
             }
-            .buttonStyle(.borderedProminent).tint(ReaderTheme.accent).disabled(!card.canImport)
-            .help("下载并添加到书库").accessibilityHint(card.title)
+            .buttonStyle(.bordered).disabled(!agent.canOpen(card))
+            .accessibilityHint(card.title)
+        case .unprepared, .ready, .failed, .cancelled:
+            let cardID = card.id
+            if card.hasDownload {
+                let title = card.importState == .failed || card.importState == .cancelled ? "重新下载" : "下载并导入"
+                Button {
+                    agent.confirmImport(cardID: cardID)
+                } label: {
+                    Label(title, systemImage: "arrow.down.to.line")
+                }
+                .buttonStyle(.borderedProminent).tint(ReaderTheme.accent).disabled(!card.canImport)
+                .help("下载并添加到书库").accessibilityHint(card.title)
+            } else {
+                fileImportAction(for: card)
+            }
         }
+    }
+
+    private func fileImportAction(for card: AgentCard) -> some View {
+        PublisherPDFImportButton(
+            importFile: { agent.importPublisherPDF($0, cardID: card.id) },
+            onFailure: { agent.publisherFileSelectionFailed($0, cardID: card.id) }
+        )
+        .id(card.id).accessibilityHint(card.title)
     }
 }

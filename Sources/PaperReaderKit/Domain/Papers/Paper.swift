@@ -5,6 +5,8 @@ public struct Paper: Identifiable, Codable, Sendable {
     public var title: String
     public var sourceURL: String?
     public var onlineSource: OnlinePaperSource?
+    /// Bibliographic pages the reader associated with this file. They do not establish its edition.
+    public var linkedPublicationURLs: [String]?
     /// Older online imports may only have their provider URL or an existing source reflow checkpoint.
     public var usesSourceReflow: Bool {
         onlineSource != nil || sourceURL != nil || reflowJob?.supportsContinuation == true || hasPublishedSourceReading

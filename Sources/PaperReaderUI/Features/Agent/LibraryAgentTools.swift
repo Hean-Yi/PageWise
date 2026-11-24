@@ -248,7 +248,7 @@ extension LibraryAgent {
                 notice: found.isEmpty ? "Semantic Scholar 未返回《\(String(seed.title.prefix(300)))》的推荐。" : nil)
         case .prepareImport(let id):
             guard let candidate = candidates[id] else { throw ReaderError.message("候选ID不属于本次会话，请先在线检索。") }
-            guard candidate.canDownload else { throw ReaderError.message("可以在结果卡打开该记录的来源页。") }
+            guard candidate.canDownload else { throw ReaderError.message("请在结果卡查看来源页，取得 PDF 后在同一卡片选择文件导入。") }
             onSubject(candidate.title)
             var card = candidateCard(candidate, id: id)
             if let reference = turns.last?.referencedCardID.flatMap({ self.card($0) }), reference.candidateID == id {
@@ -261,7 +261,7 @@ extension LibraryAgent {
             case .downloading: message = "正在下载；已有导入任务。"
             case .importing: message = "正在解析并保存；已有导入任务。"
             case .imported: message = "候选已在书库，可打开已有论文。"
-            case .failed: message = "上次导入失败，等待用户点击重试。"
+            case .failed: message = "上次导入失败，可在卡片重新下载或选择已取得的 PDF 入库。"
             case .cancelled: message = "上次导入已停止，等待用户点击重试。"
             case .unprepared, .ready: message = "等待用户点击确认；尚未下载。"
             }
@@ -323,6 +323,7 @@ extension LibraryAgent {
                     item["source"] = version.sourceName
                     item["year"] = version.year
                     item["candidate_id"] = version.hasDownload ? version.candidateID : nil
+                    item["import_status"] = version.toolImportStatus
                     return item
                 }
             }
@@ -334,6 +335,7 @@ extension LibraryAgent {
             if let candidate = records[card.id], let id = card.candidateID {
                 candidates[id] = candidate
                 candidateIDs[candidate.id] = id
+                if let paperID = card.paperID { paperRegistry.insert(paperID) }
             }
         }
         return outcome
@@ -353,15 +355,12 @@ extension LibraryAgent {
             let previous = turns.reversed().lazy.compactMap({ $0.cards.last { $0.candidateID == id } }).first
         {
             card.searchQuery = previous.searchQuery
-            card.importState = previous.importState
-            card.importError = previous.importError
-            card.paperID = previous.paperID
+            if previous.importState != .imported {
+                card.importState = previous.importState
+                card.importError = previous.importError
+            }
         }
-        if let paperID = importedPapers[id], reader.state.papers.contains(where: { $0.id == paperID }) {
-            card.importState = .imported
-            card.paperID = paperID
-        }
-        return card
+        return currentImportCard(card, candidate: candidate)
     }
 
     private func result(_ pairs: [(ToolRecord, AgentCard)], truncated: Bool = false, message: String? = nil) throws
@@ -411,6 +410,14 @@ private struct ToolPayload: Encodable {
     }
 }
 
+extension AgentCard {
+    var toolImportStatus: String? {
+        guard kind == .onlineCandidate else { return nil }
+        if !hasDownload && [.unprepared, .ready].contains(importState) { return "select_local_pdf" }
+        return importState.rawValue
+    }
+}
+
 private struct ToolRecord: Encodable {
     var resultID: UUID
     var paperID: String?
@@ -441,9 +448,7 @@ private struct ToolRecord: Encodable {
         blockID = card.blockID?.uuidString
         text = card.excerpt.isEmpty ? nil : card.excerpt
         sourceURL = card.sourceURL?.absoluteString
-        if card.kind == .onlineCandidate {
-            importStatus = card.hasDownload ? card.importState.rawValue : "publication_page_only"
-        }
+        importStatus = card.toolImportStatus
     }
     enum CodingKeys: String, CodingKey {
         case title, text, authors, year, source, versions

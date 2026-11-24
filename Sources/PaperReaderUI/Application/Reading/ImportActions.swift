@@ -1,7 +1,51 @@
 import Foundation
 import PaperReaderKit
 
+private enum PDFImportOrigin {
+    case local
+    case downloaded(DownloadedPublication)
+    case selectedForPublication(PaperCandidate)
+}
+
+private struct ImportSaveFailure: LocalizedError {
+    let errorDescription: String?
+}
+
 extension ReaderModel {
+    /// A downloadable result can require a verified source so a user-linked bibliography entry can still gain one.
+    public func importedPaperID(
+        for candidate: PaperCandidate, includeUserLinked: Bool = true,
+        matching isInScope: (Paper) -> Bool = { _ in true }
+    ) -> UUID? {
+        guard let id = candidate.verified?.id else { return nil }
+        if let downloaded = state.papers.first(where: {
+            ($0.sourceURL == id || $0.onlineSource?.candidateID == id) && !pendingImportIDs.contains($0.id)
+                && isInScope($0)
+        }) {
+            return downloaded.id
+        }
+        guard includeUserLinked else { return nil }
+        return state.papers.first {
+            $0.linkedPublicationURLs?.contains(id) == true && !pendingImportIDs.contains($0.id) && isInScope($0)
+        }?.id
+    }
+
+    @discardableResult public func importPublisherPDF(
+        _ url: URL, for candidate: PaperCandidate, shelfID: UUID? = nil, moveDuplicateToShelf: Bool = false
+    ) async throws -> UUID {
+        guard let candidate = candidate.verified else { throw ReaderError.message("论文来源无效，未导入。") }
+        try beginPDFImport()
+        defer { endPDFImport() }
+        do {
+            return try await importPDF(
+                at: url, origin: .selectedForPublication(candidate), shelfID: shelfID,
+                moveDuplicateToShelf: moveDuplicateToShelf)
+        } catch {
+            status = Task.isCancelled ? "已停止导入" : "导入未完成"
+            throw error
+        }
+    }
+
     @discardableResult public func importURLs(
         _ urls: [URL], selectAfterImport: Bool = true, metadata: PaperCandidate? = nil, shelfID: UUID? = nil,
         moveDuplicateToShelf: Bool = false,
@@ -23,80 +67,23 @@ extension ReaderModel {
             message = "论文来源无效，未导入。"
             return []
         }
-        guard loaded else {
-            message = "书库尚未成功打开，不能导入以免覆盖已有资料。"
+        do { try beginPDFImport() } catch {
+            message = error.localizedDescription
             return []
         }
-        guard !isImporting else {
-            message = "请等待当前导入完成。"
-            return []
-        }
-        isImporting = true
+        defer { endPDFImport() }
+        let origin = publication.map(PDFImportOrigin.downloaded) ?? .local
         var importedIDs: [UUID] = []
-        defer {
-            isImporting = false
-            importProgress = nil
-        }
         for url in urls {
             do {
-                status = "正在保存 \(url.lastPathComponent)…"
-                importProgress = "准备导入"
-                var imported = try await importer.storeOriginal(at: url)
-                importProgress = "提交书库"
-                let importedDirectory = root.appendingPathComponent(imported.originalPath).deletingLastPathComponent()
-                var retained = false
-                defer { if !retained { try? FileManager.default.removeItem(at: importedDirectory) } }
-                try Task.checkCancellation()
-                if let existing = state.papers.first(where: { $0.digest == imported.digest }) {
-                    if let publication, shouldAttachSource(of: publication, toIdenticalPDF: existing) {
-                        let attached = try await OnlineSourceStore().attach(publication, to: existing, root: root)
-                        guard var latest = state.papers.first(where: { $0.id == existing.id }) else {
-                            throw CancellationError()
-                        }
-                        latest.onlineSource = attached.onlineSource
-                        latest.canReflow = attached.canReflow
-                        if existing.onlineSource?.originalPDFOnly == true, let oldNotice = existing.onlineSource?.notice
-                        {
-                            latest.warnings.removeAll { $0 == oldNotice }
-                        }
-                        latest.warnings = Array(Set(latest.warnings + attached.warnings)).sorted()
-                        guard await save(cancellable: true, publishingReflow: latest) else {
-                            if let path = attached.onlineSource?.archivePath {
-                                try? FileManager.default.removeItem(at: root.appendingPathComponent(path))
-                            }
-                            return importedIDs
-                        }
-                    }
-                    if shelfID != nil || moveDuplicateToShelf {
-                        guard await movePaper(existing.id, to: shelfID) else { return importedIDs }
-                    }
-                    // The unused duplicate directory is removed by the staging cleanup above.
-                    if selectAfterImport { select(existing.id) }
-                    importedIDs.append(existing.id)
-                    status = "已打开书库中的相同论文"
-                    continue
-                }
-                if let metadata {
-                    imported.title = metadata.title
-                    imported.sourceURL = metadata.id
-                }
-                if let publication {
-                    imported = try await OnlineSourceStore().attach(publication, to: imported, root: root)
-                }
-                try Task.checkCancellation()
-                pendingImportIDs.insert(imported.id)
-                guard await save(cancellable: true, adding: imported, importShelfID: shelfID) else {
-                    pendingImportIDs.remove(imported.id)
-                    status = Task.isCancelled ? "已停止导入" : "导入未保存，请检查磁盘空间后重试"
-                    return importedIDs
-                }
-                retained = true
-                pendingImportIDs.remove(imported.id)
-                importedIDs.append(imported.id)
-                if selectAfterImport, !Task.isCancelled { select(imported.id) }
-                status = "已加入书库"
+                let id = try await importPDF(
+                    at: url, origin: origin, shelfID: shelfID, moveDuplicateToShelf: moveDuplicateToShelf)
+                importedIDs.append(id)
+                if selectAfterImport, !Task.isCancelled { select(id) }
             } catch is CancellationError {
                 status = "已停止导入"
+                return importedIDs
+            } catch is ImportSaveFailure {
                 return importedIDs
             } catch {
                 message = "导入失败：\(error.localizedDescription)"
@@ -104,6 +91,92 @@ extension ReaderModel {
             }
         }
         return importedIDs
+    }
+
+    private func beginPDFImport() throws {
+        guard loaded else { throw ReaderError.message("书库尚未成功打开，不能导入以免覆盖已有资料。") }
+        guard !isImporting else { throw ReaderError.message("请等待当前导入完成。") }
+        isImporting = true
+    }
+
+    private func endPDFImport() {
+        isImporting = false
+        importProgress = nil
+    }
+
+    private func importPDF(at url: URL, origin: PDFImportOrigin, shelfID: UUID?, moveDuplicateToShelf: Bool)
+        async throws
+        -> UUID
+    {
+        status = "正在保存 \(url.lastPathComponent)…"
+        importProgress = "准备导入"
+        var imported = try await importer.storeOriginal(at: url)
+        importProgress = "提交书库"
+        let importedDirectory = root.appendingPathComponent(imported.originalPath).deletingLastPathComponent()
+        var retained = false
+        defer { if !retained { try? FileManager.default.removeItem(at: importedDirectory) } }
+        try Task.checkCancellation()
+        if let existing = state.papers.first(where: { $0.digest == imported.digest }) {
+            var attachment: Paper?
+            var link: (paperID: UUID, url: String)?
+            switch origin {
+            case .downloaded(let publication) where shouldAttachSource(of: publication, toIdenticalPDF: existing):
+                let attached = try await OnlineSourceStore().attach(publication, to: existing, root: root)
+                guard var latest = state.papers.first(where: { $0.id == existing.id }) else {
+                    throw CancellationError()
+                }
+                latest.onlineSource = attached.onlineSource
+                latest.canReflow = attached.canReflow
+                if existing.onlineSource?.originalPDFOnly == true, let oldNotice = existing.onlineSource?.notice {
+                    latest.warnings.removeAll { $0 == oldNotice }
+                }
+                latest.warnings = Array(Set(latest.warnings + attached.warnings)).sorted()
+                attachment = latest
+            case .selectedForPublication(let candidate)
+            where existing.linkedPublicationURLs?.contains(candidate.id) != true:
+                link = (existing.id, candidate.id)
+            default:
+                break
+            }
+            let move: ShelfChange? =
+                shelfID != nil || moveDuplicateToShelf ? .move(paperID: existing.id, shelfID: shelfID) : nil
+            if move != nil || attachment != nil || link != nil {
+                let saved = await save(
+                    cancellable: true, shelfChange: move, publishingReflow: attachment, linkingPublication: link)
+                if !saved, let path = attachment?.onlineSource?.archivePath {
+                    try? FileManager.default.removeItem(at: root.appendingPathComponent(path))
+                }
+                try requireImportCommit(saved)
+            }
+            status = "论文已在书库中"
+            return existing.id
+        }
+        switch origin {
+        case .selectedForPublication(let candidate):
+            imported.title = candidate.title
+            imported.linkedPublicationURLs = [candidate.id]
+        case .downloaded(let publication):
+            imported.title = publication.candidate.title
+            imported.sourceURL = publication.candidate.id
+            imported = try await OnlineSourceStore().attach(publication, to: imported, root: root)
+        case .local:
+            break
+        }
+        try Task.checkCancellation()
+        let id = imported.id
+        pendingImportIDs.insert(id)
+        defer { pendingImportIDs.remove(id) }
+        try requireImportCommit(await save(cancellable: true, adding: imported, importShelfID: shelfID))
+        retained = true
+        status = "已加入书库"
+        return id
+    }
+
+    private func requireImportCommit(_ saved: Bool) throws {
+        guard !saved else { return }
+        try Task.checkCancellation()
+        status = "导入未保存，请检查磁盘空间后重试"
+        throw ImportSaveFailure(errorDescription: message ?? status)
     }
 
     private func shouldAttachSource(of download: DownloadedPublication, toIdenticalPDF paper: Paper) -> Bool {

@@ -29,7 +29,8 @@ public final class OnlinePaperSearch {
         if importStage == "本地处理", let progress = reader.importProgress { return progress }
         return importStage
     }
-    public private(set) var imported: [String: UUID] = [:]
+    private var sessionImports: [String: (paperID: UUID, hadDownload: Bool)] = [:]
+    public var imported: [String: UUID] { sessionImports.mapValues(\.paperID) }
     public private(set) var importErrors: [String: String] = [:]
     public private(set) var targetShelfID: UUID?
     public private(set) var closing = false
@@ -38,6 +39,8 @@ public final class OnlinePaperSearch {
     @ObservationIgnored private var generation = UUID()
     @ObservationIgnored var searchTask: Task<Void, Never>?
     @ObservationIgnored var importTask: Task<Void, Never>?
+    private var fileSelection: (candidate: PaperCandidate, awaitingFile: Bool)?
+    var selectedPublicationID: String? { fileSelection?.candidate.id }
 
     public init(reader: ReaderModel, discovery: any PaperDiscovery = FederatedPaperDiscovery.shared) {
         self.reader = reader
@@ -56,12 +59,13 @@ public final class OnlinePaperSearch {
             displayedResult = nil
             searched = false
             failure = nil
-            imported = [:]
+            sessionImports = [:]
             importErrors = [:]
         }
         // A paper may have been moved through the cover menu since the last query.
-        imported = imported.filter { _, id in
-            reader.state.papers.contains(where: { $0.id == id }) && reader.state.shelfID(for: id) == shelfID
+        sessionImports = sessionImports.filter { _, entry in
+            reader.state.papers.contains(where: { $0.id == entry.paperID })
+                && reader.state.shelfID(for: entry.paperID) == shelfID
         }
         contextNotice = nil
         isExpanded = true
@@ -79,6 +83,7 @@ public final class OnlinePaperSearch {
 
     public func cancelSearch() {
         generation = UUID()
+        fileSelection = nil
         searchTask?.cancel()
         searchTask = nil
         activeQuery = nil
@@ -129,7 +134,16 @@ public final class OnlinePaperSearch {
     private func apply(_ result: OnlineDiscoveryResult, generation: UUID) {
         guard generation == self.generation, !Task.isCancelled, let activeQuery else { return }
         var seen: Set<String> = []
-        let candidates = result.candidates.compactMap(\.verified).filter { seen.insert($0.id).inserted }
+        var candidates = result.candidates.compactMap(\.verified).filter { seen.insert($0.id).inserted }
+        // A later index can move the chosen edition into another card or beyond the result limit.
+        // Keep that edition visible while the file panel is open and when its import status changes.
+        if let selected = fileSelection?.candidate,
+            !candidates.contains(where: { card in
+                card.id == selected.id || card.alternateVersions.contains(where: { $0.id == selected.id })
+            })
+        {
+            candidates.append(selected)
+        }
         displayedResult = (activeQuery, candidates, result.notice)
     }
 
@@ -147,23 +161,68 @@ public final class OnlinePaperSearch {
 
     public func cancelImport() { importTask?.cancel() }
 
-    public func confirmImport(_ candidate: PaperCandidate) {
-        guard importTask == nil, !closing,
-            let candidate = results.lazy.flatMap({ [$0] + $0.alternateVersions }).first(where: { $0.id == candidate.id }
-            ),
-            candidate.canDownload
-        else { return }
-        if let id = imported[candidate.id], reader.state.papers.contains(where: { $0.id == id }),
-            reader.state.shelfID(for: id) == targetShelfID
+    func importedPaperID(for candidate: PaperCandidate) -> UUID? {
+        if let entry = sessionImports[candidate.id], entry.hadDownload || !candidate.canDownload,
+            reader.state.papers.contains(where: { $0.id == entry.paperID }),
+            reader.state.shelfID(for: entry.paperID) == targetShelfID
         {
-            return
+            return entry.paperID
         }
+        return reader.importedPaperID(for: candidate, includeUserLinked: !candidate.canDownload) {
+            reader.state.shelfID(for: $0.id) == targetShelfID
+        }
+    }
+
+    func openImported(_ candidate: PaperCandidate) {
+        if let id = importedPaperID(for: candidate) { reader.select(id) }
+    }
+
+    func choosePDF(for candidate: PaperCandidate) -> Bool {
+        guard isExpanded, !closing, importTask == nil, var candidate = registeredCandidate(candidate.id),
+            !candidate.canDownload || importErrors[candidate.id] != nil, importedPaperID(for: candidate) == nil
+        else { return false }
+        candidate.alternateVersions = []
+        fileSelection = (candidate, true)
+        return true
+    }
+
+    func importSelectedPDF(_ url: URL) {
+        guard isExpanded, let selection = fileSelection, selection.awaitingFile else { return }
+        fileSelection?.awaitingFile = false
+        startImport(selection.candidate, selectedPDF: url)
+    }
+
+    func cancelFileSelection() {
+        if fileSelection?.awaitingFile == true { fileSelection = nil }
+    }
+
+    func fileSelectionFailed(_ error: Error) {
+        guard isExpanded, !closing, let selection = fileSelection, selection.awaitingFile else { return }
+        fileSelection?.awaitingFile = false
+        importErrors[selection.candidate.id] = error.localizedDescription
+    }
+
+    private func registeredCandidate(_ id: String) -> PaperCandidate? {
+        results.lazy.flatMap { [$0] + $0.alternateVersions }.first { $0.id == id }
+    }
+
+    public func confirmImport(_ candidate: PaperCandidate) {
+        guard let candidate = registeredCandidate(candidate.id), candidate.canDownload else { return }
+        startImport(candidate, selectedPDF: nil)
+    }
+
+    private func startImport(_ candidate: PaperCandidate, selectedPDF: URL?) {
+        guard importTask == nil, !closing, selectedPDF != nil || importedPaperID(for: candidate) == nil else { return }
         let shelfID = targetShelfID
         guard shelfID == nil || reader.state.shelves.contains(where: { $0.id == shelfID }) else {
             importErrors[candidate.id] = "目标书架已删除，请关闭查找后从其他书架重试。"
             return
         }
-        importStage = candidate.source == .arxiv ? "下载 TeX 与原版 PDF" : "下载原版 PDF"
+        if selectedPDF != nil {
+            importStage = "本地处理"
+        } else {
+            importStage = candidate.source == .arxiv ? "下载 TeX 与原版 PDF" : "下载原版 PDF"
+        }
         importingID = candidate.id
         importErrors[candidate.id] = nil
         importTask = Task { [weak self] in
@@ -178,22 +237,28 @@ public final class OnlinePaperSearch {
                 }
             }
             do {
-                let download = try await self.discovery.downloadPublication(candidate)
-                let url = download.pdfURL
-                defer { try? FileManager.default.removeItem(at: url) }
                 try Task.checkCancellation()
-                self.importStage = "本地处理"
-                let ids = await self.reader.importURLs(
-                    [url], selectAfterImport: false, metadata: download.candidate, shelfID: shelfID,
-                    moveDuplicateToShelf: true,
-                    onlineDownload: download)
-                if let id = ids.first {
-                    // A committed import remains successful even if cancellation arrived during commit.
-                    self.imported[candidate.id] = id
+                let id: UUID
+                if let selectedPDF {
+                    id = try await self.reader.importPublisherPDF(
+                        selectedPDF, for: candidate, shelfID: shelfID, moveDuplicateToShelf: true)
                 } else {
+                    let download = try await self.discovery.downloadPublication(candidate)
+                    let url = download.pdfURL
+                    defer { try? FileManager.default.removeItem(at: url) }
                     try Task.checkCancellation()
-                    throw ReaderError.message(self.reader.message ?? "论文导入未完成，请重试或手动导入 PDF。")
+                    self.importStage = "本地处理"
+                    let ids = await self.reader.importURLs(
+                        [url], selectAfterImport: false, metadata: download.candidate, shelfID: shelfID,
+                        moveDuplicateToShelf: true, onlineDownload: download)
+                    guard let importedID = ids.first else {
+                        try Task.checkCancellation()
+                        throw ReaderError.message(self.reader.message ?? "论文导入未完成，请重试或手动导入 PDF。")
+                    }
+                    id = importedID
                 }
+                // Later indexes may supply a verified download for a formerly metadata-only edition.
+                self.sessionImports[candidate.id] = (id, candidate.canDownload)
             } catch is CancellationError {
                 self.importErrors[candidate.id] = "已停止，可重新导入。"
             } catch {

@@ -212,6 +212,7 @@ public final class ReaderModel {
         cancellable: Bool = false, adding importedPaper: Paper? = nil,
         shelfChange: ShelfChange? = nil, importShelfID: UUID? = nil,
         orderChange: LibraryOrderChange? = nil, publishingReflow publication: Paper? = nil,
+        linkingPublication link: (paperID: UUID, url: String)? = nil,
         presentingReflow: (paperID: UUID, jobID: UUID)? = nil, insertingNote: AnchoredNoteInsertion? = nil,
         closeReading: (notes: [AnchoredNoteInsertion], report: ChatTurn)? = nil
     ) async -> Bool {
@@ -234,6 +235,14 @@ public final class ReaderModel {
                 }
                 if let shelfChange { try snapshot.apply(shelfChange) }
                 if let orderChange { try snapshot.apply(orderChange) }
+                if let link {
+                    guard let index = snapshot.papers.firstIndex(where: { $0.id == link.paperID }) else {
+                        throw ReaderError.message("论文已不在书库中。")
+                    }
+                    var urls = snapshot.papers[index].linkedPublicationURLs ?? []
+                    if !urls.contains(link.url) { urls.append(link.url) }
+                    snapshot.papers[index].linkedPublicationURLs = urls
+                }
                 if let publication {
                     guard let index = snapshot.papers.firstIndex(where: { $0.id == publication.id }) else {
                         throw ReaderError.message("论文已不在书库中，未发布页面。")
@@ -299,6 +308,10 @@ public final class ReaderModel {
                 if !noteMarks.isEmpty { self.state.highlights.append(contentsOf: noteMarks) }
                 if let report { self.state.chats.append(report) }
                 if let importedPaper { self.state.papers.insert(importedPaper, at: 0) }
+                if let link, let index = self.state.papers.firstIndex(where: { $0.id == link.paperID }) {
+                    self.state.papers[index].linkedPublicationURLs =
+                        snapshot.papers.first(where: { $0.id == link.paperID })?.linkedPublicationURLs
+                }
                 if let publication, let index = self.state.papers.firstIndex(where: { $0.id == publication.id }) {
                     let wasLocal = !self.state.papers[index].usesSourceReflow
                     Self.applyReflow(publication, to: &self.state.papers[index])
