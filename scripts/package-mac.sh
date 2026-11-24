@@ -7,8 +7,10 @@ output_dir="Artifacts"
 identity="${PAPERREADER_DEVELOPER_ID:--}"
 app="$build_dir/Build/Products/Release/PaperReader.app"
 
-# Re-embed SwiftPM resources even when Xcode kept an older copy inside the app.
-if [[ -d "$app" ]]; then rm -r -- "$app"; fi
+# SwiftPM copies whole resource directories. Remove the built bundles so a replaced PDF cannot survive an incremental build.
+for product in "$app" "$build_dir/Build/Products/Release/PaperReader_PaperReaderKit.bundle"; do
+  if [[ -d "$product" ]]; then rm -r -- "$product"; fi
+done
 
 xcodebuild -quiet -jobs 2 -project PaperReader.xcodeproj -scheme PaperReader -configuration Release \
   -destination 'generic/platform=macOS' -derivedDataPath "$build_dir" \
@@ -29,7 +31,9 @@ fi
 resources="$app/Contents/Resources"
 kit="$resources/PaperReader_PaperReaderKit.bundle/Contents/Resources"
 ui="$resources/PaperReader_PaperReaderUI.bundle/Contents/Resources"
-for file in "Samples/Understanding Attention.pdf" Prompts/CloseReadingNotebook.md \
+test -s "$kit/Samples/When the Average Misleads.pdf"
+diff -qr Sources/PaperReaderKit/Resources/Samples "$kit/Samples"
+for file in Prompts/CloseReadingNotebook.md \
     KaTeX/katex.min.js Marked/marked.umd.js ThirdPartyNotices.txt; do
   cmp "Sources/PaperReaderKit/Resources/$file" "$kit/$file"
 done
@@ -53,8 +57,10 @@ PaperReader $version
 适用于 macOS $minimum_os 或更高版本，支持 Apple 芯片和 Intel Mac。
 
 1. 把 PaperReader 拖到旁边的 Applications（应用程序）文件夹。
-2. 从「应用程序」打开 PaperReader，跟随首次启动的「快速上手」。
-3. 可以先离线试读示例，也可以拖入自己的 PDF。需要翻译或 AI 助读时，
+2. 首次打开空书库时，点「快速上手」中的「直接试读示例」，即可阅读
+   随应用提供的英文 PDF《When the Average Misleads》。
+   已有论文的书库可从「帮助 → 快速上手」重看同一示例。
+3. 阅读原文、划线和写笔记可离线使用。需要翻译或 AI 助读时，
    打开「设置 → 模型服务」，选择服务并保存自己的 API 密钥。
 EOF
 if [[ "$identity" == "-" ]]; then
