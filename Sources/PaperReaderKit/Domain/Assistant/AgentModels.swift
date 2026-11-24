@@ -22,10 +22,12 @@ public struct AgentCard: Identifiable, Sendable {
     public var sourceName: String?
     public var alternateVersionIDs: [UUID] = []
     public var hasDownload = false
+    public var canLookUpFullText = false
+    public var canAttemptDownload: Bool { hasDownload || canLookUpFullText }
     public var importState: AgentImportState = .unprepared
     public var importError: String?
     public var canImport: Bool {
-        hasDownload && candidateID != nil && [.unprepared, .ready, .failed, .cancelled].contains(importState)
+        canAttemptDownload && candidateID != nil && [.unprepared, .ready, .failed, .cancelled].contains(importState)
     }
     public var canOpen: Bool { paperID != nil }
     public init(kind: Kind, title: String) {

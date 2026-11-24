@@ -137,7 +137,7 @@ private struct OnlineCandidateCard: View {
             }
             if let error = search.importErrors[item.id] {
                 Text(error).font(.caption).foregroundStyle(ReaderTheme.accent)
-                if item.canDownload, search.importedPaperID(for: item) == nil {
+                if item.canAttemptDownload, search.importedPaperID(for: item) == nil {
                     selectPDFButton(item).controlSize(.small)
                 }
             }
@@ -163,7 +163,7 @@ private struct OnlineCandidateCard: View {
     private func actions(for item: PaperCandidate) -> some View {
         HStack {
             if let url = item.landingURL {
-                if item.canDownload {
+                if item.canAttemptDownload && search.importErrors[item.id] == nil {
                     Link(destination: url) { Image(systemName: "arrow.up.right.square") }
                         .accessibilityLabel(item.landingPageLabel).help(item.landingPageLabel)
                 } else {
@@ -180,7 +180,7 @@ private struct OnlineCandidateCard: View {
             } else if search.importingID == item.id {
                 ProgressView().controlSize(.small)
                 Button("停止导入") { search.cancelImport() }.buttonStyle(.bordered)
-            } else if item.canDownload {
+            } else if item.canAttemptDownload {
                 Button(search.importErrors[item.id] == nil ? "下载并导入" : "重试导入") { search.confirmImport(item) }
                     .buttonStyle(.borderedProminent).disabled(search.importingID != nil)
             } else {

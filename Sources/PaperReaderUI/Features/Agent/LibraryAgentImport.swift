@@ -55,7 +55,7 @@ extension LibraryAgent {
             let id = card.candidateID, let candidate = candidates[id]
         else { return }
         if selectedPDF == nil {
-            guard card.hasDownload, candidate.canDownload else { return }
+            guard card.canAttemptDownload, candidate.canAttemptDownload else { return }
             if let paperID = card.paperID, card.importState == .imported {
                 paperRegistry.insert(paperID)
                 updateCandidateCards(id, state: .imported, paperID: paperID)

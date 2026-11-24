@@ -1575,8 +1575,8 @@ func publicationCardImportsTheSelectedPDFOrOpensTheMatchingShelfImport(importFro
         case 1: return tool("search_online", #"{"query":"fixture","source":"crossref"}"#, id: "crossref")
         case 2:
             let json = try #require(messages.last?.content)
-            #expect(json.contains("select_local_pdf"))
-            #expect(!json.contains("candidate_id"))
+            #expect(json.contains("lookup_open_pdf"))
+            #expect(json.contains("candidate_id"))
             return try present(candidateResultIDs(in: messages, callID: "crossref"), id: "show")
         default: return .init(role: "assistant", content: "已找到正式发表版本。")
         }
@@ -1588,10 +1588,10 @@ func publicationCardImportsTheSelectedPDFOrOpensTheMatchingShelfImport(importFro
     let card = try #require(agent.turns.first?.cards.first)
     #expect(card.sourceName == "Crossref")
     #expect(card.sourceURL?.absoluteString == discovery.publication.id)
-    #expect(!card.canImport && agent.turns[0].presentedResults.first?.id == card.id)
+    #expect(card.canImport && !card.hasDownload && agent.turns[0].presentedResults.first?.id == card.id)
     let scopes = await model.requestLimits
-    #expect(scopes.allSatisfy { $0.availableToolNames?.contains("prepare_import") == false })
-    agent.confirmImport(cardID: card.id)
+    #expect(scopes.first?.availableToolNames?.contains("prepare_import") == false)
+    #expect(scopes.dropFirst().allSatisfy { $0.availableToolNames?.contains("prepare_import") == true })
     let file = root.appendingPathComponent("user-selected.pdf")
     try DemoPaper.write(to: file)
     agent.importPublisherPDF(file, cardID: UUID())
@@ -1599,6 +1599,10 @@ func publicationCardImportsTheSelectedPDFOrOpensTheMatchingShelfImport(importFro
     if importFromShelf {
         _ = try await reader.importPublisherPDF(file, for: discovery.publication)
     } else {
+        agent.confirmImport(cardID: card.id)
+        agent.confirmImport(cardID: card.id)
+        try await eventually { agent.card(card.id)?.importState == .failed }
+        #expect(await discovery.downloads == [discovery.publication.id])
         agent.importPublisherPDF(root.appendingPathComponent("missing.pdf"), cardID: card.id)
         try await eventually { agent.card(card.id)?.importState == .failed }
         #expect(reader.state.papers.isEmpty)
@@ -1613,7 +1617,7 @@ func publicationCardImportsTheSelectedPDFOrOpensTheMatchingShelfImport(importFro
     #expect(agent.canOpen(completed) && agent.open(cardID: card.id))
     #expect(reader.selectedPaperID == paper.id)
     #expect(FileManager.default.fileExists(atPath: file.path))
-    #expect(await discovery.downloads.isEmpty)
+    #expect(await discovery.downloads == (importFromShelf ? [] : [discovery.publication.id]))
     #expect(await model.requests.count == 3)
 }
 
@@ -1652,7 +1656,7 @@ func publicationCardImportsTheSelectedPDFOrOpensTheMatchingShelfImport(importFro
     let versionID = try #require(parent.alternateVersionIDs.first)
     let version = try #require(agent.card(versionID))
     #expect(parent.searchQuery == nil && version.searchQuery == nil)
-    #expect(!parent.canImport && version.canImport && version.sourceName == "arXiv")
+    #expect(parent.canImport && !parent.hasDownload && version.canImport && version.sourceName == "arXiv")
     #expect(await discovery.downloads.isEmpty)
     let file = root.appendingPathComponent("publisher.pdf")
     try DemoPaper.write(to: file)

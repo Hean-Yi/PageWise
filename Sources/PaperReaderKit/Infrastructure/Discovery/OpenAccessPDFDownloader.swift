@@ -1,4 +1,5 @@
 import Foundation
+import PDFKit
 
 /// Resolves publisher records to retrievable open copies. Metadata and PDF actions use separate checks.
 public struct OpenAccessPDFDownloader: Sendable {
@@ -7,16 +8,26 @@ public struct OpenAccessPDFDownloader: Sendable {
 
     public static func verifiedURL(for candidate: PaperCandidate) -> URL? {
         guard candidate.source != .arxiv else { return nil }
-        if let doi = candidate.doi, let acl = anthologyPDF(doi: doi) { return acl }
-        // Crossref supplies licensed version-of-record links. Semantic Scholar marks its open-access copy.
-        guard [.crossref, .semanticScholar].contains(candidate.source), let url = candidate.pdfURL,
+        if candidate.indexedCopy == nil, let doi = candidate.doi, let acl = anthologyPDF(doi: doi) { return acl }
+        guard let url = candidate.pdfURL else { return nil }
+        let indexed = candidate.indexedCopy?.candidateID == candidate.id && candidate.indexedCopy?.url == url
+        // A DOI lookup can locate copies that weren't in the original bibliographic record.
+        guard indexed || [.crossref, .semanticScholar].contains(candidate.source),
             url.scheme == "https",
             let host = url.host?.lowercased(), url.port == nil, url.user == nil, url.password == nil,
             url.fragment == nil, url.absoluteString.utf8.count <= 2_048, !url.pathComponents.contains(".."),
             !url.pathComponents.contains("."), !url.path.contains("\\"), !url.path.contains("//")
         else { return nil }
         let path = (url.path.removingPercentEncoding ?? url.path).lowercased()
-        if candidate.source == .crossref && host != "journals.plos.org" {
+        if indexed, let doi = candidate.doi,
+            let doiStart = path.range(of: #"/10\.[0-9]{4,9}/"#, options: .regularExpression)
+        {
+            let suffix = String(path[doiStart.lowerBound...])
+            guard ["/" + doi, "/" + doi + ".pdf", "/" + doi + "/pdf", "/" + doi + ".full.pdf"].contains(suffix) else {
+                return nil
+            }
+        }
+        if !indexed && candidate.source == .crossref && host != "journals.plos.org" {
             guard let doi = candidate.doi,
                 ["/" + doi, "/" + doi + ".pdf", "/" + doi + "/pdf"].contains(where: path.hasSuffix)
             else { return nil }
@@ -44,6 +55,15 @@ public struct OpenAccessPDFDownloader: Sendable {
             guard path.contains("/pdf/") || path.contains("/pdfdirect/") else { return nil }
         case "iopscience.iop.org":
             guard path.hasPrefix("/article/") && path.hasSuffix("/pdf") else { return nil }
+        case "zenodo.org":
+            guard indexed, path.range(of: #"^/records?/[0-9]+/files/[^/]+\.pdf$"#, options: .regularExpression) != nil
+            else { return nil }
+        case "hal.science", "hal.archives-ouvertes.fr", "inria.hal.science":
+            guard indexed,
+                path.range(
+                    of: #"^/[a-z-]+-[0-9]+(?:v[0-9]+)?/(?:document|file/[^/]+\.pdf)$"#,
+                    options: .regularExpression) != nil
+            else { return nil }
         case "www.frontiersin.org":
             guard url.path.hasPrefix("/journals/") || url.path.hasPrefix("/articles/"),
                 url.path.hasSuffix("/pdf")
@@ -78,7 +98,7 @@ public struct OpenAccessPDFDownloader: Sendable {
             throw ReaderError.message("未取得可验证的开放全文地址，可查看出版页。")
         }
         try Task.checkCancellation()
-        var request = URLRequest(url: pdf)
+        var request = URLRequest(url: pdf, timeoutInterval: 20)
         request.setValue("application/pdf", forHTTPHeaderField: "Accept")
         let (file, response) = try await transport.downloadFile(for: request, maximumBytes: 50_000_000)
         defer { try? FileManager.default.removeItem(at: file) }
@@ -88,11 +108,13 @@ public struct OpenAccessPDFDownloader: Sendable {
         }
         let reader = try FileHandle(forReadingFrom: file)
         defer { try? reader.close() }
-        guard try reader.read(upToCount: 5) == Data("%PDF-".utf8) else {
-            throw ReaderError.message("来源返回的文件不是 PDF，可查看出版页。")
+        guard try reader.read(upToCount: 1_024)?.range(of: Data("%PDF-".utf8)) != nil,
+            let document = PDFDocument(url: file), !document.isLocked, document.pageCount > 0
+        else {
+            throw ReaderError.message("来源未返回可阅读的 PDF，可查看出版页。")
         }
         let target = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".pdf")
         try FileManager.default.moveItem(at: file, to: target)
-        return DownloadedPublication(pdfURL: target, candidate: verified)
+        return DownloadedPublication(pdfURL: target, candidate: verified, sourceNotice: verified.indexedCopy?.notice)
     }
 }

@@ -46,7 +46,7 @@ struct AgentResultCard: View {
     private func metadata(for card: AgentCard) -> String? {
         if card.kind == .onlineCandidate {
             let link =
-                !card.hasDownload || card.importState == .failed
+                !card.canAttemptDownload || card.importState == .failed
                 ? PaperCandidate.landingPageLabel(for: card.sourceURL) : nil
             return [card.sourceName, card.year, link].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
         }
@@ -104,7 +104,7 @@ struct AgentResultCard: View {
                 .disabled(agent.isRunning)
             }
             .labelStyle(.titleAndIcon).font(.caption).padding(.horizontal, 12).padding(.bottom, 9)
-            if card.hasDownload && card.importState == .failed {
+            if card.canAttemptDownload && card.importState == .failed {
                 fileImportAction(for: card).font(.caption).padding(.horizontal, 12).padding(.bottom, 9)
             }
         }
@@ -182,7 +182,8 @@ struct AgentResultCard: View {
                 Label("等待导入", systemImage: "clock").foregroundStyle(ReaderTheme.muted)
             } else {
                 ProgressView().controlSize(.mini)
-                Text(card.importState == .downloading ? "下载中" : "正在入库").foregroundStyle(ReaderTheme.muted)
+                Text(card.importState == .importing ? "正在入库" : (card.hasDownload ? "下载中" : "获取开放全文")).foregroundStyle(
+                    ReaderTheme.muted)
             }
             let cancelTitle = card.importState == .queued ? "取消排队" : "停止导入"
             Button {
@@ -201,7 +202,7 @@ struct AgentResultCard: View {
             .accessibilityHint(card.title)
         case .unprepared, .ready, .failed, .cancelled:
             let cardID = card.id
-            if card.hasDownload {
+            if card.canAttemptDownload {
                 let title = card.importState == .failed || card.importState == .cancelled ? "重新下载" : "下载并导入"
                 Button {
                     agent.confirmImport(cardID: cardID)

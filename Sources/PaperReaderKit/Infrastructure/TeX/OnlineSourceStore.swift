@@ -12,7 +12,7 @@ public actor OnlineSourceStore {
         var source = OnlinePaperSource(candidateID: candidate.id, notice: download.sourceNotice)
         if candidate.source != .arxiv {
             source.originalPDFOnly = true
-            source.notice = "此出版版本仅提供原版 PDF，未取得同版本的重排源码。"
+            source.notice = (download.sourceNotice ?? "已取得原版 PDF。") + "未取得同版本的重排源码。"
         }
         if let archive = download.texArchive {
             guard candidate.source == .arxiv, ArxivClient.versionedIdentifier(candidate.id) != nil,

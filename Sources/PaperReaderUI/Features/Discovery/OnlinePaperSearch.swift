@@ -39,8 +39,8 @@ public final class OnlinePaperSearch {
     @ObservationIgnored private var generation = UUID()
     @ObservationIgnored var searchTask: Task<Void, Never>?
     @ObservationIgnored var importTask: Task<Void, Never>?
-    private var fileSelection: (candidate: PaperCandidate, awaitingFile: Bool)?
-    var selectedPublicationID: String? { fileSelection?.candidate.id }
+    private var pinnedEdition: (candidate: PaperCandidate, awaitingFile: Bool)?
+    var selectedPublicationID: String? { pinnedEdition?.candidate.id }
 
     public init(reader: ReaderModel, discovery: any PaperDiscovery = FederatedPaperDiscovery.shared) {
         self.reader = reader
@@ -83,7 +83,7 @@ public final class OnlinePaperSearch {
 
     public func cancelSearch() {
         generation = UUID()
-        fileSelection = nil
+        pinnedEdition = nil
         searchTask?.cancel()
         searchTask = nil
         activeQuery = nil
@@ -136,8 +136,8 @@ public final class OnlinePaperSearch {
         var seen: Set<String> = []
         var candidates = result.candidates.compactMap(\.verified).filter { seen.insert($0.id).inserted }
         // A later index can move the chosen edition into another card or beyond the result limit.
-        // Keep that edition visible while the file panel is open and when its import status changes.
-        if let selected = fileSelection?.candidate,
+        // Keep the chosen edition visible during acquisition and after it completes.
+        if let selected = pinnedEdition?.candidate,
             !candidates.contains(where: { card in
                 card.id == selected.id || card.alternateVersions.contains(where: { $0.id == selected.id })
             })
@@ -182,23 +182,23 @@ public final class OnlinePaperSearch {
             !candidate.canDownload || importErrors[candidate.id] != nil, importedPaperID(for: candidate) == nil
         else { return false }
         candidate.alternateVersions = []
-        fileSelection = (candidate, true)
+        pinnedEdition = (candidate, true)
         return true
     }
 
     func importSelectedPDF(_ url: URL) {
-        guard isExpanded, let selection = fileSelection, selection.awaitingFile else { return }
-        fileSelection?.awaitingFile = false
+        guard isExpanded, let selection = pinnedEdition, selection.awaitingFile else { return }
+        pinnedEdition?.awaitingFile = false
         startImport(selection.candidate, selectedPDF: url)
     }
 
     func cancelFileSelection() {
-        if fileSelection?.awaitingFile == true { fileSelection = nil }
+        if pinnedEdition?.awaitingFile == true { pinnedEdition = nil }
     }
 
     func fileSelectionFailed(_ error: Error) {
-        guard isExpanded, !closing, let selection = fileSelection, selection.awaitingFile else { return }
-        fileSelection?.awaitingFile = false
+        guard isExpanded, !closing, let selection = pinnedEdition, selection.awaitingFile else { return }
+        pinnedEdition?.awaitingFile = false
         importErrors[selection.candidate.id] = error.localizedDescription
     }
 
@@ -207,7 +207,10 @@ public final class OnlinePaperSearch {
     }
 
     public func confirmImport(_ candidate: PaperCandidate) {
-        guard let candidate = registeredCandidate(candidate.id), candidate.canDownload else { return }
+        guard var candidate = registeredCandidate(candidate.id), candidate.canAttemptDownload else {
+            return
+        }
+        candidate.alternateVersions = []
         startImport(candidate, selectedPDF: nil)
     }
 
@@ -221,7 +224,12 @@ public final class OnlinePaperSearch {
         if selectedPDF != nil {
             importStage = "本地处理"
         } else {
-            importStage = candidate.source == .arxiv ? "下载 TeX 与原版 PDF" : "下载原版 PDF"
+            pinnedEdition = (candidate, false)
+            if candidate.canDownload {
+                importStage = candidate.source == .arxiv ? "下载 TeX 与原版 PDF" : "下载原版 PDF"
+            } else {
+                importStage = "查找并下载开放全文"
+            }
         }
         importingID = candidate.id
         importErrors[candidate.id] = nil
@@ -258,7 +266,7 @@ public final class OnlinePaperSearch {
                     id = importedID
                 }
                 // Later indexes may supply a verified download for a formerly metadata-only edition.
-                self.sessionImports[candidate.id] = (id, candidate.canDownload)
+                self.sessionImports[candidate.id] = (id, selectedPDF == nil || candidate.canDownload)
             } catch is CancellationError {
                 self.importErrors[candidate.id] = "已停止，可重新导入。"
             } catch {

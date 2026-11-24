@@ -215,10 +215,10 @@ public struct AgentClient: AgentCompleting {
                 ["limit": .init(type: "integer", description: "Number of candidates to inspect")], []),
             make(
                 "prepare_import",
-                "Use an existing candidate_id directly to show a download card. The reader clicks to import.",
+                "Use an existing candidate_id directly to show a download card. On click the app retrieves a public full text if available and imports it.",
                 [
                     "candidate_id": .init(
-                        type: "string", description: "Candidate ID of a downloadable search or recommendation result")
+                        type: "string", description: "Registered candidate ID from a search or recommendation")
                 ],
                 ["candidate_id"]),
             make(

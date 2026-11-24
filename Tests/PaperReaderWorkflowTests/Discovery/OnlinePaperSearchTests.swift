@@ -15,6 +15,7 @@ private actor InlineDiscoveryFixture: PaperDiscovery {
     let source: URL?
     let holdSearch: Bool
     let holdDownload: Bool
+    let resolvedFullText: PaperCandidate?
     let searchResults: [PaperCandidate]
     let initialResults: [PaperCandidate]?
     var pendingSearch: [String: CheckedContinuation<[PaperCandidate], Never>] = [:]
@@ -25,13 +26,15 @@ private actor InlineDiscoveryFixture: PaperDiscovery {
     var returnedURL: URL?
     init(
         source: URL? = nil, holdSearch: Bool = false, holdDownload: Bool = false,
-        searchResults: [PaperCandidate] = [onlineFixtureCandidate()], initialResults: [PaperCandidate]? = nil
+        searchResults: [PaperCandidate] = [onlineFixtureCandidate()], initialResults: [PaperCandidate]? = nil,
+        resolvedFullText: PaperCandidate? = nil
     ) {
         self.source = source
         self.holdSearch = holdSearch
         self.holdDownload = holdDownload
         self.searchResults = searchResults
         self.initialResults = initialResults
+        self.resolvedFullText = resolvedFullText
     }
     func discover(
         _ query: String, scope: PaperSearchScope, limit: Int, onUpdate: @Sendable (OnlineDiscoveryResult) async -> Void
@@ -56,6 +59,13 @@ private actor InlineDiscoveryFixture: PaperDiscovery {
         }
         returnedURL = url
         return url
+    }
+    func downloadPublication(_ candidate: PaperCandidate) async throws -> DownloadedPublication {
+        let file = try await download(candidate)
+        if let resolvedFullText, resolvedFullText.id == candidate.id {
+            return .init(pdfURL: file, candidate: resolvedFullText)
+        }
+        return .init(pdfURL: file, candidate: candidate)
     }
     func releaseSearch(_ query: String, number: Int) {
         pendingSearch.removeValue(forKey: query)?.resume(returning: [onlineFixtureCandidate(number)])
@@ -360,7 +370,7 @@ private struct OnlineToolReplyEcho: AgentCompleting {
     #expect(restarted.state.paperShelfIDs.isEmpty)
 }
 
-@MainActor @Test func onlineAutomaticDownloadRequiresAnOpenPDFForTheSelectedVersion() async throws {
+@MainActor @Test func onlineAutomaticDownloadResolvesTheSelectedVersionAndPreservesItsOrigin() async throws {
     let model = try await onlineModel()
     defer { try? FileManager.default.removeItem(at: model.root) }
     let source = model.root.appendingPathComponent("fixture.pdf")
@@ -372,7 +382,10 @@ private struct OnlineToolReplyEcho: AgentCompleting {
         source: .crossref)
     var preprint = onlineFixtureCandidate()
     preprint.alternateVersions = [publication]
-    let discovery = InlineDiscoveryFixture(source: source, searchResults: [metadata, preprint])
+    var resolved = metadata
+    resolved.pdfURL = URL(string: "https://link.springer.com/content/pdf/10.1234/test.pdf")
+    let discovery = InlineDiscoveryFixture(
+        source: source, searchResults: [metadata, preprint], resolvedFullText: resolved)
     let search = OnlinePaperSearch(reader: model, discovery: discovery)
     search.open(shelfID: nil)
     search.query = "fixture"
@@ -380,14 +393,21 @@ private struct OnlineToolReplyEcho: AgentCompleting {
     await search.searchTask?.value
     #expect(search.results.count == 2)
     #expect(search.results.first?.landingURL?.host == "doi.org")
+    #expect(await discovery.downloads == 0 && !metadata.canDownload && metadata.canAttemptDownload)
     search.confirmImport(metadata)
-    #expect(search.importTask == nil)
-    #expect(await discovery.downloads == 0)
-
+    search.confirmImport(metadata)
+    await search.importTask?.value
+    let resolvedID = try #require(search.importedPaperID(for: metadata))
+    #expect(await discovery.downloads == 1)
+    #expect(model.state.papers.first?.onlineSource?.candidateID == metadata.id)
+    // Use different file contents for the next edition so SHA-256 deduplication does not merge them.
+    let bytes = try Data(contentsOf: source)
+    try (bytes + Data("\n% different edition\n".utf8)).write(to: source)
     search.confirmImport(publication)
     await search.importTask?.value
     let paper = try #require(model.state.papers.first)
-    #expect(paper.title == publication.title)
+    #expect(paper.title == publication.title && paper.id != resolvedID)
+    #expect(await discovery.downloads == 2)
     #expect(paper.onlineSource?.candidateID == publication.id)
     #expect(paper.onlineSource?.originalPDFOnly == true)
     #expect(!paper.canReflow && paper.usesSourceReflow)
@@ -397,7 +417,7 @@ private struct OnlineToolReplyEcho: AgentCompleting {
     #expect(!model.pdfBilingual.isOpen && model.translating.isEmpty)
     let restarted = try ReaderModel(root: model.root)
     await restarted.load()
-    #expect(restarted.state.papers.first?.onlineSource == paper.onlineSource)
+    #expect(restarted.state.papers.first(where: { $0.id == paper.id })?.onlineSource == paper.onlineSource)
 }
 
 @MainActor @Test func publisherFileSelectionImportsTheRegisteredVersionIntoTheTargetShelfAndOpensItAfterRestart()

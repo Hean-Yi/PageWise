@@ -32,6 +32,8 @@ public struct PaperCandidate: Identifiable, Sendable {
     public var authors: String
     public var year: String
     public var pdfURL: URL?
+    /// A public copy found by an exact identifier lookup after the reader requested a download.
+    var indexedCopy: IndexedOpenCopy?
     public var source: PaperSearchSource
     public var doi: String?
     /// Explicit identifier supplied by a scholarly index for the corresponding preprint.
@@ -63,6 +65,11 @@ public struct PaperCandidate: Identifiable, Sendable {
     public var landingPageLabel: String { Self.landingPageLabel(for: landingURL) }
     public static func landingPageLabel(for url: URL?) -> String { url?.host == "doi.org" ? "查看出版页" : "查看来源页" }
     public var canDownload: Bool { verifiedRecord?.pdfURL != nil }
+
+    public var canAttemptDownload: Bool {
+        guard let record = verifiedRecord else { return false }
+        return record.pdfURL != nil || record.doi != nil || record.source == .semanticScholar
+    }
 
     private var verifiedRecord: Self? {
         var record = self

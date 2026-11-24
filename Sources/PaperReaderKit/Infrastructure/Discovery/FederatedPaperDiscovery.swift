@@ -10,7 +10,7 @@ public struct FederatedPaperDiscovery: PaperDiscovery {
     public static let shared = FederatedPaperDiscovery()
     private let arxiv: any PaperDiscovery
     private let indexes: ScholarlyIndexes
-    private let openAccess: OpenAccessPDFDownloader
+    private let openAccess: IndexedOpenCopies
     private let sourceTimeout: Duration
 
     public init() {
@@ -20,7 +20,7 @@ public struct FederatedPaperDiscovery: PaperDiscovery {
     init(arxiv: any PaperDiscovery, transport: any HTTPTransport, sourceTimeout: Duration = .seconds(12)) {
         self.arxiv = arxiv
         self.indexes = ScholarlyIndexes(transport: transport)
-        self.openAccess = OpenAccessPDFDownloader(transport: transport)
+        self.openAccess = IndexedOpenCopies(transport: transport)
         self.sourceTimeout = sourceTimeout
     }
 
@@ -147,7 +147,7 @@ public struct FederatedPaperDiscovery: PaperDiscovery {
 
     public func downloadPublication(_ candidate: PaperCandidate) async throws -> DownloadedPublication {
         if candidate.source == .arxiv { return try await arxiv.downloadPublication(candidate) }
-        return try await openAccess.downloadPublication(candidate)
+        return try await openAccess.download(candidate)
     }
 
     public func structuredContent(_ candidate: PaperCandidate) async throws -> [TextBlock]? {

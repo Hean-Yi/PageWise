@@ -248,7 +248,7 @@ extension LibraryAgent {
                 notice: found.isEmpty ? "Semantic Scholar 未返回《\(String(seed.title.prefix(300)))》的推荐。" : nil)
         case .prepareImport(let id):
             guard let candidate = candidates[id] else { throw ReaderError.message("候选ID不属于本次会话，请先在线检索。") }
-            guard candidate.canDownload else { throw ReaderError.message("请在结果卡查看来源页，取得 PDF 后在同一卡片选择文件导入。") }
+            guard candidate.canAttemptDownload else { throw ReaderError.message("请在结果卡查看来源页，取得 PDF 后在同一卡片选择文件导入。") }
             onSubject(candidate.title)
             var card = candidateCard(candidate, id: id)
             if let reference = turns.last?.referencedCardID.flatMap({ self.card($0) }), reference.candidateID == id {
@@ -258,12 +258,12 @@ extension LibraryAgent {
             let message: String
             switch card.importState {
             case .queued: message = "已排队，等待下载。"
-            case .downloading: message = "正在下载；已有导入任务。"
+            case .downloading: message = "正在获取全文。"
             case .importing: message = "正在解析并保存；已有导入任务。"
             case .imported: message = "候选已在书库，可打开已有论文。"
             case .failed: message = "上次导入失败，可在卡片重新下载或选择已取得的 PDF 入库。"
             case .cancelled: message = "上次导入已停止，等待用户点击重试。"
-            case .unprepared, .ready: message = "等待用户点击确认；尚未下载。"
+            case .unprepared, .ready: message = "读者可在卡片点击「下载并导入」。"
             }
             return try result(
                 [(ToolRecord(card: card, authors: candidate.authors, year: candidate.year), card)],
@@ -301,7 +301,9 @@ extension LibraryAgent {
             let id = candidateIDs[candidate.id] ?? ids[candidate.id] ?? UUID().uuidString
             ids[candidate.id] = id
             let best: PaperCandidate
-            if !candidate.canDownload, let known = candidates[id], known.canDownload {
+            if !candidate.canDownload, let known = candidates[id],
+                known.canDownload || (!candidate.canAttemptDownload && known.canAttemptDownload)
+            {
                 best = known
             } else {
                 best = candidate
@@ -322,7 +324,7 @@ extension LibraryAgent {
                     var item: [String: String] = [:]
                     item["source"] = version.sourceName
                     item["year"] = version.year
-                    item["candidate_id"] = version.hasDownload ? version.candidateID : nil
+                    item["candidate_id"] = version.canAttemptDownload ? version.candidateID : nil
                     item["import_status"] = version.toolImportStatus
                     return item
                 }
@@ -347,6 +349,7 @@ extension LibraryAgent {
         card.year = candidate.year
         card.sourceName = candidate.source.label
         card.hasDownload = candidate.canDownload
+        card.canLookUpFullText = !card.hasDownload && candidate.canAttemptDownload
         card.subtitle = [candidate.authors, candidate.year, candidate.source.label].filter { !$0.isEmpty }.joined(
             separator: " · ")
         card.candidateID = id
@@ -413,7 +416,9 @@ private struct ToolPayload: Encodable {
 extension AgentCard {
     var toolImportStatus: String? {
         guard kind == .onlineCandidate else { return nil }
-        if !hasDownload && [.unprepared, .ready].contains(importState) { return "select_local_pdf" }
+        if !hasDownload && [.unprepared, .ready].contains(importState) {
+            return canLookUpFullText ? "lookup_open_pdf" : "select_local_pdf"
+        }
         return importState.rawValue
     }
 }
@@ -440,7 +445,7 @@ private struct ToolRecord: Encodable {
         self.year = year ?? card.year
         source = card.sourceName
         paperID = card.paperID?.uuidString
-        candidateID = card.hasDownload ? card.candidateID : nil
+        candidateID = card.canAttemptDownload ? card.candidateID : nil
         readingNoteID = card.readingNoteID
         title = card.title
         sourcePage = card.sourcePage
