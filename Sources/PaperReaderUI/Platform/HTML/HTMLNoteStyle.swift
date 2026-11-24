@@ -15,8 +15,12 @@ enum HTMLNoteStyle {
           .reader-note-card.at-top{border-top-left-radius:0;border-top-right-radius:0}
           .reader-note-card.at-bottom{border-bottom-left-radius:0;border-bottom-right-radius:0}
           .reader-note-card header{padding:10px 14px 6px;display:flex;align-items:center;gap:8px;flex-shrink:0;font:12px system-ui;color:#796e60}
-          .reader-note-card header strong{margin-right:auto;color:inherit;font-weight:650;white-space:nowrap;flex:none}.reader-note-card header select{min-width:0;max-width:40%;font:inherit}.reader-note-card:not(.active) header select,.reader-note-card:not(.active) header button,.reader-note-card:not(.active) header details{display:none}
+          .reader-note-card header strong{margin-right:auto;color:inherit;font-weight:650;white-space:nowrap;flex:none}.reader-note-card header select{min-width:0;max-width:40%;font:inherit}.reader-note-card:not(.active) header select,.reader-note-card:not(.active) header button{display:none}
           .reader-note-card button{font:inherit;color:inherit;border:0;border-radius:6px;background:transparent;padding:4px 7px;cursor:pointer}
+          .reader-note-card button.note-icon-button,#reader-document-summary>header button.note-icon-button{display:inline-grid;place-items:center;width:28px;height:28px;padding:0;vertical-align:middle;flex:none}
+          .note-icon-button .ink-plate{fill:light-dark(#9f503a,#e8a086)}
+          @media(prefers-contrast:more){.note-icon-button .ink-plate{fill:currentColor}}
+          @media(pointer:coarse){.reader-note-card button.note-icon-button,#reader-document-summary>header button.note-icon-button{width:44px;height:44px}}
           .reader-note-card button:hover{background:#e8e1d6}.reader-note-card button:focus-visible{outline:2px solid #a34c33}
           .reader-note-card .note-content{padding:8px 14px 14px;overflow:auto;min-height:0;overflow-wrap:anywhere;flex:1}
           .reader-note-card:not(.active) .note-content{display:none}
@@ -48,7 +52,7 @@ enum HTMLNoteStyle {
           .reader-note-card .note-md-widget{display:inline-block;vertical-align:middle;max-width:100%;overflow:auto;cursor:text}
           .reader-note-card .note-md-widget math{font-size:1em;margin:0}.reader-note-card .note-md-widget>table{font:inherit}
           .reader-note-card footer{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-shrink:0;padding:8px 12px;border-top:1px solid #e6e0d5;font:11px system-ui;color:#796e60}
-          .reader-note-card .note-done{background:#a34c33;color:white;padding:5px 12px}.reader-note-card .note-delete{color:#a34c33}
+          .reader-note-card .note-done{background:#a34c33;color:white;padding:5px 12px}
           .reader-note-card .note-hidden{display:none!important}
           #annotation-menu.note-docked{position:static;width:100%;border:0;border-bottom:1px solid #e6e0d5;border-radius:0;box-shadow:none;flex-shrink:0;padding:8px 10px 0;font-size:12px}
           #annotation-menu.note-docked .bookmark,#annotation-menu.note-docked .add-note{display:none!important}

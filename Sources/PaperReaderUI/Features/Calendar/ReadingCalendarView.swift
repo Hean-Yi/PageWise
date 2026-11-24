@@ -161,7 +161,7 @@ struct ReadingCalendarView: View {
             Button(role: .destructive) {
                 model.deleteReading(record.id)
             } label: {
-                Image(systemName: "trash")
+                ReaderIcon(.delete, size: 15).readerIconTarget(macOS: 24)
             }
             .buttonStyle(.borderless).accessibilityLabel("删除阅读记录").help("删除记录")
         }

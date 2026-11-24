@@ -222,7 +222,7 @@ struct ReaderNavigator: View {
                         model.openReadingNote(summary)
                         didNavigate()
                     } label: {
-                        Label("文末总结", systemImage: "doc.append")
+                        Label("文末总结", readerIcon: .notebook)
                             .frame(maxWidth: .infinity, alignment: .leading).padding(12).contentShape(Rectangle())
                     }.buttonStyle(.plain)
                         .background(

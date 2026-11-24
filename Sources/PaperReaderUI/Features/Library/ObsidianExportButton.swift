@@ -24,7 +24,7 @@ struct ObsidianExportButton: View {
                 if model.obsidianExportPaperID == paperID {
                     ProgressView().controlSize(.small).accessibilityLabel("正在整理到 Obsidian")
                 } else {
-                    Label("整理到 Obsidian", systemImage: "square.and.arrow.down")
+                    Label("整理到 Obsidian", readerIcon: .export)
                 }
             }
             if offersDiscussion && model.hasObsidianDiscussion(paperID: paperID) {

@@ -53,7 +53,7 @@ struct PaperAssistantCitations: View {
                         didNavigate()
                     } label: {
                         AssistantToolTile(
-                            tool: note.isDocumentSummary ? "文末总结" : "已记入原文", systemImage: "note.text",
+                            tool: note.isDocumentSummary ? "文末总结" : "已记入原文", icon: .reader(.notebook),
                             title: note.isDocumentSummary
                                 ? ReadingNoteSummary.text(note.markdown)
                                 : ReadingNoteSummary.excerpt(note.anchors.first?.text ?? "阅读笔记"),
@@ -62,7 +62,7 @@ struct PaperAssistantCitations: View {
                             accessory: "chevron.forward", detailLines: 1)
                     }.buttonStyle(AssistantToolButtonStyle()).accessibilityHint("定位并打开阅读笔记")
                 } else {
-                    Label("笔记已删除", systemImage: "note.text").font(.caption).foregroundStyle(ReaderTheme.muted)
+                    Label("笔记已删除", readerIcon: .notebook, size: 14).font(.caption).foregroundStyle(ReaderTheme.muted)
                 }
             }
             if let ids = turn.closeReadingNoteIDs {
@@ -131,7 +131,7 @@ struct PaperAssistantCitations: View {
         let subject = isNote ? "笔记" : (key == nil ? "摘录" : "原文")
         let tool = source.readingNoteID != nil && excerpt.isEmpty ? "笔记已不可用" : "引用" + subject
         let tile = AssistantToolTile(
-            tool: tool, systemImage: isNote ? "note.text" : "quote.opening", title: source.title,
+            tool: tool, icon: .reader(isNote ? .notebook : .citation), title: source.title,
             detail: expanded || excerpt.isEmpty
                 ? nil : (source.readingNoteID == nil ? previews[source.id] : ReadingNoteSummary.excerpt(excerpt)),
             metadata: metadata,

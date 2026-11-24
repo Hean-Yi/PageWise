@@ -1,34 +1,51 @@
 import SwiftUI
 
-/// Swap the page immediately, then move only the new surface over its own opaque backing.
-struct WorkspaceArrival<Page: Equatable & Sendable>: ViewModifier {
-    let page: Page
-    let distance: CGFloat
+/// The current page is the only mounted surface. Its offset follows the same spring in either
+/// direction, including when a new destination interrupts an unfinished navigation.
+struct WorkspaceArrival: ViewModifier {
+    let destination: CGPoint
     let background: Color
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.horizontalSizeClass) private var sizeClass
     @Environment(\.layoutDirection) private var layoutDirection
 
     func body(content: Content) -> some View {
-        let moves = !reduceMotion && sizeClass != .compact
-        let travel = layoutDirection == .rightToLeft ? -distance : distance
+        // In compact columns NavigationSplitView supplies the platform transition.
+        let skipArrival = reduceMotion || sizeClass == .compact
+        let location = CGPoint(
+            x: layoutDirection == .rightToLeft ? -destination.x : destination.x, y: destination.y)
         content
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .transaction(value: page) { transaction in
+            .transaction(value: location) { transaction in
                 transaction.animation = nil
                 transaction.disablesAnimations = true
             }
-            .keyframeAnimator(initialValue: CGFloat.zero, trigger: page) { surface, offset in
-                surface.offset(x: moves ? offset : 0)
-            } keyframes: { _ in
-                if moves {
-                    MoveKeyframe(travel)
-                    SpringKeyframe(0, duration: 0.34, spring: .snappy(duration: 0.34))
-                } else {
-                    MoveKeyframe(0)
-                }
-            }
+            .modifier(ArrivalSurface(location: location, destination: location, paper: background, moves: !skipArrival))
+            .animation(ReaderMotion.navigation(skipArrival), value: location)
             .background(background)
             .clipped()
+    }
+
+    private struct ArrivalSurface: AnimatableModifier {
+        var location: CGPoint
+        let destination: CGPoint
+        let paper: Color
+        let moves: Bool
+
+        nonisolated var animatableData: CGPoint.AnimatableData {
+            get { location.animatableData }
+            set { location.animatableData = newValue }
+        }
+
+        func body(content: Content) -> some View {
+            let x = moves ? destination.x - location.x : 0
+            let y = moves ? destination.y - location.y : 0
+            let wash = min(0.18, Double(abs(x) + abs(y)) / 150)
+            content
+                .overlay {
+                    paper.opacity(wash).allowsHitTesting(false).accessibilityHidden(true)
+                }
+                .offset(x: x, y: y)
+        }
     }
 }

@@ -11,6 +11,7 @@ struct ReaderView: View {
     @State private var showWarnings = false
     @State private var penEnabled = false
     @State private var peekingAtOriginal = false
+    @State private var mountedSourcePaperID: UUID?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @AppStorage("PDFBilingualDisplayLayout") private var pdfLayout = PDFBilingualLayoutPreference.paragraph
 
@@ -27,16 +28,23 @@ struct ReaderView: View {
             header(width: width)
             Divider()
             VStack(spacing: 0) {
-                documentCanvas
-                if !model.showingReflowLoading { readingBar(width: width) }
+                // A direct notebook entry only needs its editor. Once the reader has shown the
+                // source, leave that same native canvas in place behind the notebook.
+                if summary == nil || mountedSourcePaperID == model.selectedPaperID {
+                    documentCanvas
+                        .onChange(of: model.selectedPaperID, initial: true) { _, id in mountedSourcePaperID = id }
+                    if !model.showingReflowLoading { readingBar(width: width) }
+                }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
             .allowsHitTesting(summary == nil)
             .accessibilityHidden(summary != nil)
             .overlay {
                 ZStack {
                     if let summary {
                         DocumentSummaryPage(model: model, note: summary)
-                            .id(summary.id).transition(.opacity)
+                            .id(summary.id)
+                            .transition(reduceMotion ? .identity : .opacity.combined(with: .offset(y: 8)))
                     }
                 }
                 .animation(ReaderMotion.navigation(reduceMotion), value: summary != nil)
@@ -137,9 +145,9 @@ struct ReaderView: View {
                 Button {
                     model.toggleFavorite(paper.id)
                 } label: {
-                    Image(systemName: favorite ? "star.fill" : "star")
+                    ReaderIcon(.favorite, size: 17, filled: favorite)
                         .foregroundStyle(favorite ? ReaderTheme.accent : ReaderTheme.muted)
-                        .frame(minWidth: 32, minHeight: 32).contentShape(Rectangle())
+                        .readerIconTarget(macOS: 32)
                         .contentTransition(.opacity)
                         .animation(ReaderMotion.feedback(reduceMotion), value: favorite)
                 }
@@ -259,7 +267,7 @@ struct ReaderView: View {
                 Button {
                     model.openReadingNote(summary)
                 } label: {
-                    Label("文末总结", systemImage: "doc.append").labelStyle(.titleAndIcon)
+                    Label("文末总结", readerIcon: .notebook).labelStyle(.titleAndIcon)
                 }
             }
             Button(action: model.toggleBookmark) {
@@ -305,14 +313,13 @@ struct ReaderView: View {
                 Button {
                     Task { await model.beginPDFReadingNote() }
                 } label: {
-                    Label("添加笔记", systemImage: "square.and.pencil").labelStyle(.iconOnly)
+                    Label("添加笔记", readerIcon: .annotation).labelStyle(.iconOnly).readerIconTarget()
                 }.help("添加笔记").accessibilityLabel("添加笔记")
                     .quickStartTarget(.annotation)
             }
             if !model.assistantSelectionText.isEmpty {
                 Button(action: explainSelection) {
-                    Label("解释选文", systemImage: "text.bubble")
-                        .labelStyle(.iconOnly)
+                    Label("解释选文", readerIcon: .discussion).labelStyle(.iconOnly).readerIconTarget()
                 }.help("解释选文").accessibilityLabel("解释选文")
             }
             #if os(iOS)
@@ -321,7 +328,7 @@ struct ReaderView: View {
                         .toggleStyle(.button).accessibilityLabel("手写批注")
                 }
             #endif
-        }.buttonStyle(.borderless).font(.caption).padding(.horizontal, 22).frame(height: 42)
+        }.buttonStyle(.borderless).font(.caption).padding(.horizontal, 22).frame(minHeight: 42)
             .background(ReaderTheme.canvas)
             .overlay(alignment: .top) { Rectangle().fill(ReaderTheme.line).frame(height: 0.5) }
     }

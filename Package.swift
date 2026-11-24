@@ -24,7 +24,10 @@ let package = Package(
                 "Platform/HTML/NoteEditor/Editor.js", "Platform/HTML/NoteEditor/SummaryEditor.js",
                 "Platform/HTML/NoteEditor/SummarySelection.js",
             ],
-            resources: [.copy("Platform/HTML/ReaderWarmup.html"), .copy("Platform/HTML/NoteEditor/NoteEditor.bundle")]),
+            resources: [
+                .process("DesignSystem/ReaderAssets.xcassets"), .copy("Platform/HTML/ReaderWarmup.html"),
+                .copy("Platform/HTML/NoteEditor/NoteEditor.bundle"),
+            ]),
         .executableTarget(name: "ReaderSmoke", dependencies: ["PaperReaderKit", "SwiftSoup"]),
         .target(
             name: "PaperReaderTestSupport", path: "Tests/PaperReaderTestSupport",

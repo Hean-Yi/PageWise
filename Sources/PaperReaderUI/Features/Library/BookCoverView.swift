@@ -203,7 +203,7 @@ struct BookshelfItem: View {
                 Button {
                     showPreview(.pinned(paper.id))
                 } label: {
-                    Image(systemName: "eye").frame(width: 30, height: 30).contentShape(Rectangle())
+                    Image(systemName: "eye").readerIconTarget(macOS: 30)
                 }
                 .buttonStyle(.plain).focused($focus, equals: .preview)
                 .foregroundStyle(ReaderTheme.muted).help("预览论文（按住空格）")
@@ -212,10 +212,9 @@ struct BookshelfItem: View {
                 Button {
                     model.toggleFavorite(paper.id)
                 } label: {
-                    Image(systemName: workspace.isFavorite ? "star.fill" : "star")
-                        .contentTransition(reduceMotion ? .identity : .symbolEffect(.replace))
+                    ReaderIcon(.favorite, filled: workspace.isFavorite)
                         .foregroundStyle(workspace.isFavorite ? ReaderTheme.accent : ReaderTheme.muted)
-                        .frame(width: 30, height: 30).contentShape(Rectangle())
+                        .readerIconTarget(macOS: 30)
                         .animation(ReaderMotion.feedback(reduceMotion), value: workspace.isFavorite)
                 }.buttonStyle(.plain).focused($focus, equals: .favorite)
                     .help(workspace.isFavorite ? "取消收藏" : "收藏")
@@ -224,11 +223,11 @@ struct BookshelfItem: View {
                     actions
                 } label: {
                     Image(systemName: "ellipsis").font(.system(size: 16, weight: .semibold))
-                        .frame(width: 24, height: 30).contentShape(Rectangle())
+                        .readerIconTarget(macOS: 30)
                 }.menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
                     .foregroundStyle(ReaderTheme.muted).focused($focus, equals: .menu)
                     .help("论文选项").accessibilityLabel("\(paper.title)的选项")
-            }.frame(height: 30).opacity(showsActions && !lifted ? 1 : 0)
+            }.frame(minHeight: 30).opacity(showsActions && !lifted ? 1 : 0)
                 .offset(arrangementOffset)
         }
         .contentShape(Rectangle())
@@ -315,7 +314,7 @@ struct AddPaperCover: View {
                 .animation(ReaderMotion.disclosure(reduceMotion), value: revealed)
                 .help("拖拽 PDF 至此，或点击在线查找").accessibilityLabel("在线查找论文")
                 .accessibilityHint("也可以拖拽 PDF 至此添加")
-            Color.clear.frame(height: 30).accessibilityHidden(true)
+            Color.clear.frame(height: ReaderTheme.iconTarget(30)).accessibilityHidden(true)
         }
     }
 }

@@ -36,7 +36,7 @@ struct ReaderNotesView: View {
                 } label: {
                     VStack(alignment: .leading, spacing: 7) {
                         if note.isDocumentSummary {
-                            Label("文末总结", systemImage: "doc.append").font(.caption)
+                            Label("文末总结", readerIcon: .notebook, size: 14).font(.caption)
                         } else if let dimension = note.dimension {
                             Label {
                                 Text(dimension.title)

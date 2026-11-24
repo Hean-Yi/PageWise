@@ -16,7 +16,7 @@ struct PDFReadingNoteCard: View {
                     }
                     .font(.headline)
                 } else {
-                    Label("阅读笔记", systemImage: "note.text").font(.headline)
+                    Label("阅读笔记", readerIcon: .notebook).font(.headline)
                 }
                 if let page = session.note.anchors.first?.pdfPageIndex {
                     Text("第 \(page + 1) 页").font(.caption).foregroundStyle(ReaderTheme.muted)
@@ -25,14 +25,14 @@ struct PDFReadingNoteCard: View {
                 Button {
                     citationRequest += 1
                 } label: {
-                    Image(systemName: "link")
+                    ReaderIcon(.citation).readerIconTarget()
                 }
                 .buttonStyle(.borderless).help("引用阅读笔记").accessibilityLabel("引用阅读笔记")
                 if model.currentReadingNotes.contains(where: { $0.id == session.id }) {
                     Button {
                         model.deleteReadingNote(session.id)
                     } label: {
-                        Image(systemName: "trash")
+                        ReaderIcon(.delete).readerIconTarget()
                     }
                     .buttonStyle(.borderless).help("删除笔记").accessibilityLabel("删除笔记")
                 }

@@ -8,7 +8,11 @@ struct NotePassageSheetView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack {
-                Label(title, systemImage: "link").font(ReaderTheme.editorial(21))
+                Label {
+                    Text(title)
+                } icon: {
+                    ReaderIcon(.citation, size: 19)
+                }.font(ReaderTheme.editorial(21))
                 Spacer()
                 Button {
                     model.notePassageSheet = nil
@@ -147,7 +151,11 @@ private struct NotePassagePreviewView: View {
                             } catch { self.error = error.localizedDescription }
                         }
                     } label: {
-                        Label(preview.readingNoteID == nil ? "打开原文" : "打开笔记", systemImage: "arrow.up.forward")
+                        if preview.readingNoteID == nil {
+                            Label("打开原文", readerIcon: .source)
+                        } else {
+                            Label("打开笔记", readerIcon: .notebook)
+                        }
                     }
                     .buttonStyle(.borderedProminent).tint(ReaderTheme.accent)
                 }

@@ -212,8 +212,12 @@ private struct LibrarySearchSuggestions: ViewModifier {
                 SearchMatchText(paper.title, matches: titleMatches(in: paper.title))
                     .font(.callout.weight(.medium)).foregroundStyle(ReaderTheme.ink)
                     .lineLimit(2).multilineTextAlignment(.leading)
-                Label(shelf, systemImage: "books.vertical")
-                    .font(.caption).foregroundStyle(ReaderTheme.muted).lineLimit(1)
+                Label {
+                    Text(shelf)
+                } icon: {
+                    ReaderIcon(.library, size: 13)
+                }
+                .font(.caption).foregroundStyle(ReaderTheme.muted).lineLimit(1)
             }
             .padding(.horizontal, 10).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
             .background(selected ? ReaderTheme.elevated : .clear, in: RoundedRectangle(cornerRadius: 8))

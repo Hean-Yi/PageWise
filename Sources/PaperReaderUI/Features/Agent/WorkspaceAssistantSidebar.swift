@@ -5,11 +5,11 @@ enum AssistantTab: String, CaseIterable {
     case notes = "笔记"
     case library = "书库助理"
 
-    var icon: String {
+    var icon: ReaderIcon.Glyph {
         switch self {
-        case .paper: "text.bubble"
-        case .notes: "note.text"
-        case .library: "books.vertical"
+        case .paper: .discussion
+        case .notes: .notebook
+        case .library: .library
         }
     }
 }
@@ -33,8 +33,12 @@ struct WorkspaceAssistantSidebar: View {
                 if isReading {
                     tabBar
                 } else {
-                    Label(AssistantTab.library.rawValue, systemImage: AssistantTab.library.icon)
-                        .font(.headline).accessibilityAddTraits(.isHeader)
+                    Label {
+                        Text(AssistantTab.library.rawValue)
+                    } icon: {
+                        ReaderIcon(.library, size: 18)
+                    }
+                    .font(.headline).accessibilityAddTraits(.isHeader)
                     Spacer(minLength: 0)
                 }
                 if model.busyAI && isReading {
@@ -64,7 +68,7 @@ struct WorkspaceAssistantSidebar: View {
                     if !selected { select(item) }
                 } label: {
                     HStack(spacing: 6) {
-                        Image(systemName: item.icon)
+                        ReaderIcon(item.icon, size: 17)
                         if selected {
                             Text(item.rawValue).font(.callout.weight(.medium)).lineLimit(1)
                                 .transition(.opacity)

@@ -37,13 +37,13 @@ struct MemoryView: View {
                     Button {
                         openPaper(source.paperID)
                     } label: {
-                        Label("来源", systemImage: "arrow.up.right")
+                        Label("来源", readerIcon: .source, size: 15)
                     }.help("打开来源论文")
                 }
                 Button(role: .destructive) {
                     model.deleteMemory(memory.id)
                 } label: {
-                    Image(systemName: "trash")
+                    ReaderIcon(.delete, size: 15).readerIconTarget(macOS: 24)
                 }
                 .accessibilityLabel("删除此条记忆").help("删除记忆")
             }

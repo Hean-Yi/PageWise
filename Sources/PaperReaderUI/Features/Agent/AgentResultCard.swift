@@ -37,17 +37,17 @@ struct AgentResultCard: View {
         return [item.sourceName, version, item.year].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
     }
 
-    private func purpose(for card: AgentCard) -> (title: String, icon: String) {
+    private func purpose(for card: AgentCard) -> (title: String, icon: AssistantToolTile.Icon) {
         switch card.readingNoteID == nil ? result.purpose : .readingNote {
-        case .recommendation: ("推荐论文", "bookmark")
-        case .citation: ("引用原文", "quote.opening")
-        case .match: ("检索结果", card.kind == .onlineCandidate ? "globe" : "books.vertical")
-        case .navigation: ("定位论文", "location")
-        case .importAction: ("导入论文", "arrow.down.doc")
-        case .readingNote: ("阅读笔记", "note.text")
-        case .localImport: ("导入本地 PDF", "doc.badge.plus")
+        case .recommendation: ("推荐论文", .system("bookmark"))
+        case .citation: ("引用原文", .reader(.citation))
+        case .match: ("检索结果", card.kind == .onlineCandidate ? .system("globe") : .reader(.library))
+        case .navigation: ("定位论文", .system("location"))
+        case .importAction: ("导入论文", .system("arrow.down.doc"))
+        case .readingNote: ("阅读笔记", .reader(.notebook))
+        case .localImport: ("导入本地 PDF", .system("doc.badge.plus"))
         case .removal:
-            if case .shelf = card.removal { ("移除书架", "trash") } else { ("删除论文", "trash") }
+            if case .shelf = card.removal { ("移除书架", .reader(.delete)) } else { ("删除论文", .reader(.delete)) }
         }
     }
 
@@ -66,10 +66,10 @@ struct AgentResultCard: View {
         if let paperID = card.paperID, card.kind != .onlineCandidate,
             !agent.reader.state.papers.contains(where: { $0.id == paperID })
         {
-            Label("论文已从书库删除", systemImage: "trash")
+            Label("论文已从书库删除", readerIcon: .delete, size: 14)
                 .font(.caption).foregroundStyle(ReaderTheme.muted)
         } else if card.readingNoteID != nil && !agent.canOpen(card) {
-            Label("笔记已删除或原文不可用", systemImage: "note.text")
+            Label("笔记已删除或原文不可用", readerIcon: .notebook, size: 14)
                 .font(.caption).foregroundStyle(ReaderTheme.muted)
         } else {
             resultTile(for: card)
@@ -119,7 +119,7 @@ struct AgentResultCard: View {
                     Button {
                         followUp(card)
                     } label: {
-                        Label("追问", systemImage: "bubble.left")
+                        Label("追问", readerIcon: .discussion, size: 14)
                     }
                     .buttonStyle(.borderless).foregroundStyle(ReaderTheme.muted)
                     .help("基于这项结果追问").accessibilityLabel("基于《\(card.title)》追问")
@@ -180,7 +180,7 @@ struct AgentResultCard: View {
         }
         return VStack(alignment: .leading, spacing: 0) {
             AssistantToolTile(
-                tool: purpose.title, systemImage: purpose.icon, title: card.title, detail: detail,
+                tool: purpose.title, icon: purpose.icon, title: card.title, detail: detail,
                 metadata: metadata(for: card), accessory: accessory, accessoryRotation: accessoryRotation,
                 detailLines: result.purpose == .readingNote ? 1 : 2,
                 searchQuery: card.searchQuery)
@@ -219,7 +219,11 @@ struct AgentResultCard: View {
                     Task { await confirmRemoval(card) }
                 }
             } label: {
-                Label(title, systemImage: "trash")
+                Label {
+                    Text(title)
+                } icon: {
+                    ReaderIcon(.delete, size: 14)
+                }
             }
             .buttonStyle(.bordered)
             .accessibilityLabel("\(title)：\(card.title)")
@@ -287,7 +291,7 @@ struct AgentResultCard: View {
             Button {
                 open(card)
             } label: {
-                Label("在书库打开", systemImage: "books.vertical")
+                Label("在书库打开", readerIcon: .library)
             }
             .buttonStyle(.bordered).disabled(!agent.canOpen(card))
             .accessibilityHint(card.title)

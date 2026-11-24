@@ -2,8 +2,20 @@ import SwiftUI
 
 /// Shared label for a tool result or a citation. The caller supplies the actual action.
 struct AssistantToolTile: View {
+    enum Icon: View {
+        case reader(ReaderIcon.Glyph)
+        case system(String)
+
+        var body: some View {
+            switch self {
+            case .reader(let glyph): ReaderIcon(glyph, size: 14)
+            case .system(let name): Image(systemName: name)
+            }
+        }
+    }
+
     let tool: String
-    let systemImage: String
+    let icon: Icon
     let title: String
     var detail: String?
     var metadata: String?
@@ -15,7 +27,7 @@ struct AssistantToolTile: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
-                Image(systemName: systemImage).accessibilityHidden(true)
+                icon.accessibilityHidden(true)
                 Text(tool).fontWeight(.semibold)
                 Spacer(minLength: 2)
                 if let metadata, !metadata.isEmpty {

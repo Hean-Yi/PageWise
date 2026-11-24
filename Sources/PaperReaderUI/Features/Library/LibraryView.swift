@@ -17,6 +17,8 @@ public struct LibraryView: View {
     @State private var selectedShelfID: UUID?
     @State private var calendarDate = Date()
     @State private var expandedNotebooks = Set<UUID>()
+    @State private var notebookScroll = NotebookScrollBookmark()
+    @State private var expandedNotebookAnnotations = Set<UUID>()
     @State private var dragTarget = false
     @State private var preferredColumn: NavigationSplitViewColumn = .sidebar
     @State private var toast: String?
@@ -25,6 +27,8 @@ public struct LibraryView: View {
     @State private var findRequest = 0
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.colorScheme) private var colorScheme
+    @ScaledMetric(relativeTo: .subheadline) private var sidebarFontSize: CGFloat = 13
     @Namespace private var sidebarSelection
     private let timer = Timer.publish(every: 60, on: .main, in: .common).autoconnect()
 
@@ -212,7 +216,9 @@ public struct LibraryView: View {
                     sidebar
                 }
             }
-            .modifier(WorkspaceArrival(page: isReading, distance: isReading ? 9 : -9, background: ReaderTheme.sidebar))
+            .modifier(
+                WorkspaceArrival(destination: CGPoint(x: isReading ? 9 : 0, y: 0), background: ReaderTheme.sidebar)
+            )
             .navigationSplitViewColumnWidth(min: 210, ideal: 244, max: 320)
         } detail: {
             detailContent
@@ -366,7 +372,9 @@ public struct LibraryView: View {
                 case .calendar:
                     ReadingCalendarView(model: model, date: $calendarDate)
                 case .notebooks:
-                    ReadingNotebooksView(model: model, expandedHistory: $expandedNotebooks)
+                    ReadingNotebooksView(
+                        model: model, expandedHistory: $expandedNotebooks, bookmark: notebookScroll,
+                        expandedAnnotations: $expandedNotebookAnnotations)
                 case .reader:
                     ReaderView(
                         model: model, sidebarOpen: assistantTab != nil,
@@ -381,17 +389,24 @@ public struct LibraryView: View {
                 }
             }
         }
-        .modifier(WorkspaceArrival(page: page, distance: page.arrivalDistance, background: ReaderTheme.canvas))
+        .modifier(
+            WorkspaceArrival(destination: page.location(origin: model.readerOrigin), background: ReaderTheme.canvas))
     }
 
     private enum WorkspacePage {
         case shelf, reader, calendar, notebooks
 
-        var arrivalDistance: CGFloat {
+        func location(origin: ReaderOrigin) -> CGPoint {
             switch self {
-            case .reader: 32
-            case .shelf: -24
-            case .calendar, .notebooks: -16
+            case .shelf: .zero
+            case .calendar: CGPoint(x: 0, y: 9)
+            case .notebooks: CGPoint(x: 0, y: 18)
+            case .reader:
+                switch origin {
+                case .library: CGPoint(x: 26, y: 0)
+                case .calendar: CGPoint(x: 26, y: 9)
+                case .notebooks: CGPoint(x: 26, y: 18)
+                }
             }
         }
     }
@@ -415,15 +430,17 @@ public struct LibraryView: View {
     private var sidebar: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 10) {
-                Image(systemName: "book.pages.fill").font(.system(size: 20, weight: .regular))
-                    .foregroundStyle(ReaderTheme.accent).accessibilityHidden(true)
+                Image("Imprint", bundle: .module)
+                    .resizable().interpolation(.high).scaledToFit().frame(width: 33, height: 33)
+                    .brightness(colorScheme == .dark ? 0.18 : 0)
+                    .accessibilityHidden(true)
                 Text("PaperReader").font(ReaderTheme.editorial(24, weight: .medium)).foregroundStyle(ReaderTheme.ink)
                     .lineLimit(1).minimumScaleFactor(0.8)
             }.padding(.horizontal, 21).padding(.top, 17).padding(.bottom, 27)
             VStack(spacing: 3) {
-                ForEach([LibraryCollection.all, .finished, .favorites]) { item in
+                ForEach(sidebarCollections, id: \.collection.id) { item, icon in
                     navigation(
-                        item.title, icon: item.icon,
+                        item.title, icon: icon,
                         selected: model.selectedSection == "library" && collection == item,
                         count: model.state.papers.filter { item.includes(model.workspace(for: $0.id), for: $0) }.count
                     ) {
@@ -434,12 +451,12 @@ public struct LibraryView: View {
                     }
                 }
                 Rectangle().fill(ReaderTheme.line).frame(height: 1).padding(.vertical, 12).padding(.horizontal, 12)
-                navigation("阅读日历", icon: "calendar", selected: model.selectedSection == "calendar") {
+                navigation("阅读日历", icon: .calendar, selected: model.selectedSection == "calendar") {
                     model.endReading()
                     model.selectedSection = "calendar"
                     preferredColumn = .detail
                 }
-                navigation("阅读笔记", icon: "book.pages", selected: model.selectedSection == "notebooks") {
+                navigation("阅读笔记", icon: .notebook, selected: model.selectedSection == "notebooks") {
                     model.endReading()
                     model.selectedSection = "notebooks"
                     preferredColumn = .detail
@@ -461,7 +478,7 @@ public struct LibraryView: View {
                                 preferredColumn = .detail
                             } label: {
                                 HStack(alignment: .top, spacing: 9) {
-                                    Image(systemName: "doc.text").foregroundStyle(ReaderTheme.muted)
+                                    ReaderIcon(.paper, size: 16).foregroundStyle(ReaderTheme.muted)
                                         .frame(width: 18).padding(.top, 1)
                                     Text(paper.title).foregroundStyle(ReaderTheme.ink).lineLimit(2)
                                         .multilineTextAlignment(.leading)
@@ -498,14 +515,18 @@ public struct LibraryView: View {
         }.frame(maxHeight: .infinity).background(ReaderTheme.sidebar)
     }
 
+    private var sidebarCollections: [(collection: LibraryCollection, icon: ReaderIcon.Glyph)] {
+        [(.all, .library), (.finished, .read), (.favorites, .favorite)]
+    }
+
     private func navigation(
-        _ title: String, icon: String, selected: Bool, count: Int? = nil, action: @escaping () -> Void
+        _ title: String, icon: ReaderIcon.Glyph, selected: Bool, count: Int? = nil, action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
             HStack(spacing: 11) {
-                Image(systemName: icon).font(.system(size: 14)).frame(width: 18)
+                ReaderIcon(icon, size: 17).frame(minWidth: 18)
                     .foregroundStyle(selected ? ReaderTheme.accent : ReaderTheme.muted)
-                Text(title).font(.system(size: 13, weight: selected ? .semibold : .regular))
+                Text(title).font(.system(size: sidebarFontSize, weight: selected ? .semibold : .regular))
                 Spacer()
                 if let count, count > 0 {
                     Text("\(count)").font(.caption.monospacedDigit()).foregroundStyle(ReaderTheme.muted)

@@ -1,6 +1,32 @@
-import Foundation
+import SwiftUI
 
 enum HTMLNotesScript {
+    /// Only application-owned drawing instructions enter the reader's script.
+    private static func iconPath(_ path: Path) -> String {
+        func point(_ p: CGPoint) -> String { "\(p.x) \(p.y)" }
+        var commands: [String] = []
+        func append(_ element: Path.Element) {
+            switch element {
+            case .move(let to): commands.append("M\(point(to))")
+            case .line(let to): commands.append("L\(point(to))")
+            case .quadCurve(let to, let control): commands.append("Q\(point(control)) \(point(to))")
+            case .curve(let to, let first, let second):
+                commands.append("C\(point(first)) \(point(second)) \(point(to))")
+            case .closeSubpath: commands.append("Z")
+            }
+        }
+        path.forEach(append)
+        return commands.joined(separator: " ")
+    }
+
+    private static func iconSVG(_ glyph: ReaderIcon.Glyph) -> String {
+        let plate = iconPath(glyph.inkPlate)
+        let outline = iconPath(glyph.drawing)
+        return """
+            <svg aria-hidden="true" focusable="false" width="16" height="16" viewBox="0 0 24 24"><path class="ink-plate" d="\(plate)"/><path d="\(outline)" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="square" stroke-linejoin="round"/></svg>
+            """
+    }
+
     static let source = #"""
         (()=>{
           const root=document.getElementById('reader'),selection=window.paperSelection,layout=window.paperNoteLayout,menu=document.getElementById('annotation-menu');
@@ -34,14 +60,20 @@ enum HTMLNotesScript {
           };
           const leave=()=>{cancelCrossing();if(active&&!editing){active=null;schedule(false);}};
           const button=(text,handler,label=text)=>{const b=document.createElement('button');b.type='button';b.textContent=text;b.setAttribute('aria-label',label);b.onclick=event=>{event.stopPropagation();handler();};return b;};
+          const icons={source:'\#(iconSVG(.source))',citation:'\#(iconSVG(.citation))',delete:'\#(iconSVG(.delete))'};
+          const iconButton=(icon,label,handler)=>{
+            const b=button('',handler,label);b.title=label;b.className='note-icon-button';
+            b.innerHTML=icons[icon];
+            return b;
+          };
           const make=note=>{
             const e={...note,persisted:false};e.card=document.createElement('article');e.card.className='reader-note-card';e.card.hidden=true;e.card.dataset.noteId=e.id;e.card.tabIndex=0;e.card.setAttribute('aria-label',e.dimensionTitle||'阅读笔记');
             const header=document.createElement('header'),title=document.createElement('strong');title.textContent=e.dimensionTitle||'笔记';header.append(title);
             e.choices=document.createElement('select');e.choices.setAttribute('aria-label','重叠笔记');e.choices.className='note-hidden';e.choices.onchange=()=>activate(e.choices.value,!!editing);header.append(e.choices);
             e.tabs=document.createElement('span');e.tabs.className='note-hidden';
-            e.tabs.textContent='Markdown';header.append(e.tabs);header.append(button('原文',()=>{document.getElementById('block-'+e.anchors[0].key)?.scrollIntoView({block:'center'});schedule();},'定位笔记原文'));
-            const more=document.createElement('details'),summary=document.createElement('summary');summary.textContent='···';summary.setAttribute('aria-label','笔记更多操作');more.append(summary);
-            more.append(button('删除笔记',()=>{const id=e.id;finish();send({kind:'noteDelete',id});e.editor?.destroy();e.card.remove();records.delete(id);showUndo();schedule();}));header.append(more);
+            e.tabs.textContent='Markdown';header.append(e.tabs);
+            header.append(iconButton('source','定位笔记原文',()=>{document.getElementById('block-'+e.anchors[0].key)?.scrollIntoView({block:'center'});schedule();}));
+            header.append(iconButton('delete','删除笔记',()=>{const id=e.id;finish();send({kind:'noteDelete',id});e.editor?.destroy();e.card.remove();records.delete(id);showUndo();schedule();}));
             e.input=document.createElement('div');e.input.className='note-editor note-hidden';
             e.input.oninput=event=>{if(event.target===e.input)store(e);};
             e.input.onkeydown=event=>{if((event.metaKey||event.ctrlKey)&&event.key==='Enter'){event.preventDefault();finish();}if(event.key==='Escape'){event.preventDefault();event.stopPropagation();finish();}};
@@ -49,10 +81,10 @@ enum HTMLNotesScript {
             e.content=document.createElement('div');e.content.className='note-content';e.content.setAttribute('aria-label','笔记预览');
             PaperNoteEditor.bindPassages(e.card,passage=>send({kind:'notePreviewPassage',id:e.id,passage}));
             e.footer=document.createElement('footer');e.footer.className='note-hidden';e.status=document.createElement('button');e.status.type='button';e.status.textContent=lastStatus;e.status.onclick=flush;
-            const insert=button('引用笔记',()=>{
+            const insert=iconButton('citation','引用阅读笔记',()=>{
               if(editing!==e.id||!e.editor)return;
               send({kind:'noteInsertPassage',id:e.id,anchors:e.anchors,markdown:e.input.value,from:e.editor.selectionStart,to:e.editor.selectionEnd});
-            },'引用阅读笔记');
+            });
             const done=button('完成',finish);done.className='note-done';e.footer.append(e.status,insert,done);e.card.append(header,e.input,e.content,e.summary,e.footer);
             e.card.addEventListener('mouseenter',()=>{cancelCrossing();if(!editing&&(active!==e.id||!reverse))activate(e.id,false,true);});
             e.card.addEventListener('focusin',()=>{if(!editing&&(active!==e.id||!reverse))activate(e.id,false,true);});
@@ -231,10 +263,10 @@ enum HTMLNotesScript {
               const tools=document.createElement('span');
               const retry=button('保存失败，重试',flush,'重试保存阅读笔记');
               retry.hidden=!lastStatus.startsWith('保存失败');
-              tools.append(retry,button('引用笔记',()=>{
+              tools.append(retry,iconButton('citation','引用阅读笔记',()=>{
                 const e=appendixEditor.editForCitation();
                 if(e)send({kind:'noteInsertPassage',id,anchors:[],markdown:e.value,from:e.selectionStart,to:e.selectionEnd});
-              },'引用阅读笔记'));
+              }));
               head.append(title,tools);
               const prose=document.createElement('div');prose.className='note-prose';appendix.append(head,prose);root.after(appendix);
               appendixEditor=PaperNoteEditor.attachSummary(prose,markdown=>send({kind:'noteChange',id,anchors:[],markdown}),active=>{

@@ -206,13 +206,23 @@
         let reopened = try ReaderModel(root: directory)
         await reopened.load()
         #expect(reopened.state.readingNotes == [saved])
-        model.deleteReadingNote(saved.id)
-        #expect(model.currentReadingNotes.isEmpty)
-        model.undoReadingNoteDeletion()
-        #expect(model.currentReadingNotes.first?.markdown == source)
+        _ = try await noteJS(web, "card.querySelector('header button[aria-label=\"删除笔记\"]').click()")
+        try await noteWait { model.currentReadingNotes.isEmpty }
         coordinator.update(web)
+        _ = try await noteJS(web, "document.querySelector('#reader-note-undo').click()")
+        try await noteWait { model.currentReadingNotes.first?.markdown == source }
+        coordinator.update(web)
+        try await noteWait {
+            (try? await noteJS(web, "return !!document.querySelector('.reader-note-card')")) as? Bool == true
+        }
         _ = try await noteJS(web, "window.paperNotes.open(id,true)", ["id": saved.id.uuidString])
-        #expect(try await noteJS(web, "return editor.value", [:]) as? String == source)
+        try await noteWait {
+            (try? await noteJS(web, "return !!document.activeElement?.closest('.reader-note-card .note-editor')"))
+                as? Bool == true
+        }
+        #expect(
+            try await noteJS(web, "return document.querySelector('.reader-note-card .note-editor').value") as? String
+                == source)
         #expect(
             try await noteJS(
                 web,
