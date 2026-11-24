@@ -8,6 +8,8 @@
 
 /* Begin PBXBuildFile section */
 		50AA7666BF0C2923F86A616C /* PaperReaderUI in Frameworks */ = {isa = PBXBuildFile; productRef = C9177913B5CE505CA4746F53 /* PaperReaderUI */; };
+		5AAEF9E42111C4C685099F09 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 1E0F1DF7AC442C5C34D102D2 /* Assets.xcassets */; };
+		6D0A637B1E095A947A836115 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 1E0F1DF7AC442C5C34D102D2 /* Assets.xcassets */; };
 		88CC6470353CC8693F2CCA3A /* PaperReaderApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51FB6B31A0DE1A8F2F06D8D9 /* PaperReaderApp.swift */; };
 		B8926482AF13E5A1504EDD23 /* PaperReaderUI in Frameworks */ = {isa = PBXBuildFile; productRef = C805074D8660902CA68F8EEA /* PaperReaderUI */; };
 		BFF978E00DF698D3FFD88FC9 /* PaperReaderApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51FB6B31A0DE1A8F2F06D8D9 /* PaperReaderApp.swift */; };
@@ -15,10 +17,11 @@
 
 /* Begin PBXFileReference section */
 		013419071F85B4A7F14D523D /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		1E0F1DF7AC442C5C34D102D2 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		51FB6B31A0DE1A8F2F06D8D9 /* PaperReaderApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PaperReaderApp.swift; sourceTree = "<group>"; };
 		7F693F2B1C0C78BE68699701 /* PaperReader-iPad.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = "PaperReader-iPad.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		86683C37CFB8D683C7EEAA0B /* PaperReader.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = PaperReader.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		07534297B3361E6EE660EF82 /* PaperReader-mvp */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "PaperReader-mvp"; path = .; sourceTree = SOURCE_ROOT; };
+		A843702A09765662CBCFDC99 /* PaperReader */ = {isa = PBXFileReference; lastKnownFileType = folder; name = PaperReader; path = .; sourceTree = SOURCE_ROOT; };
 		D7003AE7EA4AD79E60A6CC64 /* PaperReader.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = PaperReader.entitlements; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -63,6 +66,7 @@
 		C8D6C402D2EC67D8F18D9DE1 /* App */ = {
 			isa = PBXGroup;
 			children = (
+				1E0F1DF7AC442C5C34D102D2 /* Assets.xcassets */,
 				013419071F85B4A7F14D523D /* Info.plist */,
 				D7003AE7EA4AD79E60A6CC64 /* PaperReader.entitlements */,
 				51FB6B31A0DE1A8F2F06D8D9 /* PaperReaderApp.swift */,
@@ -73,7 +77,7 @@
 		DB4B44927F27955F0A0F843B /* Packages */ = {
 			isa = PBXGroup;
 			children = (
-				07534297B3361E6EE660EF82 /* PaperReader-mvp */,
+				A843702A09765662CBCFDC99 /* PaperReader */,
 			);
 			name = Packages;
 			sourceTree = "<group>";
@@ -86,6 +90,7 @@
 			buildConfigurationList = BAB1BBE9C4FA5133569B89C3 /* Build configuration list for PBXNativeTarget "PaperReader" */;
 			buildPhases = (
 				1D4B87CDED89B08EF8F91F8B /* Sources */,
+				D2DF94A792D51E839B7EA229 /* Resources */,
 				F1C04BE3C961BB17C0308D02 /* Frameworks */,
 			);
 			buildRules = (
@@ -105,6 +110,7 @@
 			buildConfigurationList = C5C8BE227A6D1718170E414D /* Build configuration list for PBXNativeTarget "PaperReader-iPad" */;
 			buildPhases = (
 				4FB50C68F47D2DEB09A097B8 /* Sources */,
+				7C552D1A06F53DF387993278 /* Resources */,
 				194C44C29AE6FB7C87A21F8A /* Frameworks */,
 			);
 			buildRules = (
@@ -152,6 +158,25 @@
 			);
 		};
 /* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		7C552D1A06F53DF387993278 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				5AAEF9E42111C4C685099F09 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		D2DF94A792D51E839B7EA229 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				6D0A637B1E095A947A836115 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		1D4B87CDED89B08EF8F91F8B /* Sources */ = {
