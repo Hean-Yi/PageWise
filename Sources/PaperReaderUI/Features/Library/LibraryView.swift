@@ -256,7 +256,7 @@ public struct LibraryView: View {
                     explainSelection: {
                         paperQuestion = "请结合全文解释选中内容。"
                         assistantTab = .paper
-                    }, requestNoteSave: { askSave = true }, openSettings: { showSettings = true }
+                    }, openSettings: { showSettings = true }
                 )
                 .transition(ReaderMotion.arrival(x: 14))
             } else {

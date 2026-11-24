@@ -72,9 +72,9 @@ struct PDFBilingualReadingView: View {
                             peekingAtOriginal = false
                         } label: {
                             Label("返回双语重排", systemImage: "arrow.uturn.backward")
-                                .font(.callout.weight(.medium)).padding(.horizontal, 6).padding(.vertical, 4)
+                                .font(.callout.weight(.medium))
                         }
-                        .buttonStyle(.borderedProminent).tint(ReaderTheme.accent).padding(16)
+                        .readerFloatingButton(.capsule).padding(16)
                         .transition(.opacity)
                     }
                 }

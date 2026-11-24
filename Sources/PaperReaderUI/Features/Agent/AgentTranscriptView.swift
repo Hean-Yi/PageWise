@@ -152,17 +152,12 @@ private struct JumpToLatest: ViewModifier {
                 hasMoreBelow = hasMore
             }
             .overlay(alignment: .bottomTrailing) {
-                Button {
+                Button("前往最新消息", systemImage: "arrow.down") {
                     readerScrolled = false
                     withAnimation(ReaderMotion.navigation(reduceMotion), jump)
-                } label: {
-                    Image(systemName: "arrow.down")
-                        .font(.callout.weight(.medium))
-                        .frame(width: 34, height: 34).background(ReaderTheme.surface, in: Circle())
-                        .overlay { Circle().strokeBorder(ReaderTheme.line) }
                 }
-                .buttonStyle(.plain).foregroundStyle(ReaderTheme.ink)
-                .help("前往最新消息").accessibilityLabel("前往最新消息")
+                .labelStyle(.iconOnly).readerFloatingButton(.circle)
+                .help("前往最新消息")
                 .opacity(hasMoreBelow ? 1 : 0)
                 .animation(ReaderMotion.feedback(reduceMotion), value: hasMoreBelow)
                 .disabled(!hasMoreBelow).allowsHitTesting(hasMoreBelow).accessibilityHidden(!hasMoreBelow)

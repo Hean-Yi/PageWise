@@ -5,7 +5,6 @@ struct ReaderView: View {
     @Bindable var model: ReaderModel
     let sidebarOpen: Bool
     let explainSelection: () -> Void
-    let requestNoteSave: () -> Void
     let openSettings: () -> Void
     @State private var pageInput = "1"
     @FocusState private var pageFocused: Bool
@@ -118,17 +117,27 @@ struct ReaderView: View {
             Text(model.paper?.title ?? "").font(ReaderTheme.editorial(18, weight: .medium))
                 .foregroundStyle(ReaderTheme.ink).lineLimit(1).truncationMode(.tail)
             Spacer(minLength: 0)
-            Picker(
-                "阅读模式",
-                selection: Binding(
+            ReaderModePicker(
+                bilingual: Binding(
                     get: { model.pdfBilingual.isOpen || model.mode != "original" },
-                    set: { selected in setBilingualReading(selected) }
-                )
-            ) {
-                Text("原版").tag(false)
-                Text("双语重排").tag(true)
-            }.pickerStyle(.segmented).controlSize(.regular).labelsHidden().fixedSize().accessibilityLabel("阅读模式")
-            readingMenu(width: width)
+                    set: { selected in setBilingualReading(selected) }))
+            if let paper = model.currentEdition {
+                let favorite = model.workspace(for: paper.id).isFavorite
+                Button {
+                    model.toggleFavorite(paper.id)
+                } label: {
+                    Image(systemName: favorite ? "star.fill" : "star")
+                        .foregroundStyle(favorite ? ReaderTheme.accent : ReaderTheme.muted)
+                        .frame(minWidth: 32, minHeight: 32).contentShape(Rectangle())
+                        .contentTransition(.opacity)
+                        .animation(ReaderMotion.feedback(reduceMotion), value: favorite)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(favorite ? "取消收藏" : "收藏论文")
+                .accessibilityAddTraits(favorite ? .isSelected : [])
+                .help(favorite ? "取消收藏" : "收藏论文")
+            }
+            readingMenu
         }
         .buttonStyle(.borderless).padding(.horizontal, width < 520 ? 12 : 22).frame(height: 56)
         .background(ReaderTheme.canvas)
@@ -153,22 +162,10 @@ struct ReaderView: View {
         }
     }
 
-    private func readingMenu(width: CGFloat) -> some View {
+    private var readingMenu: some View {
         Menu {
-            if isLocalPDF && model.pdfBilingual.isOpen {
-                PDFBilingualMenuItems(
-                    model: model, layout: $pdfLayout, peekingAtOriginal: $peekingAtOriginal, width: width)
-                Divider()
-            }
             if let paper = model.currentEdition {
                 let workspace = model.workspace(for: paper.id)
-                Button {
-                    model.toggleFavorite(paper.id)
-                } label: {
-                    Label(
-                        workspace.isFavorite ? "取消收藏" : "收藏论文", systemImage: workspace.isFavorite ? "star.fill" : "star"
-                    )
-                }
                 Menu("阅读状态") {
                     Picker(
                         "阅读状态",
@@ -180,17 +177,13 @@ struct ReaderView: View {
                         }
                     }.pickerStyle(.inline).labelsHidden()
                 }
-                Button(action: requestNoteSave) { Label("保存到 Obsidian", systemImage: "square.and.arrow.up") }
                 if !paper.warnings.isEmpty {
-                    Button {
-                        showWarnings = true
-                    } label: {
-                        Label("阅读提示", systemImage: "info.circle")
-                    }
+                    Button("阅读提示") { showWarnings = true }
                 }
                 let olderVersions = paper.retainedReadings ?? []
                 let hasLegacyEdition = !paper.readingPages.isEmpty && !paper.hasPublishedSourceReading
-                if !paper.previewPages.isEmpty || !olderVersions.isEmpty || hasLegacyEdition {
+                let canRegenerate = paper.usesSourceReflow && !paper.readingPages.isEmpty
+                if !paper.previewPages.isEmpty || !olderVersions.isEmpty || hasLegacyEdition || canRegenerate {
                     Menu("阅读版本") {
                         if !paper.previewPages.isEmpty {
                             Button("旧版固定页", action: model.openFixedPreview)
@@ -201,16 +194,20 @@ struct ReaderView: View {
                         ForEach(Array(olderVersions.enumerated()), id: \.element.id) { index, version in
                             Button("保留版本 \(index + 1)") { model.openRetainedReading(version.id) }
                         }
+                        if canRegenerate {
+                            Divider()
+                            Button("重新生成双语版") { translate(regenerate: true) }
+                                .disabled(model.translating.contains(paper.id))
+                        }
                     }
-                }
-                if paper.usesSourceReflow, !paper.readingPages.isEmpty {
-                    Button("重新生成双语版") { translate(regenerate: true) }
-                        .disabled(model.translating.contains(paper.id))
                 }
             }
         } label: {
-            Label("更多阅读选项", systemImage: "ellipsis.circle")
-        }.labelStyle(.iconOnly).fixedSize().help("更多阅读选项")
+            Image(systemName: "ellipsis").font(.body.weight(.semibold))
+                .frame(minWidth: 32, minHeight: 32).contentShape(Rectangle())
+        }
+        .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+        .accessibilityLabel("更多阅读选项").help("更多阅读选项")
     }
 
     private func readingBar(width: CGFloat) -> some View {
@@ -261,6 +258,9 @@ struct ReaderView: View {
             }.disabled(model.pageKeys.isEmpty).help(model.isCurrentPageBookmarked ? "移除书签" : "添加书签")
                 .accessibilityLabel(model.isCurrentPageBookmarked ? "移除当前页书签" : "添加当前页书签")
                 .keyboardShortcut("d")
+            if model.pdfBilingual.isOpen && isLocalPDF && !peekingAtOriginal {
+                PDFBilingualAppearanceMenu(model: model, layout: $pdfLayout, width: width)
+            }
             Spacer()
             if model.pdfBilingual.isOpen && isLocalPDF && (model.selectionText.isEmpty || !originalVisible) {
                 PDFTranslationStatusControl(model: model, layout: pdfLayout, openSettings: openSettings)

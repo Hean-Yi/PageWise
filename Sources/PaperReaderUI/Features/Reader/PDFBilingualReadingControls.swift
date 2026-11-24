@@ -1,43 +1,40 @@
 import SwiftUI
 
-struct PDFBilingualMenuItems: View {
+struct PDFBilingualAppearanceMenu: View {
     let model: ReaderModel
     @Binding var layout: PDFBilingualLayoutPreference
-    @Binding var peekingAtOriginal: Bool
     let width: CGFloat
     @AppStorage("PDFBilingualFontSize") private var fontSize = 16
 
     var body: some View {
-        if layout.resolved(at: width) != .split || peekingAtOriginal {
-            Button {
-                peekingAtOriginal.toggle()
-            } label: {
-                Label(
-                    peekingAtOriginal ? "返回双语重排" : "查看原页",
-                    systemImage: peekingAtOriginal ? "arrow.uturn.backward" : "doc.text.magnifyingglass")
+        Menu {
+            Section("对照布局") {
+                Picker("对照布局", selection: $layout) {
+                    Text("段落对照").tag(PDFBilingualLayoutPreference.paragraph)
+                    Text("逐句上下").tag(PDFBilingualLayoutPreference.stacked)
+                    Text("左右并排").tag(PDFBilingualLayoutPreference.split).disabled(width < 570)
+                    Text("随窗口调整").tag(PDFBilingualLayoutPreference.auto)
+                }.pickerStyle(.inline).labelsHidden()
+                if layout.resolved(at: width) == .split {
+                    Toggle(
+                        "跟随原句",
+                        isOn: Binding(
+                            get: { model.pdfBilingual.followsScroll }, set: { model.pdfBilingual.followsScroll = $0 }))
+                }
             }
-        }
-        Menu("对照布局") {
-            Picker("对照布局", selection: $layout) {
-                Text("段落对照").tag(PDFBilingualLayoutPreference.paragraph)
-                Text("逐句上下").tag(PDFBilingualLayoutPreference.stacked)
-                Text("左右并排").tag(PDFBilingualLayoutPreference.split).disabled(width < 570)
-                Text("随窗口调整").tag(PDFBilingualLayoutPreference.auto)
-            }.pickerStyle(.inline).labelsHidden()
-            if layout.resolved(at: width) == .split {
-                Toggle(
-                    "跟随原句",
-                    isOn: Binding(
-                        get: { model.pdfBilingual.followsScroll }, set: { model.pdfBilingual.followsScroll = $0 }))
+            Section("译文字号") {
+                Picker("译文字号", selection: $fontSize) {
+                    Text("小").tag(14)
+                    Text("标准").tag(16)
+                    Text("大").tag(19)
+                }.pickerStyle(.inline).labelsHidden()
             }
+        } label: {
+            Image(systemName: "textformat.size")
+                .frame(minWidth: 30, minHeight: 30).contentShape(Rectangle())
         }
-        Menu("译文字号") {
-            Picker("译文字号", selection: $fontSize) {
-                Text("小").tag(14)
-                Text("标准").tag(16)
-                Text("大").tag(19)
-            }.pickerStyle(.inline).labelsHidden()
-        }
+        .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+        .accessibilityLabel("阅读外观").help("阅读外观")
     }
 }
 

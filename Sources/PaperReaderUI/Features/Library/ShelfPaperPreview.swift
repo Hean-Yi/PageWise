@@ -122,12 +122,9 @@ struct ShelfPaperPreview: View {
         }
         .overlay { RoundedRectangle(cornerRadius: 16).strokeBorder(ReaderTheme.line).allowsHitTesting(false) }
         .overlay(alignment: .topTrailing) {
-            Button(action: dismiss) {
-                Image(systemName: "xmark").font(.system(size: 12, weight: .semibold))
-                    .frame(width: 30, height: 30).contentShape(Rectangle())
-            }
-            .buttonStyle(.plain).foregroundStyle(ReaderTheme.muted).padding(6)
-            .accessibilityLabel("关闭书目预览").help("关闭预览")
+            Button("关闭书目预览", systemImage: "xmark", action: dismiss)
+                .labelStyle(.iconOnly).readerFloatingButton(.circle)
+                .padding(6).help("关闭预览")
         }
     }
 

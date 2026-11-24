@@ -21,7 +21,8 @@ struct ReaderNotesView: View {
             }
             Divider()
             Button(action: saveNote) {
-                Label("保存到 Obsidian", systemImage: "square.and.arrow.up")
+                Label("将笔记导出到 Obsidian", systemImage: "note.text")
+                    .labelStyle(.titleAndIcon)
                     .font(.system(size: 12, weight: .medium)).frame(maxWidth: .infinity).padding(.vertical, 12)
                     .background(ReaderTheme.elevated, in: RoundedRectangle(cornerRadius: 9))
             }.buttonStyle(.plain).padding(16)

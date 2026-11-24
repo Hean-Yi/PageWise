@@ -273,7 +273,7 @@ struct SettingsView: View {
                 Button("选择目录…") { chooseFolder = true }
             }
             .padding(13).background(fieldBackground(focused: false))
-            Text("选定目录即生效。点击「保存到 Obsidian」时才写入笔记。")
+            Text("选定目录即生效。在笔记侧栏点击「将笔记导出到 Obsidian」时才写入。")
                 .font(.callout).foregroundStyle(ReaderTheme.muted)
             Divider().padding(.vertical, 5)
             fieldLabel("设备存储")
