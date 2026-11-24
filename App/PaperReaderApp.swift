@@ -18,7 +18,7 @@ struct PaperReaderApp: App {
     }
     var body: some Scene {
         #if os(macOS)
-            Window("PaperReader", id: "main") {
+            Window("PageWise", id: "main") {
                 content.frame(minWidth: 1000, minHeight: 640)
             }.defaultSize(width: 1320, height: 860)
                 .commands { ReaderSettingsCommands() }

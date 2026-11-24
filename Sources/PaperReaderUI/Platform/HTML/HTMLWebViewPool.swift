@@ -24,7 +24,7 @@ enum HTMLWebViewPool {
 
     static func recycle(_ view: WKWebView) {
         view.configuration.userContentController.removeAllUserScripts()
-        view.loadHTMLString("<!doctype html><title>PaperReader</title>", baseURL: nil)
+        view.loadHTMLString("<!doctype html><title>PageWise</title>", baseURL: nil)
         idle = view
     }
 

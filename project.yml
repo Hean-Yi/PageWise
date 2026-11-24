@@ -6,17 +6,19 @@ options:
     iOS: "18.0"
 settings:
   base:
+    PRODUCT_NAME: PageWise
     SWIFT_VERSION: "6.0"
     GENERATE_INFOPLIST_FILE: YES
     INFOPLIST_FILE: App/Info.plist
-    CURRENT_PROJECT_VERSION: 2
-    MARKETING_VERSION: 0.1.1
+    CURRENT_PROJECT_VERSION: 3
+    MARKETING_VERSION: 0.2.0
 packages:
   PaperReader:
     path: .
 targets:
   PaperReader:
     type: application
+    productName: PageWise
     platform: macOS
     sources: [App]
     dependencies:
@@ -33,6 +35,7 @@ targets:
         INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.education
   PaperReader-iPad:
     type: application
+    productName: PageWise
     platform: iOS
     sources: [App]
     dependencies:

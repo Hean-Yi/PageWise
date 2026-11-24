@@ -85,7 +85,7 @@ public struct LibraryView: View {
                 .focusedSceneValue(\.readerSettingsPresentation, $showSettings)
             #endif
             .alert(
-                "PaperReader",
+                "PageWise",
                 isPresented: Binding(get: { model.message != nil }, set: { if !$0 { model.message = nil } })
             ) {
                 Button("好") { model.message = nil }
@@ -452,7 +452,7 @@ public struct LibraryView: View {
                     .resizable().interpolation(.high).scaledToFit().frame(width: 33, height: 33)
                     .brightness(colorScheme == .dark ? 0.18 : 0)
                     .accessibilityHidden(true)
-                Text("PaperReader").font(ReaderTheme.editorial(24, weight: .medium)).foregroundStyle(ReaderTheme.ink)
+                Text("PageWise").font(ReaderTheme.editorial(24, weight: .medium)).foregroundStyle(ReaderTheme.ink)
                     .lineLimit(1).minimumScaleFactor(0.8)
             }.padding(.horizontal, 21).padding(.top, 17).padding(.bottom, 27)
             VStack(spacing: 3) {

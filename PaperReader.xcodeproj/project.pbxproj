@@ -17,10 +17,10 @@
 
 /* Begin PBXFileReference section */
 		013419071F85B4A7F14D523D /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		1E05373EA8EF0EF0B1EB0167 /* PageWise.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = PageWise.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		1E0F1DF7AC442C5C34D102D2 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		51FB6B31A0DE1A8F2F06D8D9 /* PaperReaderApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PaperReaderApp.swift; sourceTree = "<group>"; };
-		7F693F2B1C0C78BE68699701 /* PaperReader-iPad.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = "PaperReader-iPad.app"; sourceTree = BUILT_PRODUCTS_DIR; };
-		86683C37CFB8D683C7EEAA0B /* PaperReader.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = PaperReader.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		71025434D85429F4AD529F5C /* PageWise.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = PageWise.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A843702A09765662CBCFDC99 /* PaperReader */ = {isa = PBXFileReference; lastKnownFileType = folder; name = PaperReader; path = .; sourceTree = SOURCE_ROOT; };
 		D7003AE7EA4AD79E60A6CC64 /* PaperReader.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = PaperReader.entitlements; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -57,8 +57,8 @@
 		332F82572F781AF3D2AE43E1 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				7F693F2B1C0C78BE68699701 /* PaperReader-iPad.app */,
-				86683C37CFB8D683C7EEAA0B /* PaperReader.app */,
+				71025434D85429F4AD529F5C /* PageWise.app */,
+				1E05373EA8EF0EF0B1EB0167 /* PageWise.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -102,7 +102,7 @@
 				C9177913B5CE505CA4746F53 /* PaperReaderUI */,
 			);
 			productName = PaperReader;
-			productReference = 86683C37CFB8D683C7EEAA0B /* PaperReader.app */;
+			productReference = 71025434D85429F4AD529F5C /* PageWise.app */;
 			productType = "com.apple.product-type.application";
 		};
 		E77A53CE648CB66470189B42 /* PaperReader-iPad */ = {
@@ -122,7 +122,7 @@
 				C805074D8660902CA68F8EEA /* PaperReaderUI */,
 			);
 			productName = "PaperReader-iPad";
-			productReference = 7F693F2B1C0C78BE68699701 /* PaperReader-iPad.app */;
+			productReference = 1E05373EA8EF0EF0B1EB0167 /* PageWise.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
@@ -232,7 +232,7 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 3;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
@@ -248,10 +248,10 @@
 				INFOPLIST_FILE = App/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
 				MACOSX_DEPLOYMENT_TARGET = 15.0;
-				MARKETING_VERSION = 0.1.1;
+				MARKETING_VERSION = 0.2.0;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
-				PRODUCT_NAME = "$(TARGET_NAME)";
+				PRODUCT_NAME = PageWise;
 				SWIFT_COMPILATION_MODE = wholemodule;
 				SWIFT_OPTIMIZATION_LEVEL = "-O";
 				SWIFT_VERSION = 6.0;
@@ -333,7 +333,7 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 3;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
@@ -355,11 +355,11 @@
 				INFOPLIST_FILE = App/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
 				MACOSX_DEPLOYMENT_TARGET = 15.0;
-				MARKETING_VERSION = 0.1.1;
+				MARKETING_VERSION = 0.2.0;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
-				PRODUCT_NAME = "$(TARGET_NAME)";
+				PRODUCT_NAME = PageWise;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				SWIFT_VERSION = 6.0;

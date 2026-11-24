@@ -109,10 +109,7 @@ actor IndexedOpenCopies {
         parts.percentEncodedPath += encoded
         parts.queryItems = [fields]
         guard let url = parts.url else { return nil }
-        var request = URLRequest(url: url, timeoutInterval: 8)
-        request.setValue("application/json", forHTTPHeaderField: "Accept")
-        request.setValue("PaperReader/1.0", forHTTPHeaderField: "User-Agent")
-        return request
+        return ScholarlyIndexes.metadataRequest(url, timeout: 8)
     }
 
     private func locations(for candidate: PaperCandidate, at index: Index, request: URLRequest) async throws

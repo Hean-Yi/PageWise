@@ -1,10 +1,10 @@
-# PaperReader
+# PageWise
 
 本地优先的 Mac / iPad 论文阅读 MVP：线上论文下载、TeX 优先的双语 HTML、本地 PDF 段落对照、批注、问答、阅读笔记与 Obsidian 导出。最低 macOS 15 / 暂定 iPadOS 18；两端独立运行，目前没有跨设备自动同步。
 
-## 安装 Mac 试用版
+## 安装 Mac 版
 
-1. 在运行 macOS 15 或更新版本的 Mac 上，双击收到的 `PaperReader-0.1.1-macOS.dmg`，把 PaperReader 拖到「应用程序」，再从「应用程序」打开。此试用包同时包含 Apple 芯片和 Intel 版本。
+1. 下载并打开 DMG，把 PageWise 拖入「应用程序」，再从那里打开。适用于 macOS 15 或更高版本的 Apple 芯片和 Intel Mac。使用过 PaperReader 的读者请先退出旧版，打开 PageWise 即可继续使用原书库和笔记。[下载 PageWise 0.2.0](https://github.com/Hean-Yi/PageWise/releases/download/v0.2.0/PageWise-0.2.0-macOS.dmg) · [版本说明与 SHA-256 校验值](https://github.com/Hean-Yi/PageWise/releases/tag/v0.2.0)
 2. 首次打开空书库，在「快速上手」第一步点「直接试读示例」，就能打开随应用提供的两页英文 PDF《When the Average Misleads》。拖选原文，松开后点选区旁的「添加笔记」，即可写下第一条笔记。也可以先跟随高亮了解书架和设置，再点「打开内置示例」开始试读。
 3. 想看中文译文或向论文提问时，按 `⌘,` 打开「设置 → 模型服务」，选服务预设，填入自己的 API 密钥并保存。打开一篇论文，点「双语重排」开始翻译，或在右侧「论文助读」提问。
 

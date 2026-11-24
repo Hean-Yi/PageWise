@@ -138,6 +138,13 @@ actor ScholarlyIndexes {
         return scholarID.lowercased()
     }
 
+    static func metadataRequest(_ url: URL, timeout: TimeInterval) -> URLRequest {
+        var request = URLRequest(url: url, timeoutInterval: timeout)
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue("PageWise (+https://github.com/Hean-Yi/PageWise)", forHTTPHeaderField: "User-Agent")
+        return request
+    }
+
     private func records(
         _ components: URLComponents, source: PaperSearchSource, limit: Int,
         decode: (Data) throws -> [PaperCandidate?]
@@ -154,9 +161,7 @@ actor ScholarlyIndexes {
         if let until = retryAfter[source], until > Date() { throw Failure.rateLimited(source, until) }
         if source == .dblp, let until = dblpVerificationUntil, until > Date() { throw Failure.browserVerification }
 
-        var request = URLRequest(url: url, timeoutInterval: 12)
-        request.setValue("application/json", forHTTPHeaderField: "Accept")
-        request.setValue("PaperReader/1.0", forHTTPHeaderField: "User-Agent")
+        let request = Self.metadataRequest(url, timeout: 12)
         let data: Data
         let response: HTTPURLResponse
         do {
