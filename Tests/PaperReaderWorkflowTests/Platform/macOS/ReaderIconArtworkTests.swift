@@ -51,10 +51,42 @@
             }
         }
 
+        @Test func sidebarSelectionHasAVisibleShapeChangeForEveryDestination() throws {
+            for glyph in [ReaderIcon.Glyph.library, .read, .favorite, .calendar, .notebook] {
+                for pose in [ReaderIconInteraction.idle, .hovered, .pressed] {
+                    let outline = try pixels(glyph, pose, sidebarSelected: false)
+                    let inked = try pixels(glyph, pose, sidebarSelected: true)
+                    #expect(outline != inked, "sidebar selection for \(glyph) in \(pose)")
+                }
+            }
+        }
+
+        @Test func sidebarInkPassesOverDifferentPartsOfEachDrawing() {
+            let bounds = CGRect(x: 0, y: 0, width: 24, height: 24)
+            for glyph in [ReaderIcon.Glyph.library, .read, .calendar, .notebook] {
+                let plate = glyph.inkPlate
+                let outline = glyph.drawing.strokedPath(StrokeStyle(lineWidth: 2.1, lineCap: .square, lineJoin: .round))
+                let interior = (0..<48).flatMap { y in
+                    (0..<48).map { x in CGPoint(x: CGFloat(x) / 2 + 0.25, y: CGFloat(y) / 2 + 0.25) }
+                }.filter { plate.contains($0) || outline.contains($0) }
+                var previous = Set<Int>()
+                for frame in 0...20 {
+                    let mask = SidebarIconFill(glyph: glyph, progress: CGFloat(frame) / 20).path(in: bounds)
+                    let covered = Set(interior.indices.filter { mask.contains(interior[$0]) })
+                    #expect(previous.isSubset(of: covered), "ink retreats for \(glyph) at \(frame)")
+                    if frame == 0 { #expect(covered.isEmpty) }
+                    if frame == 10 { #expect(!covered.isEmpty && covered.count < interior.count) }
+                    if frame == 20 { #expect(covered.count == interior.count) }
+                    previous = covered
+                }
+            }
+        }
+
         private func pixels(
-            _ glyph: ReaderIcon.Glyph, _ pose: ReaderIconInteraction, filled: Bool = false, enabled: Bool = true
+            _ glyph: ReaderIcon.Glyph, _ pose: ReaderIconInteraction, filled: Bool = false,
+            enabled: Bool = true, sidebarSelected: Bool? = nil
         ) throws -> Data {
-            let icon = ReaderIcon(glyph, size: 18, filled: filled)
+            let icon = ReaderIcon(glyph, size: 18, filled: filled, sidebarSelected: sidebarSelected)
                 .environment(\.readerIconInteraction, pose)
                 .disabled(!enabled)
                 .foregroundStyle(.black)

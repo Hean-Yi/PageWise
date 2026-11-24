@@ -9,38 +9,35 @@ struct ReaderIcon: View {
 
     let glyph: Glyph
     var filled: Bool
+    let sidebarSelected: Bool?
     @ScaledMetric private var size: CGFloat
     @Environment(\.isEnabled) private var enabled
     @Environment(\.backgroundProminence) private var backgroundProminence
     @Environment(\.readerIconInteraction) private var interaction
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    init(_ glyph: Glyph, size: CGFloat = 16, filled: Bool = false) {
+    init(_ glyph: Glyph, size: CGFloat = 16, filled: Bool = false, sidebarSelected: Bool? = nil) {
         self.glyph = glyph
         self.filled = filled
+        self.sidebarSelected = sidebarSelected
         _size = ScaledMetric(wrappedValue: size, relativeTo: .body)
     }
 
     var body: some View {
         let state = enabled && !reduceMotion ? interaction : .idle
+        let outline = ReaderIconLayer(glyph: glyph, ink: .outline, state: state)
         ZStack {
-            if glyph == .favorite {
-                // The first two strokes offer a small preview. A click continues the same pencil line.
-                FavoritePencilFill(progress: filled ? 1 : state == .idle ? 0 : 0.14)
-                    .fill(plateStyle)
-                    .animation(reduceMotion ? nil : .easeInOut(duration: filled ? 0.58 : 0.25), value: filled)
-                    .mask {
-                        ReaderIconLayer(glyph: .favorite, ink: .reversed, state: state)
-                            .fill(style: FillStyle(eoFill: true))
-                    }
-                ReaderIconLayer(glyph: .favorite, ink: .spot, state: state)
-                    .fill(plateStyle).opacity(!filled && state != .idle ? 1 : 0)
+            if let sidebarSelected, glyph != .favorite {
+                sidebarInk(selected: sidebarSelected, state: state, outline: outline)
             } else {
-                ReaderIconLayer(glyph: glyph, ink: filled ? .reversed : .spot, state: state)
-                    .fill(filled ? AnyShapeStyle(.foreground) : plateStyle, style: FillStyle(eoFill: filled))
+                if glyph == .favorite {
+                    favoriteInk(marked: sidebarSelected ?? filled, state: state)
+                } else {
+                    ReaderIconLayer(glyph: glyph, ink: filled ? .reversed : .spot, state: state)
+                        .fill(filled ? AnyShapeStyle(.foreground) : plateStyle, style: FillStyle(eoFill: filled))
+                }
+                outline.stroke(sidebarLineStyle, style: outlineStroke(weight: 1.7))
             }
-            ReaderIconLayer(glyph: glyph, ink: .outline, state: state)
-                .stroke(style: StrokeStyle(lineWidth: 1.7 * size / 24, lineCap: .square, lineJoin: .round))
         }
         .frame(width: size, height: size)
         .animation(
@@ -48,6 +45,45 @@ struct ReaderIcon: View {
             value: state
         )
         .accessibilityHidden(true)
+    }
+
+    @ViewBuilder private func favoriteInk(marked: Bool, state: ReaderIconInteraction) -> some View {
+        // A click continues the two preview strokes from the hover pose.
+        FavoritePencilFill(progress: marked ? 1 : state == .idle ? 0 : 0.14)
+            .fill(plateStyle)
+            .animation(reduceMotion ? nil : .easeInOut(duration: marked ? 0.58 : 0.25), value: marked)
+            .mask {
+                ReaderIconLayer(glyph: .favorite, ink: .reversed, state: state)
+                    .fill(style: FillStyle(eoFill: true))
+            }
+        ReaderIconLayer(glyph: .favorite, ink: .spot, state: state)
+            .fill(plateStyle).opacity(!marked && state != .idle ? 1 : 0)
+    }
+
+    @ViewBuilder private func sidebarInk(
+        selected: Bool, state: ReaderIconInteraction, outline: ReaderIconLayer
+    ) -> some View {
+        let plate = ReaderIconLayer(glyph: glyph, ink: .spot, state: state)
+        outline.stroke(ReaderTheme.muted, style: outlineStroke(weight: 1.4))
+        plate.stroke(ReaderTheme.muted, lineWidth: size / 24)
+        ZStack {
+            plate.fill(plateStyle)
+            plate.stroke(plateStyle, lineWidth: size / 24)
+            outline.stroke(plateStyle, style: outlineStroke(weight: 2.1))
+        }
+        .mask {
+            SidebarIconFill(glyph: glyph, progress: selected ? 1 : 0)
+                .animation(reduceMotion ? nil : .easeInOut(duration: selected ? 0.36 : 0.2), value: selected)
+        }
+    }
+
+    private var sidebarLineStyle: AnyShapeStyle {
+        guard let sidebarSelected else { return AnyShapeStyle(.foreground) }
+        return sidebarSelected && glyph == .favorite ? plateStyle : AnyShapeStyle(ReaderTheme.muted)
+    }
+
+    private func outlineStroke(weight: CGFloat) -> StrokeStyle {
+        StrokeStyle(lineWidth: weight * size / 24, lineCap: .square, lineJoin: .round)
     }
 
     private var plateStyle: AnyShapeStyle {

@@ -533,8 +533,7 @@ public struct LibraryView: View {
     ) -> some View {
         Button(action: action) {
             HStack(spacing: 11) {
-                ReaderIcon(icon, size: 17).frame(minWidth: 18)
-                    .foregroundStyle(selected ? ReaderTheme.accent : ReaderTheme.muted)
+                ReaderIcon(icon, size: 17, sidebarSelected: selected).frame(minWidth: 18)
                 Text(title).font(.system(size: sidebarFontSize, weight: selected ? .semibold : .regular))
                 Spacer()
                 if let count, count > 0 {
