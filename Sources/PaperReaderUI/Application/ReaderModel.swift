@@ -134,7 +134,10 @@ public final class ReaderModel {
         modelSettings = saved.model.isEmpty ? self.translationValidation?.settings ?? saved : saved
     }
 
-    var currentEdition: Paper? { state.papers.first(where: { $0.id == selectedPaperID }) }
+    var currentEdition: Paper? {
+        guard let id = selectedPaperID else { return nil }
+        return state.papers.first { $0.id == id }
+    }
     public var paper: Paper? {
         guard let current = currentEdition else { return nil }
         if let version = current.retainedReadings?.first(where: { $0.id == retainedReadingID }) {
@@ -154,18 +157,21 @@ public final class ReaderModel {
     public var activePages: [PageArtifact] {
         guard let paper else { return [] }
         let pages = mode == "translated" ? paper.readingPages : paper.previewPages
-        return pages.filter { !pendingArtifactIDs.contains($0.id) }
+        return pendingArtifactIDs.isEmpty ? pages : pages.filter { !pendingArtifactIDs.contains($0.id) }
     }
     public var pageURLs: [URL] {
         guard let paper else { return [] }
         if mode == "original" || !paper.canReflow { return [root.appendingPathComponent(paper.originalPath)] }
         return activePages.map { root.appendingPathComponent($0.relativePath) }
     }
-    public var pageKeys: [String] {
-        guard let paper else { return [] }
-        if mode == "original" || !paper.canReflow { return (0..<paper.pageCount).map { "original-\($0)" } }
-        return activePages.map { $0.id.uuidString }
+    var displayedPageKeys: LazyMapCollection<Range<Int>, String> {
+        if let paper, mode == "original" || !paper.canReflow {
+            return (0..<paper.pageCount).lazy.map { "original-\($0)" }
+        }
+        let pages = activePages
+        return pages.indices.lazy.map { pages[$0].id.uuidString }
     }
+    public var pageKeys: [String] { Array(displayedPageKeys) }
     public var currentHighlights: [Highlight] { state.highlights.filter { $0.paperID == selectedPaperID } }
     public var currentChats: [ChatTurn] { state.chats.filter { $0.paperID == selectedPaperID } }
 
@@ -209,7 +215,7 @@ public final class ReaderModel {
         selectedPaperID = id
         retainedReadingID = nil
         reflowBodyCount = 0
-        if let current = state.papers.first(where: { $0.id == id }) {
+        if let current = currentEdition {
             let position = workspace(for: current.id).position
             if let key = position?.pageKey, !current.readingPages.contains(where: { $0.id.uuidString == key }) {
                 retainedReadingID =

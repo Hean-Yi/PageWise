@@ -218,13 +218,14 @@ struct ReaderView: View {
     }
 
     private func readingBar(width: CGFloat) -> some View {
+        let pageCount = model.displayedPageKeys.count
         let originalVisible = !model.pdfBilingual.isOpen || peekingAtOriginal || pdfLayout.resolved(at: width) == .split
         let continuousParagraphs = model.pdfBilingual.isOpen && pdfLayout == .paragraph && !peekingAtOriginal
         return HStack(spacing: 12) {
-            if model.pageKeys.isEmpty {
+            if pageCount == 0 {
                 Text("等待正文就绪").font(.caption).foregroundStyle(ReaderTheme.muted)
             } else if model.usesHTMLReading {
-                Text("\(model.visiblePage + 1) / \(model.pageKeys.count) 段")
+                Text("\(model.visiblePage + 1) / \(pageCount) 段")
                     .font(.caption).foregroundStyle(ReaderTheme.muted)
             } else {
                 if !continuousParagraphs {
@@ -238,7 +239,7 @@ struct ReaderView: View {
                 HStack(spacing: 4) {
                     TextField("页码", text: $pageInput).textFieldStyle(.plain).multilineTextAlignment(.center)
                         .frame(width: 28).focused($pageFocused).onSubmit(jumpToPage).accessibilityLabel("跳转页码")
-                    Text("/ \(model.pageKeys.count)").foregroundStyle(ReaderTheme.muted)
+                    Text("/ \(pageCount)").foregroundStyle(ReaderTheme.muted)
                 }.font(.system(size: 11, design: .monospaced)).padding(.horizontal, 9).padding(.vertical, 5)
                     .background(ReaderTheme.surface, in: RoundedRectangle(cornerRadius: 6))
                     .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(ReaderTheme.line))
@@ -249,10 +250,10 @@ struct ReaderView: View {
                     } label: {
                         Image(systemName: "chevron.right")
                     }
-                    .disabled(model.visiblePage >= model.pageKeys.count - 1).help("下一页").accessibilityLabel("下一页")
+                    .disabled(model.visiblePage >= pageCount - 1).help("下一页").accessibilityLabel("下一页")
                 }
             }
-            if model.visiblePage == model.pageKeys.count - 1, let summary = model.currentDocumentSummary {
+            if model.visiblePage == pageCount - 1, let summary = model.currentDocumentSummary {
                 Button {
                     model.openReadingNote(summary)
                 } label: {
@@ -262,7 +263,7 @@ struct ReaderView: View {
             Button(action: model.toggleBookmark) {
                 Image(systemName: model.isCurrentPageBookmarked ? "bookmark.fill" : "bookmark")
                     .foregroundStyle(model.isCurrentPageBookmarked ? ReaderTheme.accent : ReaderTheme.muted)
-            }.disabled(model.pageKeys.isEmpty).help(model.isCurrentPageBookmarked ? "移除书签" : "添加书签")
+            }.disabled(pageCount == 0).help(model.isCurrentPageBookmarked ? "移除书签" : "添加书签")
                 .accessibilityLabel(model.isCurrentPageBookmarked ? "移除当前页书签" : "添加当前页书签")
                 .keyboardShortcut("d")
             if model.pdfBilingual.isOpen && isLocalPDF && !peekingAtOriginal {
@@ -323,7 +324,7 @@ struct ReaderView: View {
     }
 
     private func jumpToPage() {
-        guard let page = Int(pageInput), page > 0, page <= model.pageKeys.count else {
+        guard let page = Int(pageInput), page > 0, page <= model.displayedPageKeys.count else {
             pageInput = "\(model.visiblePage + 1)"
             return
         }

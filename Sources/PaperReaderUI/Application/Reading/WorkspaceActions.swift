@@ -128,16 +128,16 @@ extension ReaderModel {
         }
         if key.hasPrefix("original-") { pdfBilingual.close() }
         navigateToStablePage(key, paperID: paperID)
-        return selectedPaperID == paperID && pageKeys[safe: visiblePage] == key
+        return selectedPaperID == paperID && currentPosition?.pageKey == key
     }
 
     public func navigateToPage(_ pageIndex: Int) {
-        guard pageKeys.indices.contains(pageIndex) else { return }
-        applyPosition(ReaderPosition(mode: mode, pageKey: pageKeys[pageIndex], pageIndex: pageIndex))
+        guard let position = position(at: pageIndex) else { return }
+        applyPosition(position)
     }
 
     public func recordVisiblePage(_ pageIndex: Int) {
-        guard pageKeys.indices.contains(pageIndex) else { return }
+        guard displayedPageKeys.indices.contains(pageIndex) else { return }
         if pageIndex != visiblePage { invalidateSearchNavigation() }
         visiblePage = pageIndex
         updateReadingPosition()
@@ -391,9 +391,12 @@ extension ReaderModel {
         }
     }
 
-    private var currentPosition: ReaderPosition? {
-        guard pageKeys.indices.contains(visiblePage) else { return nil }
-        return ReaderPosition(mode: mode, pageKey: pageKeys[visiblePage], pageIndex: visiblePage)
+    private var currentPosition: ReaderPosition? { position(at: visiblePage) }
+
+    private func position(at index: Int) -> ReaderPosition? {
+        let keys = displayedPageKeys
+        guard keys.indices.contains(index) else { return nil }
+        return ReaderPosition(mode: mode, pageKey: keys[index], pageIndex: index)
     }
 
     private func saveWorkspaceIfNeeded() async {

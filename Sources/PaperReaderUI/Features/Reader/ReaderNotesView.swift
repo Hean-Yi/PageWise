@@ -73,7 +73,7 @@ struct ReaderNotesView: View {
             if marks.isEmpty {
                 Button(action: model.toggleBookmark) {
                     Label("标记当前页", systemImage: "plus").font(.system(size: 12))
-                }.buttonStyle(.borderless).foregroundStyle(ReaderTheme.muted).disabled(model.pageKeys.isEmpty)
+                }.buttonStyle(.borderless).foregroundStyle(ReaderTheme.muted).disabled(model.displayedPageKeys.isEmpty)
             } else {
                 ForEach(marks) { mark in
                     HStack(spacing: 10) {
