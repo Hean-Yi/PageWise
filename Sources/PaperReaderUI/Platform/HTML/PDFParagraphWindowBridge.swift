@@ -95,7 +95,7 @@ extension PDFSentenceTextCanvas {
           main.replaceChildren(fragment);
           main.setAttribute('aria-label','全文英汉段落对照');
           document.body.className='paragraph continuous';
-          return {paper,articles,revision:null,loaded:new Set(),frame:0,previousPage:-1,previousSentence:'',ignoredY:null};
+          return {paper,articles,revision:null,loaded:new Set(),frame:0,previousPage:-1,ignoredY:null};
         }
         function shell(page) {
           if (page.loaded) {
@@ -190,10 +190,9 @@ extension PDFSentenceTextCanvas {
           const page=readingPage();
           if (!page) return;
           const index=Number(page.section.dataset.page);
-          const sentence=anchorAt(page).element?.dataset.sentence || '';
-          if (index!==flow.previousPage || sentence!==flow.previousSentence) {
-            flow.previousPage=index;flow.previousSentence=sentence;
-            post({action:'viewport',page:index,id:sentence});
+          if (index!==flow.previousPage) {
+            flow.previousPage=index;
+            post({action:'viewport',page:index});
           }
         }
         function scheduleViewport() {
@@ -203,7 +202,7 @@ extension PDFSentenceTextCanvas {
           const reset=!flow || flow.paper!==paper || flow.articles.length!==count;
           if (reset) {
             if (flow) clearTimeout(flow.frame);
-            pairs.clear();figures=[];order=[];paragraphMode=true;
+            pairs.clear();figures=[];paragraphMode=true;
             flow=newFlow(paper,count);
             for (const page of flow.articles) shell(page);
           }
@@ -224,7 +223,6 @@ extension PDFSentenceTextCanvas {
             fillPage(page,update);
             flow.loaded.add(update.index);
           }
-          order=[...flow.loaded].sort((a,b)=>a-b).flatMap(i=>flow.articles[i].ids);
           if (jump) flow.outlineRevealed=false;
           const canReveal=jump || (flow.previousPage===target && flow.ignoredY!==null && Math.abs(startY-flow.ignoredY)<1);
           const page=flow.articles[target];
@@ -235,7 +233,6 @@ extension PDFSentenceTextCanvas {
             if (node) node.scrollIntoView({block:'start',inline:'nearest'});
             flow.outlineRevealed=!!heading;
             flow.previousPage=target;
-            flow.previousSentence='';
             flow.ignoredY=scrollY;
           } else {
             restorePlace(anchor);

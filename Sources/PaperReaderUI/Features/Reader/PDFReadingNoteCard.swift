@@ -18,7 +18,7 @@ struct PDFReadingNoteCard: View {
                 } else {
                     Label("阅读笔记", readerIcon: .notebook).font(.headline)
                 }
-                if let page = session.note.anchors.first?.pdfPageIndex {
+                if let page = session.note.anchors.first?.readingPageIndex {
                     Text("第 \(page + 1) 页").font(.caption).foregroundStyle(ReaderTheme.muted)
                 }
                 Spacer()

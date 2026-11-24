@@ -6,26 +6,28 @@
 
     @testable import PaperReaderUI
 
-    @Test @MainActor func pdfReflowSelectionOpensToolsAfterReleaseAndSendsOnlySelectedCharacters() async throws {
+    @Test @MainActor func pdfReflowReusesTheAnnotationPaletteAndSendsOnlySelectedCharacters() async throws {
         let rows = ["First sentence.", "Second sentence."].enumerated().map { index, text in
             PDFSourceSentence(
                 id: "s\(index)", text: text, pageIndex: 0, rects: [], paragraphID: "p",
                 characterRanges: [.init(location: index * 20, length: text.utf16.count)])
         }
-        var events: [[PDFReflowTextSelection]] = []
+        var events: [(PDFReflowSelectionAction, [PDFReflowTextSelection])] = []
         var liveSelection: [PDFReflowTextSelection] = []
+        var opened: UUID?
         let mark = NoteAnchor(key: "original-0", target: "pdf", text: "First", start: 0, end: 5)
-        let canvas = PDFSentenceTextCanvas(
-            sentences: rows, translations: ["s0": "第一句。", "s1": "第二句。"], layout: .paragraph, fontSize: 16,
-            focusedID: nil, focusRevision: 0, followsScroll: false, sourceScrollID: nil, sourceScrollRevision: 0,
-            pdfSelectedIDs: [], onScroll: { _ in }, onSelection: { _ in }, onFocus: { _ in },
+        let translation = "第一句。"
+        let translated = NoteAnchor(
+            key: "original-0",
+            target: NoteAnchor.pdfTranslationTarget(
+                sentenceID: "s0", translation: translation), text: "一句", start: 1, end: 3)
+        let id = UUID()
+        var canvas = PDFSentenceTextCanvas(
+            sentences: rows, translations: ["s0": translation, "s1": "第二句。"], layout: .paragraph, fontSize: 16,
+            onSelection: { _ in }, onOpenHighlight: { opened = $0 },
             inlineHighlights: [.init(id: UUID(), anchors: [mark], color: .yellow)],
             onTextSelection: { liveSelection = $0 },
-            onSelectionAction: { action, selection in
-                if (events.isEmpty && action == .note) || (events.count == 1 && action == .highlight) {
-                    events.append(selection)
-                }
-            })
+            onSelectionAction: { events.append(($0, $1)) })
         let coordinator = canvas.makeCoordinator()
         let web = coordinator.makeView()
         defer { coordinator.stop(web) }
@@ -35,19 +37,19 @@
                 == true
         }
         for _ in 0..<150 {
-            if (try? await evaluate("return CSS.highlights.get('pdf-user-highlights')?.size === 1")) == true { break }
+            if (try? await evaluate("return CSS.highlights.get('pdf-yellow-highlight')?.size === 1")) == true { break }
             try await Task.sleep(for: .milliseconds(20))
         }
         #expect(
             try await evaluate(
                 """
-                const ink=CSS.highlights.get('pdf-user-highlights');
+                const ink=CSS.highlights.get('pdf-yellow-highlight');
                 return !!ink && [...ink][0]?.toString()==='First' && !document.querySelector('[data-reading-note]');
                 """))
         #expect(
             try await evaluate(
                 """
-                const [a,b]=document.querySelectorAll('.en'), tools=document.querySelector('#selection-tools');
+                const [a,b]=document.querySelectorAll('.en'), tools=document.querySelector('#annotation-menu');
                 a.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true}));
                 getSelection().setBaseAndExtent(b.firstChild,6,a.firstChild,6);
                 document.dispatchEvent(new Event('selectionchange'));
@@ -55,21 +57,22 @@
                 """))
         _ = try await evaluate("document.dispatchEvent(new PointerEvent('pointerup'));return true")
         for _ in 0..<75 {
-            if try await evaluate("return !document.querySelector('#selection-tools').hidden") { break }
+            if try await evaluate("return !document.querySelector('#annotation-menu').hidden") { break }
             try await Task.sleep(for: .milliseconds(15))
         }
         #expect(
             try await evaluate(
                 """
-                const tools=document.querySelector('#selection-tools');
+                const tools=document.querySelector('#annotation-menu');
                 if (tools.hidden) return false;
-                const button=tools.querySelector('[data-tool=note]');
+                const button=tools.querySelector('.add-note');
                 button.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,cancelable:true}));
                 button.click();return tools.hidden;
                 """))
         for _ in 0..<50 where events.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
-        #expect(events.first?.map(\.text) == ["sentence.", "Second"])
-        #expect(events.first?.map(\.range) == [NSRange(location: 6, length: 9), NSRange(location: 0, length: 6)])
+        #expect(events.first?.0 == .note)
+        #expect(events.first?.1.map(\.text) == ["sentence.", "Second"])
+        #expect(events.first?.1.map(\.range) == [NSRange(location: 6, length: 9), NSRange(location: 0, length: 6)])
         // A long press can transfer ownership to the system selection handles via pointercancel.
         _ = try await evaluate(
             """
@@ -79,22 +82,55 @@
             document.dispatchEvent(new PointerEvent('pointercancel'));return true;
             """)
         for _ in 0..<75 {
-            if try await evaluate("return !document.querySelector('#selection-tools').hidden") { break }
+            if try await evaluate("return !document.querySelector('#annotation-menu').hidden") { break }
             try await Task.sleep(for: .milliseconds(15))
         }
         #expect(
             try await evaluate(
                 """
-                const tools=document.querySelector('#selection-tools'), button=tools.querySelector('[data-tool=highlight]');
-                if (tools.hidden || button.textContent!=='高亮对应原句') return false;
+                const tools=document.querySelector('#annotation-menu'), button=tools.querySelector('[data-color=red]');
+                if (tools.hidden || tools.querySelectorAll('[data-color]').length!==8 || !tools.querySelector('[data-mode=underline]')) return false;
                 button.click();return true;
                 """))
         for _ in 0..<50 where events.count < 2 { try await Task.sleep(for: .milliseconds(10)) }
-        #expect(events.last?.first?.text == "一句")
-        #expect(events.last?.first?.language == "zh")
-        _ = try await evaluate("getSelection().removeAllRanges();return true")
-        for _ in 0..<50 where !liveSelection.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(events.last?.0 == .mark(color: .red, style: .highlight, removing: false))
+        #expect(events.last?.1.first?.text == "一句")
+        #expect(events.last?.1.first?.language == "zh")
+        _ = try await evaluate("document.querySelector('[data-mode=underline]').click();return true")
+        for _ in 0..<50 where events.count < 3 { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(events.last?.0 == .mark(color: .red, style: .underline, removing: false))
+
+        canvas.inlineHighlights.append(.init(id: id, anchors: [translated], color: .red, style: .underline))
+        coordinator.update(canvas, view: web)
+        let selectedInk = """
+            const range=[...CSS.highlights.get('pdf-red-underline')][0],menu=document.querySelector('#annotation-menu');
+            return range?.toString()==='一句' && range.startContainer.parentElement.classList.contains('zh')
+              && !menu.hidden && menu.querySelector('.remove').textContent==='取消下划线'
+              && !menu.querySelector('.remove').hidden && menu.querySelector('[data-color=red]').getAttribute('aria-pressed')==='true';
+            """
+        #expect(try await evaluate(selectedInk))
+        _ = try await evaluate("document.querySelector('#annotation-menu .remove').click();return true")
+        for _ in 0..<50 where events.count < 4 { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(events.last?.0 == .mark(color: .red, style: .underline, removing: true))
+
+        _ = try await evaluate(
+            """
+            const node=document.querySelector('.zh'),range=[...CSS.highlights.get('pdf-red-underline')][0];
+            const r=range.getBoundingClientRect();
+            node.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true}));
+            getSelection().removeAllRanges();
+            node.dispatchEvent(new MouseEvent('click',{bubbles:true,detail:1,clientX:r.x+r.width/2,clientY:r.y+r.height/2}));
+            return true;
+            """)
+        for _ in 0..<50 where !liveSelection.isEmpty || opened == nil { try await Task.sleep(for: .milliseconds(10)) }
         #expect(liveSelection.isEmpty)
+        #expect(opened == id)
+        canvas = PDFSentenceTextCanvas(
+            sentences: rows, translations: ["s0": "已变更的译文", "s1": "第二句。"], layout: .paragraph, fontSize: 16,
+            onSelection: { _ in }, inlineHighlights: canvas.inlineHighlights)
+        coordinator.update(canvas, view: web)
+        #expect(try await evaluate("return CSS.highlights.get('pdf-red-underline').size===0"))
+
     }
 
     @Test @MainActor func pdfSelectionPaintTracksTheSelectedCharactersAcrossSoftWraps() async throws {
@@ -102,8 +138,7 @@
         let row = PDFSourceSentence(id: "en", text: prose, pageIndex: 0, rects: [], paragraphID: "p")
         let canvas = PDFSentenceTextCanvas(
             sentences: [row], translations: ["en": "谨慎看待这一结果。"], layout: .paragraph, fontSize: 18,
-            focusedID: nil, focusRevision: 0, followsScroll: false, sourceScrollID: nil, sourceScrollRevision: 0,
-            pdfSelectedIDs: [], onScroll: { _ in }, onSelection: { _ in }, onFocus: { _ in })
+            onSelection: { _ in })
         let coordinator = canvas.makeCoordinator()
         let web = coordinator.makeView()
         defer { coordinator.stop(web) }
@@ -139,7 +174,7 @@
               Math.abs(r.x-runs[i].x)<0.1 && Math.abs(r.y-runs[i].y)<0.1 &&
               Math.abs(r.width-runs[i].width)<0.1 && r.left>=paper.left-1 && r.right<=paper.right+1)
               && getComputedStyle(document.documentElement,'::selection').backgroundColor==='rgba(0, 0, 0, 0)'
-              && !!document.querySelector('.zh.counterpart');
+              && !document.querySelector('main [aria-pressed=true],main .counterpart');
             """
         for width in [1120, 420] {
             web.frame.size.width = CGFloat(width)
@@ -167,9 +202,7 @@
         let anchor = NoteAnchor(key: "original-0", target: "pdf", text: "word", start: 40, end: 44)
         var opened: UUID?
         var canvas = PDFSentenceTextCanvas(
-            sentences: [sentence], translations: ["s": "对照"], layout: .paragraph, fontSize: 18, focusedID: nil,
-            focusRevision: 0, followsScroll: false, sourceScrollID: nil, sourceScrollRevision: 0, pdfSelectedIDs: [],
-            onScroll: { _ in }, onSelection: { _ in }, onFocus: { _ in },
+            sentences: [sentence], translations: ["s": "对照"], layout: .paragraph, fontSize: 18, onSelection: { _ in },
             inlineNotes: [.init(id: id, anchors: [anchor], color: nil)], onOpenNote: { opened = $0 })
         let coordinator = canvas.makeCoordinator()
         let web = coordinator.makeView()
@@ -232,8 +265,7 @@
             imagePNG: nil, originalText: .init(kind: .references, paragraphs: ["[1] A < B.", "[2] Second title."]))
         let canvas = PDFSentenceTextCanvas(
             sentences: [sentence], translations: ["s": "正文。"], layout: .paragraph, fontSize: 18,
-            focusedID: nil, focusRevision: 0, followsScroll: false, sourceScrollID: nil,
-            sourceScrollRevision: 0, pdfSelectedIDs: [], onScroll: { _ in }, onSelection: { _ in }, onFocus: { _ in },
+            onSelection: { _ in },
             illustrations: [byline, references])
         let coordinator = canvas.makeCoordinator()
         let web = coordinator.makeView()
@@ -269,19 +301,14 @@
         let sentences = ["a", "b", "c"].map { id in
             PDFSourceSentence(id: id, text: "Repeated line.", pageIndex: 0, rects: [], paragraphID: "p")
         }
-        var chosen: String?
         var selection: [String] = []
-        func canvas(translations: [String: String], stacked: Bool) -> PDFSentenceTextCanvas {
+        func canvas(translations: [String: String], fontSize: Int) -> PDFSentenceTextCanvas {
             PDFSentenceTextCanvas(
-                sentences: sentences, translations: translations, layout: stacked ? .stacked : .split,
-                fontSize: stacked ? 19 : 16,
-                focusedID: "b",
-                focusRevision: 1, followsScroll: true, sourceScrollID: nil, sourceScrollRevision: 0,
-                pdfSelectedIDs: ["c"],
-                onScroll: { _ in }, onSelection: { selection = $0 }, onFocus: { chosen = $0 })
+                sentences: sentences, translations: translations, layout: .split, fontSize: fontSize,
+                onSelection: { selection = $0 })
         }
         let initial = ["b": "中间的重复句。", "c": "中间的重复句。"]
-        let first = canvas(translations: initial, stacked: false)
+        let first = canvas(translations: initial, fontSize: 16)
         let coordinator = first.makeCoordinator()
         let web = coordinator.makeView()
         defer { coordinator.stop(web) }
@@ -310,7 +337,7 @@
 
         var completed = initial
         completed["a"] = "作为文本显示 <img src='x'>。"
-        coordinator.update(canvas(translations: completed, stacked: true), view: web)
+        coordinator.update(canvas(translations: completed, fontSize: 19), view: web)
         let preserved =
             try await web.callAsyncJavaScript(
                 """
@@ -318,9 +345,9 @@
                 return p.children.length===3 && [...p.children].map(s=>s.id).join('')==='abc'
                   && document.images.length===0 && document.body.textContent.includes("<img src='x'>")
                   && b===window.original && getSelection().toString()==='中间'
-                  && getComputedStyle(b.firstChild).display==='block' && getComputedStyle(b.lastChild).fontSize==='19px'
-                  && b.getAttribute('aria-pressed')==='true'
-                  && getComputedStyle(b).backgroundColor!==getComputedStyle(document.getElementById('a')).backgroundColor;
+                  && getComputedStyle(b.firstChild).display==='none' && getComputedStyle(b.lastChild).fontSize==='19px'
+                  && !b.hasAttribute('aria-pressed')
+                  && getComputedStyle(b).backgroundColor===getComputedStyle(document.getElementById('a')).backgroundColor;
                 """,
                 arguments: [:], in: nil, contentWorld: .defaultClient) as? Bool
         #expect(preserved == true)
@@ -340,28 +367,22 @@
                 return clipboard.getData('text/plain');
                 """, arguments: [:], in: nil, contentWorld: .defaultClient) as? String
         #expect(copied == "间的重复句。中间")
-        _ = try await web.callAsyncJavaScript(
-            "getSelection().removeAllRanges();document.getElementById('c').click();",
-            arguments: [:], in: nil, contentWorld: .defaultClient)
-        for _ in 0..<60 where chosen == nil { try await Task.sleep(for: .milliseconds(10)) }
-        #expect(chosen == "c")
     }
-    @Test @MainActor func pdfParagraphLayoutKeepsWholeParagraphsAndLinksOnlyMatchingSentences() async throws {
+    @Test @MainActor func pdfParagraphLayoutPreservesSelectionWithoutActivatingOrHighlightingCounterparts() async throws
+    {
         let sentences = ["Alpha < One.", "Bravo two.", "Charlie three.", "Delta four.", "Echo five."].enumerated().map {
             PDFSourceSentence(
                 id: "s\($0.offset)", text: $0.element, pageIndex: 0, rects: [], paragraphID: "extraction",
                 readingParagraphID: $0.offset < 4 ? "p1" : "p2"
             )
         }
-        var focus: String?
         var selected: [String] = []
         func canvas(_ translations: [String: String], layout: PDFSentenceTextCanvas.Layout = .paragraph)
             -> PDFSentenceTextCanvas
         {
             PDFSentenceTextCanvas(
-                sentences: sentences, translations: translations, layout: layout, fontSize: 19, focusedID: "s1",
-                focusRevision: 1, followsScroll: true, sourceScrollID: nil, sourceScrollRevision: 0,
-                pdfSelectedIDs: [], onScroll: { _ in }, onSelection: { selected = $0 }, onFocus: { focus = $0 })
+                sentences: sentences, translations: translations, layout: layout, fontSize: 19,
+                onSelection: { selected = $0 })
         }
         let partial = ["s1": "第二句。", "s4": "<img> 是原文。"]
         let view = canvas(partial)
@@ -385,24 +406,17 @@
               && en.textContent==='Alpha < One. Bravo two. Charlie three. Delta four.'
               && zh.textContent==='待译第二句。待译' && zh.querySelectorAll('.pending').length===2
               && second.firstChild.textContent==='Echo five.' && second.lastChild.textContent==='<img> 是原文。'
-              && document.images.length===0 && document.querySelectorAll('[aria-pressed="true"]').length===2
-              && Array.from(document.querySelectorAll('[aria-pressed="true"]')).every(node=>node.dataset.sentence==='s1');
+              && document.images.length===0 && !document.querySelector('main [role=button],main [aria-pressed]');
             """)
         #expect(paragraphs)
         let retainedFocus = try await evaluate(
             """
             const zh=document.querySelector('.zh[data-sentence=s4]');
             zh.dispatchEvent(new PointerEvent('pointerover',{bubbles:true,pointerType:'mouse'}));
-            return !zh.matches('[aria-pressed="true"]') &&
-              [...document.querySelectorAll('[aria-pressed="true"]')].every(el=>el.dataset.sentence==='s1');
+            zh.click();
+            return !document.querySelector('main [aria-pressed],.related,.counterpart') && getSelection().isCollapsed;
             """)
-        #expect(retainedFocus && focus == nil)
-        for side in ["en", "zh"] {
-            focus = nil
-            _ = try await evaluate("document.querySelector('.\(side)[data-sentence=s4]').click();return true")
-            for _ in 0..<60 where focus == nil { try await Task.sleep(for: .milliseconds(10)) }
-            #expect(focus == "s4")
-        }
+        #expect(retainedFocus)
         _ = try await evaluate(
             """
             const node=document.querySelector('.zh[data-sentence=s1]').firstChild;
@@ -416,7 +430,7 @@
             """
             const p=document.querySelector('p[lang="zh-Hans"]');
             return p.textContent==='第一句。第二句。第三句。第四句。' && !document.querySelector('.pending')
-              && getSelection().toString()==='二句' && document.querySelector('.counterpart')?.dataset.sentence==='s1';
+              && getSelection().toString()==='二句' && !document.querySelector('main .counterpart, main [aria-pressed]');
             """)
         #expect(preserved)
         // A range spanning both languages copies the selected English characters in paragraph order.
@@ -431,16 +445,11 @@
         #expect(copiesEnglish)
         for _ in 0..<60 where selected != ["s3", "s4"] { try await Task.sleep(for: .milliseconds(10)) }
         #expect(selected == ["s3", "s4"])
-        coordinator.update(canvas(completed, layout: .stacked), view: web)
-        let restored = try await evaluate(
-            """
-            const el=document.querySelector('#s1');
-            return el.getAttribute('aria-pressed')==='true'
-              && el.textContent==='Bravo two.第二句。'
-              && getSelection().anchorNode===document.querySelector('#s3 .en').firstChild
-              && getSelection().focusNode===document.querySelector('#s4 .en').firstChild;
-            """)
-        #expect(restored)
+        // Switching to the original/translation split keeps Chinese plain, without a sentence action.
+        coordinator.update(canvas(completed, layout: .split), view: web)
+        #expect(
+            try await evaluate(
+                "return !document.querySelector('main [role=button]') && !!document.querySelector('#s1 .zh')"))
     }
 
     @Test @MainActor func pdfParagraphIllustrationsStayAnchoredDuringTranslationAndOpenTheirOriginalRegion()
@@ -465,9 +474,7 @@
             rows: [PDFSourceSentence], translations: [String: String], layout: PDFSentenceTextCanvas.Layout
         ) -> PDFSentenceTextCanvas {
             PDFSentenceTextCanvas(
-                sentences: rows, translations: translations, layout: layout, fontSize: 16, focusedID: nil,
-                focusRevision: 0, followsScroll: false, sourceScrollID: nil, sourceScrollRevision: 0,
-                pdfSelectedIDs: [], onScroll: { _ in }, onSelection: { _ in }, onFocus: { _ in },
+                sentences: rows, translations: translations, layout: layout, fontSize: 16, onSelection: { _ in },
                 illustrations: [figure, table], onRevealIllustration: { revealed = $0 })
         }
         let initial = canvas(rows: sentences, translations: [:], layout: .paragraph)
@@ -524,56 +531,10 @@
         let onlyFigures = try await evaluate(
             "return document.querySelectorAll('main figure').length===2 && !document.querySelector('[data-sentence]')")
         #expect(onlyFigures)
-        coordinator.update(canvas(rows: sentences, translations: ["b": "图注。"], layout: .stacked), view: web)
+        coordinator.update(canvas(rows: sentences, translations: ["b": "图注。"], layout: .split), view: web)
         let sentenceLayout = try await evaluate(
             "return !document.querySelector('figure') && !!document.querySelector('#b')")
         #expect(sentenceLayout)
     }
 
-    @Test @MainActor func pdfSentenceScrollFollowsUserInputWithoutEchoingProgrammaticJumps() async throws {
-        let sentences = (0..<24).map { index in
-            PDFSourceSentence(
-                id: "s\(index)", text: "A short sentence.", pageIndex: 0, rects: [], paragraphID: "p\(index)")
-        }
-        let translations = Dictionary(uniqueKeysWithValues: sentences.map { ($0.id, "这是一段用来验证滚动定位的译文。") })
-        var movements: [String] = []
-        func canvas(sourceID: String?, revision: Int) -> PDFSentenceTextCanvas {
-            PDFSentenceTextCanvas(
-                sentences: sentences, translations: translations, layout: .split, fontSize: 16, focusedID: nil,
-                focusRevision: 0, followsScroll: true, sourceScrollID: sourceID, sourceScrollRevision: revision,
-                pdfSelectedIDs: [], onScroll: { movements.append($0) }, onSelection: { _ in },
-                onFocus: { _ in })
-        }
-        let first = canvas(sourceID: nil, revision: 0)
-        let coordinator = first.makeCoordinator()
-        let web = coordinator.makeView()
-        defer { coordinator.stop(web) }
-        web.frame = CGRect(x: 0, y: 0, width: 440, height: 160)
-        for _ in 0..<160 {
-            if let ready = try? await web.callAsyncJavaScript(
-                "return document.querySelectorAll('.pair').length===24",
-                arguments: [:], in: nil, contentWorld: .defaultClient) as? Bool, ready
-            {
-                break
-            }
-            try await Task.sleep(for: .milliseconds(25))
-        }
-        _ = try await web.callAsyncJavaScript(
-            """
-            document.dispatchEvent(new WheelEvent('wheel'));
-            document.getElementById('s8').scrollIntoView({block:'start'});
-            """, arguments: [:], in: nil, contentWorld: .defaultClient)
-        for _ in 0..<120 where movements.isEmpty { try await Task.sleep(for: .milliseconds(15)) }
-        #expect(!movements.isEmpty)
-        let prior = movements
-        coordinator.update(canvas(sourceID: "s20", revision: 1), view: web)
-        let visible =
-            try await web.callAsyncJavaScript(
-                """
-                const b=document.getElementById('s20').getBoundingClientRect();return b.top>=0 && b.bottom<=innerHeight;
-                """, arguments: [:], in: nil, contentWorld: .defaultClient) as? Bool
-        #expect(visible == true)
-        try await Task.sleep(for: .milliseconds(160))
-        #expect(movements == prior)
-    }
 #endif

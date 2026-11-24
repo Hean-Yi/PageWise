@@ -1,7 +1,6 @@
 import SwiftUI
 
 struct PDFBilingualAppearanceMenu: View {
-    let model: ReaderModel
     @Binding var layout: PDFBilingualLayoutPreference
     let width: CGFloat
     @AppStorage("PDFBilingualFontSize") private var fontSize = 16
@@ -14,19 +13,13 @@ struct PDFBilingualAppearanceMenu: View {
 
     private var items: [ReaderMenuItem] {
         let layouts: [(String, PDFBilingualLayoutPreference)] = [
-            ("段落对照", .paragraph), ("逐句上下", .stacked), ("左右并排", .split), ("随窗口调整", .auto),
+            ("段落对照", .paragraph), ("原页与译文并排", .split),
         ]
         var items: [ReaderMenuItem] = [.section("对照布局")]
         items += layouts.map { title, value in
             .action(title, selected: layout == value, enabled: value != .split || width >= 570) {
                 layout = value
             }
-        }
-        if layout.resolved(at: width) == .split {
-            items.append(
-                .action("跟随原句", selected: model.pdfBilingual.followsScroll) {
-                    model.pdfBilingual.followsScroll.toggle()
-                })
         }
         items += [.divider, .section("译文字号")]
         items += [("小", 14), ("标准", 16), ("大", 19)].map { title, value in

@@ -14,11 +14,11 @@ import Testing
 
     #expect(paragraph.resolved(at: 420) == .paragraph)
     #expect(paragraph.resolved(at: 1000) == .paragraph)
-    #expect(automatic.resolved(at: 680) == .stacked)
-    #expect(automatic.resolved(at: 1000) == .split)
-    #expect(split.resolved(at: 420) == .stacked)
+    #expect(automatic.resolved(at: 680) == .paragraph)
+    #expect(automatic.resolved(at: 1000) == .paragraph)
+    #expect(split.resolved(at: 420) == .paragraph)
     #expect(split.resolved(at: 680) == .split)
-    #expect(stacked.resolved(at: 1000) == .stacked)
+    #expect(stacked.resolved(at: 1000) == .paragraph)
 }
 
 @Test @MainActor func localPDFBilingualReadingRequiresExplicitTranslationAndReopensOffline() async throws {
@@ -41,9 +41,6 @@ import Testing
     #expect(model.openBilingualReading(translatingDocument: false))
     try await waitForPageSession { !session.isLoading }
     #expect(await transport.requests == 0)
-    let sentence = try #require(session.sentences.first)
-    session.focusFromPDF(sentence.id)
-    #expect(session.focusedID == sentence.id)
     session.translatePage(model)
     try await waitForPageSession { !session.isTranslating }
     #expect(session.error == nil)
@@ -307,16 +304,12 @@ func attachingOnlineMetadataStopsPDFTranslationAndUsesOnlySourceReflow(candidate
 
     let neighboring = try #require(session.paragraphPages[3]?.sentences.first)
     session.receiveDocumentTranslations([neighboring.id: "相邻页保存的译句。"], paperID: paperID, page: 3)
-    session.focusParagraphSentence(neighboring.id, model: model)
+    session.paragraphDidScroll(to: 3, model: model)
     #expect(model.visiblePage == 3 && session.pageIndex == 3 && !session.isLoading)
-    #expect(session.focusedID == neighboring.id && session.translations[neighboring.id] == "相邻页保存的译句。")
+    #expect(session.translations[neighboring.id] == "相邻页保存的译句。")
     #expect(session.paragraphJumpRevision == revision && session.paragraphJumpPage == 3 && model.jumpPage == nil)
     #expect(model.workspace(for: paperID).position?.pageIndex == 3)
-    session.followsScroll = false
-    session.scrollFromParagraph(neighboring.id)
-    #expect(session.pdfScrollID == neighboring.id)
     session.revealParagraphPage(3, model: model)
-    #expect(session.pdfScrollID == nil && session.focusedID == nil)
     session.loadPage(model)
     #expect(session.paragraphJumpRevision == revision)
 

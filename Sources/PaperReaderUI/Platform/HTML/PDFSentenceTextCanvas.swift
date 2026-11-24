@@ -2,22 +2,14 @@ import PaperReaderKit
 import SwiftUI
 import WebKit
 
-/// All three layouts use the source sentence IDs for interaction and native text selection.
+/// Paragraph text remains selectable while sentence IDs connect translated text to stable local anchors.
 @MainActor struct PDFSentenceTextCanvas {
-    enum Layout: String { case split, stacked, paragraph }
+    enum Layout: String { case split, paragraph }
     let sentences: [PDFSourceSentence]
     let translations: [String: String]
     let layout: Layout
     let fontSize: Int
-    let focusedID: String?
-    let focusRevision: Int
-    let followsScroll: Bool
-    let sourceScrollID: String?
-    let sourceScrollRevision: Int
-    let pdfSelectedIDs: [String]
-    let onScroll: (String) -> Void
     let onSelection: ([String]) -> Void
-    let onFocus: (String?) -> Void
     var illustrations: [PDFReadingIllustration] = []
     var onRevealIllustration: ((PDFReadingIllustration) -> Void)?
     var copyTableText: (String) -> Bool = { text in
@@ -33,6 +25,7 @@ import WebKit
     var continuous: Continuous?
     var inlineNotes: [PDFInlineNote] = []
     var onOpenNote: (UUID) -> Void = { _ in }
+    var onOpenHighlight: (UUID) -> Void = { _ in }
     var inlineHighlights: [PDFInlineNote] = []
     var onTextSelection: ([PDFReflowTextSelection]) -> Void = { _ in }
     var onSelectionAction: (PDFReflowSelectionAction, [PDFReflowTextSelection]) -> Void = { _, _ in }
@@ -57,11 +50,6 @@ import WebKit
         private var translated: [String: String] = [:]
         private var displayedLayout: Layout?
         private var displayedFontSize: Int?
-        private var focused: String?
-        private var revision = -1
-        private var follow: Bool?
-        private var lastScrollRevision = -1
-        private var lastPDFSelection: [String] = []
         private var displayedNotes: [PDFInlineNote] = []
         private var displayedHighlights: [PDFInlineNote] = []
         private var ready = false
@@ -132,8 +120,15 @@ import WebKit
                     || !displayedHighlights.isEmpty || !parent.inlineHighlights.isEmpty)
             {
                 let sentences = continuous.map { $0.pages.values.flatMap(\.sentences) } ?? parent.sentences
-                let marks = Self.noteMarks(in: sentences, notes: parent.inlineNotes)
-                let highlights = Self.noteMarks(in: sentences, notes: parent.inlineHighlights)
+                let translations =
+                    continuous.map { window in
+                        window.pages.values.reduce(into: [String: String]()) {
+                            $0.merge($1.translations) { _, new in new }
+                        }
+                    } ?? parent.translations
+                let marks = Self.noteMarks(in: sentences, notes: parent.inlineNotes, translations: translations)
+                let highlights = Self.noteMarks(
+                    in: sentences, notes: parent.inlineHighlights, translations: translations)
                 view.callAsyncJavaScript(
                     "window.sentenceReader.markNotes(marks, highlights)",
                     arguments: ["marks": marks, "highlights": highlights],
@@ -141,40 +136,12 @@ import WebKit
                 displayedNotes = parent.inlineNotes
                 displayedHighlights = parent.inlineHighlights
             }
-            if changed || windowChanged || layoutChanged || displayedFontSize != parent.fontSize
-                || focused != parent.focusedID
-                || revision != parent.focusRevision
-            {
-                let scroll =
-                    parent.focusedID != nil
-                    && (focused != parent.focusedID || layoutChanged || revision != parent.focusRevision)
+            if changed || windowChanged || layoutChanged || displayedFontSize != parent.fontSize {
                 view.callAsyncJavaScript(
-                    "window.sentenceReader.show(fontSize, focused, scroll)",
-                    arguments: [
-                        "fontSize": parent.fontSize,
-                        "focused": parent.focusedID ?? "", "scroll": scroll,
-                    ],
+                    "window.sentenceReader.show(fontSize)", arguments: ["fontSize": parent.fontSize],
                     in: nil, in: .defaultClient, completionHandler: nil)
-                focused = parent.focusedID
-                revision = parent.focusRevision
                 displayedLayout = parent.layout
                 displayedFontSize = parent.fontSize
-            }
-            if changed || layoutChanged || follow != parent.followsScroll
-                || lastScrollRevision != parent.sourceScrollRevision
-                || lastPDFSelection != parent.pdfSelectedIDs
-            {
-                let track = parent.followsScroll && parent.layout == .split
-                let reveal = track && lastScrollRevision != parent.sourceScrollRevision
-                view.callAsyncJavaScript(
-                    "window.sentenceReader.sync(track, reveal, ids)",
-                    arguments: [
-                        "track": track, "reveal": reveal ? parent.sourceScrollID ?? "" : "",
-                        "ids": parent.pdfSelectedIDs,
-                    ], in: nil, in: .defaultClient, completionHandler: nil)
-                follow = parent.followsScroll
-                lastScrollRevision = parent.sourceScrollRevision
-                lastPDFSelection = parent.pdfSelectedIDs
             }
         }
 
@@ -195,13 +162,32 @@ import WebKit
         /// Intersections are computed in the immutable PDF character space. Reflowed text receives ink
         /// only when the overlapping glyphs also identify a unique substring of the rendered sentence.
         static func noteMarks(
-            in sentences: [PDFSourceSentence], notes: [PDFInlineNote]
+            in sentences: [PDFSourceSentence], notes: [PDFInlineNote], translations: [String: String] = [:]
         ) -> [[String: Any]] {
             let byPage = Dictionary(grouping: sentences, by: \.pageIndex)
+            var translatedSentences: [String: PDFSourceSentence] = [:]
+            if notes.contains(where: { $0.anchors.contains { $0.pdfTranslationPageIndex != nil } }) {
+                for sentence in sentences {
+                    guard let text = translations[sentence.id] else { continue }
+                    translatedSentences[NoteAnchor.pdfTranslationTarget(sentenceID: sentence.id, translation: text)] =
+                        sentence
+                }
+            }
             var output: [[String: Any]] = []
             for note in notes {
                 var hits: [String: [[Int]]] = [:]
+                var chinese: [String: [[Int]]] = [:]
                 for anchor in note.anchors {
+                    if let page = anchor.pdfTranslationPageIndex {
+                        guard let sentence = translatedSentences[anchor.target], sentence.pageIndex == page,
+                            let text = translations[sentence.id] as NSString?, anchor.start >= 0,
+                            anchor.end > anchor.start, anchor.end <= text.length,
+                            text.substring(with: NSRange(location: anchor.start, length: anchor.end - anchor.start))
+                                == anchor.text
+                        else { continue }
+                        chinese[sentence.id, default: []].append([anchor.start, anchor.end])
+                        continue
+                    }
                     guard let page = anchor.pdfPageIndex, anchor.start >= 0, anchor.end > anchor.start,
                         anchor.end - anchor.start == anchor.text.utf16.count
                     else { continue }
@@ -248,11 +234,14 @@ import WebKit
                         }
                     }
                 }
-                for (sentenceID, ranges) in hits {
-                    output.append([
-                        "note": note.id.uuidString, "sentence": sentenceID, "ranges": ranges,
-                        "color": note.color?.rawValue ?? "yellow",
-                    ])
+                for (language, entries) in [("en", hits), ("zh", chinese)] {
+                    for (sentenceID, ranges) in entries {
+                        output.append([
+                            "note": note.id.uuidString, "sentence": sentenceID, "ranges": ranges,
+                            "language": language, "color": note.color?.rawValue ?? "yellow",
+                            "style": note.style?.rawValue ?? "highlight",
+                        ])
+                    }
                 }
             }
             return output
@@ -359,7 +348,6 @@ import WebKit
                     switch event["action"] as? String {
                     case "viewport":
                         window.onVisiblePage(index)
-                        if let sentence = event["id"] as? String, isDisplayed(sentence) { latest.onScroll(sentence) }
                         return
                     case "original":
                         window.onOpenOriginalPage(index)
@@ -372,8 +360,17 @@ import WebKit
             }
             let action = event["action"] as? String
             if action == "annotate" {
-                guard let raw = event["tool"] as? String, let tool = PDFReflowSelectionAction(rawValue: raw) else {
-                    return
+                let tool: PDFReflowSelectionAction
+                switch event["tool"] as? String {
+                case "note": tool = .note
+                case "bookmark": tool = .bookmark
+                case "mark":
+                    guard let color = (event["color"] as? String).flatMap(AnnotationColor.init(rawValue:)),
+                        let style = (event["style"] as? String).flatMap(AnnotationStyle.init(rawValue:)),
+                        let removing = event["remove"] as? Bool
+                    else { return }
+                    tool = .mark(color: color, style: style, removing: removing)
+                default: return
                 }
                 let selection = textSelection(event)
                 guard !selection.isEmpty else { return }
@@ -384,6 +381,12 @@ import WebKit
                 latest.inlineNotes.contains(where: { $0.id == id })
             {
                 latest.onOpenNote(id)
+                return
+            }
+            if action == "openHighlight", let raw = event["id"] as? String, let id = UUID(uuidString: raw),
+                latest.inlineHighlights.contains(where: { $0.id == id })
+            {
+                latest.onOpenHighlight(id)
                 return
             }
             if action == "illustration" || action == "copyTable" {
@@ -411,14 +414,6 @@ import WebKit
                 latest.onSelection(ids)
                 latest.onTextSelection(textSelection(event))
                 return
-            }
-            guard let raw = event["id"] as? String, raw.isEmpty || isDisplayed(raw) else { return }
-            let id = raw.isEmpty ? nil : raw
-            switch event["action"] as? String {
-            case "focus": latest.onFocus(id)
-            case "scroll":
-                if latest.followsScroll, latest.layout == .split, let id { latest.onScroll(id) }
-            default: break
             }
         }
     }
@@ -449,12 +444,7 @@ extension PDFSentenceTextCanvas {
         *{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font:var(--zh-size,16px)/1.7 \(ReadingPageTypography.pdfChinese)}
         main{max-width:45rem;margin:auto;padding:19px clamp(18px,4vw,38px) 60px;overflow-wrap:anywhere}
         p{margin:0 0 1em}
-        [role="button"]{border-radius:3px;box-decoration-break:clone;-webkit-box-decoration-break:clone}
-        [aria-pressed="true"],.related,.counterpart{background:var(--active)}
-        [role="button"]:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
-        .en{display:none}.stacked .pair{display:block;padding:4px 6px;margin:0 -6px 12px}
-        .stacked .en{display:block;font:16px/1.55 Georgia,"Times New Roman",serif;color:var(--en);margin-bottom:3px}
-        .stacked p{margin-bottom:1.5em}.stacked .zh{line-height:1.7}
+        .en{display:none}
         .paragraph main{\(ReadingPageTypography.pdfColumn)}
         .paragraph main>*+*{margin-top:1.7em}
         figure{margin:0}.paragraph figure+section{margin-top:.8em}
@@ -487,7 +477,10 @@ extension PDFSentenceTextCanvas {
         .page-marker{display:flex;align-items:center;gap:.8em;margin:2.4em 0 1.4em;color:var(--en);font:500 .75em/1.5 -apple-system,sans-serif}
         .page-marker:after{content:"";height:1px;background:currentColor;opacity:.2;flex:1}
         ::highlight(pdf-reading-notes){background-color:#eacb6d5c;text-decoration:underline #ab7752}
-        ::highlight(pdf-user-highlights){background-color:#e9bf3f80}
+        \(AnnotationColor.allCases.map { color in
+            "::highlight(pdf-\(color.rawValue)-highlight){background-color:\(color.hex);color:#292e2e}" +
+            "::highlight(pdf-\(color.rawValue)-underline){text-decoration:underline \(color.hex) 2px}"
+        }.joined(separator: "\n"))
         ::highlight(pdf-notes-red){background-color:#f5aaa67d;text-decoration:underline #d4807a}
         ::highlight(pdf-notes-blue){background-color:#b5d5f884;text-decoration:underline #7ca3d0}
         ::highlight(pdf-notes-green){background-color:#b7db9e80;text-decoration:underline #7ca663}
@@ -530,28 +523,14 @@ extension PDFSentenceTextCanvas {
         html.reading-range main ::selection{background:transparent;color:inherit}
         main{position:relative;z-index:1}
         #pdf-text-selection{position:absolute;inset:0 auto auto 0;width:0;height:0;pointer-events:none}
-        #selection-tools{position:fixed;z-index:1000;display:flex;flex-wrap:wrap;width:max-content;max-width:calc(100vw - 16px);
-          gap:2px;padding:4px;border-radius:12px;background:var(--paper);color:var(--ink);
-          border:1px solid color-mix(in srgb,var(--en) 20%,transparent);box-shadow:0 4px 18px #32281923;
-          user-select:none;-webkit-user-select:none}
-        #selection-tools[hidden]{display:none}
-        #selection-tools button{border:0;border-radius:8px;background:transparent;color:inherit;cursor:pointer;
-          font:500 13px/1.3 -apple-system,sans-serif;padding:7px 9px}
-        #selection-tools button:hover,#selection-tools button:focus-visible{background:var(--active);color:var(--focus)}
-        @media(pointer:coarse){#selection-tools button{min-height:44px}}
-        </style></head><body><main aria-label="本页逐句译文"></main>
-        <div id="selection-tools" role="group" aria-label="选文批注" hidden>
-          <button type="button" data-tool="note">记笔记</button><button type="button" data-tool="highlight">高亮</button>
-          <button type="button" data-tool="bookmark">加书签</button>
-        </div></body></html>
+        </style></head><body><main aria-label="本页段落译文"></main></body></html>
         """
 
     fileprivate static let script = """
         (() => {
           const main=document.querySelector('main'), pairs=new Map();
           let figures=[];
-          let focused='', track=false, userScroll=false, scrollTimer=0, lastScroll='';
-          let lastSelection='[[],[]]', related=[], order=[], paragraphMode=false, revealLanguage='en';
+          let lastSelection='[[],[]]', paragraphMode=false;
           let inlineNoteRanges=new WeakMap();
           let flow=null;
           function post(event) {
@@ -559,43 +538,8 @@ extension PDFSentenceTextCanvas {
             window.webkit.messageHandlers.sentence.postMessage(event);
           }
           const send=(action,id)=>post({action,id});
-          const pairAt=node=>node?.closest?.('[data-sentence]');
           const sideOf=node=>node?.closest('.en,.source-line') ? 'en' : 'zh';
-          function focus(node) {
-            revealLanguage=sideOf(node)==='en' ? 'zh' : 'en';
-            const id=node.dataset.sentence;
-            send('focus',id===focused ? '' : id);
-          }
-          function targets(id) {
-            const pair=pairs.get(id);
-            return pair ? (paragraphMode ? [pair.en,pair.zh] : [pair.button]) : [];
-          }
-          function reveal(id) {
-            const pair=pairs.get(id);
-            if (!pair) return;
-            const target=paragraphMode ? (pair[revealLanguage].isConnected ? pair[revealLanguage] : pair.en) : pair.button;
-            const bounds=target.getBoundingClientRect();
-            if (bounds.bottom<=0 || bounds.top>=innerHeight) {
-              clearTimeout(scrollTimer); scrollTimer=0; userScroll=false;
-              target.scrollIntoView({block:'center',inline:'nearest'});
-            }
-          }
-          for (const event of ['wheel','touchmove','pointerdown','keydown']) {
-            document.addEventListener(event,()=>{userScroll=true;},{passive:true});
-          }
-          window.addEventListener('scroll',()=>{
-            if (flow) { scheduleViewport();return; }
-            if (!userScroll || !track || scrollTimer) return;
-            scrollTimer=setTimeout(()=>{
-              scrollTimer=0;
-              if (!userScroll || !track || !getSelection().isCollapsed) return;
-              const edge=innerHeight*0.23;
-              const visible=[...main.querySelectorAll('.pair')].find(s=>{
-                const box=s.getBoundingClientRect(); return box.bottom>=edge && box.top<innerHeight;
-              });
-              if (visible && lastScroll!==visible.id) {lastScroll=visible.id;send('scroll',visible.id);}
-            },70);
-          },{passive:true});
+          window.addEventListener('scroll',scheduleViewport,{passive:true});
           \(tableScript)
           \(HTMLSelectionScript.textInk)
           const selectionInk=document.createElement('div');
@@ -646,21 +590,16 @@ extension PDFSentenceTextCanvas {
             else delete main.dataset.selecting;
           });
           document.addEventListener('selectionchange', () => {
+            if (getSelection().isCollapsed && tools.preservingSelection()) return;
             const pieces=selectedPieces();
             paintSelection(pieces);
-            if (paragraphMode) {
-              for (const el of main.querySelectorAll('.counterpart')) el.classList.remove('counterpart');
-              for (const piece of pieces) {
-                const opposite=piece.language==='en' ? 'zh' : 'en';
-                pairs.get(piece.id)?.[opposite].classList.add('counterpart');
-              }
-            }
             const ids = pieces.map(piece => piece.id).filter(Boolean);
             const parts=annotationParts(pieces), signature=JSON.stringify([ids,parts]);
             if (signature !== lastSelection) {
               lastSelection=signature;
+              rememberSelection(parts,pieces);
               post({action:'selection',ids,pieces:parts});
-              selectionToolsChanged();
+              tools.selectionChanged();
             }
           });
           document.addEventListener('copy', event => {
@@ -689,10 +628,10 @@ extension PDFSentenceTextCanvas {
             const note=e.target.closest('[data-reading-note]');
             if (note) {send('note',note.dataset.readingNote);return;}
             if (e.detail===1 && getSelection().isCollapsed) {
-              const runs=inlineNoteRanges.get(e.target.closest('.en'));
+              const runs=inlineNoteRanges.get(e.target.closest('.en,.zh'));
               const hit=runs?.find(({range})=>[...range.getClientRects()].some(rect=>
                 rect.left<=e.clientX && e.clientX<=rect.right && rect.top<=e.clientY && e.clientY<=rect.bottom));
-              if (hit) {send('note',hit.id);return;}
+              if (hit) {send(hit.action,hit.id);return;}
             }
             const source=e.target.closest('[data-original]');
             if (source) {post({action:'original',page:Number(source.dataset.original)});return;}
@@ -706,24 +645,6 @@ extension PDFSentenceTextCanvas {
                 return;
               }
               send('illustration',figure.dataset.illustration); return;
-            }
-            const el=pairAt(e.target);
-            if (el && window.getSelection().isCollapsed) focus(el);
-          });
-          main.addEventListener('keydown',e=>{
-            const el=pairAt(e.target);
-            if (e.key==='Escape') {send('focus','');return;}
-            if (!el || e.shiftKey || e.metaKey || e.ctrlKey || e.altKey) return;
-            if (e.key==='Enter' || e.key===' ') {e.preventDefault();focus(el);}
-            if (e.key==='ArrowDown' || e.key==='ArrowUp') {
-              e.preventDefault();
-              const id=order[order.indexOf(el.dataset.sentence)+(e.key==='ArrowDown'?1:-1)];
-              const pair=pairs.get(id);
-              if (pair) {
-                const side=sideOf(el);
-                const target=paragraphMode ? (pair[side].isConnected ? pair[side] : pair.en) : pair.button;
-                target.focus();send('focus',id);
-              }
             }
           });
           // Reuse the text nodes, including when a translation arrives before an existing selection.
@@ -740,18 +661,11 @@ extension PDFSentenceTextCanvas {
               node.className=name; node.dataset.sentence=id;
               return node;
             };
-            const button=span('pair'), en=span('en'), zh=span('zh');
-            button.id=id; en.lang='en'; zh.lang='zh-Hans';
+            const groupSpan=span('pair'), en=span('en'), zh=span('zh');
+            groupSpan.id=id; en.lang='en'; zh.lang='zh-Hans';
             const pending=document.createElement('span');
             pending.className='pending'; pending.textContent='待译';
-            return {button,en,zh,pending,space:document.createTextNode(' ')};
-          }
-          function setButton(node,enabled) {
-            if (enabled) {
-              node.tabIndex=0; node.setAttribute('role','button'); node.setAttribute('aria-pressed','false');
-            } else {
-              node.removeAttribute('role');node.removeAttribute('tabindex');node.removeAttribute('aria-pressed');
-            }
+            return {groupSpan,en,zh,pending,space:document.createTextNode(' ')};
           }
           function makeGroup(id) {
             const group=document.createElement(paragraphMode ? 'section' : 'p');
@@ -838,8 +752,6 @@ extension PDFSentenceTextCanvas {
               let pair=pairs.get(row.id);
               if (!pair || changingStructure) {
                 pair=pair||makePair(row.id);
-                setButton(pair.button,!paragraphMode);
-                setButton(pair.en,paragraphMode);setButton(pair.zh,paragraphMode);
                 pairs.set(row.id,pair);
               }
               pair.group=row.paragraph;
@@ -867,8 +779,8 @@ extension PDFSentenceTextCanvas {
                 }
                 setChildren(group.firstChild,english);setChildren(group.lastChild,chinese);
               } else {
-                for (const pair of members) setChildren(pair.button,[pair.en,pair.zh]);
-                setChildren(group,members.map(pair=>pair.button));
+                for (const pair of members) setChildren(pair.groupSpan,[pair.en,pair.zh]);
+                setChildren(group,members.map(pair=>pair.groupSpan));
               }
               blocks.push(group);
             }
@@ -881,29 +793,32 @@ extension PDFSentenceTextCanvas {
             markNotes(marks, highlights=[]) {
               const colors={yellow:'pdf-reading-notes',red:'pdf-notes-red',blue:'pdf-notes-blue',green:'pdf-notes-green',purple:'pdf-notes-purple'};
               const ink=new Map(Object.values(colors).map(name=>[name,[]]));
-              ink.set('pdf-user-highlights',[]);
+              for (const color of Object.keys(\(HTMLAnnotationMenuScript.colors))) for (const style of ['highlight','underline']) ink.set('pdf-'+color+'-'+style,[]);
+              projectedInk=[];
               inlineNoteRanges=new WeakMap();
               const lastButton=new Map();
               for (const button of main.querySelectorAll('[data-reading-note]')) button.remove();
-              for (const [index,mark] of [...highlights,...marks].entries()) {
-                const isHighlight=index<highlights.length;
-                const en=pairs.get(mark.sentence)?.en, text=en?.firstChild;
-                if (!en?.isConnected || text?.nodeType!==Node.TEXT_NODE) continue;
+              for (const [index,mark] of [...marks,...highlights].entries()) {
+                const isHighlight=index>=marks.length;
+                const language=mark.language || 'en', span=pairs.get(mark.sentence)?.[language], text=span?.firstChild;
+                if (!span?.isConnected || text?.nodeType!==Node.TEXT_NODE) continue;
                 for (const [start,end] of mark.ranges) {
                   if (start<0 || end<=start || end>text.length) continue;
                   const range=document.createRange();range.setStart(text,start);range.setEnd(text,end);
-                  ink.get(isHighlight ? 'pdf-user-highlights' : colors[mark.color] ?? colors.yellow).push(range);
-                  if (isHighlight) continue;
-                  if (!inlineNoteRanges.has(en)) inlineNoteRanges.set(en,[]);
-                  inlineNoteRanges.get(en).push({id:mark.note,range});
+                  const color=mark.color||'yellow',style=mark.style||'highlight';
+                  ink.get(isHighlight ? 'pdf-'+color+'-'+style : colors[color] ?? colors.yellow)?.push(range);
+                  if (isHighlight) projectedInk.push({key:mark.sentence,target:language,range:[start,end],color,style});
+                  if (!inlineNoteRanges.has(span)) inlineNoteRanges.set(span,[]);
+                  inlineNoteRanges.get(span).push({id:mark.note,range,action:isHighlight?'openHighlight':'note'});
                 }
                 if (!isHighlight && paragraphMode) {
                   const button=document.createElement('button');button.type='button';button.className='sentence-note';
                   button.dataset.readingNote=mark.note;button.setAttribute('aria-label','打开阅读笔记');
-                  button.title='打开阅读笔记';(lastButton.get(en) ?? en).after(button);lastButton.set(en,button);
+                  button.title='打开阅读笔记';(lastButton.get(span) ?? span).after(button);lastButton.set(span,button);
                 }
               }
               if (window.CSS?.highlights) for (const [name,ranges] of ink) CSS.highlights.set(name,new Highlight(...ranges));
+              tools.refresh();
             },
             render(rows,layout,items) {
               const changingStructure=paragraphMode!==(layout==='paragraph');
@@ -912,17 +827,12 @@ extension PDFSentenceTextCanvas {
               const {anchorNode,anchorOffset,focusNode,focusOffset}=selection;
               paragraphMode=layout==='paragraph';
               document.body.className=layout;
-              main.setAttribute('aria-label',paragraphMode ? '本页段落对照' : '本页逐句译文');
+              main.setAttribute('aria-label',paragraphMode ? '本页段落对照' : '本页段落译文');
               if (items) figures=items.map(makeFigure);
-              order=rows.map(row=>row.id);
-              const incoming=new Set(order);
+              const incoming=new Set(rows.map(row=>row.id));
               for (const id of pairs.keys()) if (!incoming.has(id)) pairs.delete(id);
               renderRows(main,rows,figures,changingStructure);
               if (changingStructure) {
-                revealLanguage='en';
-                for (const pair of pairs.values()) {
-                  for (const node of [pair.en,pair.zh,pair.button]) node.classList.remove('related','counterpart');
-                }
                 if (anchorNode?.nodeType===Node.TEXT_NODE && focusNode?.nodeType===Node.TEXT_NODE
                     && anchorNode.isConnected && focusNode.isConnected
                     && anchorNode.parentElement.getClientRects().length && focusNode.parentElement.getClientRects().length) {
@@ -930,20 +840,9 @@ extension PDFSentenceTextCanvas {
                 }
               }
             },
-            show(fontSize,id,scroll) {
+            show(fontSize) {
               document.documentElement.style.setProperty('--zh-size',fontSize+'px');
               updateTableWidths();
-              for (const el of targets(focused)) el.setAttribute('aria-pressed','false');
-              focused=id;
-              for (const el of targets(focused)) el.setAttribute('aria-pressed','true');
-              if (scroll) reveal(focused);
-            },
-            sync(enabled,scrollID,selected) {
-              track=enabled;
-              for (const id of related) for (const el of targets(id)) el.classList.remove('related');
-              related=selected;
-              for (const id of related) for (const el of targets(id)) el.classList.add('related');
-              if (scrollID) {lastScroll=scrollID; reveal(scrollID);}
             }
           };
         })();

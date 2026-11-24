@@ -3,6 +3,10 @@ import PaperReaderKit
 
 extension ReaderModel {
     var assistantSelectionText: String {
+        let pieces = pdfBilingual.reflowTextSelection
+        if let language = pieces.first?.language {
+            return pieces.map(\.text).joined(separator: language == "zh" ? "" : " ")
+        }
         let sentences = pdfBilingual.selectedSourceSentences
         return sentences.isEmpty ? selectionText : sentences.map(\.text).joined(separator: " ")
     }
@@ -33,7 +37,9 @@ extension ReaderModel {
         let deletion = lastPaperDeletion[paper.id]
         let selectedSentences = pdfBilingual.selectedSourceSentences
         let selection = String(assistantSelectionText.prefix(18_000))
-        let originalPage = selection.isEmpty ? visiblePage : selectionPage
+        let originalPage =
+            selection.isEmpty
+            ? visiblePage : (pdfBilingual.reflowTextSelection.first?.sentence.pageIndex ?? selectionPage)
         let useOriginalPage = mode == "original" && paper.blocks.isEmpty
         let config = modelSettings
         let history = currentChats.filter { turn in

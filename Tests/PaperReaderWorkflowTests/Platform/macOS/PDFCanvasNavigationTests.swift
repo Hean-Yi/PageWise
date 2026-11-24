@@ -3,6 +3,7 @@
     import PaperReaderKit
     import SwiftUI
     import Testing
+    import WebKit
 
     @testable import PaperReaderUI
 
@@ -24,7 +25,7 @@
         let canvas = PDFCanvas(model: model, penEnabled: false)
         let coordinator = PDFCoordinator(model: model)
         let original = coordinator.makeView()
-        func update() { coordinator.update(original, penEnabled: false, focus: canvas.sentenceDisplay) }
+        func update() { coordinator.update(original, penEnabled: false, focus: canvas.displayContext) }
         update()
         #expect(!model.pdfBilingual.isOpen && original.document?.pageCount == paper.pageCount)
 
@@ -58,7 +59,7 @@
         try DemoPaper.write(to: file)
         _ = try #require(await model.importURLs([file]).first)
 
-        let host = NSHostingView(rootView: PDFCanvas(model: model, penEnabled: false, acceptsSentenceInput: false))
+        let host = NSHostingView(rootView: PDFCanvas(model: model, penEnabled: false, isReaderVisible: false))
         let window = NSWindow(
             contentRect: CGRect(x: 0, y: 0, width: 480, height: 350),
             styleMask: [.borderless], backing: .buffered, defer: false)
@@ -83,7 +84,7 @@
 
         // The continuous text view accepts the jump, then the user peeks at the source page.
         model.jumpPage = nil
-        host.rootView = PDFCanvas(model: model, penEnabled: false, acceptsSentenceInput: true)
+        host.rootView = PDFCanvas(model: model, penEnabled: false, isReaderVisible: true)
         host.layoutSubtreeIfNeeded()
         #expect(original.currentPage === second)
         #expect(model.visiblePage == 1)
@@ -116,12 +117,9 @@
             if let pdf = view as? PDFView { return pdf }
             return view.subviews.lazy.compactMap(findPDF).first
         }
-        func button(_ label: String, in element: AnyObject) -> AnyObject? {
-            if element.accessibilityRole?() == .button, element.accessibilityLabel?() == label { return element }
-            for child in element.accessibilityChildren?() ?? [] {
-                if let match = button(label, in: child as AnyObject) { return match }
-            }
-            return nil
+        func findPalette(_ view: NSView) -> WKWebView? {
+            if let web = view as? WKWebView { return web }
+            return view.subviews.lazy.compactMap(findPalette).first
         }
         func wait(_ description: String, until condition: () -> Bool) async throws {
             let deadline = ContinuousClock.now + .seconds(3)
@@ -139,28 +137,63 @@
         let range = text.range(of: "the Average")
         try #require(range.location != NSNotFound)
         let selection = try #require(page.selection(for: range))
-        #expect(button("记笔记", in: host) == nil)
+        #expect(findPalette(host) == nil)
         pdf.setCurrentSelection(selection, animate: false)
-        try await wait("Floating note button visible") { button("记笔记", in: host) != nil }
+        try await wait("Floating palette created") { findPalette(host) != nil }
+        let web = try #require(findPalette(host))
+        func js(_ script: String) async throws -> Bool {
+            try await web.callAsyncJavaScript(script, arguments: [:], in: nil, contentWorld: .defaultClient) as? Bool
+                == true
+        }
+        func waitForMenu(_ script: String) async throws {
+            let deadline = ContinuousClock.now + .seconds(5)
+            while ContinuousClock.now < deadline {
+                host.layoutSubtreeIfNeeded()
+                if (try? await js(script)) == true { return }
+                try await Task.sleep(for: .milliseconds(15))
+            }
+            try #require(await js(script), "Native PDF palette: \(script)")
+        }
+        try await waitForMenu(
+            "const m=document.querySelector('#annotation-menu'); return m && !m.hidden && !m.querySelector('.swatch').disabled"
+        )
         #expect(model.pdfSelectionRanges == [range])
-        let note = try #require(button("记笔记", in: host))
-        #expect(note.accessibilityPerformPress?() == true)
+        #expect(
+            try await js(
+                "return document.querySelectorAll('.swatch').length===8 && document.querySelector('.add-note').textContent==='添加笔记'"
+            ))
+        #expect(try await js("document.querySelector('.add-note').click();return true"))
         try await wait("Draft opened") { model.pdfNoteEditor != nil }
         let anchor = try #require(model.pdfNoteEditor?.note.anchors.first)
         #expect(anchor.pdfPageIndex == 0 && anchor.start == range.location && anchor.end == NSMaxRange(range))
         #expect(anchor.text == "the Average")
-        #expect(button("记笔记", in: host) == nil)
+        try await waitForMenu("return document.querySelector('#annotation-menu').hidden")
         model.closePDFReadingNote()
         pdf.clearSelection()
         pdf.setCurrentSelection(selection, animate: false)
-        try await wait("Floating highlighter visible") { button("高亮", in: host) != nil }
-        let highlighter = try #require(button("高亮", in: host))
-        #expect(highlighter.accessibilityPerformPress?() == true)
-        try await wait("Highlight persisted") { model.currentHighlights.count == 1 }
+        try await waitForMenu(
+            "return document.querySelector('#annotation-menu')?.getBoundingClientRect().height>0"
+        )
+        // The same WebKit component is kept warm between selections.
+        #expect(findPalette(host) === web)
+        #expect(try await js("document.querySelector('[data-color=blue]').click();return true"))
+        try await wait("Blue highlight persisted") { !model.currentHighlights.isEmpty }
         let highlight = try #require(model.currentHighlights.first)
         #expect(highlight.pdfTextStart == range.location && highlight.text == anchor.text)
-        #expect(!highlight.rects.isEmpty && highlight.pageKey == anchor.key)
-        #expect(await model.highlightSaveTask?.value == true)
+        #expect(!highlight.rects.isEmpty && highlight.pageKey == anchor.key && highlight.color == .blue)
+        try await waitForMenu(
+            "return document.querySelector('.remove').hidden===false && document.querySelector('[data-color=blue]').getAttribute('aria-pressed')==='true'"
+        )
+        #expect(try await js("document.querySelector('[data-mode=underline]').click();return true"))
+        try await wait("New underline visible") {
+            model.currentHighlights.count == 1 && page.annotations.contains { $0.type == "Underline" }
+                && !page.annotations.contains { $0.type == "Highlight" }
+        }
+        try await waitForMenu("return document.querySelector('.remove').textContent==='取消下划线'")
+        #expect(try await js("document.querySelector('.remove').click();return true"))
+        try await wait("Ink removed from original") { model.currentHighlights.isEmpty && page.annotations.isEmpty }
+        #expect(try await js("document.querySelector('.bookmark').click();return true"))
+        try await wait("Bookmark added") { model.currentBookmarks.count == 1 }
         await model.flushReadingPosition()
     }
 

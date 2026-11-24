@@ -188,14 +188,15 @@ extension ReaderModel {
         }
         guard let first = note.anchors.first else { return }
         closeDocumentSummary()
-        if let index = first.pdfPageIndex {
+        if let index = first.readingPageIndex {
             guard let current = currentEdition, note.contentVersion == current.digest + ":original-0",
                 (0..<current.pageCount).contains(index), currentReadingNotes.contains(where: { $0.id == note.id })
             else { return }
-            pdfBilingual.close()
+            if first.pdfPageIndex != nil { pdfBilingual.close() }
             retainedReadingID = nil
             mode = "original"
             navigateToPage(index)
+            if first.pdfTranslationPageIndex != nil { pdfBilingual.open(self) }
             pdfNoteEditor = PDFNoteEditorSession(note: note, marks: [])
             requestedReadingNote = note.id
             readingNoteNavigationToken = UUID()

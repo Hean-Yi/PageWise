@@ -1,16 +1,26 @@
 import PaperReaderKit
 import SwiftUI
 
-enum PDFBilingualLayoutPreference: String {
-    case auto, split, stacked, paragraph
+enum PDFBilingualLayoutPreference: RawRepresentable, Equatable {
+    case paragraph, split
+
+    init?(rawValue: String) {
+        switch rawValue {
+        case "split": self = .split
+        case "paragraph", "stacked", "auto": self = .paragraph
+        default: return nil
+        }
+    }
+
+    var rawValue: String {
+        switch self {
+        case .split: "split"
+        case .paragraph: "paragraph"
+        }
+    }
 
     func resolved(at width: CGFloat) -> PDFSentenceTextCanvas.Layout {
-        switch self {
-        case .auto: width >= 740 ? .split : .stacked
-        case .split: width >= 570 ? .split : .stacked
-        case .stacked: .stacked
-        case .paragraph: .paragraph
-        }
+        self == .split && width >= 570 ? .split : .paragraph
     }
 }
 
@@ -29,7 +39,7 @@ struct PDFBilingualReadingView: View {
 
     private var session: PDFBilingualSession { model.pdfBilingual }
 
-    private var paragraphVisible: Bool { session.isOpen && layout == .paragraph && !peekingAtOriginal }
+    private var paragraphVisible: Bool { session.isOpen && !peekingAtOriginal }
 
     var body: some View {
         GeometryReader { geometry in
@@ -39,7 +49,7 @@ struct PDFBilingualReadingView: View {
             let pdfVisible = !session.isOpen || peekingAtOriginal || spread
             let pdfWidth = spread ? min(width - 268, max(240, width * originalFraction)) : width
             ZStack(alignment: .leading) {
-                PDFCanvas(model: model, penEnabled: pdfVisible && penEnabled, acceptsSentenceInput: pdfVisible)
+                PDFCanvas(model: model, penEnabled: pdfVisible && penEnabled, isReaderVisible: pdfVisible)
                     .frame(maxWidth: spread ? .infinity : 820)
                     .frame(width: pdfWidth)
                     .allowsHitTesting(pdfVisible)
@@ -81,22 +91,19 @@ struct PDFBilingualReadingView: View {
                 .animation(ReaderMotion.feedback(reduceMotion), value: peekingAtOriginal)
                 .allowsHitTesting(session.isOpen && peekingAtOriginal)
             }
-            .onChange(of: pdfVisible) { _, visible in
-                if visible, let id = session.focusedID { session.focus(id) }
+            .onChange(of: session.isOpen && textLayout == .paragraph && !peekingAtOriginal, initial: true) {
+                _, visible in
+                if visible {
+                    session.prepareParagraphReading(model)
+                    session.consumeParagraphJump(model)
+                }
             }
-        }
-        .onChange(of: paragraphVisible, initial: true) { _, visible in
-            if visible {
-                session.prepareParagraphReading(model)
-                session.consumeParagraphJump(model)
+            .onChange(of: model.jumpPage) { _, _ in
+                if paragraphVisible && textLayout == .paragraph { session.consumeParagraphJump(model) }
             }
-        }
-        .onChange(of: model.jumpPage) { _, _ in
-            if paragraphVisible { session.consumeParagraphJump(model) }
-        }
-        .onChange(of: model.outlineArrival?.revision) { _, _ in
-            // Two headings can request different ranges on the same page in consecutive frames.
-            if paragraphVisible { session.consumeParagraphJump(model) }
+            .onChange(of: model.outlineArrival?.revision) { _, _ in
+                if paragraphVisible && textLayout == .paragraph { session.consumeParagraphJump(model) }
+            }
         }
         .onChange(of: session.isOpen) { _, _ in peekingAtOriginal = false }
         .onChange(of: session.selectionRequestRevision) { _, _ in peekingAtOriginal = false }
@@ -155,32 +162,15 @@ struct PDFBilingualReadingView: View {
                 .padding(12).background(ReaderTheme.accent.opacity(0.07))
             }
             if let source = session.selectionSource {
-                selectionResult(source, sentences: sentences)
+                selectionResult(source)
             }
             if !paragraphs && translations.isEmpty {
                 emptyPage(hasSentences: !sentences.isEmpty, showsPageAction: showsPageAction)
             } else {
                 PDFSentenceTextCanvas(
                     sentences: sentences, translations: translations,
-                    layout: textLayout, fontSize: fontSize, focusedID: session.focusedID,
-                    focusRevision: session.sourceFocusRevision, followsScroll: session.followsScroll,
-                    sourceScrollID: session.sourceScrollID, sourceScrollRevision: session.sourceScrollRevision,
-                    pdfSelectedIDs: session.pdfSelectedIDs,
-                    onScroll: { id in
-                        if paragraphs {
-                            if paragraphVisible { session.scrollFromParagraph(id) }
-                        } else {
-                            session.scrollFromTranslation(id)
-                        }
-                    },
+                    layout: textLayout, fontSize: fontSize,
                     onSelection: model.selectBilingualSentences,
-                    onFocus: { id in
-                        if paragraphs {
-                            if paragraphVisible { session.focusParagraphSentence(id, model: model) }
-                        } else {
-                            session.focus(id)
-                        }
-                    },
                     illustrations: session.illustrations,
                     onRevealIllustration: { item in
                         if paragraphs {
@@ -194,6 +184,10 @@ struct PDFBilingualReadingView: View {
                     onOpenNote: { id in
                         guard let note = model.currentReadingNotes.first(where: { $0.id == id }) else { return }
                         model.pdfNoteEditor = PDFNoteEditorSession(note: note, marks: [])
+                    },
+                    onOpenHighlight: { id in
+                        guard let mark = model.currentHighlights.first(where: { $0.id == id }) else { return }
+                        Task { await model.openPDFHighlightNote(mark) }
                     }, inlineHighlights: model.inlinePDFHighlights,
                     onTextSelection: { session.reflowTextSelection = $0 },
                     onSelectionAction: { action, selection in
@@ -231,7 +225,7 @@ struct PDFBilingualReadingView: View {
                 Text("正在读取本页文字").font(.callout).foregroundStyle(ReaderTheme.muted)
             } else if !hasSentences {
                 Image(systemName: "doc.text.viewfinder").font(.title2).foregroundStyle(ReaderTheme.muted)
-                Text(layout == .paragraph ? "本页暂无可重排的文字" : "本页暂无可逐句对照的文字").font(.headline)
+                Text("本页暂无可重排的文字").font(.headline)
                 if layout != .paragraph {
                     Button("查看原页") { peekingAtOriginal = true }.buttonStyle(.bordered)
                 }
@@ -256,7 +250,7 @@ struct PDFBilingualReadingView: View {
             .font(.caption).foregroundStyle(ReaderTheme.muted).textSelection(.enabled)
     }
 
-    private func selectionResult(_ source: String, sentences: [PDFSourceSentence]) -> some View {
+    private func selectionResult(_ source: String) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
                 Text("选区译文").font(.caption.weight(.semibold)).foregroundStyle(ReaderTheme.accent)
@@ -281,11 +275,7 @@ struct PDFBilingualReadingView: View {
                     }
                 }.frame(maxWidth: .infinity, alignment: .leading)
             }.frame(maxHeight: 140).fixedSize(horizontal: false, vertical: true)
-            if let id = session.selectionContextID, sentences.contains(where: { $0.id == id }) {
-                Button("对照整句") { session.showSelectionContext() }
-                    .buttonStyle(.borderless).font(.caption.weight(.medium))
-                    .help("查看这一句已保存的英文和译文")
-            }
+
         }.padding(16).background(ReaderTheme.accent.opacity(0.045))
     }
 }

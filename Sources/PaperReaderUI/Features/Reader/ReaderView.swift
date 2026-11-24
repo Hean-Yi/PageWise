@@ -172,7 +172,7 @@ struct ReaderView: View {
         peekingAtOriginal = false
         if bilingual {
             model.closeDocumentSummary()
-            if !model.openBilingualReading(translatingDocument: pdfLayout == .paragraph) { openSettings() }
+            if !model.openBilingualReading(translatingDocument: true) { openSettings() }
         } else {
             model.showOriginalReading()
         }
@@ -255,7 +255,8 @@ struct ReaderView: View {
     private func readingBar(width: CGFloat) -> some View {
         let pageCount = model.displayedPageKeys.count
         let originalVisible = !model.pdfBilingual.isOpen || peekingAtOriginal || pdfLayout.resolved(at: width) == .split
-        let continuousParagraphs = model.pdfBilingual.isOpen && pdfLayout == .paragraph && !peekingAtOriginal
+        let continuousParagraphs =
+            model.pdfBilingual.isOpen && pdfLayout.resolved(at: width) == .paragraph && !peekingAtOriginal
         return HStack(spacing: 12) {
             if pageCount == 0 {
                 Text("等待正文就绪").font(.caption).foregroundStyle(ReaderTheme.muted)
@@ -306,7 +307,7 @@ struct ReaderView: View {
             .keyboardShortcut("d")
             if let paper = model.currentEdition { editionControls(for: paper) }
             if model.pdfBilingual.isOpen && isLocalPDF && !peekingAtOriginal {
-                PDFBilingualAppearanceMenu(model: model, layout: $pdfLayout, width: width)
+                PDFBilingualAppearanceMenu(layout: $pdfLayout, width: width)
             }
             Spacer()
             if model.pdfBilingual.isOpen && isLocalPDF && (model.selectionText.isEmpty || !originalVisible) {

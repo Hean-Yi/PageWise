@@ -108,7 +108,7 @@ enum HTMLSelectionScript {
             }
             return spans.map(([a,b])=>{const r=document.createRange();r.setStart(range.startContainer,a);r.setEnd(range.endContainer,b);return r;});
           });
-          const colors={yellow:'#f2d36b',red:'#f5aaa6',green:'#b7db9e',blue:'#b5d5f8',purple:'#cbb7ed',pink:'#edbdd8',orange:'#f5c28f',gray:'#d1d4d7'};
+          const colors=Object.fromEntries(Object.entries(\#(HTMLAnnotationMenuScript.colors)).map(([name,[,hex]])=>[name,hex]));
           const style=document.createElement('style');
           style.textContent='#reader{position:relative;z-index:1}html.reading-range::selection,html.reading-range body::selection,#reader::selection,#reader ::selection{background:transparent;color:inherit}::highlight(reader-selection){background:transparent;color:inherit}[data-reader-selected]{outline:2px solid #424953!important;outline-offset:2px}[data-reader-saved]{outline:2px solid #c9a331;outline-offset:2px}';
           for(const [color,hex] of Object.entries(colors)) for(const kind of ['highlight','underline']) {

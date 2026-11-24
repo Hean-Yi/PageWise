@@ -77,7 +77,7 @@ public actor ReadingNoteMemoryIndex {
             }
             let hit = Evidence(
                 id: note.id.uuidString, title: entry.title, text: best.text,
-                paperID: note.paperID, sourcePage: note.anchors.first?.pdfPageIndex, readingNoteID: note.id)
+                paperID: note.paperID, sourcePage: note.anchors.first?.readingPageIndex, readingNoteID: note.id)
             results.append((hit, bodyScore + 0.55 * weight(entry.titleTerms), note.modifiedAt))
         }
         return results.sorted {

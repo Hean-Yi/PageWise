@@ -67,6 +67,17 @@ extension ReaderModel {
     }
 
     public func navigate(to highlight: Highlight) {
+        if let page = highlight.pdfReadingAnchor?.pdfTranslationPageIndex,
+            let paper = state.papers.first(where: { $0.id == highlight.paperID }),
+            highlight.contentVersion == paper.digest + ":original-0", (0..<paper.pageCount).contains(page)
+        {
+            if selectedPaperID != paper.id { select(paper.id) }
+            retainedReadingID = nil
+            mode = "original"
+            navigateToPage(page)
+            pdfBilingual.open(self)
+            return
+        }
         guard let version = highlight.contentVersion else {
             navigateToStablePage(highlight.pageKey, paperID: highlight.paperID)
             return

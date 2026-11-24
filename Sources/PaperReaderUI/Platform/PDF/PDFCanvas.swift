@@ -10,6 +10,12 @@ import SwiftUI
 
 extension AnnotationColor {
     fileprivate var pdfInk: PDFInkColor {
+        PDFInkColor(
+            red: CGFloat((rgb >> 16) & 255) / 255, green: CGFloat((rgb >> 8) & 255) / 255,
+            blue: CGFloat(rgb & 255) / 255, alpha: 1)
+    }
+    /// Notes made before PDF character anchors were recorded keep their original system ink.
+    fileprivate var legacyPDFInk: PDFInkColor {
         switch self {
         case .yellow: .systemYellow
         case .red: .systemRed
@@ -21,13 +27,14 @@ extension AnnotationColor {
         case .gray: .systemGray
         }
     }
+
 }
 
 #if os(iOS)
     import PencilKit
 #endif
 
-private struct PDFSelectionToolsAnchor: Equatable {
+struct PDFSelectionToolsAnchor: Equatable {
     let bounds: CGRect
     let paperID: UUID
     let page: Int
@@ -43,50 +50,50 @@ private struct PDFSelectionToolsAnchor: Equatable {
 struct PDFCanvas: View {
     let model: ReaderModel
     var penEnabled: Bool
-    var acceptsSentenceInput = true
+    var isReaderVisible = true
     @State private var selectionAnchor: PDFSelectionToolsAnchor?
-    var sentenceDisplay: PDFSentenceDisplay {
-        let session = model.pdfBilingual
-        return PDFSentenceDisplay(
-            isVisible: acceptsSentenceInput,
-            sentences: session.matches(model) && acceptsSentenceInput ? session.sentences : [],
-            focusedID: session.focusedID, revealRevision: session.revealRevision,
-            selectedIDs: session.translationSelectedIDs, scrollID: session.pdfScrollID,
-            scrollRevision: session.pdfScrollRevision,
-            illustration: acceptsSentenceInput && session.matches(model) ? session.sourceIllustration : nil)
+    @State private var hasPresentedTools = false
+    var displayContext: PDFDisplayContext {
+        PDFDisplayContext(
+            isVisible: isReaderVisible,
+            illustration: isReaderVisible && model.pdfBilingual.matches(model)
+                ? model.pdfBilingual.sourceIllustration : nil)
     }
     var body: some View {
-        PlatformPDF(model: model, penEnabled: penEnabled, focus: sentenceDisplay, selectionAnchor: $selectionAnchor)
+        PlatformPDF(model: model, penEnabled: penEnabled, focus: displayContext, selectionAnchor: $selectionAnchor)
             .overlay {
-                if let selectionAnchor, acceptsSentenceInput, !penEnabled, model.pdfNoteEditor == nil,
-                    selectionAnchor.matches(model)
-                {
-                    PDFSelectionTools(model: model, anchor: selectionAnchor.bounds) {
-                        guard self.selectionAnchor == selectionAnchor, selectionAnchor.matches(model) else {
-                            return false
+                if hasPresentedTools, isReaderVisible, !penEnabled {
+                    let active = selectionAnchor.flatMap { $0.matches(model) && model.pdfNoteEditor == nil ? $0 : nil }
+                    if model.mode == "original" {
+                        PDFSelectionTools(model: model, selection: active) { selectionAnchor = nil }
+                    } else if let active {
+                        // A saved fixed-layout edition has its own page coordinates.
+                        PDFSelectionToolsLayout(anchor: active.bounds) {
+                            Button("高亮") {
+                                guard active.matches(model) else { return }
+                                model.highlightSelection()
+                                selectionAnchor = nil
+                            }
+                            .readerIconButtonStyle(.plain).padding(8)
+                            .readerGlassSurface(in: RoundedRectangle(cornerRadius: 9), bordered: true)
                         }
-                        self.selectionAnchor = nil
-                        return true
                     }
                 }
             }
-            .onChange(of: acceptsSentenceInput) { _, _ in selectionAnchor = nil }
+            .onChange(of: selectionAnchor) { _, anchor in
+                if anchor != nil { hasPresentedTools = true }
+            }
+            .onChange(of: isReaderVisible) { _, _ in selectionAnchor = nil }
             .onChange(of: penEnabled) { _, _ in selectionAnchor = nil }
             .onChange(of: model.selectedPaperID) { _, _ in selectionAnchor = nil }
             .onChange(of: model.mode) { _, _ in selectionAnchor = nil }
             .quickStartTarget(
-                acceptsSentenceInput && model.mode == "original" && !model.hasPDFNoteSelection ? .annotation : nil)
+                isReaderVisible && model.mode == "original" && !model.hasPDFNoteSelection ? .annotation : nil)
     }
 }
 
-struct PDFSentenceDisplay {
+struct PDFDisplayContext {
     let isVisible: Bool
-    let sentences: [PDFSourceSentence]
-    let focusedID: String?
-    let revealRevision: Int
-    let selectedIDs: [String]
-    let scrollID: String?
-    let scrollRevision: Int
     let illustration: PDFReadingIllustration?
 }
 
@@ -95,12 +102,10 @@ private final class ReaderPDFView: PDFView {
     var copyTextProvider: (() -> String?)?
 
     #if os(macOS)
-        var sentenceClick: ((CGPoint) -> Void)?
         var notePointer: ((CGPoint) -> Void)?
         var dismissTools: (() -> Void)?
         var observesNoteInput = false
         private var clickStart: CGPoint?
-        var observesSentenceInput = false
         private var eventMonitor: Any?
 
         override func viewDidMoveToWindow() {
@@ -121,20 +126,17 @@ private final class ReaderPDFView: PDFView {
                 }
                 let point = self.convert(event.locationInWindow, from: nil)
                 let inside = self.visibleRect.contains(point)
-                if event.type == .leftMouseDown && !inside { self.dismissTools?() }
-                guard self.observesSentenceInput || self.observesNoteInput else { return event }
                 if event.type == .leftMouseDown {
                     let content = window.contentView
                     let hit = content.flatMap { $0.hitTest($0.convert(event.locationInWindow, from: nil)) }
-                    self.clickStart =
-                        inside && event.clickCount == 1 && (hit?.isDescendant(of: self) == true || hit === self)
-                        ? point : nil
+                    let inPDF = inside && (hit?.isDescendant(of: self) == true || hit === self)
+                    if !inside || inPDF { self.dismissTools?() }
+                    self.clickStart = self.observesNoteInput && inPDF && event.clickCount == 1 ? point : nil
                 } else {
                     defer { self.clickStart = nil }
                     guard inside, let start = self.clickStart, hypot(start.x - point.x, start.y - point.y) < 3 else {
                         return event
                     }
-                    if self.observesSentenceInput { self.sentenceClick?(point) }
                     if self.observesNoteInput { self.notePointer?(point) }
                 }
                 return event
@@ -158,7 +160,7 @@ private final class ReaderPDFView: PDFView {
     private struct PlatformPDF: NSViewRepresentable {
         let model: ReaderModel
         let penEnabled: Bool
-        let focus: PDFSentenceDisplay
+        let focus: PDFDisplayContext
         @Binding var selectionAnchor: PDFSelectionToolsAnchor?
         func makeCoordinator() -> PDFCoordinator {
             let coordinator = PDFCoordinator(model: model)
@@ -175,7 +177,7 @@ private final class ReaderPDFView: PDFView {
     private struct PlatformPDF: UIViewRepresentable {
         let model: ReaderModel
         let penEnabled: Bool
-        let focus: PDFSentenceDisplay
+        let focus: PDFDisplayContext
         @Binding var selectionAnchor: PDFSelectionToolsAnchor?
         func makeCoordinator() -> PDFCoordinator {
             let coordinator = PDFCoordinator(model: model)
@@ -199,7 +201,8 @@ final class PDFCoordinator: NSObject, @preconcurrency PDFPageOverlayViewProvider
     var displayedDocument: PDFDisplayDocument?
     var displayedURLs: [URL]?
     var keys: [String] = []
-    var highlightIDs: Set<UUID> = []
+    private var renderedHighlights: [String: [Highlight]] = [:]
+    private var highlightInk: [String: [PDFAnnotation]] = [:]
     private struct NoteLocation {
         let page: PDFPage
         let bounds: CGRect
@@ -208,9 +211,6 @@ final class PDFCoordinator: NSObject, @preconcurrency PDFPageOverlayViewProvider
     private var noteAnnotations: [UUID: [NoteLocation]] = [:]
     var penEnabled = false
     private var isVisible = false
-    private var displayedSentenceIDs: [String] = []
-    private var scrollRevision = 0
-    private var revealRevision: Int?
     private var revealedIllustrationID: String?
     var isUpdating = false
     var paperID: UUID?
@@ -236,10 +236,6 @@ final class PDFCoordinator: NSObject, @preconcurrency PDFPageOverlayViewProvider
         #endif
         self.view = view
         #if os(macOS)
-            view.sentenceClick = { [weak self] point in
-                guard let self, let hit = self.sentence(at: point) else { return }
-                self.model.pdfBilingual.focusFromPDF(hit.id)
-            }
             view.notePointer = { [weak self] point in self?.openNote(at: point) }
             view.dismissTools = { [weak self] in self?.dismissSelectionTools() }
         #else
@@ -257,15 +253,12 @@ final class PDFCoordinator: NSObject, @preconcurrency PDFPageOverlayViewProvider
         return view
     }
 
-    func update(_ view: PDFView, penEnabled: Bool, focus: PDFSentenceDisplay) {
+    func update(_ view: PDFView, penEnabled: Bool, focus: PDFDisplayContext) {
         isUpdating = true
         defer { isUpdating = false }
         let becameVisible = focus.isVisible && !isVisible
         isVisible = focus.isVisible
         self.penEnabled = penEnabled
-        #if os(macOS)
-            (view as? ReaderPDFView)?.observesSentenceInput = !focus.sentences.isEmpty
-        #endif
         view.isInMarkupMode = penEnabled
         // SwiftUI can still update this representable while it is being replaced by the loading view.
         guard model.showsPDFCanvas, let currentPaperID = model.selectedPaperID else {
@@ -274,7 +267,8 @@ final class PDFCoordinator: NSObject, @preconcurrency PDFPageOverlayViewProvider
             displayedURLs = nil
             keys = []
             paperID = nil
-            highlightIDs = []
+            renderedHighlights = [:]
+            highlightInk = [:]
             noteAnnotations = [:]
             #if os(iOS)
                 for canvas in canvases.values {
@@ -288,8 +282,6 @@ final class PDFCoordinator: NSObject, @preconcurrency PDFPageOverlayViewProvider
         let urls = model.pageURLs
         if displayedURLs != urls || paperID != currentPaperID {
             let oldPage = model.visiblePage
-            displayedSentenceIDs = []
-            revealRevision = nil
             revealedIllustrationID = nil
             displayedURLs = urls
             keys = model.pageKeys
@@ -306,7 +298,8 @@ final class PDFCoordinator: NSObject, @preconcurrency PDFPageOverlayViewProvider
             } catch {
                 view.document = nil
                 displayedDocument = nil
-                highlightIDs = []
+                renderedHighlights = [:]
+                highlightInk = [:]
                 let message = error.localizedDescription
                 Task { @MainActor [weak model, keys] in
                     guard let model, model.showsPDFCanvas, model.selectedPaperID == currentPaperID,
@@ -331,34 +324,18 @@ final class PDFCoordinator: NSObject, @preconcurrency PDFPageOverlayViewProvider
                     scroll.panGestureRecognizer.addTarget(self, action: #selector(originalScrolled))
                 }
             #endif
-            highlightIDs = []
+            renderedHighlights = [:]
+            highlightInk = [:]
             noteAnnotations = [:]
             if let page = document.page(at: min(oldPage, max(0, document.pageCount - 1))) { view.go(to: page) }
         }
-        for mark in model.currentHighlights where !highlightIDs.contains(mark.id) {
-            guard let index = keys.firstIndex(of: mark.pageKey), let page = view.document?.page(at: index) else {
-                continue
-            }
-            let style = mark.style ?? .highlight
-            let color = (mark.color ?? .yellow).pdfInk.withAlphaComponent(style == .underline ? 1 : 0.45)
-            let noteInk = Set(noteAnnotations.values.flatMap { $0 }.flatMap(\.ink).map(ObjectIdentifier.init))
-            let existing = page.annotations.filter {
-                ["Highlight", "Underline", "StrikeOut", "Squiggly"].contains($0.type ?? "")
-                    && !noteInk.contains(ObjectIdentifier($0))
-            }.flatMap(Self.markupBounds)
-            for rect in mark.rects.compactMap(Self.rectangle).flatMap({
-                PDFHighlightCoverage.uncovered($0, by: existing)
-            }) {
-                let annotation = PDFAnnotation(
-                    bounds: rect, forType: style == .underline ? .underline : .highlight, withProperties: nil)
-                annotation.color = color
-                page.addAnnotation(annotation)
-            }
-            highlightIDs.insert(mark.id)
+        if let document = view.document {
+            updateHighlights(in: document)
+            updateNotes(in: document)
         }
-        if let document = view.document { updateNotes(in: document) }
         #if os(macOS)
-            (view as? ReaderPDFView)?.observesNoteInput = isVisible && !noteAnnotations.isEmpty
+            (view as? ReaderPDFView)?.observesNoteInput =
+                isVisible && (!noteAnnotations.isEmpty || !renderedHighlights.isEmpty)
         #endif
         if isVisible, let index = model.jumpPage, let page = view.document?.page(at: index) {
             let outline = model.jumpOutlineItem
@@ -393,7 +370,14 @@ final class PDFCoordinator: NSObject, @preconcurrency PDFPageOverlayViewProvider
         } else if becameVisible, let page = view.document?.page(at: model.visiblePage), view.currentPage !== page {
             view.go(to: page)
         }
-        if isVisible { updateSentenceFocus(in: view, display: focus, becameVisible: becameVisible) }
+        if isVisible {
+            if let item = focus.illustration, becameVisible || revealedIllustrationID != item.id,
+                let page = view.document?.page(at: item.pageIndex)
+            {
+                view.go(to: item.sourceBounds, on: page)
+            }
+            revealedIllustrationID = focus.illustration?.id
+        }
         #if os(iOS)
             for canvas in canvases.values { canvas.isUserInteractionEnabled = penEnabled }
             if let current = view.currentPage, let document = view.document {
@@ -406,13 +390,61 @@ final class PDFCoordinator: NSObject, @preconcurrency PDFPageOverlayViewProvider
         #endif
     }
 
+    /// Keep the PDF's own ink intact. Rebuild changed pages so a partial erase or recolor can expose earlier marks.
+    private func updateHighlights(in document: PDFDocument) {
+        let updated = Dictionary(grouping: model.currentHighlights.filter { !$0.rects.isEmpty }, by: \.pageKey)
+        guard updated != renderedHighlights else { return }
+        let changed = Set(updated.keys).union(renderedHighlights.keys).filter { updated[$0] != renderedHighlights[$0] }
+        defer { renderedHighlights = updated }
+        for key in changed {
+            guard let index = keys.firstIndex(of: key), let page = document.page(at: index) else { continue }
+            let before = renderedHighlights[key] ?? []
+            let after = updated[key] ?? []
+            let appended = after.starts(with: before)
+            if !appended {
+                for ink in highlightInk.removeValue(forKey: key) ?? [] { page.removeAnnotation(ink) }
+                // An existing note underline may become visible after an overlapping mark is erased.
+                let affectedNotes = noteAnnotations.compactMap { id, hits in
+                    hits.contains { $0.page === page } ? id : nil
+                }
+                for id in affectedNotes { removeNoteInk(id) }
+            }
+            let drawnNotes = Set(noteAnnotations.values.flatMap { $0 }.flatMap(\.ink).map(ObjectIdentifier.init))
+            var covered = page.annotations.filter {
+                ["Highlight", "Underline", "StrikeOut", "Squiggly"].contains($0.type ?? "")
+                    && !drawnNotes.contains(ObjectIdentifier($0))
+            }.flatMap(Self.markupBounds)
+            for mark in after.dropFirst(appended ? before.count : 0) {
+                let style = mark.style ?? .highlight
+                let pigment = mark.color ?? .yellow
+                let color = mark.pdfTextStart == nil ? pigment.legacyPDFInk : pigment.pdfInk
+                let alpha: CGFloat = mark.pdfTextStart == nil ? 0.45 : 0.65
+                for box in mark.rects.compactMap(Self.rectangle) {
+                    for rect in PDFHighlightCoverage.uncovered(box, by: covered) {
+                        let ink = PDFAnnotation(
+                            bounds: rect, forType: style == .underline ? .underline : .highlight,
+                            withProperties: nil)
+                        ink.color = color.withAlphaComponent(style == .underline ? 1 : alpha)
+                        page.addAnnotation(ink)
+                        highlightInk[key, default: []].append(ink)
+                        covered.append(rect)
+                    }
+                }
+            }
+        }
+    }
+
+    private func removeNoteInk(_ id: UUID) {
+        for location in noteAnnotations.removeValue(forKey: id) ?? [] {
+            for annotation in location.ink { location.page.removeAnnotation(annotation) }
+        }
+    }
+
     private func updateNotes(in document: PDFDocument) {
         let notes = model.inlinePDFNotes
         let live = Set(notes.map(\.id))
         for id in noteAnnotations.keys where !live.contains(id) {
-            for location in noteAnnotations.removeValue(forKey: id) ?? [] {
-                for annotation in location.ink { location.page.removeAnnotation(annotation) }
-            }
+            removeNoteInk(id)
         }
         let missing = notes.filter { noteAnnotations[$0.id] == nil }
         guard !missing.isEmpty else { return }
@@ -452,37 +484,29 @@ final class PDFCoordinator: NSObject, @preconcurrency PDFPageOverlayViewProvider
 
     @discardableResult
     func openNote(at point: CGPoint) -> Bool {
-        guard isVisible, !penEnabled, !noteAnnotations.isEmpty, let view,
+        guard isVisible, !penEnabled, let view, let document = view.document,
             let page = view.page(for: point, nearest: false)
         else { return false }
         let location = view.convert(point, to: page)
-        guard
-            let hit = model.inlinePDFNotes.first(where: { note in
-                noteAnnotations[note.id]?.contains { $0.page === page && $0.bounds.contains(location) } == true
-            }), let note = model.currentReadingNotes.first(where: { $0.id == hit.id })
-        else { return false }
-        model.openReadingNote(note)
-        return true
-    }
-
-    private func sentence(at point: CGPoint) -> PDFSourceSentence? {
-        guard isVisible, let view, !penEnabled, model.pdfBilingual.matches(model),
-            let page = view.page(for: point, nearest: false),
-            view.document?.index(for: page) == model.pdfBilingual.pageIndex
-        else { return nil }
-        let location = view.convert(point, to: page)
-        return model.pdfBilingual.sentences.first { sentence in
-            sentence.rects.contains { Self.rectangle($0)?.insetBy(dx: -0.5, dy: -0.5).contains(location) == true }
+        if let hit = model.inlinePDFNotes.first(where: { note in
+            noteAnnotations[note.id]?.contains { $0.page === page && $0.bounds.contains(location) } == true
+        }), let note = model.currentReadingNotes.first(where: { $0.id == hit.id }) {
+            model.openReadingNote(note)
+            return true
         }
+        let index = document.index(for: page)
+        guard model.mode == "original",
+            let mark = renderedHighlights["original-\(index)"]?.last(where: { mark in
+                mark.rects.contains { Self.rectangle($0)?.contains(location) == true }
+            })
+        else { return false }
+        Task { await model.openPDFHighlightNote(mark) }
+        return true
     }
 
     #if os(iOS)
         @objc private func tappedPDF(_ gesture: UITapGestureRecognizer) {
-            if gesture.state == .ended, let view, !openNote(at: gesture.location(in: view)),
-                let hit = sentence(at: gesture.location(in: view))
-            {
-                model.pdfBilingual.focusFromPDF(hit.id)
-            }
+            if gesture.state == .ended, let view { openNote(at: gesture.location(in: view)) }
         }
     #endif
 
@@ -512,64 +536,8 @@ final class PDFCoordinator: NSObject, @preconcurrency PDFPageOverlayViewProvider
         return CGRect(x: values[0], y: values[1], width: values[2], height: values[3])
     }
 
-    private func updateSentenceFocus(in view: PDFView, display: PDFSentenceDisplay, becameVisible: Bool) {
-        let ids = display.selectedIDs.isEmpty ? [display.focusedID].compactMap { $0 } : display.selectedIDs
-        let active = ids.isEmpty ? [] : display.sentences.filter { ids.contains($0.id) }
-        let visibleIDs = active.map(\.id)
-        if displayedSentenceIDs != visibleIDs {
-            displayedSentenceIDs = visibleIDs
-            var selections = [PDFSelection]()
-            for sentence in active {
-                guard let page = view.document?.page(at: sentence.pageIndex) else { continue }
-                selections += sentence.characterRanges.compactMap { page.selection(for: $0) }
-            }
-            for selection in selections {
-                #if os(macOS)
-                    selection.color = NSColor(calibratedRed: 0.73, green: 0.41, blue: 0.26, alpha: 0.25)
-                #else
-                    selection.color = UIColor(red: 0.73, green: 0.41, blue: 0.26, alpha: 0.25)
-                #endif
-            }
-            view.highlightedSelections = selections
-        }
-        let newFocus = becameVisible || revealRevision != display.revealRevision
-        let newScroll = becameVisible || scrollRevision != display.scrollRevision
-        revealRevision = display.revealRevision
-        scrollRevision = display.scrollRevision
-        if let item = display.illustration {
-            if becameVisible || revealedIllustrationID != item.id, let page = view.document?.page(at: item.pageIndex) {
-                view.go(to: item.sourceBounds, on: page)
-            }
-            revealedIllustrationID = item.id
-            return
-        }
-        revealedIllustrationID = nil
-        let targetID = (newFocus ? display.focusedID : nil) ?? (newScroll ? display.scrollID : nil)
-        if let targetID, let sentence = display.sentences.first(where: { $0.id == targetID }),
-            let page = view.document?.page(at: sentence.pageIndex),
-            let firstRect = sentence.rects.first.flatMap(Self.rectangle),
-            !view.bounds.contains(view.convert(firstRect, from: page))
-        {
-            view.go(to: firstRect.insetBy(dx: -8, dy: -12), on: page)
-        }
-    }
-
     @objc private func originalScrolled() {
         selectionAnchorChanged?(nil)
-        let session = model.pdfBilingual
-        guard isVisible, !isUpdating, session.matches(model), session.followsScroll, let view,
-            let page = view.document?.page(at: session.pageIndex)
-        else { return }
-        let visible = view.convert(view.bounds, to: page)
-        let referenceY = visible.maxY - visible.height * 0.3
-        var nearest: (id: String, distance: CGFloat)?
-        for sentence in session.sentences {
-            for rect in sentence.rects.compactMap(Self.rectangle) where visible.intersects(rect) {
-                let distance = abs(rect.midY - referenceY)
-                if distance < nearest?.distance ?? .infinity { nearest = (sentence.id, distance) }
-            }
-        }
-        if let nearest { session.scrollFromPDF(nearest.id) }
     }
 
     @objc func selectionChanged() {
@@ -579,7 +547,6 @@ final class PDFCoordinator: NSObject, @preconcurrency PDFPageOverlayViewProvider
             let document = view.document, let text = selected.string,
             !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         else {
-            model.pdfBilingual.selectFromPDF([])
             model.captureSelection(text: "", rects: [], page: model.visiblePage)
             return
         }
@@ -592,19 +559,10 @@ final class PDFCoordinator: NSObject, @preconcurrency PDFPageOverlayViewProvider
         guard let captured = displayedDocument?.text(for: selected, on: pageIndex),
             !captured.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         else {
-            model.pdfBilingual.selectFromPDF([])
             model.captureSelection(text: "", rects: [], page: model.visiblePage)
             return
         }
         let ranges = (0..<selected.numberOfTextRanges(on: page)).map { selected.range(at: $0, on: page) }
-        if model.pdfBilingual.matches(model), pageIndex == model.pdfBilingual.pageIndex {
-            let matching = model.pdfBilingual.sentences.filter { sentence in
-                sentence.characterRanges.contains { source in
-                    ranges.contains { NSIntersectionRange($0, source).length > 0 }
-                }
-            }
-            model.pdfBilingual.selectFromPDF(matching.map(\.id))
-        }
         model.captureSelection(
             text: captured, rects: rects, page: pageIndex, spansPages: selected.pages.count > 1, ranges: ranges)
         if selected.pages.count > 1 {
@@ -624,10 +582,11 @@ final class PDFCoordinator: NSObject, @preconcurrency PDFPageOverlayViewProvider
                     view.currentSelection != nil, model.selectionPage == pageIndex,
                     model.selectionText == captured, model.pdfSelectionRanges == ranges
                 else { return }
-                let area = lines.reduce(CGRect.null) { area, line in
-                    area.union(view.convert(line.bounds(for: page), from: page).intersection(view.bounds))
-                }
-                guard !area.isNull, !area.isEmpty else { return }
+                guard
+                    let area = lines.reversed().lazy.map({
+                        view.convert($0.bounds(for: page), from: page).intersection(view.bounds)
+                    }).first(where: { !$0.isNull && !$0.isEmpty })
+                else { return }
                 #if os(macOS)
                     let y = view.isFlipped ? area.minY - view.bounds.minY : view.bounds.maxY - area.maxY
                 #else
@@ -738,7 +697,7 @@ final class PDFCoordinator: NSObject, @preconcurrency PDFPageOverlayViewProvider
 #if os(iOS)
     extension PDFCoordinator: UIGestureRecognizerDelegate {
         func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
-            (model.pdfBilingual.matches(model) || !noteAnnotations.isEmpty) && !penEnabled
+            isVisible && (!renderedHighlights.isEmpty || !noteAnnotations.isEmpty) && !penEnabled
         }
         func gestureRecognizer(
             _ gestureRecognizer: UIGestureRecognizer,

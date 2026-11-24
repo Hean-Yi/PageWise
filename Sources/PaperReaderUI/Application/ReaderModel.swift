@@ -27,6 +27,7 @@ public final class ReaderModel {
     public var importProgress: String?
     public var selectionHTMLRange: [Int]?
     var notePassageSheet: NotePassageSheet?
+    @ObservationIgnored var pdfInkEdit: Task<Void, Never>?
     var pdfNoteEditor: PDFNoteEditorSession?
     var presentedSummaryID: UUID?
     public var requestedReadingNote: UUID?

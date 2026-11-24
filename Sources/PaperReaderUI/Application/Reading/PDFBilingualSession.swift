@@ -24,38 +24,11 @@ final class PDFBilingualSession {
     private(set) var isTranslating = false
     private(set) var notice: String?
     private(set) var error: String?
-    private(set) var focusedID: String?
-    private(set) var sourceFocusRevision = 0
-    private(set) var revealRevision = 0
-    var followsScroll = true
-    private(set) var sourceScrollID: String?
-    private(set) var sourceScrollRevision = 0
-    private(set) var pdfScrollID: String?
-    private(set) var pdfScrollRevision = 0
-    private(set) var pdfSelectedIDs: [String] = []
     var reflowTextSelection: [PDFReflowTextSelection] = []
     private(set) var translationSelectedIDs: [String] = []
     private(set) var selectionRequestRevision = 0
     private(set) var selectionSource: String?
     private(set) var selectionTranslation: String?
-    private var excerptRanges: [NSRange] = []
-    var selectionContextID: String? {
-        guard selectionSource != nil, !excerptRanges.isEmpty else { return nil }
-        let matches = sentences.filter { sentence in
-            sentence.characterRanges.contains { span in
-                excerptRanges.contains { NSIntersectionRange(span, $0).length > 0 }
-            }
-        }
-        guard matches.count == 1, let id = matches.first?.id, translations[id] != nil else { return nil }
-        return id
-    }
-    func showSelectionContext() {
-        guard let id = selectionContextID else { return }
-        dismissSelection()
-        focus(id)
-        sourceFocusRevision &+= 1
-    }
-
     // Page data is local and bounded. Only the explicit paragraph entry authorizes the translation job.
     private var paragraphLayout = false
     private var readingParagraphs = false
@@ -177,23 +150,6 @@ final class PDFBilingualSession {
         activatePage(model, scrolling: true)
     }
 
-    func scrollFromParagraph(_ id: String) {
-        guard readingParagraphs, pdfScrollID != id, paragraphSentences.contains(where: { $0.id == id }) else { return }
-        sourceIllustration = nil
-        pdfScrollID = id
-        pdfScrollRevision &+= 1
-    }
-
-    func focusParagraphSentence(_ id: String?, model: ReaderModel) {
-        if let id {
-            guard let entry = loadedPages.values.first(where: { $0.paragraph.sentences.contains { $0.id == id } })
-            else { return }
-            paragraphDidScroll(to: entry.paragraph.index, model: model)
-            guard pageIndex == entry.paragraph.index else { return }
-        }
-        focus(id)
-    }
-
     func revealParagraphIllustration(_ item: PDFReadingIllustration, model: ReaderModel) {
         paragraphDidScroll(to: item.pageIndex, model: model)
         revealIllustration(item)
@@ -202,8 +158,7 @@ final class PDFBilingualSession {
     func revealParagraphPage(_ index: Int, model: ReaderModel) {
         paragraphDidScroll(to: index, model: model)
         guard pageIndex == index else { return }
-        focus(nil)
-        pdfScrollID = nil
+        sourceIllustration = nil
     }
 
     private func activatePage(_ model: ReaderModel, scrolling: Bool) {
@@ -212,14 +167,10 @@ final class PDFBilingualSession {
         guard paper.id != paperID || index != pageIndex else { return }
         if paper.id != paperID { releasePages() }
         pause()
-        if paper.id != paperID || pageIndex != -1 { focusedID = nil }
         paperID = paper.id
         pageIndex = index
-        sourceScrollID = nil
-        pdfScrollID = nil
         translationSelectedIDs = []
         reflowTextSelection = []
-        pdfSelectedIDs = []
         sourceIllustration = nil
         selectionSource = nil
         selectionTranslation = nil
@@ -241,7 +192,6 @@ final class PDFBilingualSession {
         notice = page?.originalNotice
         translations = page?.paragraph.translations ?? pendingTranslations[pageIndex] ?? [:]
         isLoading = page == nil
-        if page != nil, let focusedID, !sentences.contains(where: { $0.id == focusedID }) { self.focusedID = nil }
     }
 
     /// A single neighboring page on each side is sufficient to begin scrolling in either direction.
@@ -332,7 +282,6 @@ final class PDFBilingualSession {
         let text = model.selectionText
         let rects = model.selectionRects
         let page = model.selectionPage
-        let ranges = model.pdfSelectionRanges
         if page != model.visiblePage { model.navigateToPage(page) }
         open(model)
         let signature = "\(paper.digest)|\(page)|\(rects)|\(text)"
@@ -343,7 +292,6 @@ final class PDFBilingualSession {
             sentence.text.split(whereSeparator: \.isWhitespace) == text.split(whereSeparator: \.isWhitespace)
                 && sentence.rects == rects
         }
-        excerptRanges = ranges
         selectionRequestRevision &+= 1
         selectionSource = text
         selectionTranslation = nil
@@ -363,36 +311,9 @@ final class PDFBilingualSession {
         isTranslating = false
     }
 
-    func focus(_ id: String?) {
-        sourceIllustration = nil
-        focusedID = id
-        revealRevision &+= 1
-    }
-
-    func focusFromPDF(_ id: String) {
-        sourceIllustration = nil
-        focusedID = id
-        sourceFocusRevision &+= 1
-    }
-
     func revealIllustration(_ item: PDFReadingIllustration) {
         guard isOpen, item.pageIndex == pageIndex, illustrations.contains(where: { $0.id == item.id }) else { return }
-        focus(nil)
         sourceIllustration = item
-    }
-
-    func scrollFromTranslation(_ id: String) {
-        guard followsScroll, pdfScrollID != id, sentences.contains(where: { $0.id == id }) else { return }
-        sourceScrollID = nil
-        pdfScrollID = id
-        pdfScrollRevision &+= 1
-    }
-
-    func scrollFromPDF(_ id: String) {
-        guard followsScroll, sourceScrollID != id else { return }
-        pdfScrollID = nil
-        sourceScrollID = id
-        sourceScrollRevision &+= 1
     }
 
     func selectFromTranslation(_ ids: [String]) {
@@ -400,7 +321,7 @@ final class PDFBilingualSession {
         if translationSelectedIDs != ids { translationSelectedIDs = ids }
     }
 
-    func sourceRange(for piece: PDFReflowTextSelection) -> NSRange? {
+    func validatedText(for piece: PDFReflowTextSelection) -> String? {
         guard let page = loadedPages[piece.sentence.pageIndex],
             page.originalSentences.contains(piece.sentence) || page.paragraph.sentences.contains(piece.sentence)
         else { return nil }
@@ -414,11 +335,7 @@ final class PDFBilingualSession {
             piece.range.length > 0, piece.range.length <= text.length - piece.range.location,
             text.substring(with: piece.range) == piece.text
         else { return nil }
-        return piece.language == "en" ? piece.range : NSRange(location: 0, length: piece.sentence.text.utf16.count)
-    }
-
-    func selectFromPDF(_ ids: [String]) {
-        if pdfSelectedIDs != ids { pdfSelectedIDs = ids }
+        return displayed
     }
 
     func matches(_ model: ReaderModel) -> Bool {

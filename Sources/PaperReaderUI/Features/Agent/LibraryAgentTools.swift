@@ -81,7 +81,7 @@ extension LibraryAgent {
                 var item = AgentCard(kind: .navigation, title: title)
                 item.paperID = paper.id
                 item.readingNoteID = id
-                item.sourcePage = note.anchors.first?.pdfPageIndex.map { $0 + 1 }
+                item.sourcePage = note.anchors.first?.readingPageIndex.map { $0 + 1 }
                 return item
             }
             guard !cards.isEmpty else { throw ReaderError.message("此版论文的精读笔记已删除。") }
@@ -125,7 +125,7 @@ extension LibraryAgent {
             item.readingNoteID = note.id
             item.paperID = paperID
             item.excerpt = String(note.anchors.first?.text.prefix(300) ?? "")
-            item.sourcePage = note.anchors.first?.pdfPageIndex.map { $0 + 1 }
+            item.sourcePage = note.anchors.first?.readingPageIndex.map { $0 + 1 }
             // The mutation has committed. Its receipt must fit even when the tool's excerpt budget is very small.
             return AgentToolOutcome(content: #"{"ok":true,"saved":true}"#, cards: [item], truncated: false)
         case .presentResults(let purpose, let items):

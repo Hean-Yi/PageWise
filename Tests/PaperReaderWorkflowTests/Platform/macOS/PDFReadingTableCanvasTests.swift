@@ -260,9 +260,7 @@
         onOpen: @escaping (Int) -> Void = { _ in }
     ) -> PDFSentenceTextCanvas {
         PDFSentenceTextCanvas(
-            sentences: [], translations: [:], layout: .paragraph, fontSize: 16, focusedID: nil,
-            focusRevision: 0, followsScroll: false, sourceScrollID: nil, sourceScrollRevision: 0,
-            pdfSelectedIDs: [], onScroll: { _ in }, onSelection: { _ in }, onFocus: { _ in },
+            sentences: [], translations: [:], layout: .paragraph, fontSize: 16, onSelection: { _ in },
             onRevealIllustration: onReveal,
             continuous: .init(
                 paperID: paperID, pageCount: 1, pages: [0: page], targetPage: 0, jumpRevision: 0,

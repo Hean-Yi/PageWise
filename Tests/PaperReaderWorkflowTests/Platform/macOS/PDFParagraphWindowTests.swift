@@ -26,9 +26,7 @@
         }
         func canvas() -> PDFSentenceTextCanvas {
             PDFSentenceTextCanvas(
-                sentences: [], translations: [:], layout: .paragraph, fontSize: 16, focusedID: nil,
-                focusRevision: 0, followsScroll: false, sourceScrollID: nil, sourceScrollRevision: 0,
-                pdfSelectedIDs: [], onScroll: { _ in }, onSelection: { _ in }, onFocus: { _ in },
+                sentences: [], translations: [:], layout: .paragraph, fontSize: 16, onSelection: { _ in },
                 continuous: .init(
                     paperID: paperID, pageCount: 6, pages: pages, targetPage: target, jumpRevision: revision,
                     outlineItem: outline,
