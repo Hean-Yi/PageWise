@@ -95,7 +95,7 @@ struct LibraryAgentView: View {
                     Button {
                         withAnimation(ReaderMotion.disclosure(reduceMotion)) { agent.clearFollowUp() }
                     } label: {
-                        Image(systemName: "xmark.circle.fill").readerIconTarget(macOS: 22)
+                        ReaderIcon(.close, size: 13).readerIconTarget(macOS: 22)
                     }
                     .readerPlainButton(cornerRadius: 6).accessibilityLabel("移除追问来源").help("移除追问来源")
                 }
@@ -116,20 +116,20 @@ struct LibraryAgentView: View {
                         draft = ""
                         composerFocused = true
                     } label: {
-                        Image(systemName: "square.and.pencil").frame(minWidth: 30, minHeight: 30)
-                    }.buttonStyle(.plain).foregroundStyle(ReaderTheme.muted)
+                        Image(systemName: "square.and.pencil").readerSymbolInk().frame(minWidth: 30, minHeight: 30)
+                    }.readerIconButtonStyle(.plain).foregroundStyle(ReaderTheme.muted)
                         .help("新对话").accessibilityLabel("新对话")
                 }
                 Spacer(minLength: 6)
                 Button {
                     if agent.isRunning { agent.cancel() } else { send() }
                 } label: {
-                    Image(systemName: agent.isRunning ? "stop.fill" : "arrow.up")
+                    Image(systemName: agent.isRunning ? "stop.fill" : "arrow.up").readerSymbolInk()
                         .font(agent.isRunning ? .system(size: 11) : .body.weight(.semibold))
                         .contentTransition(reduceMotion ? .identity : .opacity)
                         .animation(ReaderMotion.feedback(reduceMotion), value: agent.isRunning)
                 }
-                .buttonStyle(AssistantSendButtonStyle())
+                .readerIconButtonStyle(AssistantSendButtonStyle())
                 .disabled(!agent.isRunning && draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 .help(agent.isRunning ? "停止生成" : "发送问题")
                 .accessibilityLabel(agent.isRunning ? "停止 Agent" : "发送给 Agent")
@@ -155,13 +155,13 @@ struct LibraryAgentView: View {
                         Text(option).font(.body)
                             .multilineTextAlignment(.leading).fixedSize(horizontal: false, vertical: true)
                         Spacer(minLength: 6)
-                        Image(systemName: "arrow.up.right").font(.caption.weight(.semibold))
+                        Image(systemName: "arrow.up.right").readerSymbolInk().font(.caption.weight(.semibold))
                             .foregroundStyle(ReaderTheme.accent).accessibilityHidden(true)
                     }
                     .padding(.horizontal, 7).padding(.vertical, 6)
                     .frame(maxWidth: .infinity, minHeight: 40, alignment: .leading).contentShape(Rectangle())
                 }
-                .buttonStyle(AssistantToolButtonStyle(embedded: true))
+                .readerIconButtonStyle(AssistantToolButtonStyle(embedded: true))
                 if option != prompt.options.last { Divider() }
             }
         }

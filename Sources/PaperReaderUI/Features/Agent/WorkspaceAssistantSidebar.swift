@@ -83,7 +83,7 @@ struct WorkspaceAssistantSidebar: View {
                     .padding(.horizontal, 2)
                     .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
+                .readerIconButtonStyle(.plain)
                 .help(item.rawValue).accessibilityLabel(item.rawValue)
                 .accessibilityAddTraits(selected ? .isSelected : [])
             }

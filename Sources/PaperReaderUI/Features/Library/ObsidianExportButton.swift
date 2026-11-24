@@ -26,16 +26,16 @@ struct ObsidianExportButton: View {
                 } else {
                     Label("整理到 Obsidian", readerIcon: .export)
                 }
-            }
+            }.readerIconButtonStyle(.borderless)
             if offersDiscussion && model.hasObsidianDiscussion(paperID: paperID) {
                 Menu {
                     Button("同时整理讨论…", systemImage: "text.bubble") {
                         request?(ObsidianExportRequest(paperID: paperID, includeDiscussion: true))
                     }
                 } label: {
-                    Image(systemName: "chevron.down").font(.caption)
+                    ReaderIcon(.chevron, size: 12).rotationEffect(.degrees(90))
                 }
-                .menuIndicator(.hidden).fixedSize()
+                .readerMenuIconInteraction().menuIndicator(.hidden).fixedSize()
                 .accessibilityLabel("更多整理选项")
             }
         }

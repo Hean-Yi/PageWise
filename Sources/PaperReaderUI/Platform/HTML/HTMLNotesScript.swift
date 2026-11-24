@@ -22,8 +22,16 @@ enum HTMLNotesScript {
     private static func iconSVG(_ glyph: ReaderIcon.Glyph) -> String {
         let plate = iconPath(glyph.inkPlate)
         let outline = iconPath(glyph.drawing)
+        let hover = glyph.inkPose(for: .hovered)
+        let press = glyph.inkPose(for: .pressed)
+        func transform(_ pose: ReaderIconInkPose) -> String {
+            "translate(\(pose.x)px,\(pose.y)px) rotate(\(pose.degrees)deg) scale(\(pose.scaleX),\(pose.scaleY))"
+        }
+        let poses =
+            "--ink-hover:\(transform(hover));--ink-press:\(transform(press));"
+            + "transform-origin:\(hover.pivotX)px \(hover.pivotY)px"
         return """
-            <svg aria-hidden="true" focusable="false" width="16" height="16" viewBox="0 0 24 24"><path class="ink-plate" d="\(plate)"/><path d="\(outline)" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="square" stroke-linejoin="round"/></svg>
+            <svg aria-hidden="true" focusable="false" width="16" height="16" viewBox="0 0 24 24"><path class="ink-plate" style="\(poses)" d="\(plate)"/><path d="\(outline)" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="square" stroke-linejoin="round"/></svg>
             """
     }
 
@@ -61,9 +69,25 @@ enum HTMLNotesScript {
           const leave=()=>{cancelCrossing();if(active&&!editing){active=null;schedule(false);}};
           const button=(text,handler,label=text)=>{const b=document.createElement('button');b.type='button';b.textContent=text;b.setAttribute('aria-label',label);b.onclick=event=>{event.stopPropagation();handler();};return b;};
           const icons={source:'\#(iconSVG(.source))',citation:'\#(iconSVG(.citation))',delete:'\#(iconSVG(.delete))'};
+          const reduceIconMotion=matchMedia('(prefers-reduced-motion:reduce)');
           const iconButton=(icon,label,handler)=>{
-            const b=button('',handler,label);b.title=label;b.className='note-icon-button';
+            let release;
+            const b=button('',()=>{
+              if(!reduceIconMotion.matches){
+                release?.cancel();
+                release=plate.animate([{transform:'var(--ink-press)'},{transform:'var(--ink-rest, none)'}],
+                  {duration:190,easing:'cubic-bezier(.2,.8,.3,1)'});
+              }
+              handler();
+            },label);
+            b.title=label;b.className='note-icon-button';
             b.innerHTML=icons[icon];
+            const plate=b.querySelector('.ink-plate');
+            b.onpointerdown=()=>release?.cancel();
+            b.onkeydown=event=>{
+              if(event.key===' '||event.key==='Enter'){release?.cancel();b.dataset.keyPress='';}
+            };
+            b.onkeyup=b.onblur=()=>{delete b.dataset.keyPress;};
             return b;
           };
           const make=note=>{

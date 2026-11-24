@@ -19,7 +19,7 @@ struct AgentProcessView: View {
                 } label: {
                     disclosureLabel("模型思考", icon: "text.bubble", expanded: showsThinking)
                 }
-                .buttonStyle(.plain)
+                .readerIconButtonStyle(.plain)
                 .accessibilityValue(showsThinking ? "已展开" : "已收起")
                 if showsThinking {
                     VStack(alignment: .leading, spacing: 7) {
@@ -39,7 +39,7 @@ struct AgentProcessView: View {
                 } label: {
                     disclosureLabel(summary, icon: "list.bullet.indent", expanded: expanded)
                 }
-                .buttonStyle(.plain)
+                .readerIconButtonStyle(.plain)
                 .help(expanded ? "收起执行过程" : "查看执行过程")
                 .accessibilityLabel("执行过程，\(summary)")
                 .accessibilityValue(expanded ? "已展开" : "已收起")
@@ -65,7 +65,7 @@ struct AgentProcessView: View {
 
     private func disclosureLabel(_ title: String, icon: String, expanded: Bool) -> some View {
         HStack(spacing: 7) {
-            Image(systemName: icon).frame(width: 15)
+            Image(systemName: icon).readerSymbolInk().frame(width: 15)
             Text(title).fontWeight(.medium).multilineTextAlignment(.leading)
             Spacer(minLength: 4)
             chevron(expanded: expanded)
@@ -74,7 +74,7 @@ struct AgentProcessView: View {
     }
 
     private func chevron(expanded: Bool) -> some View {
-        Image(systemName: "chevron.right").font(.caption2)
+        Image(systemName: "chevron.right").readerSymbolInk().font(.caption2)
             .rotationEffect(.degrees(expanded ? 90 : 0))
             .flipsForRightToLeftLayoutDirection(true)
             .accessibilityHidden(true)
@@ -131,7 +131,7 @@ struct AgentProcessView: View {
                 } label: {
                     stepLabel(activity, expanded: opened)
                 }
-                .buttonStyle(.plain).accessibilityValue(opened ? "已展开" : "已收起")
+                .readerIconButtonStyle(.plain).accessibilityValue(opened ? "已展开" : "已收起")
             } else {
                 stepLabel(activity, expanded: nil)
             }
@@ -166,7 +166,7 @@ struct AgentProcessView: View {
                     systemName: activity.status == .failed
                         ? "exclamationmark.circle" : (activity.status == .cancelled ? "stop.circle" : "checkmark")
                 )
-                .font(.caption2).frame(width: 12).accessibilityHidden(true)
+                .readerSymbolInk().font(.caption2).frame(width: 12).accessibilityHidden(true)
             }
             Text(name(of: activity)).foregroundStyle(ReaderTheme.ink)
             if activity.status == .failed { Text("失败") }

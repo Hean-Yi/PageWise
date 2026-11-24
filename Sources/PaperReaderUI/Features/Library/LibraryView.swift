@@ -321,8 +321,10 @@ public struct LibraryView: View {
                     Label(
                         "助读侧栏", systemImage: assistantTab == nil ? "sidebar.right" : "rectangle.righthalf.inset.filled"
                     )
+                    .labelStyle(ReaderSymbolLabelStyle(iconOnly: true))
                     .contentTransition(reduceMotion ? .identity : .symbolEffect(.replace))
                 }
+                .readerIconButtonStyle(.automatic)
                 .keyboardShortcut("i", modifiers: [.command, .option])
                 .help(assistantTab == nil ? "打开助读侧栏" : "收起助读侧栏")
                 .accessibilityLabel(assistantTab == nil ? "打开助读侧栏" : "收起助读侧栏")
@@ -493,7 +495,7 @@ public struct LibraryView: View {
                                     Spacer(minLength: 0)
                                 }.font(.callout).padding(.horizontal, 12).padding(.vertical, 8)
                                     .contentShape(Rectangle())
-                            }.buttonStyle(.plain)
+                            }.readerIconButtonStyle(.plain)
                         }
                     }.padding(.horizontal, 10)
                 }
@@ -504,17 +506,17 @@ public struct LibraryView: View {
                 Button {
                     showImporter = true
                 } label: {
-                    Label("导入 PDF", systemImage: "plus").font(.callout.weight(.medium))
+                    Label("导入 PDF", readerIcon: .add, size: 16).font(.callout.weight(.medium))
                         .frame(maxWidth: .infinity).frame(minHeight: 40)
                         .readerGlassSurface(in: RoundedRectangle(cornerRadius: 10), bordered: true)
                 }
-                .quickStartTarget(.importPaper)
+                .readerIconButtonStyle(.plain).quickStartTarget(.importPaper)
                 Button {
                     showSettings = true
                 } label: {
-                    Label("设置", systemImage: "gearshape").labelStyle(.iconOnly)
+                    Label("设置", systemImage: "gearshape").labelStyle(ReaderSymbolLabelStyle(iconOnly: true))
                         .frame(width: 42, height: 42).contentShape(Rectangle())
-                }.help("设置").quickStartTarget(.modelSettings)
+                }.readerIconButtonStyle(.plain).help("设置").quickStartTarget(.modelSettings)
                     #if os(iOS)
                         .keyboardShortcut(",")
                     #endif
@@ -542,7 +544,7 @@ public struct LibraryView: View {
                 .padding(.horizontal, 12).frame(minHeight: 38)
                 .sidebarSelectionTarget(selected)
                 .contentShape(Rectangle())
-        }.buttonStyle(.plain).accessibilityAddTraits(selected ? .isSelected : [])
+        }.readerIconButtonStyle(.plain).accessibilityAddTraits(selected ? .isSelected : [])
     }
 }
 

@@ -4,7 +4,7 @@ import SwiftUI
 struct ReaderIcon: View {
     enum Glyph: Int, CaseIterable {
         case library, read, favorite, calendar, notebook, paper, source
-        case export, citation, delete, annotation, openNote, chevron, discussion
+        case export, citation, delete, annotation, openNote, chevron, discussion, close, add
     }
 
     let glyph: Glyph
@@ -12,6 +12,8 @@ struct ReaderIcon: View {
     @ScaledMetric private var size: CGFloat
     @Environment(\.isEnabled) private var enabled
     @Environment(\.backgroundProminence) private var backgroundProminence
+    @Environment(\.readerIconInteraction) private var interaction
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     init(_ glyph: Glyph, size: CGFloat = 16, filled: Bool = false) {
         self.glyph = glyph
@@ -20,22 +22,31 @@ struct ReaderIcon: View {
     }
 
     var body: some View {
-        let scale = size / 24
-        let transform = CGAffineTransform(scaleX: scale, y: scale)
-        let outline = glyph.drawing.applying(transform)
-        let spot = glyph.inkPlate.applying(transform)
+        let state = enabled && !reduceMotion ? interaction : .idle
         ZStack {
-            if filled {
-                Path { path in
-                    path.addPath(outline)
-                    path.addPath(spot)
-                }.fill(style: FillStyle(eoFill: true))
+            if glyph == .favorite {
+                // The first two strokes offer a small preview. A click continues the same pencil line.
+                FavoritePencilFill(progress: filled ? 1 : state == .idle ? 0 : 0.14)
+                    .fill(plateStyle)
+                    .animation(reduceMotion ? nil : .easeInOut(duration: filled ? 0.58 : 0.25), value: filled)
+                    .mask {
+                        ReaderIconLayer(glyph: .favorite, ink: .reversed, state: state)
+                            .fill(style: FillStyle(eoFill: true))
+                    }
+                ReaderIconLayer(glyph: .favorite, ink: .spot, state: state)
+                    .fill(plateStyle).opacity(!filled && state != .idle ? 1 : 0)
             } else {
-                spot.fill(plateStyle)
+                ReaderIconLayer(glyph: glyph, ink: filled ? .reversed : .spot, state: state)
+                    .fill(filled ? AnyShapeStyle(.foreground) : plateStyle, style: FillStyle(eoFill: filled))
             }
-            outline.stroke(style: StrokeStyle(lineWidth: 1.7 * scale, lineCap: .square, lineJoin: .round))
+            ReaderIconLayer(glyph: glyph, ink: .outline, state: state)
+                .stroke(style: StrokeStyle(lineWidth: 1.7 * size / 24, lineCap: .square, lineJoin: .round))
         }
         .frame(width: size, height: size)
+        .animation(
+            reduceMotion ? nil : state == .pressed ? .easeOut(duration: 0.085) : .smooth(duration: 0.24),
+            value: state
+        )
         .accessibilityHidden(true)
     }
 
@@ -90,20 +101,11 @@ extension ReaderIcon.Glyph {
                     (19, 8.2), (10.9, 17.7),
                 ], closed: true)
         case .favorite:
-            // A cut-paper heart. The short ink cut reverses out when the heart is filled.
-            art.outline = Path { path in
-                path.move(to: CGPoint(x: 11.8, y: 20.7))
-                path.addQuadCurve(to: CGPoint(x: 2.2, y: 9.6), control: CGPoint(x: 2.2, y: 13))
-                path.addCurve(
-                    to: CGPoint(x: 11.8, y: 6.8),
-                    control1: CGPoint(x: 2.2, y: 3.1), control2: CGPoint(x: 8.2, y: 2.3))
-                path.addCurve(
-                    to: CGPoint(x: 21.8, y: 9), control1: CGPoint(x: 15.3, y: 1.5),
-                    control2: CGPoint(x: 21.8, y: 3.3))
-                path.addQuadCurve(to: CGPoint(x: 18.1, y: 15.1), control: CGPoint(x: 21.8, y: 11.8))
-                path.closeSubpath()
-            }
-            art.spot.line([(4.9, 9.7), (7.2, 10.8), (9.7, 15.8), (6.2, 12.7)], closed: true)
+            // Optically even points around two open shoulders; the outline also clips the pencil.
+            art.outline.addLines(Self.starVertices)
+            art.outline.closeSubpath()
+            // A small second plate below the crown becomes a paper cut in the solid star.
+            art.spot.line([(12, 5.8), (13.8, 10.1), (16.9, 10.6), (12, 12.6)], closed: true)
         case .calendar:
             // A tear-off date sheet with a printed top band and a single oversized numeral.
             art.spot.line([(3, 5), (20.6, 5), (20.6, 9.3), (3, 9.3)], closed: true)
@@ -182,9 +184,21 @@ extension ReaderIcon.Glyph {
                 ], closed: true)
             art.outline.line([(5.7, 7.9), (13.6, 7.9)])
             art.spot.line([(10.8, 15), (21.6, 15), (21.6, 22.1), (17.9, 19.4), (10.8, 19.4)], closed: true)
+        case .close:
+            art.outline.line([(6.7, 6.7), (17.3, 17.3)])
+            art.spot.line([(16.8, 5.8), (18.2, 7.2), (7.2, 18.2), (5.8, 16.8)], closed: true)
+        case .add:
+            art.outline.line([(4, 12), (20, 12)])
+            art.spot.line([(11, 3.3), (13, 3.3), (13, 20.7), (11, 20.7)], closed: true)
         }
         return art
     }
+
+    static let starVertices: [CGPoint] = [
+        CGPoint(x: 12, y: 2.5), CGPoint(x: 15, y: 8.55), CGPoint(x: 21.9, y: 9.6),
+        CGPoint(x: 16.9, y: 14.45), CGPoint(x: 18.1, y: 21.25), CGPoint(x: 12, y: 18.05),
+        CGPoint(x: 5.9, y: 21.25), CGPoint(x: 7.1, y: 14.45), CGPoint(x: 2.1, y: 9.6), CGPoint(x: 9, y: 8.55),
+    ]
 
     private static let quotationMark = Path { path in
         path.move(to: CGPoint(x: 9.8, y: 4))

@@ -8,15 +8,15 @@ struct AssistantSuggestion: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: 10) {
-                Image(systemName: systemImage).frame(width: 18).foregroundStyle(ReaderTheme.accent)
+                Image(systemName: systemImage).readerSymbolInk().frame(width: 18).foregroundStyle(ReaderTheme.accent)
                 Text(title).foregroundStyle(ReaderTheme.ink)
                 Spacer(minLength: 8)
-                Image(systemName: "arrow.up.left").font(.caption2).foregroundStyle(ReaderTheme.muted)
+                Image(systemName: "arrow.up.left").readerSymbolInk().font(.caption2).foregroundStyle(ReaderTheme.muted)
             }
             .font(.callout).padding(.horizontal, 10).frame(minHeight: 42)
             .contentShape(Rectangle())
         }
-        .buttonStyle(AssistantToolButtonStyle(embedded: true))
+        .readerIconButtonStyle(AssistantToolButtonStyle(embedded: true))
         .clipShape(RoundedRectangle(cornerRadius: 8))
     }
 }

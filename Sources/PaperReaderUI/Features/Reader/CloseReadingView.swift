@@ -29,7 +29,7 @@ struct CloseReadingControl: View {
                     Button {
                         model.closeReadingTask?.cancel()
                     } label: {
-                        Image(systemName: "stop.circle")
+                        Image(systemName: "stop.circle").readerSymbolInk()
                     }
                     .help("停止精读").accessibilityLabel("停止精读")
                 } else {
@@ -43,14 +43,15 @@ struct CloseReadingControl: View {
                     } label: {
                         Label(
                             model.existingCloseReading(for: id) == nil ? "AI 精读" : "查看精读",
-                            systemImage: "text.magnifyingglass")
+                            systemImage: "text.magnifyingglass"
+                        ).labelStyle(ReaderSymbolLabelStyle())
                     }.disabled(model.busyAI)
                         .quickStartTarget(.assistant)
                     if model.existingCloseReading(for: id) != nil {
                         Button {
                             Task { await model.showCloseReading(id, regenerate: true) }
                         } label: {
-                            Image(systemName: "arrow.clockwise")
+                            Image(systemName: "arrow.clockwise").readerSymbolInk()
                         }.disabled(model.busyAI).help("重新精读").accessibilityLabel("重新精读")
                     }
                     Spacer()
@@ -59,7 +60,7 @@ struct CloseReadingControl: View {
                     } label: {
                         HStack(spacing: 3) {
                             ForEach(CloseReadingDimension.allCases, id: \.self) { dimension in
-                                Circle().fill(dimension.swatch).frame(width: 8, height: 8)
+                                Circle().fill(dimension.swatch).readerSymbolInk().frame(width: 8, height: 8)
                             }
                         }.padding(.vertical, 7).contentShape(Rectangle())
                     }.help("精读批注图例").accessibilityLabel("精读批注图例")
@@ -75,7 +76,7 @@ struct CloseReadingControl: View {
                             }.padding().presentationCompactAdaptation(.popover)
                         }
                 }
-            }.buttonStyle(.plain).foregroundStyle(ReaderTheme.ink).font(.callout)
+            }.readerIconButtonStyle(.plain).foregroundStyle(ReaderTheme.ink).font(.callout)
                 .padding(.horizontal, 20).padding(.vertical, 9)
             Divider()
         }
@@ -106,9 +107,9 @@ struct CloseReadingNoteList: View {
                                     .lineLimit(2)
                             }
                             Spacer()
-                            Image(systemName: "chevron.forward").imageScale(.small)
+                            Image(systemName: "chevron.forward").readerSymbolInk().imageScale(.small)
                         }.contentShape(Rectangle()).padding(.vertical, 7)
-                    }.buttonStyle(.plain)
+                    }.readerIconButtonStyle(.plain)
                 }
             }
         }.font(.caption).tint(ReaderTheme.muted).foregroundStyle(ReaderTheme.ink)

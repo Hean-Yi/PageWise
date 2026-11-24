@@ -152,9 +152,15 @@ private struct JumpToLatest: ViewModifier {
                 hasMoreBelow = hasMore
             }
             .overlay(alignment: .bottomTrailing) {
-                Button("前往最新消息", systemImage: "arrow.down") {
+                Button {
                     readerScrolled = false
                     withAnimation(ReaderMotion.navigation(reduceMotion), jump)
+                } label: {
+                    Label {
+                        Text("前往最新消息")
+                    } icon: {
+                        Image(systemName: "arrow.down").readerSymbolInk()
+                    }
                 }
                 .labelStyle(.iconOnly).readerFloatingButton(.circle)
                 .help("前往最新消息")

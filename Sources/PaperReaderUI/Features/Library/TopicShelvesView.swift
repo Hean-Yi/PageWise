@@ -27,21 +27,22 @@ struct TopicShelvesView<SortMenu: View>: View {
                         Button {
                             withAnimation(ReaderMotion.disclosure(reduceMotion)) { expanded.toggle() }
                         } label: {
-                            Image(systemName: "chevron.down")
-                                .rotationEffect(.degrees(expanded ? 180 : 0))
+                            ReaderIcon(.chevron, size: 14)
+                                .rotationEffect(.degrees(expanded ? -90 : 90))
                                 .frame(width: shelfControlSize, height: shelfControlSize)
                                 .contentShape(Rectangle())
                         }
-                        .help(expanded ? "收起书架" : "展开全部书架")
+                        .readerIconButtonStyle(.plain).help(expanded ? "收起书架" : "展开全部书架")
                         .accessibilityLabel(expanded ? "收起书架" : "展开全部书架")
                     }
                     Button {
                         beginEditing(nil)
                     } label: {
-                        Image(systemName: "plus")
+                        ReaderIcon(.add, size: 16)
                             .frame(width: shelfControlSize, height: shelfControlSize)
                             .contentShape(Rectangle())
                     }
+                    .readerIconButtonStyle(.plain)
                     .help("新建书架").accessibilityLabel("新建书架").disabled(saving)
                     .quickStartTarget(editing ? nil : .shelves)
                 }
@@ -142,15 +143,15 @@ struct TopicShelvesView<SortMenu: View>: View {
                 .onSubmit { saveName() }.disabled(saving)
                 .frame(maxWidth: 280)
             Button(action: saveName) {
-                Image(systemName: "checkmark").frame(width: 32, height: 32)
+                Image(systemName: "checkmark").readerSymbolInk().frame(width: 32, height: 32)
             }
             .foregroundStyle(ReaderTheme.accent)
-            .help("保存书架名称").accessibilityLabel("保存书架名称")
+            .readerIconButtonStyle(.plain).help("保存书架名称").accessibilityLabel("保存书架名称")
             .disabled(saving || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             Button(action: cancelEditing) {
-                Image(systemName: "xmark").frame(width: 32, height: 32)
+                ReaderIcon(.close, size: 14).frame(width: 32, height: 32)
             }
-            .help("取消编辑").accessibilityLabel("取消编辑")
+            .readerIconButtonStyle(.plain).help("取消编辑").accessibilityLabel("取消编辑")
             .keyboardShortcut(.cancelAction).disabled(saving)
             if saving { ProgressView().controlSize(.small) }
         }.buttonStyle(.plain).font(.system(size: 12))
@@ -258,7 +259,7 @@ private struct TopicShelfItem: View {
     var body: some View {
         Button(action: select) {
             HStack(spacing: 7) {
-                if isUnclassified { Image(systemName: "tray").font(.system(size: 11)) }
+                if isUnclassified { Image(systemName: "tray").readerSymbolInk().font(.system(size: 11)) }
                 Text(name).font(.system(size: 12, weight: .medium)).lineLimit(1)
                 Text("\(count)").font(.system(size: 10)).monospacedDigit().fixedSize().foregroundStyle(
                     ReaderTheme.muted)
@@ -284,7 +285,7 @@ private struct TopicShelfItem: View {
             .scaleEffect(targeted && !reduceMotion ? 1.04 : 1)
             .contentShape(RoundedRectangle(cornerRadius: 7))
         }
-        .buttonStyle(.plain).help(name)
+        .readerIconButtonStyle(.plain).help(name)
         .accessibilityLabel("\(name)，\(count) 篇论文")
         .accessibilityAddTraits(selected ? .isSelected : [])
         #if os(macOS)

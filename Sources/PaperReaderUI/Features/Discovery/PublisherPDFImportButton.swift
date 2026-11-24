@@ -3,7 +3,7 @@ import UniformTypeIdentifiers
 
 struct PublisherPDFImportLabel: View {
     var body: some View {
-        Label("导入已下载的 PDF", systemImage: "doc.badge.plus")
+        Label("导入已下载的 PDF", systemImage: "doc.badge.plus").labelStyle(ReaderSymbolLabelStyle())
     }
 }
 
@@ -18,7 +18,7 @@ struct PublisherPDFImportButton: View {
         } label: {
             PublisherPDFImportLabel()
         }
-        .buttonStyle(.bordered)
+        .readerIconButtonStyle(.bordered)
         .publisherPDFImporter(isPresented: $choosingPDF, importFile: importFile, onFailure: onFailure)
     }
 }

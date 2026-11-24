@@ -18,7 +18,7 @@ struct NotePassageSheetView: View {
                 Button {
                     model.notePassageSheet = nil
                 } label: {
-                    Image(systemName: "xmark").font(.system(size: 12, weight: .semibold))
+                    ReaderIcon(.close, size: 15)
                         .foregroundStyle(ReaderTheme.muted).readerIconTarget()
                 }
                 .readerPlainButton().accessibilityLabel("关闭").help("关闭").keyboardShortcut(.cancelAction)
@@ -101,7 +101,7 @@ private struct NotePassagePicker: View {
                                                     .leading)
                                         }
                                         Spacer(minLength: 0)
-                                        Image(systemName: "plus").foregroundStyle(ReaderTheme.accent)
+                                        ReaderIcon(.add, size: 16).foregroundStyle(ReaderTheme.accent)
                                     }
                                     .padding(.horizontal, 5).padding(.vertical, 9).contentShape(Rectangle())
                                 }.readerPlainButton().disabled(insertion != nil)
@@ -171,7 +171,7 @@ private struct NotePassagePreviewView: View {
                             Label("打开笔记", readerIcon: .notebook)
                         }
                     }
-                    .buttonStyle(.borderedProminent).tint(ReaderTheme.accent)
+                    .readerIconButtonStyle(.borderedProminent).tint(ReaderTheme.accent)
                 }
             } else {
                 ProgressView().accessibilityLabel("核对引文")

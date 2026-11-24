@@ -22,7 +22,7 @@ struct ReadingMonthGrid: View {
                 Button {
                     moveMonth(-1)
                 } label: {
-                    Image(systemName: "chevron.left")
+                    Image(systemName: "chevron.left").readerSymbolInk()
                 }
                 .accessibilityLabel("上个月")
                 Button {
@@ -35,10 +35,10 @@ struct ReadingMonthGrid: View {
                 Button {
                     moveMonth(1)
                 } label: {
-                    Image(systemName: "chevron.right")
+                    Image(systemName: "chevron.right").readerSymbolInk()
                 }
                 .accessibilityLabel("下个月")
-            }.buttonStyle(.plain).font(.caption).foregroundStyle(ReaderTheme.ink)
+            }.readerIconButtonStyle(.plain).font(.caption).foregroundStyle(ReaderTheme.ink)
             VStack(spacing: 5) {
                 LazyVGrid(columns: columns, spacing: 5) {
                     ForEach(["一", "二", "三", "四", "五", "六", "日"], id: \.self) { value in

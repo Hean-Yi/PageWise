@@ -21,9 +21,9 @@ struct ReadingCalendarView: View {
                         addPaper = model.selectedPaperID ?? model.state.papers.first?.id
                         showAdd = true
                     } label: {
-                        Label("补记", systemImage: "plus")
+                        Label("补记", readerIcon: .add, size: 15)
                     }
-                    .buttonStyle(.bordered).disabled(model.state.papers.isEmpty)
+                    .readerIconButtonStyle(.bordered).disabled(model.state.papers.isEmpty)
                     .accessibilityLabel("补记阅读记录")
                 }
                 ViewThatFits(in: .horizontal) {
@@ -127,9 +127,9 @@ struct ReadingCalendarView: View {
                 Button {
                     model.select(paper.id)
                 } label: {
-                    Image(systemName: "arrow.up.right")
+                    Image(systemName: "arrow.up.right").readerSymbolInk()
                 }
-                .buttonStyle(.borderless).accessibilityLabel("阅读\(title)").help("打开论文")
+                .readerIconButtonStyle(.borderless).accessibilityLabel("阅读\(title)").help("打开论文")
             }
             DisclosureGroup {
                 ForEach(paper.entries) { record in
@@ -163,7 +163,7 @@ struct ReadingCalendarView: View {
             } label: {
                 ReaderIcon(.delete, size: 15).readerIconTarget(macOS: 24)
             }
-            .buttonStyle(.borderless).accessibilityLabel("删除阅读记录").help("删除记录")
+            .readerIconButtonStyle(.borderless).accessibilityLabel("删除阅读记录").help("删除记录")
         }
         .padding(.vertical, 3)
     }

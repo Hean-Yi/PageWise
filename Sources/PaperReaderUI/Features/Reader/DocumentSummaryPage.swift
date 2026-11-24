@@ -40,8 +40,8 @@ struct DocumentSummaryPage: View {
     private var navigation: some View {
         HStack(spacing: 12) {
             Button(action: model.closeDocumentSummary) {
-                Label("返回正文", systemImage: "chevron.backward")
-            }
+                Label("返回正文", systemImage: "chevron.backward").labelStyle(ReaderSymbolLabelStyle())
+            }.readerIconButtonStyle(.borderless)
             Text("文末总结").font(ReaderTheme.editorial(titleSize, weight: .semibold))
                 .foregroundStyle(ReaderTheme.ink).accessibilityAddTraits(.isHeader)
         }
@@ -63,6 +63,7 @@ struct DocumentSummaryPage: View {
             }
             .tint(ReaderTheme.muted).help("删除总结")
         }
+        .readerIconButtonStyle(.borderless)
         .padding(.horizontal, 8)
         .readerGlassSurface(in: Capsule(), fallback: ReaderTheme.elevated)
     }

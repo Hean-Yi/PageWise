@@ -19,6 +19,14 @@ enum HTMLNoteStyle {
           .reader-note-card button{font:inherit;color:inherit;border:0;border-radius:6px;background:transparent;padding:4px 7px;cursor:pointer}
           .reader-note-card button.note-icon-button,#reader-document-summary>header button.note-icon-button{display:inline-grid;place-items:center;width:28px;height:28px;padding:0;vertical-align:middle;flex:none}
           .note-icon-button .ink-plate{fill:light-dark(#9f503a,#e8a086)}
+          @media(prefers-reduced-motion:no-preference){
+            .note-icon-button .ink-plate{transform-box:view-box;transform:var(--ink-rest,none);transition:transform .18s cubic-bezier(.2,.8,.3,1)}
+            .note-icon-button:enabled:focus-visible .ink-plate{--ink-rest:var(--ink-hover)}
+            .note-icon-button:enabled:is(:active,[data-key-press]) .ink-plate{transform:var(--ink-press);transition-duration:.07s}
+          }
+          @media(hover:hover) and (prefers-reduced-motion:no-preference){
+            .note-icon-button:enabled:hover .ink-plate{--ink-rest:var(--ink-hover)}
+          }
           @media(prefers-contrast:more){.note-icon-button .ink-plate{fill:currentColor}}
           @media(pointer:coarse){.reader-note-card button.note-icon-button,#reader-document-summary>header button.note-icon-button{width:44px;height:44px}}
           .reader-note-card button:hover{background:#e8e1d6}.reader-note-card button:focus-visible{outline:2px solid #a34c33}

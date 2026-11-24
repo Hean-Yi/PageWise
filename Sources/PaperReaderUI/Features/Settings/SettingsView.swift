@@ -145,7 +145,7 @@ struct SettingsView: View {
                     category = item
                 } label: {
                     HStack(spacing: 9) {
-                        Image(systemName: item.symbol).frame(width: 18)
+                        Image(systemName: item.symbol).readerSymbolInk().frame(width: 18)
                         Text(item.rawValue)
                     }
                     .font(.subheadline.weight(item == category ? .semibold : .regular))
@@ -155,7 +155,7 @@ struct SettingsView: View {
                     .animation(ReaderMotion.feedback(reduceMotion), value: item == category)
                     .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain).disabled(isTesting)
+                .readerIconButtonStyle(.plain).disabled(isTesting)
                 .accessibilityAddTraits(item == category ? .isSelected : [])
             }
             Spacer()
@@ -169,9 +169,9 @@ struct SettingsView: View {
         Button {
             if hasModelEdits { confirmLeaveForGuide = true } else { openGuide() }
         } label: {
-            Label("快速上手", systemImage: "questionmark.circle")
+            Label("快速上手", systemImage: "questionmark.circle").labelStyle(ReaderSymbolLabelStyle())
         }
-        .buttonStyle(.borderless).foregroundStyle(ReaderTheme.muted).disabled(isTesting)
+        .readerIconButtonStyle(.borderless).foregroundStyle(ReaderTheme.muted).disabled(isTesting)
     }
 
     private var compactNavigation: some View {
@@ -227,18 +227,18 @@ struct SettingsView: View {
                     }.pickerStyle(.inline).labelsHidden()
                 } label: {
                     HStack(spacing: 12) {
-                        Image(systemName: "network").foregroundStyle(ReaderTheme.accent)
+                        Image(systemName: "network").readerSymbolInk().foregroundStyle(ReaderTheme.accent)
                             .accessibilityHidden(true)
                         Text(provider.displayName).font(.body.weight(.medium))
                         Spacer(minLength: 6)
-                        Image(systemName: "chevron.up.chevron.down").font(.caption2.weight(.semibold))
+                        Image(systemName: "chevron.up.chevron.down").readerSymbolInk().font(.caption2.weight(.semibold))
                             .foregroundStyle(ReaderTheme.muted).accessibilityHidden(true)
                     }
                     .padding(.horizontal, 13).frame(minHeight: 42).contentShape(Rectangle())
                     .background(fieldBackground(focused: false))
                     .accessibilityElement(children: .combine)
                 }
-                .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden)
+                .readerMenuIconInteraction().menuIndicator(.hidden)
                 .accessibilityLabel("服务预设").accessibilityValue(provider.displayName)
             }
             if provider == .custom {

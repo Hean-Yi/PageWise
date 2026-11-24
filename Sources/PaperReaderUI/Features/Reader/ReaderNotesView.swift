@@ -54,7 +54,7 @@ struct ReaderNotesView: View {
                             .system(size: 13)
                         ).lineLimit(1)
                     }.frame(maxWidth: .infinity, alignment: .leading).padding(12)
-                }.buttonStyle(AssistantToolButtonStyle())
+                }.readerIconButtonStyle(AssistantToolButtonStyle())
             }
             if model.lastDeletedNoteID != nil {
                 Button("撤销删除笔记", action: model.undoReadingNoteDeletion).font(.system(size: 12))
@@ -69,8 +69,9 @@ struct ReaderNotesView: View {
         return Section {
             if marks.isEmpty {
                 Button(action: model.toggleBookmark) {
-                    Label("标记当前页", systemImage: "plus").font(.system(size: 12))
-                }.buttonStyle(.borderless).foregroundStyle(ReaderTheme.muted).disabled(model.displayedPageKeys.isEmpty)
+                    Label("标记当前页", readerIcon: .add, size: 14).font(.system(size: 12))
+                }.readerIconButtonStyle(.borderless).foregroundStyle(ReaderTheme.muted).disabled(
+                    model.displayedPageKeys.isEmpty)
             } else {
                 ForEach(marks) { mark in
                     HStack(spacing: 10) {
@@ -79,18 +80,19 @@ struct ReaderNotesView: View {
                             didNavigate()
                         } label: {
                             HStack(spacing: 8) {
-                                Image(systemName: "bookmark.fill").foregroundStyle(ReaderTheme.accent)
+                                Image(systemName: "bookmark.fill").readerSymbolInk().foregroundStyle(ReaderTheme.accent)
                                 Text("\(readingModeTitle(mark.mode)) · 第 \(mark.pageIndex + 1) 页")
                                 Spacer()
-                                Image(systemName: "arrow.up.right").foregroundStyle(ReaderTheme.muted)
+                                Image(systemName: "arrow.up.right").readerSymbolInk().foregroundStyle(ReaderTheme.muted)
                             }.contentShape(Rectangle())
-                        }.buttonStyle(.plain)
+                        }.readerIconButtonStyle(.plain)
                         Button {
                             model.removeBookmark(mark.id)
                         } label: {
-                            Image(systemName: "xmark")
+                            ReaderIcon(.close, size: 13)
                         }
-                        .buttonStyle(.plain).foregroundStyle(ReaderTheme.muted).help("移除书签").accessibilityLabel("移除书签")
+                        .readerIconButtonStyle(.plain).foregroundStyle(ReaderTheme.muted).help("移除书签")
+                        .accessibilityLabel("移除书签")
                     }.font(.system(size: 12)).padding(12)
                         .background(ReaderTheme.canvas, in: RoundedRectangle(cornerRadius: 8))
                 }
@@ -116,11 +118,11 @@ struct ReaderNotesView: View {
                             HStack {
                                 Text("第 \(mark.pageIndex + 1) 页")
                                 Spacer()
-                                Image(systemName: "arrow.up.right")
+                                Image(systemName: "arrow.up.right").readerSymbolInk()
                             }.font(.system(size: 10)).foregroundStyle(ReaderTheme.muted)
                         }
                     }.fixedSize(horizontal: false, vertical: true).padding(.vertical, 6).contentShape(Rectangle())
-                }.buttonStyle(.plain)
+                }.readerIconButtonStyle(.plain)
             }
         } header: {
             heading("划线", icon: "highlighter", count: marks.count).padding(.top, 14)
@@ -136,8 +138,9 @@ struct ReaderNotesView: View {
             if model.paper?.blocks.isEmpty == false {
                 Button(action: summarize) {
                     Label(model.paper?.summary.isEmpty == false ? "重新生成" : "生成论文总结", systemImage: "sparkles")
+                        .labelStyle(ReaderSymbolLabelStyle())
                         .font(.system(size: 12))
-                }.buttonStyle(.borderless).disabled(model.busyAI)
+                }.readerIconButtonStyle(.borderless).disabled(model.busyAI)
             }
         }
     }

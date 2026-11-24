@@ -122,7 +122,7 @@ struct ShelfPaperPreview: View {
         }
         .overlay { RoundedRectangle(cornerRadius: 16).strokeBorder(ReaderTheme.line).allowsHitTesting(false) }
         .overlay(alignment: .topTrailing) {
-            Button("关闭书目预览", systemImage: "xmark", action: dismiss)
+            Button(action: dismiss) { Label("关闭书目预览", readerIcon: .close, size: 15) }
                 .labelStyle(.iconOnly).readerFloatingButton(.circle)
                 .padding(6).help("关闭预览")
         }
@@ -158,10 +158,10 @@ struct ShelfPaperPreview: View {
             Button(action: open) {
                 HStack(spacing: 6) {
                     Text("打开论文")
-                    Image(systemName: "arrow.right")
+                    ReaderIcon(.openNote, size: 15)
                 }
                 .font(.callout.weight(.medium)).foregroundStyle(ReaderTheme.accent)
-            }.buttonStyle(.plain)
+            }.readerIconButtonStyle(.plain)
         }
         .foregroundStyle(ReaderTheme.ink)
         .padding(.top, 30).padding(.bottom, 20)

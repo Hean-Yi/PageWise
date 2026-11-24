@@ -208,9 +208,9 @@ struct BookshelfItem: View {
                 Button {
                     showPreview(.pinned(paper.id))
                 } label: {
-                    Image(systemName: "eye").readerIconTarget(macOS: 30)
+                    Image(systemName: "eye").readerSymbolInk().readerIconTarget(macOS: 30)
                 }
-                .buttonStyle(.plain).focused($focus, equals: .preview)
+                .readerIconButtonStyle(.plain).focused($focus, equals: .preview)
                 .foregroundStyle(ReaderTheme.muted).help("预览论文（按住空格）")
                 .accessibilityLabel("预览论文：\(paper.title)")
                 Spacer(minLength: 0)
@@ -220,16 +220,15 @@ struct BookshelfItem: View {
                     ReaderIcon(.favorite, filled: workspace.isFavorite)
                         .foregroundStyle(workspace.isFavorite ? ReaderTheme.accent : ReaderTheme.muted)
                         .readerIconTarget(macOS: 30)
-                        .animation(ReaderMotion.feedback(reduceMotion), value: workspace.isFavorite)
-                }.buttonStyle(.plain).focused($focus, equals: .favorite)
+                }.readerIconButtonStyle(.plain).focused($focus, equals: .favorite)
                     .help(workspace.isFavorite ? "取消收藏" : "收藏")
                     .accessibilityLabel("\(workspace.isFavorite ? "取消收藏" : "收藏") \(paper.title)")
                 Menu {
                     actions
                 } label: {
-                    Image(systemName: "ellipsis").font(.system(size: 16, weight: .semibold))
+                    Image(systemName: "ellipsis").readerSymbolInk().font(.system(size: 16, weight: .semibold))
                         .readerIconTarget(macOS: 30)
-                }.menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+                }.readerMenuIconInteraction().menuIndicator(.hidden).fixedSize()
                     .foregroundStyle(ReaderTheme.muted).focused($focus, equals: .menu)
                     .help("论文选项").accessibilityLabel("\(paper.title)的选项")
             }.frame(minHeight: 30).opacity(showsActions && !lifted ? 1 : 0)
@@ -305,7 +304,7 @@ struct AddPaperCover: View {
                     }
                     .overlay {
                         ZStack {
-                            Image(systemName: "plus").font(.system(size: 30, weight: .ultraLight))
+                            ReaderIcon(.add, size: 31)
                                 .offset(y: revealed ? -25 : 0)
                             Text("拖拽 PDF 至此\n或点击在线查找")
                                 .font(.system(size: 12)).lineSpacing(7).multilineTextAlignment(.center)
@@ -315,7 +314,7 @@ struct AddPaperCover: View {
                         }.foregroundStyle(revealed ? ReaderTheme.accent : ReaderTheme.muted)
                     }.aspectRatio(0.70, contentMode: .fit)
                     .contentShape(Rectangle())
-            }.buttonStyle(.plain).focused($focused).onHover { hovered = $0 }
+            }.readerIconButtonStyle(.plain).focused($focused).onHover { hovered = $0 }
                 .animation(ReaderMotion.disclosure(reduceMotion), value: revealed)
                 .help("拖拽 PDF 至此，或点击在线查找").accessibilityLabel("在线查找论文")
                 .accessibilityHint("也可以拖拽 PDF 至此添加")

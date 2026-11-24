@@ -92,9 +92,9 @@ struct AgentResultCard: View {
                         }
                     }
                 } label: {
-                    Label(versionLabel(card), systemImage: "square.stack")
+                    Label(versionLabel(card), systemImage: "square.stack").labelStyle(ReaderSymbolLabelStyle())
                 }
-                .menuStyle(.borderlessButton).fixedSize().font(.caption)
+                .readerMenuIconInteraction().fixedSize().font(.caption)
                 .padding(.leading, 12).padding(.top, 8).accessibilityLabel("选择论文版本")
             }
             if card.removal != nil || card.localImportDestination != nil {
@@ -121,7 +121,7 @@ struct AgentResultCard: View {
                     } label: {
                         Label("追问", readerIcon: .discussion, size: 14)
                     }
-                    .buttonStyle(.borderless).foregroundStyle(ReaderTheme.muted)
+                    .readerIconButtonStyle(.borderless).foregroundStyle(ReaderTheme.muted)
                     .help("基于这项结果追问").accessibilityLabel("基于《\(card.title)》追问")
                     .disabled(agent.isRunning)
                 }
@@ -141,7 +141,9 @@ struct AgentResultCard: View {
             } label: {
                 label(for: card, accessory: "arrow.up.right")
             }
-            .buttonStyle(AssistantToolButtonStyle(embedded: true)).help(PaperCandidate.landingPageLabel(for: url))
+            .readerIconButtonStyle(AssistantToolButtonStyle(embedded: true)).help(
+                PaperCandidate.landingPageLabel(for: url)
+            )
             .accessibilityHint("在浏览器中查看论文")
         } else if agent.canOpen(card) {
             Button {
@@ -149,7 +151,7 @@ struct AgentResultCard: View {
             } label: {
                 label(for: card, accessory: "chevron.forward")
             }
-            .buttonStyle(AssistantToolButtonStyle(embedded: true)).help(card.title)
+            .readerIconButtonStyle(AssistantToolButtonStyle(embedded: true)).help(card.title)
             .accessibilityHint("在阅读器中打开")
         } else if !card.excerpt.isEmpty {
             Button {
@@ -157,7 +159,7 @@ struct AgentResultCard: View {
             } label: {
                 label(for: card, accessory: "chevron.down", accessoryRotation: .degrees(showsExcerpt ? 180 : 0))
             }
-            .buttonStyle(AssistantToolButtonStyle(embedded: true))
+            .readerIconButtonStyle(AssistantToolButtonStyle(embedded: true))
             .accessibilityHint(showsExcerpt ? "收起摘录" : "查看完整摘录")
             if showsExcerpt {
                 SearchMatchText(card.excerpt, query: card.searchQuery).font(.callout).textSelection(.enabled)
@@ -225,7 +227,7 @@ struct AgentResultCard: View {
                     ReaderIcon(.delete, size: 14)
                 }
             }
-            .buttonStyle(.bordered)
+            .readerIconButtonStyle(.bordered)
             .accessibilityLabel("\(title)：\(card.title)")
         }
     }
@@ -253,9 +255,9 @@ struct AgentResultCard: View {
             Button {
                 choosingLocalPDFs = true
             } label: {
-                Label("选择 PDF 并导入", systemImage: "folder")
+                Label("选择 PDF 并导入", systemImage: "folder").labelStyle(ReaderSymbolLabelStyle())
             }
-            .buttonStyle(.bordered).disabled(agent.reader.isImporting)
+            .readerIconButtonStyle(.bordered).disabled(agent.reader.isImporting)
             .fileImporter(isPresented: $choosingLocalPDFs, allowedContentTypes: [.pdf], allowsMultipleSelection: true) {
                 result in
                 switch result {
@@ -284,16 +286,16 @@ struct AgentResultCard: View {
             Button {
                 agent.cancelImport(cardID: card.id)
             } label: {
-                Image(systemName: "stop.circle")
+                Image(systemName: "stop.circle").readerSymbolInk()
             }
-            .buttonStyle(.borderless).help(cancelTitle).accessibilityLabel("\(cancelTitle) \(card.title)")
+            .readerIconButtonStyle(.borderless).help(cancelTitle).accessibilityLabel("\(cancelTitle) \(card.title)")
         case .imported:
             Button {
                 open(card)
             } label: {
                 Label("在书库打开", readerIcon: .library)
             }
-            .buttonStyle(.bordered).disabled(!agent.canOpen(card))
+            .readerIconButtonStyle(.bordered).disabled(!agent.canOpen(card))
             .accessibilityHint(card.title)
         case .unprepared, .ready, .failed, .cancelled:
             let cardID = card.id
@@ -302,9 +304,9 @@ struct AgentResultCard: View {
                 Button {
                     agent.confirmImport(cardID: cardID)
                 } label: {
-                    Label(title, systemImage: "arrow.down.to.line")
+                    Label(title, systemImage: "arrow.down.to.line").labelStyle(ReaderSymbolLabelStyle())
                 }
-                .buttonStyle(.borderedProminent).tint(ReaderTheme.accent).disabled(!card.canImport)
+                .readerIconButtonStyle(.borderedProminent).tint(ReaderTheme.accent).disabled(!card.canImport)
                 .help("下载并添加到书库").accessibilityHint(card.title)
             } else {
                 fileImportAction(for: card)

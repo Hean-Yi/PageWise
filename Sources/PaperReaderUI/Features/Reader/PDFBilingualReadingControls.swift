@@ -30,10 +30,10 @@ struct PDFBilingualAppearanceMenu: View {
                 }.pickerStyle(.inline).labelsHidden()
             }
         } label: {
-            Image(systemName: "textformat.size")
+            Image(systemName: "textformat.size").readerSymbolInk()
                 .frame(minWidth: 30, minHeight: 30).contentShape(Rectangle())
         }
-        .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+        .readerMenuIconInteraction().menuIndicator(.hidden).fixedSize()
         .accessibilityLabel("阅读外观").help("阅读外观")
     }
 }
@@ -65,11 +65,11 @@ struct PDFTranslationStatusControl: View {
                     }
                 } label: {
                     ViewThatFits(in: .horizontal) {
-                        Label(label, systemImage: symbol(status)).fixedSize()
-                        Image(systemName: symbol(status))
+                        Label(label, systemImage: symbol(status)).labelStyle(ReaderSymbolLabelStyle()).fixedSize()
+                        Image(systemName: symbol(status)).readerSymbolInk()
                     }
                 }
-                .buttonStyle(.borderless).accessibilityLabel(label).help(label)
+                .readerIconButtonStyle(.borderless).accessibilityLabel(label).help(label)
                 .popover(isPresented: $showingDetails) {
                     details(status, paperID: paperID)
                         .presentationCompactAdaptation(.popover)
@@ -154,15 +154,16 @@ struct PDFPageTranslationAction: View {
             Button {
                 session.pause()
             } label: {
-                Label("暂停本页翻译", systemImage: "pause.circle")
-            }
+                Label("暂停本页翻译", systemImage: "pause.circle").labelStyle(ReaderSymbolLabelStyle())
+            }.readerIconButtonStyle(.borderless)
         } else {
             Button {
                 if model.modelSettings.model.isEmpty { openSettings() } else { session.translatePage(model) }
             } label: {
-                Label(session.translations.isEmpty ? "翻译本页" : "继续翻译本页", systemImage: "character.bubble")
+                Label(session.translations.isEmpty ? "翻译本页" : "继续翻译本页", systemImage: "character.bubble").labelStyle(
+                    ReaderSymbolLabelStyle())
             }
-            .disabled(session.isLoading)
+            .readerIconButtonStyle(.borderless).disabled(session.isLoading)
         }
     }
 }

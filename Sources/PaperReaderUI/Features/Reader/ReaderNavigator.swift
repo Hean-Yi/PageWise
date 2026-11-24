@@ -79,8 +79,8 @@ struct ReaderNavigator: View {
                         model.returnFromReader()
                         didNavigate()
                     } label: {
-                        Label(model.readerOrigin.title, systemImage: "arrow.left")
-                    }.buttonStyle(.plain).padding(.horizontal, 16).padding(.top, 12)
+                        Label(model.readerOrigin.title, systemImage: "arrow.left").labelStyle(ReaderSymbolLabelStyle())
+                    }.readerIconButtonStyle(.plain).padding(.horizontal, 16).padding(.top, 12)
                 }
             #endif
             HStack {
@@ -93,11 +93,11 @@ struct ReaderNavigator: View {
                     Button {
                         withAnimation(ReaderMotion.disclosure(reduceMotion)) { expanded = allOpen ? [] : expandable }
                     } label: {
-                        Image(systemName: "chevron.down.2")
+                        Image(systemName: "chevron.down.2").readerSymbolInk()
                             .rotationEffect(.degrees(allOpen ? 180 : 0))
                             .frame(minWidth: 28, minHeight: 32)
                     }
-                    .buttonStyle(.borderless).foregroundStyle(ReaderTheme.muted)
+                    .readerIconButtonStyle(.borderless).foregroundStyle(ReaderTheme.muted)
                     .help(allOpen ? "收起全部章节" : "展开全部章节")
                     .accessibilityLabel(allOpen ? "收起全部章节" : "展开全部章节")
                 }
@@ -108,9 +108,9 @@ struct ReaderNavigator: View {
                     Label(
                         searching ? "返回目录" : "查找正文或译文",
                         systemImage: searching ? "list.bullet.indent" : "magnifyingglass"
-                    ).labelStyle(.iconOnly).frame(minWidth: 32, minHeight: 32)
+                    ).labelStyle(ReaderSymbolLabelStyle(iconOnly: true)).frame(minWidth: 32, minHeight: 32)
                 }
-                .buttonStyle(.borderless).foregroundStyle(ReaderTheme.muted)
+                .readerIconButtonStyle(.borderless).foregroundStyle(ReaderTheme.muted)
                 .help(searching ? "返回目录" : "文内查找（⌘F）")
             }
             .padding(.horizontal, 18).frame(height: 56)
@@ -186,7 +186,7 @@ struct ReaderNavigator: View {
                                             if open { expanded.remove(group.id) } else { expanded.insert(group.id) }
                                         }
                                     } label: {
-                                        Image(systemName: "chevron.forward")
+                                        Image(systemName: "chevron.forward").readerSymbolInk()
                                             .font(.system(size: 10, weight: .bold))
                                             .rotationEffect(
                                                 .degrees(open ? (layoutDirection == .rightToLeft ? -90 : 90) : 0)
@@ -194,7 +194,7 @@ struct ReaderNavigator: View {
                                             .foregroundStyle(open ? ReaderTheme.accent : ReaderTheme.muted)
                                             .frame(width: 24, height: 34).contentShape(Rectangle())
                                     }
-                                    .buttonStyle(.plain)
+                                    .readerIconButtonStyle(.plain)
                                     .accessibilityLabel((open ? "收起 " : "展开 ") + group.heading.title)
                                 }
                                 chapterLink(group.heading, selected: selected)
@@ -225,7 +225,7 @@ struct ReaderNavigator: View {
                     } label: {
                         Label("文末总结", readerIcon: .notebook)
                             .frame(maxWidth: .infinity, alignment: .leading).padding(12).contentShape(Rectangle())
-                    }.buttonStyle(.plain)
+                    }.readerIconButtonStyle(.plain)
                         .background { rowBackground(selected: model.presentedSummaryID == summary.id) }
                         .accessibilityAddTraits(model.presentedSummaryID == summary.id ? .isSelected : [])
                         .padding(.horizontal, 8)
@@ -295,7 +295,7 @@ struct ReaderNavigator: View {
                     Button {
                         query = ""
                     } label: {
-                        Image(systemName: "xmark.circle.fill").readerIconTarget(macOS: 22)
+                        ReaderIcon(.close, size: 13).readerIconTarget(macOS: 22)
                     }
                     .readerPlainButton(cornerRadius: 6).foregroundStyle(ReaderTheme.muted).help("清除文内查找")
                     .accessibilityLabel("清除文内查找")

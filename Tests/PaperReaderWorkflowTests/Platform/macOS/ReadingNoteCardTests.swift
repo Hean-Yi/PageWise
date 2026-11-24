@@ -505,13 +505,33 @@
             try await noteWait {
                 (try? await noteJS(web, "return !!document.querySelector('.reader-note-card')")) as? Bool == true
             }
-            _ = try await noteJS(
+            _ = try await noteJS(web, "paperNotes.open(id,true)", ["id": noteID.uuidString])
+            try await noteWait {
+                (try? await noteJS(
+                    web, "return document.querySelector('.note-icon-button[title=\"引用阅读笔记\"]').offsetWidth>0"))
+                    as? Bool == true
+            }
+            let issues = try await noteJS(
                 web,
                 """
-                paperNotes.open(id,true);
                 const e=document.querySelector('.note-editor').noteEditor;e.setSelectionRange(2,11);
-                document.querySelector('[aria-label="引用阅读笔记"]').click();
-                """, ["id": noteID.uuidString])
+                const b=document.querySelector('[aria-label="引用阅读笔记"]'), plate=b.querySelector('.ink-plate');
+                const reduced=matchMedia('(prefers-reduced-motion:reduce)').matches;
+                plate.style.transition='none';
+                const rest=getComputedStyle(plate).transform, width=b.offsetWidth, height=b.offsetHeight;
+                b.dispatchEvent(new KeyboardEvent('keydown',{key:' ',bubbles:true}));
+                const pressed=getComputedStyle(plate).transform;
+                b.dispatchEvent(new KeyboardEvent('keyup',{key:' ',bubbles:true}));
+                b.click();
+                const otherPath=plate.nextElementSibling;
+                const issues=[];
+                if((rest!==pressed)!==!reduced)issues.push('ink press: '+rest+' to '+pressed);
+                if((plate.getAnimations().length>0)!==!reduced)issues.push('missing release animation');
+                if(getComputedStyle(otherPath).transform!=='none')issues.push('outline moved');
+                if(width!==b.offsetWidth || height!==b.offsetHeight)issues.push('button resized');
+                return issues;
+                """)
+            #expect(issues as? [String] == [])
         }
         try await noteWait { model.notePassageSheet != nil }
         guard case .picker(let draft) = model.notePassageSheet else {

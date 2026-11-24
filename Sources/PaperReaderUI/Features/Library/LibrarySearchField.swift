@@ -60,7 +60,7 @@ struct LibrarySearchField: View {
                         input.query.wrappedValue = ""
                         input.focus.wrappedValue = true
                     } label: {
-                        Image(systemName: "xmark.circle.fill").readerIconTarget(macOS: 22)
+                        ReaderIcon(.close, size: 13).readerIconTarget(macOS: 22)
                     }
                     .readerPlainButton(cornerRadius: 6).foregroundStyle(ReaderTheme.muted)
                     .help("清除搜索").accessibilityLabel("清除搜索")
@@ -221,7 +221,7 @@ private struct LibrarySearchSuggestions: ViewModifier {
             .background(selected ? ReaderTheme.elevated : .clear, in: RoundedRectangle(cornerRadius: 8))
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain).focusable(false)
+        .readerIconButtonStyle(.plain).focusable(false)
         .onHover { inside in
             if inside {
                 selection = paper.id

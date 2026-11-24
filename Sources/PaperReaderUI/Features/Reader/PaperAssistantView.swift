@@ -73,7 +73,7 @@ struct PaperAssistantView: View {
                     Button {
                         model.clearAssistantSelection()
                     } label: {
-                        Image(systemName: "xmark.circle.fill").readerIconTarget(macOS: 22)
+                        ReaderIcon(.close, size: 13).readerIconTarget(macOS: 22)
                     }
                     .readerPlainButton(cornerRadius: 6).foregroundStyle(ReaderTheme.muted).accessibilityLabel("移除选文")
                 }.fixedSize(horizontal: false, vertical: true)
@@ -84,9 +84,10 @@ struct PaperAssistantView: View {
                 .focused($composerFocused).onSubmit(send).accessibilityLabel("向论文助读提问")
             HStack {
                 Button(action: relatedPapers) {
-                    Label("相关论文", systemImage: "point.3.connected.trianglepath.dotted")
+                    Label("相关论文", systemImage: "point.3.connected.trianglepath.dotted").labelStyle(
+                        ReaderSymbolLabelStyle())
                 }
-                .font(.callout).buttonStyle(.borderless).foregroundStyle(ReaderTheme.muted)
+                .font(.callout).readerIconButtonStyle(.borderless).foregroundStyle(ReaderTheme.muted)
                 .help("查找与当前论文相关的研究").disabled(!canFindRelated)
                 if let last = model.currentChats.last, last.readingNoteID == nil, !last.answer.isEmpty {
                     Button {
@@ -96,16 +97,16 @@ struct PaperAssistantView: View {
                         }
                         Task { await model.ask("把刚才讨论的观点记为阅读笔记，并标画对应原文。") }
                     } label: {
-                        Image(systemName: "note.text.badge.plus").frame(minWidth: 30, minHeight: 30)
+                        Image(systemName: "note.text.badge.plus").readerSymbolInk().frame(minWidth: 30, minHeight: 30)
                     }
-                    .buttonStyle(.plain).foregroundStyle(ReaderTheme.muted)
+                    .readerIconButtonStyle(.plain).foregroundStyle(ReaderTheme.muted)
                     .help("将刚才的讨论记为笔记").accessibilityLabel("将刚才的讨论记为笔记")
                     .disabled(model.busyAI)
                 }
                 Spacer()
                 Button(action: send) {
-                    Image(systemName: "arrow.up")
-                }.buttonStyle(AssistantSendButtonStyle()).help("发送问题").accessibilityLabel("发送问题")
+                    Image(systemName: "arrow.up").readerSymbolInk()
+                }.readerIconButtonStyle(AssistantSendButtonStyle()).help("发送问题").accessibilityLabel("发送问题")
                     .disabled(question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || model.busyAI)
             }
         }

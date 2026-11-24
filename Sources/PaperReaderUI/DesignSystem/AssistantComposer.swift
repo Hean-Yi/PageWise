@@ -35,6 +35,7 @@ struct AssistantSendButtonStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
+            .transformEnvironment(\.readerIconInteraction) { if configuration.isPressed { $0 = .pressed } }
             .font(.body.weight(.semibold))
             .foregroundStyle(enabled ? ReaderTheme.surface : ReaderTheme.muted)
             .frame(width: 40, height: 40)

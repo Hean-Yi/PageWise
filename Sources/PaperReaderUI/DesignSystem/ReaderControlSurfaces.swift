@@ -59,9 +59,9 @@ private struct ReaderFloatingButtonStyle: ViewModifier {
 
     func body(content: Content) -> some View {
         if #available(macOS 26, iOS 26, *), !reduceTransparency {
-            content.buttonStyle(.glass).buttonBorderShape(shape).controlSize(.large)
+            content.readerIconButtonStyle(.glass).buttonBorderShape(shape).controlSize(.large)
         } else {
-            content.buttonStyle(.bordered).buttonBorderShape(shape).controlSize(.large)
+            content.readerIconButtonStyle(.bordered).buttonBorderShape(shape).controlSize(.large)
                 .background(ReaderTheme.surface, in: shape)
         }
     }

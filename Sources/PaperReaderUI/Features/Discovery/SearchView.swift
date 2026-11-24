@@ -41,8 +41,8 @@ struct SearchView: View {
                 Button {
                     search.close()
                 } label: {
-                    Image(systemName: "xmark").frame(width: 28, height: 28)
-                }.buttonStyle(.plain).accessibilityLabel("关闭在线查找").disabled(search.closing)
+                    ReaderIcon(.close, size: 15).frame(width: 28, height: 28)
+                }.readerIconButtonStyle(.plain).accessibilityLabel("关闭在线查找").disabled(search.closing)
             }
             HStack(spacing: 12) {
                 Image(systemName: "magnifyingglass").foregroundStyle(ReaderTheme.accent)
@@ -71,7 +71,10 @@ struct SearchView: View {
                     HStack(spacing: 14) {
                         Button("重试") { search.search() }.buttonStyle(.plain)
                         if let url = search.webSearchURL {
-                            Link(destination: url) { Label("在 arXiv 网页查找", systemImage: "arrow.up.right.square") }
+                            Link(destination: url) {
+                                Label("在 arXiv 网页查找", systemImage: "arrow.up.right.square").labelStyle(
+                                    ReaderSymbolLabelStyle())
+                            }.readerIconButtonStyle(.automatic)
                         }
                     }
                 }
@@ -165,19 +168,23 @@ private struct OnlineCandidateCard: View {
         HStack {
             if let url = item.landingURL {
                 if item.canAttemptDownload && search.importErrors[item.id] == nil {
-                    Link(destination: url) { Image(systemName: "arrow.up.right.square") }
+                    Link(destination: url) { Image(systemName: "arrow.up.right.square").readerSymbolInk() }
+                        .readerIconButtonStyle(.automatic)
                         .accessibilityLabel(item.landingPageLabel).help(item.landingPageLabel)
                 } else {
-                    Link(destination: url) { Label(item.landingPageLabel, systemImage: "arrow.up.right.square") }
-                        .buttonStyle(.bordered)
+                    Link(destination: url) {
+                        Label(item.landingPageLabel, systemImage: "arrow.up.right.square").labelStyle(
+                            ReaderSymbolLabelStyle())
+                    }
+                    .readerIconButtonStyle(.bordered)
                 }
             }
             if search.importedPaperID(for: item) != nil {
                 Button {
                     search.openImported(item)
                 } label: {
-                    Label("在书库打开", systemImage: "checkmark.circle.fill")
-                }.buttonStyle(.bordered)
+                    Label("在书库打开", systemImage: "checkmark.circle.fill").labelStyle(ReaderSymbolLabelStyle())
+                }.readerIconButtonStyle(.bordered)
             } else if search.importingID == item.id {
                 ProgressView().controlSize(.small)
                 Button("停止导入") { search.cancelImport() }.buttonStyle(.bordered)
@@ -196,7 +203,7 @@ private struct OnlineCandidateCard: View {
         } label: {
             PublisherPDFImportLabel()
         }
-        .buttonStyle(.bordered).disabled(search.importingID != nil)
+        .readerIconButtonStyle(.bordered).disabled(search.importingID != nil)
     }
 
     private func versionLabel(for item: PaperCandidate) -> String {

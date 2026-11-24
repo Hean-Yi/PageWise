@@ -27,14 +27,14 @@ struct PDFReadingNoteCard: View {
                 } label: {
                     ReaderIcon(.citation).readerIconTarget()
                 }
-                .buttonStyle(.borderless).help("引用阅读笔记").accessibilityLabel("引用阅读笔记")
+                .readerIconButtonStyle(.borderless).help("引用阅读笔记").accessibilityLabel("引用阅读笔记")
                 if model.currentReadingNotes.contains(where: { $0.id == session.id }) {
                     Button {
                         model.deleteReadingNote(session.id)
                     } label: {
                         ReaderIcon(.delete).readerIconTarget()
                     }
-                    .buttonStyle(.borderless).help("删除笔记").accessibilityLabel("删除笔记")
+                    .readerIconButtonStyle(.borderless).help("删除笔记").accessibilityLabel("删除笔记")
                 }
             }.padding([.horizontal, .top], 14)
             Text(session.note.anchors.map(\.text).joined(separator: " "))

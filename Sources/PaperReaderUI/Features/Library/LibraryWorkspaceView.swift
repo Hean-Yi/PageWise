@@ -402,7 +402,7 @@ private struct ShelfWorkspaceContent: View {
                 .background(ReaderTheme.surface, in: RoundedRectangle(cornerRadius: 12))
                 .overlay { RoundedRectangle(cornerRadius: 12).strokeBorder(ReaderTheme.line) }
                 .contentShape(RoundedRectangle(cornerRadius: 12))
-        }.buttonStyle(.plain).accessibilityLabel("继续阅读 \(paper.title)")
+        }.readerIconButtonStyle(.plain).accessibilityLabel("继续阅读 \(paper.title)")
     }
 
     private func positionLabel(_ position: ReaderPosition, in paper: Paper) -> String {
@@ -425,8 +425,8 @@ private struct ShelfWorkspaceContent: View {
                 ForEach(LibrarySort.allCases) { item in Text(item.title).tag(item) }
             }.pickerStyle(.inline).labelsHidden()
         } label: {
-            Label(sort.title, systemImage: "arrow.up.arrow.down").font(.caption)
-        }.menuStyle(.borderlessButton).fixedSize().foregroundStyle(ReaderTheme.muted)
+            Label(sort.title, systemImage: "arrow.up.arrow.down").labelStyle(ReaderSymbolLabelStyle()).font(.caption)
+        }.readerMenuIconInteraction().fixedSize().foregroundStyle(ReaderTheme.muted)
     }
 }
 

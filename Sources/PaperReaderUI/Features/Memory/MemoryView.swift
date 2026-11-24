@@ -47,7 +47,7 @@ struct MemoryView: View {
                 }
                 .accessibilityLabel("删除此条记忆").help("删除记忆")
             }
-            .font(.caption).foregroundStyle(ReaderTheme.muted).buttonStyle(.borderless)
+            .font(.caption).foregroundStyle(ReaderTheme.muted).readerIconButtonStyle(.borderless)
         }
         .padding(22).frame(maxWidth: .infinity, alignment: .leading)
         .background(ReaderTheme.surface, in: RoundedRectangle(cornerRadius: 14))

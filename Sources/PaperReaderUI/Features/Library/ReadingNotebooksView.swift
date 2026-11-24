@@ -162,7 +162,7 @@ struct ReadingNotebooksView: View {
                         }
                         .padding(.vertical, 5).contentShape(Rectangle())
                     }
-                    .buttonStyle(.plain).multilineTextAlignment(.leading)
+                    .readerIconButtonStyle(.plain).multilineTextAlignment(.leading)
                     .accessibilityValue(note.dimension?.title ?? "批注")
                     .accessibilityHint("在原文位置打开批注")
                 }
@@ -179,7 +179,7 @@ struct ReadingNotebooksView: View {
             }
             .padding(.vertical, 3).contentShape(Rectangle())
         }
-        .font(.caption).buttonStyle(.plain).foregroundStyle(ReaderTheme.muted)
+        .font(.caption).readerIconButtonStyle(.plain).foregroundStyle(ReaderTheme.muted)
         .accessibilityValue(expanded ? "已展开" : "已收起")
     }
 
@@ -202,7 +202,7 @@ struct ReadingNotebooksView: View {
                 ReaderIcon(.source, size: 15)
             }
         }
-        .buttonStyle(.borderless).foregroundStyle(ReaderTheme.muted)
+        .readerIconButtonStyle(.borderless).foregroundStyle(ReaderTheme.muted)
         .accessibilityLabel("打开论文原文：\(notebook.title)")
         ObsidianExportButton(model: model, paperID: notebook.id)
     }
@@ -260,7 +260,7 @@ private struct NotebookOpenButton: View {
             .foregroundStyle(hovered ? ReaderTheme.accent : ReaderTheme.ink)
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain).multilineTextAlignment(.leading)
+        .readerIconButtonStyle(.plain).multilineTextAlignment(.leading)
         .onHover { hovered = $0 }
         .animation(ReaderMotion.feedback(reduceMotion), value: hovered)
         .accessibilityHint(entry.note.isDocumentSummary ? "打开文末笔记" : "在原文位置打开批注")

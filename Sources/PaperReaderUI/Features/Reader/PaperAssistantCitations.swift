@@ -60,7 +60,7 @@ struct PaperAssistantCitations: View {
                             detail: note.isDocumentSummary ? nil : ReadingNoteSummary.text(note.markdown),
                             metadata: note.anchors.count > 1 ? "\(note.anchors.count) 处" : nil,
                             accessory: "chevron.forward", detailLines: 1)
-                    }.buttonStyle(AssistantToolButtonStyle()).accessibilityHint("定位并打开阅读笔记")
+                    }.readerIconButtonStyle(AssistantToolButtonStyle()).accessibilityHint("定位并打开阅读笔记")
                 } else {
                     Label("笔记已删除", readerIcon: .notebook, size: 14).font(.caption).foregroundStyle(ReaderTheme.muted)
                 }
@@ -102,12 +102,12 @@ struct PaperAssistantCitations: View {
                     Text(source.id).monospacedDigit()
                     Text(source.title).foregroundStyle(ReaderTheme.ink).lineLimit(2)
                     Spacer(minLength: 0)
-                    Image(systemName: canNavigate ? "arrow.up.forward" : "chevron.down")
+                    Image(systemName: canNavigate ? "arrow.up.forward" : "chevron.down").readerSymbolInk()
                         .rotationEffect(.degrees(!canNavigate && expanded ? 180 : 0))
                         .imageScale(.small).accessibilityHidden(true)
                 }.contentShape(Rectangle())
             }
-            .buttonStyle(.plain).disabled(!canNavigate && excerpt.isEmpty)
+            .readerIconButtonStyle(.plain).disabled(!canNavigate && excerpt.isEmpty)
             if expanded { Text(excerpt).textSelection(.enabled) }
         }
     }
@@ -144,7 +144,7 @@ struct PaperAssistantCitations: View {
                 } label: {
                     tile
                 }
-                .buttonStyle(AssistantToolButtonStyle())
+                .readerIconButtonStyle(AssistantToolButtonStyle())
                 .accessibilityHint("前往引用位置")
             } else if canExpand {
                 VStack(alignment: .leading, spacing: 0) {
@@ -153,7 +153,7 @@ struct PaperAssistantCitations: View {
                     } label: {
                         tile
                     }
-                    .buttonStyle(AssistantToolButtonStyle(embedded: true))
+                    .readerIconButtonStyle(AssistantToolButtonStyle(embedded: true))
                     .accessibilityHint(expanded ? "收起摘录" : "展开摘录")
                     if expanded {
                         Divider().accessibilityHidden(true)

@@ -71,7 +71,7 @@ struct PDFBilingualReadingView: View {
                         Button {
                             peekingAtOriginal = false
                         } label: {
-                            Label("返回双语重排", systemImage: "arrow.uturn.backward")
+                            Label("返回双语重排", systemImage: "arrow.uturn.backward").labelStyle(ReaderSymbolLabelStyle())
                                 .font(.callout.weight(.medium))
                         }
                         .readerFloatingButton(.capsule).padding(16)
@@ -260,9 +260,9 @@ struct PDFBilingualReadingView: View {
                 Button {
                     session.dismissSelection()
                 } label: {
-                    Image(systemName: "xmark").padding(4)
+                    ReaderIcon(.close, size: 14).padding(4)
                 }
-                .buttonStyle(.plain).foregroundStyle(ReaderTheme.muted)
+                .readerIconButtonStyle(.plain).foregroundStyle(ReaderTheme.muted)
                 .accessibilityLabel("关闭选区译文").help("关闭选区译文")
             }
             ScrollView {

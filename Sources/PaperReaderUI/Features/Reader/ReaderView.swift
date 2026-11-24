@@ -131,7 +131,9 @@ struct ReaderView: View {
             Button(action: model.returnFromReader) {
                 Label("返回\(model.readerOrigin.title)", systemImage: "chevron.left")
             }
-            .labelStyle(.iconOnly).help("返回\(model.readerOrigin.title)")
+            .readerIconButtonStyle(.borderless).labelStyle(ReaderSymbolLabelStyle(iconOnly: true)).help(
+                "返回\(model.readerOrigin.title)"
+            )
             .keyboardShortcut("l", modifiers: [.command, .shift])
             Text(model.paper?.title ?? "").font(ReaderTheme.editorial(18, weight: .medium))
                 .foregroundStyle(ReaderTheme.ink).lineLimit(1).truncationMode(.tail)
@@ -149,10 +151,8 @@ struct ReaderView: View {
                         ReaderIcon(.favorite, size: 17, filled: favorite)
                             .foregroundStyle(favorite ? ReaderTheme.accent : ReaderTheme.muted)
                             .readerIconTarget(macOS: 32)
-                            .contentTransition(.opacity)
-                            .animation(ReaderMotion.feedback(reduceMotion), value: favorite)
                     }
-                    .buttonStyle(.plain)
+                    .readerIconButtonStyle(.plain)
                     .accessibilityLabel(favorite ? "取消收藏" : "收藏论文")
                     .accessibilityAddTraits(favorite ? .isSelected : [])
                     .help(favorite ? "取消收藏" : "收藏论文")
@@ -225,10 +225,10 @@ struct ReaderView: View {
                 DeletePaperButton(paper: paper, model: model)
             }
         } label: {
-            Image(systemName: "ellipsis").font(.body.weight(.semibold))
+            Image(systemName: "ellipsis").readerSymbolInk().font(.body.weight(.semibold))
                 .frame(minWidth: 32, minHeight: 32).contentShape(Rectangle())
         }
-        .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+        .readerMenuIconInteraction().menuIndicator(.hidden).fixedSize()
         .accessibilityLabel("更多阅读选项").help("更多阅读选项")
     }
 
@@ -247,9 +247,10 @@ struct ReaderView: View {
                     Button {
                         model.navigateToPage(model.visiblePage - 1)
                     } label: {
-                        Image(systemName: "chevron.left")
+                        Image(systemName: "chevron.left").readerSymbolInk()
                     }
-                    .disabled(model.visiblePage <= 0).help("上一页").accessibilityLabel("上一页")
+                    .readerIconButtonStyle(.borderless).disabled(model.visiblePage <= 0).help("上一页").accessibilityLabel(
+                        "上一页")
                 }
                 HStack(spacing: 4) {
                     TextField("页码", text: $pageInput).textFieldStyle(.plain).multilineTextAlignment(.center)
@@ -262,9 +263,10 @@ struct ReaderView: View {
                     Button {
                         model.navigateToPage(model.visiblePage + 1)
                     } label: {
-                        Image(systemName: "chevron.right")
+                        Image(systemName: "chevron.right").readerSymbolInk()
                     }
-                    .disabled(model.visiblePage >= pageCount - 1).help("下一页").accessibilityLabel("下一页")
+                    .readerIconButtonStyle(.borderless).disabled(model.visiblePage >= pageCount - 1).help("下一页")
+                    .accessibilityLabel("下一页")
                 }
             }
             if model.visiblePage == pageCount - 1, let summary = model.currentDocumentSummary {
@@ -272,14 +274,16 @@ struct ReaderView: View {
                     model.openReadingNote(summary)
                 } label: {
                     Label("文末总结", readerIcon: .notebook).labelStyle(.titleAndIcon)
-                }
+                }.readerIconButtonStyle(.borderless)
             }
             Button(action: model.toggleBookmark) {
-                Image(systemName: model.isCurrentPageBookmarked ? "bookmark.fill" : "bookmark")
+                Image(systemName: model.isCurrentPageBookmarked ? "bookmark.fill" : "bookmark").readerSymbolInk()
                     .foregroundStyle(model.isCurrentPageBookmarked ? ReaderTheme.accent : ReaderTheme.muted)
-            }.disabled(pageCount == 0).help(model.isCurrentPageBookmarked ? "移除书签" : "添加书签")
-                .accessibilityLabel(model.isCurrentPageBookmarked ? "移除当前页书签" : "添加当前页书签")
-                .keyboardShortcut("d")
+            }.readerIconButtonStyle(.borderless).disabled(pageCount == 0).help(
+                model.isCurrentPageBookmarked ? "移除书签" : "添加书签"
+            )
+            .accessibilityLabel(model.isCurrentPageBookmarked ? "移除当前页书签" : "添加当前页书签")
+            .keyboardShortcut("d")
             if model.pdfBilingual.isOpen && isLocalPDF && !peekingAtOriginal {
                 PDFBilingualAppearanceMenu(model: model, layout: $pdfLayout, width: width)
             }
@@ -304,13 +308,17 @@ struct ReaderView: View {
                     Button {
                         model.pdfBilingual.translateSelection(model)
                     } label: {
-                        Label("翻译选区", systemImage: "character.bubble")
+                        Label("翻译选区", systemImage: "character.bubble").labelStyle(ReaderSymbolLabelStyle())
                     }
-                    .disabled(model.pdfSelectionSpansPages || model.pdfBilingual.isTranslating)
+                    .readerIconButtonStyle(.borderless).disabled(
+                        model.pdfSelectionSpansPages || model.pdfBilingual.isTranslating
+                    )
                     .help(model.pdfSelectionSpansPages ? "跨页选文请逐页翻译" : "只发送所选文字")
                 }
                 if !model.usesHTMLReading {
-                    Button(action: model.highlightSelection) { Label("高亮", systemImage: "highlighter") }
+                    Button(action: model.highlightSelection) {
+                        Label("高亮", systemImage: "highlighter").labelStyle(ReaderSymbolLabelStyle())
+                    }.readerIconButtonStyle(.borderless)
                 }
             }
             if model.hasPDFNoteSelection {
@@ -318,18 +326,18 @@ struct ReaderView: View {
                     Task { await model.beginPDFReadingNote() }
                 } label: {
                     Label("添加笔记", readerIcon: .annotation).labelStyle(.iconOnly).readerIconTarget()
-                }.help("添加笔记").accessibilityLabel("添加笔记")
+                }.readerIconButtonStyle(.borderless).help("添加笔记").accessibilityLabel("添加笔记")
                     .quickStartTarget(.annotation)
             }
             if !model.assistantSelectionText.isEmpty {
                 Button(action: explainSelection) {
                     Label("解释选文", readerIcon: .discussion).labelStyle(.iconOnly).readerIconTarget()
-                }.help("解释选文").accessibilityLabel("解释选文")
+                }.readerIconButtonStyle(.borderless).help("解释选文").accessibilityLabel("解释选文")
             }
             #if os(iOS)
                 if !model.usesHTMLReading && originalVisible {
-                    Toggle(isOn: $penEnabled) { Image(systemName: "pencil.tip.crop.circle") }
-                        .toggleStyle(.button).accessibilityLabel("手写批注")
+                    Toggle(isOn: $penEnabled) { Image(systemName: "pencil.tip.crop.circle").readerSymbolInk() }
+                        .readerIconButtonStyle(.borderless).toggleStyle(.button).accessibilityLabel("手写批注")
                 }
             #endif
         }.buttonStyle(.borderless).font(.caption).padding(.horizontal, 22).frame(minHeight: 42)
