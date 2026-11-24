@@ -489,7 +489,9 @@ func changingAgentServiceOrModelStartsFreshWireHistoryAndKeepsDisplayedTurns(cha
     #expect(agent.turns[0].activities.map(\.toolName) == ["search_online", "prepare_import"])
     let rounds = await model.requestLimits
     #expect(
-        rounds.first?.availableToolNames == ["search_online", "search_library", "search_reading_notes", "ask_user"])
+        rounds.first?.availableToolNames == [
+            "search_online", "search_library", "search_reading_notes", "ask_user", "list_library",
+        ])
     let afterSearch = try #require(rounds.dropFirst().first?.availableToolNames)
     #expect(afterSearch.contains("prepare_import") && afterSearch.contains("present_results"))
     #expect(afterSearch.isDisjoint(with: ["read_paper", "create_reading_note", "close_read_paper"]))
@@ -1690,4 +1692,165 @@ func publicationCardImportsTheSelectedPDFOrOpensTheMatchingShelfImport(importFro
     let freshGroup = try #require(agent.turns.last?.cards.first)
     let freshVersion = try #require(freshGroup.alternateVersionIDs.first.flatMap { agent.card($0) })
     #expect(freshVersion.canImport && freshVersion.importState == .unprepared)
+}
+
+private func libraryPayload(_ messages: [AgentMessage], _ call: String) throws -> [String: Any] {
+    let body = try #require(messages.first { $0.toolCallID == call }?.content)
+    return try #require(try JSONSerialization.jsonObject(with: Data(body.utf8)) as? [String: Any])
+}
+
+@Test @MainActor func agentOrganizerPaginatesAndFilesRegisteredPapersInOneSavedChange() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let reader = try await makeAgentReader(root)
+    let papers = ["Attention", "Memory"].map { title in
+        Paper(
+            title: title, digest: title, originalPath: title + ".pdf", pageCount: 1, blocks: [], warnings: [],
+            canReflow: false)
+    }
+    reader.state.papers = papers
+    #expect(await reader.save())
+    let model = ScriptedLibraryModel { messages, step in
+        switch step {
+        case 1: return tool("list_library", #"{"scope":"unfiled"}"#, id: "page1")
+        case 2:
+            let cursor = try #require(try libraryPayload(messages, "page1")["next_offset"] as? Int)
+            return tool("list_library", #"{"scope":"unfiled","offset":\#(cursor)}"#, id: "page2")
+        case 3: return tool("create_shelf", #"{"name":"研究"}"#, id: "shelf")
+        case 4:
+            let destination = try #require(try libraryPayload(messages, "shelf")["shelf_id"] as? String)
+            let ids = try ["page1", "page2"].map { page in
+                let rows = try #require(try libraryPayload(messages, page)["results"] as? [[String: Any]])
+                return try #require(rows.first?["paper_id"] as? String)
+            }
+            let args = try JSONSerialization.data(withJSONObject: ["destination": destination, "paper_ids": ids])
+            return tool("move_papers", String(decoding: args, as: UTF8.self), id: "move")
+        default: return .init(role: "assistant", content: "已将两篇归入研究。")
+        }
+    }
+    var limits = AgentLimits()
+    limits.maxResults = 1
+    let agent = LibraryAgent(reader: reader, client: model, limits: limits)
+    agent.send("帮我把未分类的论文按研究主题归到合适的书架")
+    try await eventually { !agent.isRunning }
+    let shelf = try #require(reader.state.shelves.first { $0.name == "研究" })
+    #expect(agent.turns.last?.activities.map(\.status) == Array(repeating: .succeeded, count: 4))
+    #expect(papers.allSatisfy { reader.state.shelfID(for: $0.id) == shelf.id })
+    let persisted = try await reader.store.load()
+    #expect(papers.allSatisfy { persisted.shelfID(for: $0.id) == shelf.id })
+}
+
+@Test @MainActor func agentOrganizerRemovalRequiresClickAndBlocksDeletedEvidenceBeforeRestore() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let reader = try await makeAgentReader(root)
+    await reader.addDemo()
+    let paper = try #require(reader.paper)
+    let model = ScriptedLibraryModel { messages, step in
+        switch step {
+        case 1: return tool("list_library", #"{"scope":"papers"}"#, id: "catalog")
+        case 2: return tool("open_paper", #"{"paper_id":"\#(paper.id)"}"#, id: "open")
+        case 3: return .init(role: "assistant", content: "打开论文。")
+        case 4: return tool("prepare_delete_paper", #"{"paper_id":"\#(paper.id)"}"#, id: "prepare")
+        case 5:
+            #expect(!messages.contains { $0.toolCallID == "catalog" })
+            return tool("list_library", #"{"scope":"trash"}"#, id: "trash")
+        case 6: return tool("restore_paper", #"{"paper_id":"\#(paper.id)"}"#, id: "restore")
+        default: return .init(role: "assistant", content: "已恢复。")
+        }
+    }
+    let agent = LibraryAgent(reader: reader, client: model)
+    agent.send("打开我的论文")
+    try await eventually { !agent.isRunning }
+    let open = try #require(agent.turns.last?.presentedResults.first)
+    agent.send("删除这篇论文", referencing: open.id)
+    try await eventually { !agent.isRunning }
+    let removal = try #require(agent.turns.last?.presentedResults.first)
+    #expect(removal.purpose == .removal)
+    #expect(reader.state.papers.map(\.id) == [paper.id])
+    #expect(await agent.confirmRemoval(cardID: removal.id))
+    #expect(!(await agent.confirmRemoval(cardID: removal.id)))
+    #expect(!agent.open(cardID: open.id))
+    #expect(!agent.prepareFollowUp(cardID: open.id))
+    #expect(reader.state.trashedPapers.map(\.id) == [paper.id])
+    agent.send("恢复刚才删除的论文")
+    try await eventually { !agent.isRunning }
+    #expect(agent.turns.last?.activities.map(\.status) == [.succeeded, .succeeded])
+    #expect(reader.state.papers.map(\.id) == [paper.id])
+    #expect(reader.state.trashedPapers.isEmpty)
+}
+
+@Test @MainActor func agentOrganizerLocalPickerUsesExistingImportAndShelfRemovalDetectsChangedMembership() async throws
+{
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let reader = try await makeAgentReader(root)
+    let shelf = try #require(await reader.createShelf(name: "主题"))
+    let pdf = root.appendingPathComponent("fixture.pdf")
+    try DemoPaper.write(to: pdf)
+    let model = ScriptedLibraryModel { _, step in
+        switch step {
+        case 1: return tool("list_library", #"{"scope":"shelves"}"#, id: "shelves")
+        case 2: return tool("prepare_local_import", #"{"destination":"\#(shelf)"}"#, id: "picker")
+        default: return tool("prepare_delete_shelf", #"{"shelf_id":"\#(shelf)"}"#, id: "deleteShelf")
+        }
+    }
+    let agent = LibraryAgent(reader: reader, client: model)
+    agent.send("把本地 PDF 导入主题书架")
+    try await eventually { !agent.isRunning }
+    let pick = try #require(agent.turns.last?.presentedResults.first)
+    #expect(pick.purpose == .localImport)
+    #expect(reader.state.papers.isEmpty)
+    #expect(await agent.importLocalPDFs([URL(string: "https://example.com/a.pdf")!], cardID: pick.id) == [])
+    let partial = await agent.importLocalPDFs([pdf, root.appendingPathComponent("missing.pdf")], cardID: pick.id)
+    #expect(partial.count == 1)
+    #expect(agent.card(pick.id)?.importState == .failed)
+    let ids = await agent.importLocalPDFs([pdf], cardID: pick.id)
+    #expect(agent.card(pick.id)?.importState == .imported)
+    #expect(await agent.importLocalPDFs([pdf], cardID: pick.id) == [])
+    let id = try #require(ids.first)
+    #expect(reader.state.shelfID(for: id) == shelf)
+    #expect(reader.selectedPaperID == nil)
+    agent.send("删除主题书架")
+    try await eventually { !agent.isRunning }
+    let removal = try #require(agent.turns.last?.presentedResults.first)
+    #expect(removal.purpose == .removal)
+    #expect(await reader.movePaper(id, to: nil))
+    #expect(!(await agent.confirmRemoval(cardID: removal.id)))
+    #expect(reader.state.shelves.contains { $0.id == shelf })
+}
+
+@Test @MainActor func agentOrganizerGuardsUnregisteredIDsNegativeInstructionsAndStaleShelfNames() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let reader = try await makeAgentReader(root)
+    await reader.addDemo()
+    let paper = try #require(reader.paper)
+    let shelf = try #require(await reader.createShelf(name: "旧名称"))
+    let model = ScriptedLibraryModel { _, step in
+        switch step {
+        case 1: return tool("prepare_delete_paper", #"{"paper_id":"\#(paper.id)"}"#, id: "unsolicited")
+        case 2:
+            return tool(
+                "move_papers", #"{"paper_ids":["\#(paper.id)"],"destination":"\#(shelf)"}"#, id: "unregisteredShelf")
+        case 3: return tool("list_library", #"{"scope":"shelves"}"#, id: "register")
+        case 4: return tool("move_papers", #"{"paper_ids":["\#(shelf)"],"destination":"\#(shelf)"}"#, id: "wrongType")
+        case 5: return .init(role: "assistant", content: "请指定论文。")
+        case 6: return tool("rename_shelf", #"{"shelf_id":"\#(shelf)","name":"随意重命名"}"#, id: "stale")
+        case 7: return tool("list_library", #"{"scope":"shelves"}"#, id: "recheck")
+        case 8: return tool("rename_shelf", #"{"shelf_id":"\#(shelf)","name":"新名称"}"#, id: "rename")
+        default: return .init(role: "assistant", content: "已重命名。")
+        }
+    }
+    let agent = LibraryAgent(reader: reader, client: model)
+    agent.send("不要删论文，帮我整理书架")
+    try await eventually { !agent.isRunning }
+    #expect(agent.turns.last?.activities.map(\.status) == [.failed, .failed, .succeeded, .failed])
+    #expect(agent.turns.last?.presentedResults.isEmpty == true)
+    #expect(reader.state.shelfID(for: paper.id) == nil)
+    #expect(await reader.renameShelf(shelf, name: "用户刚改过"))
+    agent.send("把这个书架重命名为新名称")
+    try await eventually { !agent.isRunning }
+    #expect(agent.turns.last?.activities.map(\.status) == [.failed, .succeeded, .succeeded])
+    #expect(reader.state.shelves.first { $0.id == shelf }?.name == "新名称")
 }

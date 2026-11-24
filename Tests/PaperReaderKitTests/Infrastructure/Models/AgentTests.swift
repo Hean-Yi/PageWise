@@ -42,6 +42,8 @@ private actor AgentWireTransport: HTTPTransport {
         Set(definitions.compactMap { $0["name"] as? String }) == [
             "search_library", "read_paper", "search_online", "prepare_import", "open_paper", "present_results",
             "ask_user", "create_reading_note", "close_read_paper", "search_reading_notes", "recommend_related",
+            "list_library", "create_shelf", "rename_shelf", "move_papers", "prepare_local_import",
+            "prepare_delete_shelf", "prepare_delete_paper", "restore_paper",
         ])
     let presentation = try #require(definitions.first { $0["name"] as? String == "present_results" })
     let parameters = try #require(presentation["parameters"] as? [String: Any])
@@ -306,4 +308,34 @@ private actor AgentSaveGate {
         title: "Malformed fixture", digest: "invalid", originalPath: "invalid.pdf", pageCount: -1,
         blocks: [TextBlock(sourcePage: 0, text: "Needle in an invalid page")], warnings: [], canReflow: false)
     #expect(LibraryAgentSearch.search("Needle", papers: [malformed]).isEmpty)
+}
+
+@Test func libraryOrganizationIntentUnderstandsScopedCommandsAndIgnoresQuotedOrNegativeRequests() {
+    let organize: Set<String> = ["create_shelf", "move_papers"]
+    #expect(LibraryOrganizationIntent.tools(for: "不要删论文，帮我整理书架") == organize)
+    #expect(LibraryOrganizationIntent.tools(for: "帮我整理书架，但不要新建书架") == ["move_papers"])
+    #expect(LibraryOrganizationIntent.tools(for: "帮我整理书库，先给我看看方案").isEmpty)
+    #expect(LibraryOrganizationIntent.tools(for: "帮我把未分类的论文按研究主题归到合适的书架") == organize)
+    #expect(LibraryOrganizationIntent.tools(for: "说说「删除论文」有什么风险").isEmpty)
+    #expect(LibraryOrganizationIntent.tools(for: "帮我在线下载这篇论文").isEmpty)
+    #expect(LibraryOrganizationIntent.tools(for: "怎么移除这个书架？").isEmpty)
+    #expect(LibraryOrganizationIntent.tools(for: "不要删除论文").isEmpty)
+    #expect(LibraryOrganizationIntent.tools(for: "把这篇论文从研究书架中移除") == ["move_papers"])
+    #expect(LibraryOrganizationIntent.tools(for: "删除研究书架") == ["prepare_delete_shelf"])
+    #expect(LibraryOrganizationIntent.tools(for: "删除这篇论文") == ["prepare_delete_paper"])
+    #expect(LibraryOrganizationIntent.tools(for: "如果它们重复，请删除论文").isEmpty)
+}
+
+@Test func libraryOrganizationParserRejectsPathsAmbiguousDestinationsAndRepeatedIDs() throws {
+    let id = UUID()
+    for (name, json) in [
+        ("prepare_local_import", #"{"destination":"unfiled","path":"/some/file.pdf"}"#),
+        ("move_papers", #"{"paper_ids":["\#(id)","\#(id)"],"destination":"unfiled"}"#),
+        ("list_library", #"{"scope":"shelf"}"#),
+        ("list_library", #"{"scope":"trash","offset":true}"#),
+        ("list_library", #"{"scope":"papers","shelf_id":"\#(id)"}"#),
+        ("prepare_delete_shelf", #"{"shelf_id":"book title"}"#),
+    ] {
+        #expect(throws: (any Error).self) { try AgentToolArguments.parse(name: name, json: json, limits: .init()) }
+    }
 }

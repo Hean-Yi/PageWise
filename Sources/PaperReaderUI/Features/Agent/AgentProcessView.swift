@@ -190,6 +190,14 @@ struct AgentProcessView: View {
 
     private func name(of activity: AgentActivity) -> String {
         switch activity.toolName {
+        case "list_library": "查看馆藏"
+        case "create_shelf": "新建书架"
+        case "rename_shelf": "重命名书架"
+        case "move_papers": "整理论文归属"
+        case "prepare_delete_shelf": "准备移除书架"
+        case "prepare_delete_paper": "准备删除论文"
+        case "restore_paper": "恢复论文"
+        case "prepare_local_import": "准备导入本地 PDF"
         case "search_library": "检索书库"
         case "search_reading_notes": "检索笔记"
         case "search_online": "在线检索论文"

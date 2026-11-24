@@ -14,6 +14,7 @@ public enum AgentToolArguments: Sendable, Equatable {
         public var passage: Quotation
         public var label: String
     }
+    case library(AgentLibraryOperation)
     case createReadingNote(
         markdown: String, sources: [Quotation], citations: [NoteCitation], dimension: CloseReadingDimension?)
     case closeReadPaper(String)
@@ -58,7 +59,50 @@ public enum AgentToolArguments: Sendable, Equatable {
             else { throw ReaderError.message("检索数量须为正整数，当前上限为 \(max(0, min(limits.maxResults, 20)))。") }
             return count.intValue
         }
+        func uuid(_ key: String) throws -> UUID {
+            guard let id = UUID(uuidString: try string(key, max: 36)) else { throw ReaderError.message("需要已登记的书库 ID。") }
+            return id
+        }
         switch name {
+        case "list_library":
+            try keys(["scope", "shelf_id", "offset"], required: ["scope"])
+            guard let scope = AgentLibraryScope(rawValue: try string("scope", max: 16)),
+                (scope == .shelf) == (values["shelf_id"] != nil)
+            else { throw ReaderError.message("按单个书架查看时须给出其 ID。") }
+            var offset = 0
+            if let raw = values["offset"] {
+                guard let n = raw as? NSNumber, CFGetTypeID(n) != CFBooleanGetTypeID(),
+                    (0...1_000_000).contains(n.doubleValue), n.doubleValue.rounded() == n.doubleValue
+                else { throw ReaderError.message("书库列表起点无效。") }
+                offset = n.intValue
+            }
+            return .library(.list(scope, shelf: scope == .shelf ? try uuid("shelf_id") : nil, offset: offset))
+        case "prepare_local_import":
+            try keys(["destination"], required: ["destination"])
+            let target = try string("destination", max: 36)
+            return .library(.prepareLocalImport(target == "unfiled" ? nil : try uuid("destination")))
+        case "create_shelf":
+            try keys(["name"], required: ["name"])
+            return .library(.createShelf(try string("name", max: 240)))
+        case "rename_shelf":
+            try keys(["shelf_id", "name"], required: ["shelf_id", "name"])
+            return .library(.renameShelf(try uuid("shelf_id"), try string("name", max: 240)))
+        case "move_papers":
+            try keys(["paper_ids", "destination"], required: ["paper_ids", "destination"])
+            guard let raw = values["paper_ids"] as? [String], (1...50).contains(raw.count) else {
+                throw ReaderError.message("每次可移动一至五十篇已登记的论文。")
+            }
+            let ids = raw.compactMap(UUID.init(uuidString:))
+            guard Set(ids).count == raw.count else { throw ReaderError.message("论文 ID 无效或重复。") }
+            let target = try string("destination", max: 36)
+            return .library(.movePapers(ids, to: target == "unfiled" ? nil : try uuid("destination")))
+        case "prepare_delete_shelf":
+            try keys(["shelf_id"], required: ["shelf_id"])
+            return .library(.prepareDeleteShelf(try uuid("shelf_id")))
+        case "prepare_delete_paper", "restore_paper":
+            try keys(["paper_id"], required: ["paper_id"])
+            let id = try uuid("paper_id")
+            return .library(name == "restore_paper" ? .restorePaper(id) : .prepareDeletePaper(id))
         case "close_read_paper":
             try keys(["paper_id"], required: ["paper_id"])
             return .closeReadPaper(try string("paper_id", max: 128))

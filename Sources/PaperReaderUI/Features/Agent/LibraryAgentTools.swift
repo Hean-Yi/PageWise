@@ -32,7 +32,9 @@ enum AgentSourceTarget: Hashable {
     case card(UUID)
 
     init(_ card: AgentCard) {
-        if let note = card.readingNoteID {
+        if card.removal != nil || card.localImportDestination != nil {
+            self = .card(card.id)
+        } else if let note = card.readingNoteID {
             self = .readingNote(note)
         } else if let candidate = card.candidateID {
             self = .candidate(candidate)
@@ -49,7 +51,8 @@ enum AgentSourceTarget: Hashable {
 extension LibraryAgent {
     func execute(
         _ call: AgentToolCall, epoch: UUID, noteRequest: AgentNoteRequest? = nil,
-        recommendationSeed: AgentRecommendationSeed? = nil, onSubject: @escaping @MainActor @Sendable (String) -> Void
+        recommendationSeed: AgentRecommendationSeed? = nil, organization: Set<String> = [],
+        onSubject: @escaping @MainActor @Sendable (String) -> Void
     )
         async throws -> AgentToolOutcome
     {
@@ -57,6 +60,11 @@ extension LibraryAgent {
             name: call.function.name, json: call.function.arguments, limits: limits)
         try check(epoch)
         switch arguments {
+        case .library(let operation):
+            guard call.function.name == "list_library" || organization.contains(call.function.name),
+                limits.availableToolNames?.contains(call.function.name) != false
+            else { throw ReaderError.message("本次提问未授权该书库操作。") }
+            return try await organize(operation, onSubject: onSubject)
         case .closeReadPaper(let raw):
             let paper = try registeredPaper(raw, page: nil)
             guard let request = noteRequest, CloseReadingIntent.isRequested(request.instruction),
@@ -125,7 +133,7 @@ extension LibraryAgent {
             var selected: [AgentPresentedResult] = []
             var cards: [AgentCard] = []
             for item in items {
-                guard let card = card(item.id),
+                guard let card = card(item.id), card.removal == nil, card.localImportDestination == nil,
                     card.noteModifiedAt == nil || evidence(for: card) != nil
                 else {
                     throw ReaderError.message("展示项中有未登记的结果，请使用工具返回的 result_id 重新选择。")
@@ -279,7 +287,7 @@ extension LibraryAgent {
         }
     }
 
-    private func registeredPaper(_ id: String, page: Int?) throws -> Paper {
+    func registeredPaper(_ id: String, page: Int?) throws -> Paper {
         guard let uuid = UUID(uuidString: id), paperRegistry.contains(uuid),
             let paper = reader.state.papers.first(where: { $0.id == uuid })
         else {

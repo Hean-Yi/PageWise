@@ -1,5 +1,6 @@
 import PaperReaderKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// A selected result always keeps the identity and actions of its registered source.
 struct AgentResultCard: View {
@@ -12,6 +13,8 @@ struct AgentResultCard: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var showsExcerpt = false
     @State private var selectedVersion: UUID?
+    @State private var choosingLocalPDFs = false
+    @State private var confirmingRemoval = false
 
     private var versions: [AgentCard] {
         [group] + group.alternateVersionIDs.compactMap { agent.card($0) }
@@ -41,6 +44,9 @@ struct AgentResultCard: View {
         case .navigation: ("定位论文", "location")
         case .importAction: ("导入论文", "arrow.down.doc")
         case .readingNote: ("阅读笔记", "note.text")
+        case .localImport: ("导入本地 PDF", "doc.badge.plus")
+        case .removal:
+            if case .shelf = card.removal { ("移除书架", "trash") } else { ("删除论文", "trash") }
         }
     }
 
@@ -56,7 +62,12 @@ struct AgentResultCard: View {
 
     var body: some View {
         let card = selectedCard
-        if card.readingNoteID != nil && !agent.canOpen(card) {
+        if let paperID = card.paperID, card.kind != .onlineCandidate,
+            !agent.reader.state.papers.contains(where: { $0.id == paperID })
+        {
+            Label("论文已移到最近删除", systemImage: "trash")
+                .font(.caption).foregroundStyle(ReaderTheme.muted)
+        } else if card.readingNoteID != nil && !agent.canOpen(card) {
             Label("笔记已删除或原文不可用", systemImage: "note.text")
                 .font(.caption).foregroundStyle(ReaderTheme.muted)
         } else {
@@ -85,24 +96,34 @@ struct AgentResultCard: View {
                 .menuStyle(.borderlessButton).fixedSize().font(.caption)
                 .padding(.leading, 12).padding(.top, 8).accessibilityLabel("选择论文版本")
             }
-            primaryAction(for: card)
+            if card.removal != nil || card.localImportDestination != nil {
+                label(for: card, accessory: nil)
+            } else {
+                primaryAction(for: card)
+            }
             if let error = card.importError {
                 Text(error).font(.caption).foregroundStyle(ReaderTheme.muted)
                     .padding(.horizontal, 12).padding(.bottom, 7).fixedSize(horizontal: false, vertical: true)
             }
             HStack(spacing: 12) {
-                if card.kind == .onlineCandidate {
-                    importAction(for: card)
-                    Spacer(minLength: 4)
+                if let removal = card.removal {
+                    removalAction(removal, for: card)
+                } else if let destination = card.localImportDestination {
+                    localImportAction(destination, for: card)
+                } else {
+                    if card.kind == .onlineCandidate {
+                        importAction(for: card)
+                        Spacer(minLength: 4)
+                    }
+                    Button {
+                        followUp(card)
+                    } label: {
+                        Label("追问", systemImage: "bubble.left")
+                    }
+                    .buttonStyle(.borderless).foregroundStyle(ReaderTheme.muted)
+                    .help("基于这项结果追问").accessibilityLabel("基于《\(card.title)》追问")
+                    .disabled(agent.isRunning)
                 }
-                Button {
-                    followUp(card)
-                } label: {
-                    Label("追问", systemImage: "bubble.left")
-                }
-                .buttonStyle(.borderless).foregroundStyle(ReaderTheme.muted)
-                .help("基于这项结果追问").accessibilityLabel("基于《\(card.title)》追问")
-                .disabled(agent.isRunning)
             }
             .labelStyle(.titleAndIcon).font(.caption).padding(.horizontal, 12).padding(.bottom, 9)
             if card.canAttemptDownload && card.importState == .failed {
@@ -174,6 +195,66 @@ struct AgentResultCard: View {
 
     private func open(_ card: AgentCard) {
         if agent.open(cardID: card.id) { didNavigate() }
+    }
+
+    @ViewBuilder private func removalAction(_ removal: AgentCard.Removal, for card: AgentCard) -> some View {
+        let title =
+            switch removal {
+            case .paper: "移到最近删除"
+            case .shelf: "移除书架"
+            }
+        if card.removalCompleted {
+            Label("已完成", systemImage: "checkmark").foregroundStyle(ReaderTheme.muted)
+        } else if confirmingRemoval {
+            ProgressView().controlSize(.mini)
+        } else if !agent.canConfirmRemoval(card) {
+            Text("请求已失效").foregroundStyle(ReaderTheme.muted)
+        } else {
+            Button(role: .destructive) {
+                confirmingRemoval = true
+                Task {
+                    _ = await agent.confirmRemoval(cardID: card.id)
+                    confirmingRemoval = false
+                }
+            } label: {
+                Label(title, systemImage: "trash")
+            }
+            .buttonStyle(.bordered)
+            .accessibilityLabel("\(title)：\(card.title)")
+        }
+    }
+
+    @ViewBuilder private func localImportAction(_ destination: AgentCard.ImportDestination, for card: AgentCard)
+        -> some View
+    {
+        if case .shelf(let id) = destination,
+            !agent.reader.state.shelves.contains(where: { $0.id == id && $0.name == card.title })
+        {
+            Text("目标书架已变化").foregroundStyle(ReaderTheme.muted)
+        } else if card.importState == .importing {
+            ProgressView().controlSize(.mini)
+            Text("正在导入").foregroundStyle(ReaderTheme.muted)
+        } else if card.importState == .imported {
+            Label("已导入", systemImage: "checkmark").foregroundStyle(ReaderTheme.muted)
+        } else {
+            Button {
+                choosingLocalPDFs = true
+            } label: {
+                Label("选择 PDF 并导入", systemImage: "folder")
+            }
+            .buttonStyle(.bordered).disabled(agent.reader.isImporting)
+            .fileImporter(isPresented: $choosingLocalPDFs, allowedContentTypes: [.pdf], allowsMultipleSelection: true) {
+                result in
+                switch result {
+                case .success(let urls):
+                    if !urls.isEmpty { Task { await agent.importLocalPDFs(urls, cardID: card.id) } }
+                case .failure(let error):
+                    if (error as? CocoaError)?.code != .userCancelled {
+                        agent.reader.message = error.localizedDescription
+                    }
+                }
+            }
+        }
     }
 
     @ViewBuilder private func importAction(for card: AgentCard) -> some View {

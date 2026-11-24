@@ -159,7 +159,53 @@ public struct AgentClient: AgentCompleting {
         }
         let type = "function"
         var function: Function
+        private static let shelfID = Property(
+            type: "string", description: "Exact shelf_id returned by list_library or create_shelf")
+        private static let paperID = Property(type: "string", description: "Exact registered paper_id")
+        private static let shelfName = Property(type: "string", description: "Shelf display name, 1–60 characters")
         static let definitions: [Tool] = [
+            make(
+                "list_library",
+                "Page through the local library for inventory and organization. Discover shelf IDs before inspecting a shelf. Follow next_offset for complete coverage.",
+                [
+                    "scope": .init(
+                        type: "string",
+                        description:
+                            "Shelf list, all papers, one shelf, uncategorized papers, or recently deleted papers",
+                        choices: AgentLibraryScope.allCases.map(\.rawValue)),
+                    "shelf_id": shelfID,
+                    "offset": .init(type: "integer", description: "Start at zero, then use the previous next_offset"),
+                ], ["scope"]),
+            make(
+                "prepare_local_import",
+                "Show a file-picker card to import local PDFs into a selected shelf. Only the reader selects files.",
+                ["destination": .init(type: "string", description: "A registered shelf_id or the literal unfiled")],
+                ["destination"]),
+            make(
+                "create_shelf", "Create a named local shelf on request. Reuse an existing shelf with the same name.",
+                ["name": shelfName], ["name"]),
+            make(
+                "rename_shelf", "Rename an identified local shelf on the reader's instruction.",
+                ["shelf_id": shelfID, "name": shelfName], ["shelf_id", "name"]),
+            make(
+                "move_papers",
+                "Atomically assign registered papers to one existing shelf or remove their shelf assignment. Each paper belongs to at most one shelf.",
+                [
+                    "paper_ids": .init(
+                        type: "array", description: "One to fifty registered paper IDs", items: .init(type: "string")),
+                    "destination": .init(type: "string", description: "A registered shelf_id or the literal unfiled"),
+                ], ["paper_ids", "destination"]),
+            make(
+                "prepare_delete_shelf",
+                "Show a reader-confirmed removal card for a shelf. Its papers stay in the library.",
+                ["shelf_id": shelfID], ["shelf_id"]),
+            make(
+                "prepare_delete_paper", "Show a reader-confirmed card to move one local paper to Recently Deleted.",
+                ["paper_id": paperID], ["paper_id"]),
+            make(
+                "restore_paper",
+                "Restore the selected paper from Recently Deleted using an ID returned by list_library with trash scope.",
+                ["paper_id": paperID], ["paper_id"]),
             make(
                 "present_results",
                 "Show selected recommendations, matches or citations in order. Import and navigation tools display their own action cards.",

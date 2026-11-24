@@ -25,6 +25,18 @@ public struct AgentCard: Identifiable, Sendable {
     public var canLookUpFullText = false
     public var canAttemptDownload: Bool { hasDownload || canLookUpFullText }
     public var importState: AgentImportState = .unprepared
+    public enum Removal: Sendable, Equatable {
+        case paper(UUID)
+        case shelf(UUID, members: Set<UUID>)
+    }
+    public enum ImportDestination: Sendable, Equatable {
+        case unfiled
+        case shelf(UUID)
+    }
+    public var localImportDestination: ImportDestination?
+    public var removal: Removal?
+    public var removalGeneration: Date?
+    public var removalCompleted = false
     public var importError: String?
     public var canImport: Bool {
         canAttemptDownload && candidateID != nil && [.unprepared, .ready, .failed, .cancelled].contains(importState)
@@ -55,7 +67,7 @@ public struct AgentActivity: Identifiable, Sendable {
 
 public struct AgentPresentedResult: Identifiable, Sendable {
     public enum Purpose: String, Sendable {
-        case recommendation, citation, match, navigation, importAction, readingNote
+        case recommendation, citation, match, navigation, importAction, readingNote, removal, localImport
     }
     /// The identifier of the registered card, which owns the source and any subsequent import state.
     public let id: UUID

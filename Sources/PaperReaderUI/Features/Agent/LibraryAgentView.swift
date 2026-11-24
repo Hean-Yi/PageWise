@@ -45,6 +45,7 @@ struct LibraryAgentView: View {
 
     private var welcome: some View {
         VStack(spacing: 0) {
+            suggestion("按主题整理书库", icon: "books.vertical", prompt: "帮我把未分类的论文按研究主题归到合适的书架。")
             suggestion("检索阅读笔记", icon: "note.text", prompt: "我之前在哪些笔记里讨论过注意力机制？")
             suggestion("在线查找论文", icon: "globe", prompt: "帮我在线查找 Attention Is All You Need")
         }.frame(maxWidth: .infinity, alignment: .leading)
