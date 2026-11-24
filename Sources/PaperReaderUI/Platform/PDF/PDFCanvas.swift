@@ -27,10 +27,24 @@ extension AnnotationColor {
     import PencilKit
 #endif
 
+private struct PDFSelectionToolsAnchor: Equatable {
+    let bounds: CGRect
+    let paperID: UUID
+    let page: Int
+    let ranges: [NSRange]
+    let text: String
+
+    @MainActor func matches(_ model: ReaderModel) -> Bool {
+        model.selectedPaperID == paperID && model.selectionPage == page && model.pdfSelectionRanges == ranges
+            && model.selectionText == text && !model.pdfSelectionSpansPages
+    }
+}
+
 struct PDFCanvas: View {
     let model: ReaderModel
     var penEnabled: Bool
     var acceptsSentenceInput = true
+    @State private var selectionAnchor: PDFSelectionToolsAnchor?
     var sentenceDisplay: PDFSentenceDisplay {
         let session = model.pdfBilingual
         return PDFSentenceDisplay(
@@ -42,7 +56,24 @@ struct PDFCanvas: View {
             illustration: acceptsSentenceInput && session.matches(model) ? session.sourceIllustration : nil)
     }
     var body: some View {
-        PlatformPDF(model: model, penEnabled: penEnabled, focus: sentenceDisplay)
+        PlatformPDF(model: model, penEnabled: penEnabled, focus: sentenceDisplay, selectionAnchor: $selectionAnchor)
+            .overlay {
+                if let selectionAnchor, acceptsSentenceInput, !penEnabled, model.pdfNoteEditor == nil,
+                    selectionAnchor.matches(model)
+                {
+                    PDFSelectionTools(model: model, anchor: selectionAnchor.bounds) {
+                        guard self.selectionAnchor == selectionAnchor, selectionAnchor.matches(model) else {
+                            return false
+                        }
+                        self.selectionAnchor = nil
+                        return true
+                    }
+                }
+            }
+            .onChange(of: acceptsSentenceInput) { _, _ in selectionAnchor = nil }
+            .onChange(of: penEnabled) { _, _ in selectionAnchor = nil }
+            .onChange(of: model.selectedPaperID) { _, _ in selectionAnchor = nil }
+            .onChange(of: model.mode) { _, _ in selectionAnchor = nil }
             .quickStartTarget(
                 acceptsSentenceInput && model.mode == "original" && !model.hasPDFNoteSelection ? .annotation : nil)
     }
@@ -66,6 +97,7 @@ private final class ReaderPDFView: PDFView {
     #if os(macOS)
         var sentenceClick: ((CGPoint) -> Void)?
         var notePointer: ((CGPoint) -> Void)?
+        var dismissTools: (() -> Void)?
         var observesNoteInput = false
         private var clickStart: CGPoint?
         var observesSentenceInput = false
@@ -78,13 +110,19 @@ private final class ReaderPDFView: PDFView {
             guard window != nil else { return }
             // PDFKit's inner document view handles mouse tracking itself. Observe this window's
             // events without consuming them so text selection, links and scrolling keep working.
-            eventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .leftMouseUp]) {
+            eventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .leftMouseUp, .keyDown]) {
                 [weak self] event in
-                guard let self, self.observesSentenceInput || self.observesNoteInput, let window = self.window,
+                guard let self, let window = self.window,
                     event.window === window, window.attachedSheet == nil
                 else { return event }
+                if event.type == .keyDown {
+                    if event.keyCode == 53 { self.dismissTools?() }
+                    return event
+                }
                 let point = self.convert(event.locationInWindow, from: nil)
                 let inside = self.visibleRect.contains(point)
+                if event.type == .leftMouseDown && !inside { self.dismissTools?() }
+                guard self.observesSentenceInput || self.observesNoteInput else { return event }
                 if event.type == .leftMouseDown {
                     let content = window.contentView
                     let hit = content.flatMap { $0.hitTest($0.convert(event.locationInWindow, from: nil)) }
@@ -121,8 +159,14 @@ private final class ReaderPDFView: PDFView {
         let model: ReaderModel
         let penEnabled: Bool
         let focus: PDFSentenceDisplay
-        func makeCoordinator() -> PDFCoordinator { PDFCoordinator(model: model) }
+        @Binding var selectionAnchor: PDFSelectionToolsAnchor?
+        func makeCoordinator() -> PDFCoordinator {
+            let coordinator = PDFCoordinator(model: model)
+            coordinator.selectionAnchorChanged = { if selectionAnchor != $0 { selectionAnchor = $0 } }
+            return coordinator
+        }
         func makeNSView(context: Context) -> PDFView { context.coordinator.makeView() }
+        static func dismantleNSView(_ view: PDFView, coordinator: PDFCoordinator) { coordinator.detachSelectionTools() }
         func updateNSView(_ view: PDFView, context: Context) {
             context.coordinator.update(view, penEnabled: false, focus: focus)
         }
@@ -132,8 +176,14 @@ private final class ReaderPDFView: PDFView {
         let model: ReaderModel
         let penEnabled: Bool
         let focus: PDFSentenceDisplay
-        func makeCoordinator() -> PDFCoordinator { PDFCoordinator(model: model) }
+        @Binding var selectionAnchor: PDFSelectionToolsAnchor?
+        func makeCoordinator() -> PDFCoordinator {
+            let coordinator = PDFCoordinator(model: model)
+            coordinator.selectionAnchorChanged = { if selectionAnchor != $0 { selectionAnchor = $0 } }
+            return coordinator
+        }
         func makeUIView(context: Context) -> PDFView { context.coordinator.makeView() }
+        static func dismantleUIView(_ view: PDFView, coordinator: PDFCoordinator) { coordinator.detachSelectionTools() }
         func updateUIView(_ view: PDFView, context: Context) {
             context.coordinator.update(view, penEnabled: penEnabled, focus: focus)
         }
@@ -144,6 +194,8 @@ private final class ReaderPDFView: PDFView {
 final class PDFCoordinator: NSObject, @preconcurrency PDFPageOverlayViewProvider {
     let model: ReaderModel
     weak var view: PDFView?
+    fileprivate var selectionAnchorChanged: ((PDFSelectionToolsAnchor?) -> Void)?
+    private var selectionToolsTask: Task<Void, Never>?
     var displayedDocument: PDFDisplayDocument?
     var displayedURLs: [URL]?
     var keys: [String] = []
@@ -189,6 +241,7 @@ final class PDFCoordinator: NSObject, @preconcurrency PDFPageOverlayViewProvider
                 self.model.pdfBilingual.focusFromPDF(hit.id)
             }
             view.notePointer = { [weak self] point in self?.openNote(at: point) }
+            view.dismissTools = { [weak self] in self?.dismissSelectionTools() }
         #else
             let tap = UITapGestureRecognizer(target: self, action: #selector(tappedPDF(_:)))
             tap.cancelsTouchesInView = false
@@ -197,6 +250,8 @@ final class PDFCoordinator: NSObject, @preconcurrency PDFPageOverlayViewProvider
         #endif
         NotificationCenter.default.addObserver(
             self, selector: #selector(selectionChanged), name: .PDFViewSelectionChanged, object: view)
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(dismissSelectionTools), name: .PDFViewScaleChanged, object: view)
         NotificationCenter.default.addObserver(
             self, selector: #selector(pageChanged), name: .PDFViewPageChanged, object: view)
         return view
@@ -500,6 +555,7 @@ final class PDFCoordinator: NSObject, @preconcurrency PDFPageOverlayViewProvider
     }
 
     @objc private func originalScrolled() {
+        selectionAnchorChanged?(nil)
         let session = model.pdfBilingual
         guard isVisible, !isUpdating, session.matches(model), session.followsScroll, let view,
             let page = view.document?.page(at: session.pageIndex)
@@ -518,6 +574,7 @@ final class PDFCoordinator: NSObject, @preconcurrency PDFPageOverlayViewProvider
 
     @objc func selectionChanged() {
         guard isVisible, !isUpdating, paperID == model.selectedPaperID, keys == model.pageKeys else { return }
+        dismissSelectionTools()
         guard let view, let selected = view.currentSelection, let page = selected.pages.first,
             let document = view.document, let text = selected.string,
             !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -550,7 +607,48 @@ final class PDFCoordinator: NSObject, @preconcurrency PDFPageOverlayViewProvider
         }
         model.captureSelection(
             text: captured, rects: rects, page: pageIndex, spansPages: selected.pages.count > 1, ranges: ranges)
-        if selected.pages.count > 1 { model.status = "跨页选择暂按第一页记录；请逐页划线以保留准确位置" }
+        if selected.pages.count > 1 {
+            model.status = "跨页选择暂按第一页记录；请逐页划线以保留准确位置"
+        } else if !ranges.isEmpty && !rects.isEmpty && !penEnabled && selectionAnchorChanged != nil {
+            selectionToolsTask = Task { @MainActor [weak self, weak view] in
+                #if os(macOS)
+                    // PDFKit tracks the mouse in its own document subview and may update the selection on every drag.
+                    while NSEvent.pressedMouseButtons & 1 != 0 {
+                        do { try await Task.sleep(for: .milliseconds(35)) } catch { return }
+                    }
+                #else
+                    do { try await Task.sleep(for: .milliseconds(180)) } catch { return }
+                #endif
+                guard !Task.isCancelled, let self, let view, isVisible, !penEnabled,
+                    let paperID, paperID == model.selectedPaperID, keys == model.pageKeys,
+                    view.currentSelection != nil, model.selectionPage == pageIndex,
+                    model.selectionText == captured, model.pdfSelectionRanges == ranges
+                else { return }
+                let area = lines.reduce(CGRect.null) { area, line in
+                    area.union(view.convert(line.bounds(for: page), from: page).intersection(view.bounds))
+                }
+                guard !area.isNull, !area.isEmpty else { return }
+                #if os(macOS)
+                    let y = view.isFlipped ? area.minY - view.bounds.minY : view.bounds.maxY - area.maxY
+                #else
+                    let y = area.minY - view.bounds.minY
+                #endif
+                let bounds = CGRect(x: area.minX - view.bounds.minX, y: y, width: area.width, height: area.height)
+                selectionAnchorChanged?(
+                    .init(bounds: bounds, paperID: paperID, page: pageIndex, ranges: ranges, text: captured))
+            }
+        }
+    }
+
+    @objc private func dismissSelectionTools() {
+        selectionToolsTask?.cancel()
+        selectionToolsTask = nil
+        selectionAnchorChanged?(nil)
+    }
+
+    fileprivate func detachSelectionTools() {
+        selectionAnchorChanged = nil
+        dismissSelectionTools()
     }
 
     private func selectedSourceText() -> String? {

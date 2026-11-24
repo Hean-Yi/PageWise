@@ -469,6 +469,14 @@ public final class ReaderModel {
                 rects: selectionRects)
             if usesHTMLReading { highlight.contentVersion = htmlAnnotationVersion }
             highlight.textRange = selectionHTMLRange
+            // PDFCanvas reads this quote from the source PDF at the recorded range before publishing the selection.
+            if mode == "original", highlight.pageKey == "original-\(selectionPage)", !pdfSelectionSpansPages,
+                pdfSelectionRanges.count == 1, let range = pdfSelectionRanges.first,
+                range.length == selectionText.utf16.count, range.location >= 0,
+                range.location <= Int.max - range.length
+            {
+                highlight.pdfTextStart = range.location
+            }
             state.highlights.append(highlight)
         }
         highlightSaveTask = Task { await save() }
