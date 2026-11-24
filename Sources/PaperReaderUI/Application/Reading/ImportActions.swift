@@ -45,7 +45,8 @@ extension ReaderModel {
     }
 
     @discardableResult public func importPublisherPDF(
-        _ url: URL, for candidate: PaperCandidate, shelfID: UUID? = nil, moveDuplicateToShelf: Bool = false
+        _ url: URL, for candidate: PaperCandidate, shelfID: UUID? = nil, moveDuplicateToShelf: Bool = false,
+        requestedAt: Date = .now
     ) async throws -> UUID {
         guard let candidate = candidate.verified else { throw ReaderError.message("论文来源无效，未导入。") }
         try beginPDFImport()
@@ -53,7 +54,7 @@ extension ReaderModel {
         do {
             return try await importPDF(
                 at: url, origin: .selectedForPublication(candidate), shelfID: shelfID,
-                moveDuplicateToShelf: moveDuplicateToShelf)
+                moveDuplicateToShelf: moveDuplicateToShelf, requestedAt: requestedAt)
         } catch {
             status = Task.isCancelled ? "已停止导入" : "导入未完成"
             throw error
@@ -63,7 +64,7 @@ extension ReaderModel {
     @discardableResult public func importURLs(
         _ urls: [URL], selectAfterImport: Bool = true, metadata: PaperCandidate? = nil, shelfID: UUID? = nil,
         moveDuplicateToShelf: Bool = false,
-        onlineDownload: DownloadedPublication? = nil
+        onlineDownload: DownloadedPublication? = nil, requestedAt: Date = .now
     ) async -> [UUID] {
         // Earlier callers supplied the verified candidate and downloaded PDF without a TeX archive.
         let publication =
@@ -91,7 +92,8 @@ extension ReaderModel {
         for url in urls {
             do {
                 let id = try await importPDF(
-                    at: url, origin: origin, shelfID: shelfID, moveDuplicateToShelf: moveDuplicateToShelf)
+                    at: url, origin: origin, shelfID: shelfID, moveDuplicateToShelf: moveDuplicateToShelf,
+                    requestedAt: requestedAt)
                 importedIDs.append(id)
                 if selectAfterImport, !Task.isCancelled { select(id) }
             } catch is CancellationError {
@@ -118,21 +120,23 @@ extension ReaderModel {
         importProgress = nil
     }
 
-    private func importPDF(at url: URL, origin: PDFImportOrigin, shelfID: UUID?, moveDuplicateToShelf: Bool)
-        async throws
-        -> UUID
-    {
+    private func importPDF(
+        at url: URL, origin: PDFImportOrigin, shelfID: UUID?, moveDuplicateToShelf: Bool, requestedAt: Date
+    ) async throws -> UUID {
         let id = try await commitPDF(
-            at: url, origin: origin, shelfID: shelfID, moveDuplicateToShelf: moveDuplicateToShelf)
+            at: url, origin: origin, shelfID: shelfID, moveDuplicateToShelf: moveDuplicateToShelf,
+            requestedAt: requestedAt)
         importProgress = "整理摘要"
         await prepareImportedAbstract(for: id)
+        guard state.papers.contains(where: { $0.id == id }) else {
+            throw ReaderError.message("导入期间这篇论文已移到最近删除。")
+        }
         return id
     }
 
-    private func commitPDF(at url: URL, origin: PDFImportOrigin, shelfID: UUID?, moveDuplicateToShelf: Bool)
-        async throws
-        -> UUID
-    {
+    private func commitPDF(
+        at url: URL, origin: PDFImportOrigin, shelfID: UUID?, moveDuplicateToShelf: Bool, requestedAt: Date
+    ) async throws -> UUID {
         status = "正在保存 \(url.lastPathComponent)…"
         importProgress = "准备导入"
         var imported = try await importer.storeOriginal(at: url)
@@ -141,14 +145,18 @@ extension ReaderModel {
         var retained = false
         defer { if !retained { try? FileManager.default.removeItem(at: importedDirectory) } }
         try Task.checkCancellation()
-        if let existing = state.papers.first(where: { $0.digest == imported.digest }) {
+        let archived = state.trashedPapers.first { $0.paper.digest == imported.digest }
+        if let archived, archived.deletedAt > requestedAt {
+            throw ReaderError.message("导入期间这篇论文已移到最近删除。")
+        }
+        if let existing = state.papers.first(where: { $0.digest == imported.digest }) ?? archived?.paper {
             var attachment: Paper?
             var link: (paperID: UUID, url: String)?
             var abstract: PublicationAbstractFill?
             switch origin {
             case .downloaded(let publication) where shouldAttachSource(of: publication, toIdenticalPDF: existing):
                 let attached = try await OnlineSourceStore().attach(publication, to: existing, root: root)
-                guard var latest = state.papers.first(where: { $0.id == existing.id }) else {
+                guard var latest = state.papers.first(where: { $0.id == existing.id }) ?? archived?.paper else {
                     throw CancellationError()
                 }
                 latest.onlineSource = attached.onlineSource
@@ -173,16 +181,18 @@ extension ReaderModel {
             }
             let move: ShelfChange? =
                 shelfID != nil || moveDuplicateToShelf ? .move(paperID: existing.id, shelfID: shelfID) : nil
-            if move != nil || attachment != nil || link != nil || abstract != nil {
+            let restore = archived.map { PaperTrashChange.restore($0.id, deletedAt: $0.deletedAt) }
+            if restore != nil || move != nil || attachment != nil || link != nil || abstract != nil {
                 let saved = await save(
-                    cancellable: true, shelfChange: move, publishingReflow: attachment, linkingPublication: link,
+                    cancellable: true, paperTrashChange: restore, shelfChange: move, publishingReflow: attachment,
+                    linkingPublication: link,
                     fillingSourceAbstract: abstract)
                 if !saved, let path = attachment?.onlineSource?.archivePath {
                     try? FileManager.default.removeItem(at: root.appendingPathComponent(path))
                 }
                 try requireImportCommit(saved)
             }
-            status = "论文已在书库中"
+            status = archived == nil ? "论文已在书库中" : "已从最近删除恢复论文"
             return existing.id
         }
         switch origin {
@@ -209,7 +219,7 @@ extension ReaderModel {
     private func requireImportCommit(_ saved: Bool) throws {
         guard !saved else { return }
         try Task.checkCancellation()
-        status = "导入未保存，请检查磁盘空间后重试"
+        status = "导入未保存"
         throw ImportSaveFailure(errorDescription: message ?? status)
     }
 

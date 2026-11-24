@@ -6,6 +6,7 @@ struct AgentImportRequest {
     let candidate: PaperCandidate
     /// Present only for a file the reader selected for this specific result.
     let selectedPDF: URL?
+    let requestedAt = Date()
 }
 
 extension LibraryAgent {
@@ -113,7 +114,7 @@ extension LibraryAgent {
         if let url = request.selectedPDF {
             while reader.isImporting { try await Task.sleep(for: .milliseconds(200)) }
             try checkImport(request.id, token: token, epoch: epoch)
-            return try await reader.importPublisherPDF(url, for: request.candidate)
+            return try await reader.importPublisherPDF(url, for: request.candidate, requestedAt: request.requestedAt)
         }
         let download = try await discovery.downloadPublication(request.candidate)
         defer { try? FileManager.default.removeItem(at: download.pdfURL) }
@@ -122,7 +123,8 @@ extension LibraryAgent {
         while reader.isImporting { try await Task.sleep(for: .milliseconds(200)) }
         try checkImport(request.id, token: token, epoch: epoch)
         let paperIDs = await reader.importURLs(
-            [download.pdfURL], selectAfterImport: false, metadata: download.candidate, onlineDownload: download)
+            [download.pdfURL], selectAfterImport: false, metadata: download.candidate, onlineDownload: download,
+            requestedAt: request.requestedAt)
         if let paperID = paperIDs.first { return paperID }
         try checkImport(request.id, token: token, epoch: epoch)
         throw ReaderError.message("论文导入未完成；请检查 PDF 或本地存储后重试。")

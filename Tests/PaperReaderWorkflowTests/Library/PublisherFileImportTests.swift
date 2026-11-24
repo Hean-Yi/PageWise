@@ -69,6 +69,38 @@ import Testing
         #expect(restored.state.shelfID(for: id) == shelf)
     }
 
+    @Test func reimportRestoresArchivedPaperAndAnnotationsInOneCommit() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let reader = try ReaderModel(root: root, credentials: WorkflowCredentials())
+        await reader.load()
+        let originalShelf = try #require(await reader.createShelf(name: "待整理"))
+        let url = root.appendingPathComponent("sample.pdf")
+        try DemoPaper.write(to: url)
+        let id = try #require(await reader.importURLs([url], selectAfterImport: false, shelfID: originalShelf).first)
+        let mark = Highlight(
+            paperID: id, pageKey: "original-0", pageIndex: 0, text: "Attention", rects: [[1, 2, 3, 4]])
+        reader.state.highlights = [mark]
+        #expect(await reader.save())
+        #expect(await reader.trashPaper(id))
+
+        #expect(await reader.importURLs([url], requestedAt: .distantPast).isEmpty)
+        await #expect(throws: (any Error).self) {
+            try await reader.importPublisherPDF(url, for: citation, shelfID: UUID())
+        }
+        #expect(reader.state.papers.isEmpty && reader.state.trashedPapers.map(\.id) == [id])
+
+        let destination = try #require(await reader.createShelf(name: "注意力"))
+        #expect(try await reader.importPublisherPDF(url, for: citation, shelfID: destination) == id)
+        let reopened = try ReaderModel(root: root, credentials: WorkflowCredentials())
+        await reopened.load()
+        #expect(reopened.state.trashedPapers.isEmpty && reopened.state.papers.map(\.id) == [id])
+        #expect(reopened.state.shelfID(for: id) == destination && reopened.importedPaperID(for: citation) == id)
+        #expect(reopened.state.highlights == [mark])
+        let paper = try #require(reopened.state.papers.first)
+        #expect(try Data(contentsOf: root.appendingPathComponent(paper.originalPath)) == Data(contentsOf: url))
+    }
+
     @Test func distinctBytesWithEqualNamesSizesAndBibliographyStaySeparate() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }

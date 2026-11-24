@@ -217,6 +217,7 @@ public final class OnlinePaperSearch {
     private func startImport(_ candidate: PaperCandidate, selectedPDF: URL?) {
         guard importTask == nil, !closing, selectedPDF != nil || importedPaperID(for: candidate) == nil else { return }
         let shelfID = targetShelfID
+        let requestedAt = Date()
         guard shelfID == nil || reader.state.shelves.contains(where: { $0.id == shelfID }) else {
             importErrors[candidate.id] = "目标书架已删除，请关闭查找后从其他书架重试。"
             return
@@ -249,7 +250,8 @@ public final class OnlinePaperSearch {
                 let id: UUID
                 if let selectedPDF {
                     id = try await self.reader.importPublisherPDF(
-                        selectedPDF, for: candidate, shelfID: shelfID, moveDuplicateToShelf: true)
+                        selectedPDF, for: candidate, shelfID: shelfID, moveDuplicateToShelf: true,
+                        requestedAt: requestedAt)
                 } else {
                     let download = try await self.discovery.downloadPublication(candidate)
                     let url = download.pdfURL
@@ -258,7 +260,7 @@ public final class OnlinePaperSearch {
                     self.importStage = "本地处理"
                     let ids = await self.reader.importURLs(
                         [url], selectAfterImport: false, metadata: download.candidate, shelfID: shelfID,
-                        moveDuplicateToShelf: true, onlineDownload: download)
+                        moveDuplicateToShelf: true, onlineDownload: download, requestedAt: requestedAt)
                     guard let importedID = ids.first else {
                         try Task.checkCancellation()
                         throw ReaderError.message(self.reader.message ?? "论文导入未完成，请重试或手动导入 PDF。")
