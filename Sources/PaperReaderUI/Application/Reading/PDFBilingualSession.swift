@@ -33,6 +33,7 @@ final class PDFBilingualSession {
     private(set) var pdfScrollID: String?
     private(set) var pdfScrollRevision = 0
     private(set) var pdfSelectedIDs: [String] = []
+    var reflowTextSelection: [PDFReflowTextSelection] = []
     private(set) var translationSelectedIDs: [String] = []
     private(set) var selectionRequestRevision = 0
     private(set) var selectionSource: String?
@@ -136,6 +137,7 @@ final class PDFBilingualSession {
 
     func close() {
         isOpen = false
+        reflowTextSelection = []
         paragraphLayout = false
         readingParagraphs = false
         releasePages()
@@ -216,6 +218,7 @@ final class PDFBilingualSession {
         sourceScrollID = nil
         pdfScrollID = nil
         translationSelectedIDs = []
+        reflowTextSelection = []
         pdfSelectedIDs = []
         sourceIllustration = nil
         selectionSource = nil
@@ -393,7 +396,25 @@ final class PDFBilingualSession {
     }
 
     func selectFromTranslation(_ ids: [String]) {
+        if ids.isEmpty, !reflowTextSelection.isEmpty { reflowTextSelection = [] }
         if translationSelectedIDs != ids { translationSelectedIDs = ids }
+    }
+
+    func sourceRange(for piece: PDFReflowTextSelection) -> NSRange? {
+        guard let page = loadedPages[piece.sentence.pageIndex],
+            page.originalSentences.contains(piece.sentence) || page.paragraph.sentences.contains(piece.sentence)
+        else { return nil }
+        let displayed: String?
+        switch piece.language {
+        case "en": displayed = piece.sentence.text
+        case "zh": displayed = page.paragraph.translations[piece.sentence.id]
+        default: return nil
+        }
+        guard let text = displayed as NSString?, piece.range.location >= 0, piece.range.location <= text.length,
+            piece.range.length > 0, piece.range.length <= text.length - piece.range.location,
+            text.substring(with: piece.range) == piece.text
+        else { return nil }
+        return piece.language == "en" ? piece.range : NSRange(location: 0, length: piece.sentence.text.utf16.count)
     }
 
     func selectFromPDF(_ ids: [String]) {

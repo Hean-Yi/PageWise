@@ -6,6 +6,97 @@
 
     @testable import PaperReaderUI
 
+    @Test @MainActor func pdfReflowSelectionOpensToolsAfterReleaseAndSendsOnlySelectedCharacters() async throws {
+        let rows = ["First sentence.", "Second sentence."].enumerated().map { index, text in
+            PDFSourceSentence(
+                id: "s\(index)", text: text, pageIndex: 0, rects: [], paragraphID: "p",
+                characterRanges: [.init(location: index * 20, length: text.utf16.count)])
+        }
+        var events: [[PDFReflowTextSelection]] = []
+        var liveSelection: [PDFReflowTextSelection] = []
+        let mark = NoteAnchor(key: "original-0", target: "pdf", text: "First", start: 0, end: 5)
+        let canvas = PDFSentenceTextCanvas(
+            sentences: rows, translations: ["s0": "第一句。", "s1": "第二句。"], layout: .paragraph, fontSize: 16,
+            focusedID: nil, focusRevision: 0, followsScroll: false, sourceScrollID: nil, sourceScrollRevision: 0,
+            pdfSelectedIDs: [], onScroll: { _ in }, onSelection: { _ in }, onFocus: { _ in },
+            inlineHighlights: [.init(id: UUID(), anchors: [mark], color: .yellow)],
+            onTextSelection: { liveSelection = $0 },
+            onSelectionAction: { action, selection in
+                if (events.isEmpty && action == .note) || (events.count == 1 && action == .highlight) {
+                    events.append(selection)
+                }
+            })
+        let coordinator = canvas.makeCoordinator()
+        let web = coordinator.makeView()
+        defer { coordinator.stop(web) }
+        web.frame = CGRect(x: 0, y: 0, width: 540, height: 480)
+        func evaluate(_ script: String) async throws -> Bool {
+            try await web.callAsyncJavaScript(script, arguments: [:], in: nil, contentWorld: .defaultClient) as? Bool
+                == true
+        }
+        for _ in 0..<150 {
+            if (try? await evaluate("return CSS.highlights.get('pdf-user-highlights')?.size === 1")) == true { break }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        #expect(
+            try await evaluate(
+                """
+                const ink=CSS.highlights.get('pdf-user-highlights');
+                return !!ink && [...ink][0]?.toString()==='First' && !document.querySelector('[data-reading-note]');
+                """))
+        #expect(
+            try await evaluate(
+                """
+                const [a,b]=document.querySelectorAll('.en'), tools=document.querySelector('#selection-tools');
+                a.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true}));
+                getSelection().setBaseAndExtent(b.firstChild,6,a.firstChild,6);
+                document.dispatchEvent(new Event('selectionchange'));
+                return tools.hidden;
+                """))
+        _ = try await evaluate("document.dispatchEvent(new PointerEvent('pointerup'));return true")
+        for _ in 0..<75 {
+            if try await evaluate("return !document.querySelector('#selection-tools').hidden") { break }
+            try await Task.sleep(for: .milliseconds(15))
+        }
+        #expect(
+            try await evaluate(
+                """
+                const tools=document.querySelector('#selection-tools');
+                if (tools.hidden) return false;
+                const button=tools.querySelector('[data-tool=note]');
+                button.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,cancelable:true}));
+                button.click();return tools.hidden;
+                """))
+        for _ in 0..<50 where events.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(events.first?.map(\.text) == ["sentence.", "Second"])
+        #expect(events.first?.map(\.range) == [NSRange(location: 6, length: 9), NSRange(location: 0, length: 6)])
+        // A long press can transfer ownership to the system selection handles via pointercancel.
+        _ = try await evaluate(
+            """
+            const zh=document.querySelector('.zh');
+            zh.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true}));
+            getSelection().setBaseAndExtent(zh.firstChild,1,zh.firstChild,3);
+            document.dispatchEvent(new PointerEvent('pointercancel'));return true;
+            """)
+        for _ in 0..<75 {
+            if try await evaluate("return !document.querySelector('#selection-tools').hidden") { break }
+            try await Task.sleep(for: .milliseconds(15))
+        }
+        #expect(
+            try await evaluate(
+                """
+                const tools=document.querySelector('#selection-tools'), button=tools.querySelector('[data-tool=highlight]');
+                if (tools.hidden || button.textContent!=='高亮对应原句') return false;
+                button.click();return true;
+                """))
+        for _ in 0..<50 where events.count < 2 { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(events.last?.first?.text == "一句")
+        #expect(events.last?.first?.language == "zh")
+        _ = try await evaluate("getSelection().removeAllRanges();return true")
+        for _ in 0..<50 where !liveSelection.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(liveSelection.isEmpty)
+    }
+
     @Test @MainActor func pdfSelectionPaintTracksTheSelectedCharactersAcrossSoftWraps() async throws {
         let prose = String(repeating: "There is another reason to be cautious about this result. ", count: 5)
         let row = PDFSourceSentence(id: "en", text: prose, pageIndex: 0, rects: [], paragraphID: "p")

@@ -11,6 +11,8 @@ public struct Highlight: Identifiable, Codable, Sendable, Equatable {
     public var contentVersion: String?
     /// UTF-16 start/end within the stable HTML section; nil for PDF geometry.
     public var textRange: [Int]?
+    /// Optional UTF-16 offset on the immutable original PDF page for highlights created in reflow.
+    public var pdfTextStart: Int?
     /// Source-only offsets and a shared paragraph highlight for its Chinese translation.
     /// Nil preserves the section-relative coordinates of existing HTML annotations.
     public var linksTranslation: Bool?

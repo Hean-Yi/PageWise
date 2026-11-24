@@ -184,3 +184,58 @@ func pdfDiscussionNoteKeepsTheColorAndInkOfAnOverlappingManualMark(style: Annota
         })
     #expect(additions.contains { $0.type == "Underline" })
 }
+
+@Test @MainActor func pdfReflowSelectionPersistsOnlyTheSelectedWordsAndReopensTheirNote() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let reader = try ReaderModel(root: root, credentials: WorkflowCredentials())
+    await reader.load()
+    let url = root.appendingPathComponent("fixture.pdf")
+    try AttentionFixture.write(to: url)
+    let id = try #require(await reader.importURLs([url]).first)
+    let session = reader.pdfBilingual
+    session.open(reader)
+    for _ in 0..<200 where session.sentences.isEmpty { try await Task.sleep(for: .milliseconds(20)) }
+    let word = "notebook"
+    let sentence = try #require(session.sentences.first(where: { $0.text.contains(word) }))
+    let range = (sentence.text as NSString).range(of: word)
+    let english = PDFReflowTextSelection(sentence: sentence, language: "en", range: range, text: word)
+    session.reflowTextSelection = [english]
+    #expect(reader.hasPDFNoteSelection)
+    await reader.beginPDFReadingNote()
+    let draft = try #require(reader.pdfNoteEditor)
+    #expect(draft.note.anchors.map(\.text) == [word])
+    #expect(reader.updateReadingNote(id: draft.id, anchors: draft.note.anchors, markdown: "笔记保留到同一个词"))
+    reader.closePDFReadingNote()
+    await reader.flushReadingNotes()
+    await reader.performReflowSelectionAction(.note, selection: [english])
+    #expect(reader.pdfNoteEditor?.id == draft.id)
+    await reader.performReflowSelectionAction(.highlight, selection: [english])
+    await reader.performReflowSelectionAction(.highlight, selection: [english])
+    #expect(reader.inlinePDFHighlights.map(\.anchors) == [draft.note.anchors])
+    await reader.performReflowSelectionAction(.bookmark, selection: [english])
+    await reader.performReflowSelectionAction(.bookmark, selection: [english])
+    #expect(reader.currentBookmarks.count == 1)
+    let reopened = try ReaderModel(root: root, credentials: WorkflowCredentials())
+    await reopened.load()
+    reopened.select(id)
+    #expect(reopened.currentReadingNotes.first?.anchors == draft.note.anchors)
+    #expect(reopened.inlinePDFHighlights.map(\.anchors) == [draft.note.anchors])
+
+    let chinese = "想象一本笔记本。"
+    let part = "一本"
+    session.receiveDocumentTranslations([sentence.id: chinese], paperID: id, page: sentence.pageIndex)
+    let translated = PDFReflowTextSelection(
+        sentence: sentence, language: "zh", range: (chinese as NSString).range(of: part), text: part)
+    session.reflowTextSelection = [translated]
+    await reader.performReflowSelectionAction(.note, selection: [translated])
+    let original = try #require(reader.pdfNoteEditor)
+    #expect(original.note.anchors.map(\.text).joined(separator: " ").contains("Imagine a notebook"))
+    #expect(original.id != draft.id)
+    reader.closePDFReadingNote()
+    let stale = PDFReflowTextSelection(sentence: sentence, language: "en", range: range, text: "outdated")
+    await reader.performReflowSelectionAction(.note, selection: [stale])
+    #expect(reader.pdfNoteEditor == nil)
+    session.close()
+    #expect(!reader.hasPDFNoteSelection)
+}

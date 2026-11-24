@@ -194,6 +194,14 @@ struct PDFBilingualReadingView: View {
                     onOpenNote: { id in
                         guard let note = model.currentReadingNotes.first(where: { $0.id == id }) else { return }
                         model.pdfNoteEditor = PDFNoteEditorSession(note: note, marks: [])
+                    }, inlineHighlights: model.inlinePDFHighlights,
+                    onTextSelection: { session.reflowTextSelection = $0 },
+                    onSelectionAction: { action, selection in
+                        let paperID = model.paper?.id
+                        Task {
+                            guard let paperID, model.paper?.id == paperID else { return }
+                            await model.performReflowSelectionAction(action, selection: selection)
+                        }
                     })
             }
         }

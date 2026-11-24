@@ -90,6 +90,29 @@ public actor PDFReadingNoteLocator {
         return try Self.fragments(page: page, pageIndex: pageIndex, ranges: ranges)
     }
 
+    /// Project offsets in the displayed sentence through its verified original character runs.
+    public func selected(_ pieces: [(sentence: PDFSourceSentence, range: NSRange)], in url: URL) throws
+        -> [PDFReadingNoteFragment]
+    {
+        guard let first = pieces.first else { throw Self.notFound }
+        let document = try document(at: url, pageIndex: first.sentence.pageIndex)
+        defer { withExtendedLifetime(document) {} }
+        var fragments: [PDFReadingNoteFragment] = []
+        var seen = Set<NoteAnchor>()
+        for (sentence, range) in pieces {
+            try Task.checkCancellation()
+            let count = sentence.text.utf16.count
+            guard range.location >= 0, range.location <= count, range.length > 0,
+                range.length <= count - range.location, let page = document.page(at: sentence.pageIndex),
+                let raw = page.string as NSString?, raw.length == page.numberOfCharacters
+            else { throw Self.notFound }
+            let spans = try Self.project(range, in: sentence, raw: raw)
+            let located = try Self.fragments(page: page, pageIndex: sentence.pageIndex, ranges: spans)
+            fragments.append(contentsOf: located.filter { seen.insert($0.anchor).inserted })
+        }
+        return fragments
+    }
+
     private func document(at url: URL, pageIndex: Int) throws -> PDFDocument {
         try Task.checkCancellation()
         guard let document = PDFDocument(url: url), !document.isLocked, (0..<document.pageCount).contains(pageIndex)
