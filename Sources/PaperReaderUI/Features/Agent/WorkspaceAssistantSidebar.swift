@@ -26,36 +26,12 @@ struct WorkspaceAssistantSidebar: View {
     let saveNote: () -> Void
     let didNavigate: () -> Void
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Namespace private var tabSelection
 
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 4) {
                 if isReading {
-                    ForEach(AssistantTab.allCases, id: \.self) { item in
-                        Button {
-                            select(item)
-                        } label: {
-                            HStack(spacing: 6) {
-                                Image(systemName: item.icon)
-                                if tab == item { Text(item.rawValue).font(.callout.weight(.medium)).lineLimit(1) }
-                            }
-                            .frame(minWidth: 36, maxWidth: .infinity, minHeight: 34)
-                            .padding(.horizontal, 8)
-                            .foregroundStyle(tab == item ? ReaderTheme.accent : ReaderTheme.muted)
-                            .background {
-                                if tab == item {
-                                    Capsule().fill(ReaderTheme.elevated)
-                                        .matchedGeometryEffect(id: "selected-tab", in: tabSelection)
-                                        .transition(.identity)
-                                }
-                            }
-                            .contentShape(Capsule())
-                        }
-                        .buttonStyle(.plain)
-                        .help(item.rawValue).accessibilityLabel(item.rawValue)
-                        .accessibilityAddTraits(tab == item ? .isSelected : [])
-                    }
+                    tabBar
                 } else {
                     Label(AssistantTab.library.rawValue, systemImage: AssistantTab.library.icon)
                         .font(.headline).accessibilityAddTraits(.isHeader)
@@ -66,7 +42,6 @@ struct WorkspaceAssistantSidebar: View {
                         .accessibilityHidden(tab == .library)
                 }
             }.padding(.horizontal, 14).frame(height: 56)
-                .animation(ReaderMotion.disclosure(reduceMotion), value: tab)
             Divider()
             ZStack {
                 tabContent.id(tab).transition(.opacity)
@@ -78,6 +53,51 @@ struct WorkspaceAssistantSidebar: View {
         .overlay(alignment: .leading) { Rectangle().fill(ReaderTheme.line).frame(width: 1) }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("助读侧栏")
+    }
+
+    private var tabBar: some View {
+        let tabs = AssistantTab.allCases
+        return HStack(spacing: 0) {
+            ForEach(tabs, id: \.self) { item in
+                let selected = tab == item
+                Button {
+                    if !selected { select(item) }
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: item.icon)
+                        if selected {
+                            Text(item.rawValue).font(.callout.weight(.medium)).lineLimit(1)
+                                .transition(.opacity)
+                        }
+                    }
+                    .padding(.horizontal, 4)
+                    .frame(minWidth: 0, maxWidth: .infinity)
+                    #if os(macOS)
+                        .frame(minHeight: 34)
+                    #else
+                        .frame(minHeight: 44)
+                    #endif
+                    .foregroundStyle(selected ? ReaderTheme.accent : ReaderTheme.muted)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help(item.rawValue).accessibilityLabel(item.rawValue)
+                .accessibilityAddTraits(selected ? .isSelected : [])
+            }
+        }
+        .background {
+            GeometryReader { geometry in
+                let width = geometry.size.width / CGFloat(tabs.count)
+                if let index = tabs.firstIndex(of: tab) {
+                    HStack(spacing: 0) {
+                        Color.clear.frame(width: CGFloat(index) * width)
+                        Capsule().fill(ReaderTheme.elevated).padding(.horizontal, 2).frame(width: width)
+                    }
+                }
+            }
+            .allowsHitTesting(false).accessibilityHidden(true)
+        }
+        .animation(ReaderMotion.navigation(reduceMotion), value: tab)
     }
 
     @ViewBuilder private var tabContent: some View {
