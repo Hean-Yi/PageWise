@@ -56,6 +56,7 @@ public enum ModelServicePreset: String, CaseIterable, Identifiable, Sendable {
 
     public static func matching(_ settings: ModelSettings) -> Self {
         guard let address = try? settings.endpointURL().absoluteString else { return .custom }
+        if address == Self.deepSeek.baseURL + "/v1/chat/completions" { return .deepSeek }
         return allCases.first { $0 != .custom && address == $0.baseURL + "/chat/completions" } ?? .custom
     }
 }

@@ -53,9 +53,18 @@ public struct AgentClient: AgentCompleting {
             throw CancellationError()
         } catch let error as AgentToolBudgetError {
             throw error
+        } catch let failure as ModelStreamFailure {
+            try Task.checkCancellation()
+            throw Self.incompleteReply(failure)
+        } catch let failure as ReaderError {
+            try Task.checkCancellation()
+            throw failure
+        } catch is URLError {
+            try Task.checkCancellation()
+            throw ReaderError.message("模型网络请求未完成，请检查连接后重试。")
         } catch {
             try Task.checkCancellation()
-            throw ReaderError.message("模型网络请求未完成，请检查连接后重试；没有自动重复请求。")
+            throw ReaderError.message("模型响应处理失败，未执行工具。")
         }
         try Task.checkCancellation()
         switch response.statusCode {
@@ -86,9 +95,19 @@ public struct AgentClient: AgentCompleting {
                     call.function.arguments.utf8.count <= limits.maxArgumentBytes
                 else { throw ReaderError.message("模型工具调用标识、类型或参数长度无效。") }
             }
-        default: throw ReaderError.message("模型响应未完整结束，未执行工具或保存回答。")
+        case "length": throw Self.incompleteReply(.outputLimit)
+        case "content_filter": throw Self.incompleteReply(.contentFilter)
+        default: throw Self.incompleteReply(.unexpectedFinish)
         }
         return message
+    }
+
+    private static func incompleteReply(_ failure: ModelStreamFailure) -> ReaderError {
+        switch failure {
+        case .outputLimit: .message("模型达到本次输出长度上限，未执行这一轮工具。")
+        case .contentFilter: .message("模型服务过滤了本次回答，未执行这一轮工具。")
+        case .unexpectedFinish: .message("模型响应未完整结束，未执行这一轮工具。")
+        }
     }
 
     private static func validateHistory(_ messages: [AgentMessage]) throws {

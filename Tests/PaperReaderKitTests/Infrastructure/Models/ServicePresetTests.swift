@@ -65,3 +65,26 @@ func modelServicesUseTheirWireFormatForTextReflowAndTools(_ preset: ModelService
         }
     }
 }
+
+@Test func deepSeekVersionedEndpointUsesTheSameTranslationOptionsWithoutChangingTheDestination() async throws {
+    let transport = PresetTransport()
+    let client = ModelClient(transport: transport)
+    var settings = ModelSettings()
+    settings.baseURL = "https://API.DEEPSEEK.COM:443/v1/chat/completions/"
+    settings.model = ModelServicePreset.deepSeek.defaultModel
+    #expect(ModelServicePreset.matching(settings) == .deepSeek)
+    _ = try await client.complete(settings: settings, key: "fixture", system: "JSON", user: "fixture", jsonOutput: true)
+    let request = try #require(await transport.requests.first)
+    #expect(request.url?.absoluteString == "https://api.deepseek.com/v1/chat/completions")
+    let requestData = try #require(request.httpBody)
+    let body = try #require(try JSONSerialization.jsonObject(with: requestData) as? [String: Any])
+    #expect(body["thinking"] as? [String: String] == ["type": "disabled"])
+    #expect(body["response_format"] as? [String: String] == ["type": "json_object"])
+    for unrecognized in [
+        "https://api.deepseek.com.example.invalid/v1", "https://api.deepseek.com:8443/v1",
+        "https://api.deepseek.com/custom",
+    ] {
+        settings.baseURL = unrecognized
+        #expect(ModelServicePreset.matching(settings) == .custom)
+    }
+}

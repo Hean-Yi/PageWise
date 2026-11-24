@@ -37,3 +37,43 @@ private actor StreamCapture {
     #expect(extra["google"]?["thought_signature"] == "saved-signature")
     #expect(message.toolCalls?.first?.function.arguments == #"{"query":"attention"}"#)
 }
+
+private struct AgentErrorTransport: HTTPTransport {
+    let body: String?
+    func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        guard let body else { throw URLError(.timedOut) }
+        return (
+            Data(body.utf8), HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+        )
+    }
+}
+
+@Test func failedAgentCompletionsDistinguishNetworkFailuresFromModelResponses() async throws {
+    var settings = ModelSettings()
+    settings.baseURL = ModelServicePreset.deepSeek.baseURL
+    settings.model = ModelServicePreset.deepSeek.defaultModel
+    let cases: [(data: String?, stream: Bool, expected: String)] = [
+        (nil, true, "网络请求未完成"),
+        ("data: not-json\n\n", true, "格式不兼容"),
+        ("data: [DONE]\n\n", true, "流式响应中断"),
+        ("data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"length\"}]}\n\n", true, "输出长度上限"),
+        ("data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"content_filter\"}]}\n\n", true, "过滤"),
+        (#"{"choices":[{"message":{"role":"assistant"},"finish_reason":"length"}]}"#, false, "输出长度上限"),
+    ]
+    for sample in cases {
+        let agent = AgentClient(transport: AgentErrorTransport(body: sample.data))
+        let messages = [AgentMessage(role: "user", content: "fixture")]
+        do {
+            if sample.stream {
+                _ = try await agent.respondStreaming(
+                    settings: settings, key: "fixture", messages: messages, limits: .init()
+                ) { _ in }
+            } else {
+                _ = try await agent.respond(settings: settings, key: "fixture", messages: messages, limits: .init())
+            }
+            Issue.record("Expected the incomplete response to fail")
+        } catch let error as ReaderError {
+            #expect(error.localizedDescription.contains(sample.expected))
+        }
+    }
+}
