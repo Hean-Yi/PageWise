@@ -34,3 +34,15 @@ Artifacts/
 !scripts/note-editor/package.json
 !scripts/note-editor/package-lock.json
 scripts/note-editor/node_modules/
+
+# Additional Xcode and distribution outputs
+*.hmap
+*.dSYM.zip
+*.dSYM
+timeline.xctimeline
+playground.xcworkspace
+Carthage/Build/
+fastlane/report.xml
+fastlane/Preview.html
+fastlane/screenshots/**/*.png
+fastlane/test_output
