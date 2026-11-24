@@ -6,7 +6,7 @@ import Testing
 @testable import PaperReaderKit
 @testable import PaperReaderUI
 
-@Test(arguments: [ReaderOrigin.library, .calendar, .notebooks, .trash])
+@Test(arguments: [ReaderOrigin.library, .calendar, .notebooks])
 @MainActor func readerReturnsToItsEntrySectionAfterFollowingAnotherPaper(origin: ReaderOrigin) async throws {
     let root = workspaceDirectory()
     defer { try? FileManager.default.removeItem(at: root) }

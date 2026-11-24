@@ -43,7 +43,7 @@ private actor AgentWireTransport: HTTPTransport {
             "search_library", "read_paper", "search_online", "prepare_import", "open_paper", "present_results",
             "ask_user", "create_reading_note", "close_read_paper", "search_reading_notes", "recommend_related",
             "list_library", "create_shelf", "rename_shelf", "move_papers", "prepare_local_import",
-            "prepare_delete_shelf", "prepare_delete_paper", "restore_paper",
+            "prepare_delete_shelf", "prepare_delete_paper",
         ])
     let presentation = try #require(definitions.first { $0["name"] as? String == "present_results" })
     let parameters = try #require(presentation["parameters"] as? [String: Any])
@@ -323,6 +323,8 @@ private actor AgentSaveGate {
     #expect(LibraryOrganizationIntent.tools(for: "把这篇论文从研究书架中移除") == ["move_papers"])
     #expect(LibraryOrganizationIntent.tools(for: "删除研究书架") == ["prepare_delete_shelf"])
     #expect(LibraryOrganizationIntent.tools(for: "删除这篇论文") == ["prepare_delete_paper"])
+    #expect(LibraryOrganizationIntent.tools(for: "恢复已经删除的论文").isEmpty)
+    #expect(LibraryOrganizationIntent.tools(for: "请永久删除这篇论文") == ["prepare_delete_paper"])
     #expect(LibraryOrganizationIntent.tools(for: "如果它们重复，请删除论文").isEmpty)
 }
 
@@ -332,7 +334,11 @@ private actor AgentSaveGate {
         ("prepare_local_import", #"{"destination":"unfiled","path":"/some/file.pdf"}"#),
         ("move_papers", #"{"paper_ids":["\#(id)","\#(id)"],"destination":"unfiled"}"#),
         ("list_library", #"{"scope":"shelf"}"#),
-        ("list_library", #"{"scope":"trash","offset":true}"#),
+        ("list_library", #"{"scope":"papers","offset":true}"#),
+        ("list_library", #"{"scope":"trash"}"#),
+        ("restore_paper", #"{"paper_id":"\#(id)"}"#),
+        ("delete_paper", #"{"paper_id":"\#(id)"}"#),
+        ("prepare_delete_paper", #"{"paper_id":"\#(id)","confirmed":true}"#),
         ("list_library", #"{"scope":"papers","shelf_id":"\#(id)"}"#),
         ("prepare_delete_shelf", #"{"shelf_id":"book title"}"#),
     ] {

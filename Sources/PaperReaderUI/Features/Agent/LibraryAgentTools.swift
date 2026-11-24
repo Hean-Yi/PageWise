@@ -208,6 +208,7 @@ extension LibraryAgent {
                     (try? PDFSentenceExtractor.extractPage(url: url, pageIndex: page - 1))?.sentences ?? []
                 }.value
                 try check(epoch)
+                _ = try registeredPaper(id, page: page)
                 var prior: String?
                 for sentence in sentences {
                     if prior == sentence.readingParagraphID, let last = passages.indices.last {

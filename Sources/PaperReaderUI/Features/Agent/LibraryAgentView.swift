@@ -41,6 +41,7 @@ struct LibraryAgentView: View {
             }
         }
         .background(ReaderTheme.canvas).foregroundStyle(ReaderTheme.ink)
+        .paperDeletionConfirmation()
     }
 
     private var welcome: some View {

@@ -190,7 +190,7 @@ public struct AgentClient: AgentCompleting {
                     "scope": .init(
                         type: "string",
                         description:
-                            "Shelf list, all papers, one shelf, uncategorized papers, or recently deleted papers",
+                            "Shelf list, all papers, one shelf, or uncategorized papers",
                         choices: AgentLibraryScope.allCases.map(\.rawValue)),
                     "shelf_id": shelfID,
                     "offset": .init(type: "integer", description: "Start at zero, then use the previous next_offset"),
@@ -219,11 +219,8 @@ public struct AgentClient: AgentCompleting {
                 "Show a reader-confirmed removal card for a shelf. Its papers stay in the library.",
                 ["shelf_id": shelfID], ["shelf_id"]),
             make(
-                "prepare_delete_paper", "Show a reader-confirmed card to move one local paper to Recently Deleted.",
-                ["paper_id": paperID], ["paper_id"]),
-            make(
-                "restore_paper",
-                "Restore the selected paper from Recently Deleted using an ID returned by list_library with trash scope.",
+                "prepare_delete_paper",
+                "Prepare a permanent deletion card for one local paper. The reader must confirm in the app dialog before deletion.",
                 ["paper_id": paperID], ["paper_id"]),
             make(
                 "present_results",

@@ -1,7 +1,7 @@
 import Foundation
 
 public enum AgentLibraryScope: String, CaseIterable, Sendable {
-    case shelves, papers, shelf, unfiled, trash
+    case shelves, papers, shelf, unfiled
 }
 
 public enum AgentLibraryOperation: Sendable, Equatable {
@@ -12,7 +12,6 @@ public enum AgentLibraryOperation: Sendable, Equatable {
     case movePapers([UUID], to: UUID?)
     case prepareDeleteShelf(UUID)
     case prepareDeletePaper(UUID)
-    case restorePaper(UUID)
 }
 
 /// Only the reader's directive may enable writes. Titles, quoted examples, excerpts and model replies grant none.
@@ -81,15 +80,12 @@ public enum LibraryOrganizationIntent {
         if fromShelf {
             if directs(#"(?:把|将|从|remove\b)"#) { names.insert("move_papers") }
         } else if directs(
-            #"(?:删除|移除|移到回收站|丢弃|扔掉|删掉|删去|删)|(?:将|把|从).{0,180}(?:删除|删掉|移除|丢弃|移到(?:回收站|最近删除))|(?:delete|trash|remove)\b"#)
+            #"(?:(?:永久|彻底)?删除|移除|丢弃|扔掉|删掉|删去|删)|(?:将|把|从).{0,180}(?:删除|删掉|移除|丢弃)|(?:permanently )?(?:delete|remove)\b"#)
         {
             let mentionsShelf = has(#"书架|\bshel(?:f|ves)\b"#)
             let mentionsPaper = has(#"论文|文章|这篇|那篇|\b(?:paper|article)s?\b"#)
             if mentionsPaper || !mentionsShelf { names.insert("prepare_delete_paper") }
             if mentionsShelf || !mentionsPaper { names.insert("prepare_delete_shelf") }
-        }
-        if directs(#"(?:恢复|还原|找回)|(?:把|将|从).{0,180}(?:恢复|还原|找回)|(?:restore|undelete|recover)\b"#) {
-            names.insert("restore_paper")
         }
         if directs(
             #"(?:导入|添加|加入|上传|选取).{0,80}(?:本地|pdf|文件)|(?:把|将|从).{0,180}(?:本地|pdf|文件).{0,80}(?:添加|导入|加入|放入)|(?:import|add)\b.{0,80}\b(?:file|local|pdf)s?\b"#

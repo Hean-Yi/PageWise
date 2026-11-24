@@ -10,6 +10,7 @@ struct AgentResultCard: View {
     let didNavigate: () -> Void
     let followUp: (AgentCard) -> Void
     @Environment(\.openURL) private var openURL
+    @Environment(\.requestPaperDeletion) private var requestPaperDeletion
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var showsExcerpt = false
     @State private var selectedVersion: UUID?
@@ -65,7 +66,7 @@ struct AgentResultCard: View {
         if let paperID = card.paperID, card.kind != .onlineCandidate,
             !agent.reader.state.papers.contains(where: { $0.id == paperID })
         {
-            Label("论文已移到最近删除", systemImage: "trash")
+            Label("论文已从书库删除", systemImage: "trash")
                 .font(.caption).foregroundStyle(ReaderTheme.muted)
         } else if card.readingNoteID != nil && !agent.canOpen(card) {
             Label("笔记已删除或原文不可用", systemImage: "note.text")
@@ -200,7 +201,7 @@ struct AgentResultCard: View {
     @ViewBuilder private func removalAction(_ removal: AgentCard.Removal, for card: AgentCard) -> some View {
         let title =
             switch removal {
-            case .paper: "移到最近删除"
+            case .paper: "删除论文…"
             case .shelf: "移除书架"
             }
         if card.removalCompleted {
@@ -211,10 +212,11 @@ struct AgentResultCard: View {
             Text("请求已失效").foregroundStyle(ReaderTheme.muted)
         } else {
             Button(role: .destructive) {
-                confirmingRemoval = true
-                Task {
-                    _ = await agent.confirmRemoval(cardID: card.id)
-                    confirmingRemoval = false
+                switch removal {
+                case .paper:
+                    requestPaperDeletion?(PaperDeletionRequest(title: card.title) { await confirmRemoval(card) })
+                case .shelf:
+                    Task { await confirmRemoval(card) }
                 }
             } label: {
                 Label(title, systemImage: "trash")
@@ -222,6 +224,13 @@ struct AgentResultCard: View {
             .buttonStyle(.bordered)
             .accessibilityLabel("\(title)：\(card.title)")
         }
+    }
+
+    private func confirmRemoval(_ card: AgentCard) async {
+        guard !confirmingRemoval else { return }
+        confirmingRemoval = true
+        defer { confirmingRemoval = false }
+        _ = await agent.confirmRemoval(cardID: card.id)
     }
 
     @ViewBuilder private func localImportAction(_ destination: AgentCard.ImportDestination, for card: AgentCard)

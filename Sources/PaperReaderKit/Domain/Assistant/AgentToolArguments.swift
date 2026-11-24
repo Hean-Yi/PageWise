@@ -99,10 +99,9 @@ public enum AgentToolArguments: Sendable, Equatable {
         case "prepare_delete_shelf":
             try keys(["shelf_id"], required: ["shelf_id"])
             return .library(.prepareDeleteShelf(try uuid("shelf_id")))
-        case "prepare_delete_paper", "restore_paper":
+        case "prepare_delete_paper":
             try keys(["paper_id"], required: ["paper_id"])
-            let id = try uuid("paper_id")
-            return .library(name == "restore_paper" ? .restorePaper(id) : .prepareDeletePaper(id))
+            return .library(.prepareDeletePaper(try uuid("paper_id")))
         case "close_read_paper":
             try keys(["paper_id"], required: ["paper_id"])
             return .closeReadPaper(try string("paper_id", max: 128))

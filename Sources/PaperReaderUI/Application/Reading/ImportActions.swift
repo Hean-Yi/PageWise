@@ -5,6 +5,14 @@ private enum PDFImportOrigin {
     case local
     case downloaded(DownloadedPublication)
     case selectedForPublication(PaperCandidate)
+
+    var publicationID: String? {
+        switch self {
+        case .local: nil
+        case .downloaded(let download): download.candidate.id
+        case .selectedForPublication(let candidate): candidate.id
+        }
+    }
 }
 
 private struct ImportSaveFailure: LocalizedError {
@@ -129,7 +137,7 @@ extension ReaderModel {
         importProgress = "整理摘要"
         await prepareImportedAbstract(for: id)
         guard state.papers.contains(where: { $0.id == id }) else {
-            throw ReaderError.message("导入期间这篇论文已移到最近删除。")
+            throw ReaderError.message("导入期间这篇论文已被删除。")
         }
         return id
     }
@@ -145,18 +153,17 @@ extension ReaderModel {
         var retained = false
         defer { if !retained { try? FileManager.default.removeItem(at: importedDirectory) } }
         try Task.checkCancellation()
-        let archived = state.trashedPapers.first { $0.paper.digest == imported.digest }
-        if let archived, archived.deletedAt > requestedAt {
-            throw ReaderError.message("导入期间这篇论文已移到最近删除。")
+        guard !wasPaperDeleted(since: requestedAt, digest: imported.digest, publicationID: origin.publicationID) else {
+            throw ReaderError.message("导入期间这篇论文已被删除。")
         }
-        if let existing = state.papers.first(where: { $0.digest == imported.digest }) ?? archived?.paper {
+        if let existing = state.papers.first(where: { $0.digest == imported.digest }) {
             var attachment: Paper?
             var link: (paperID: UUID, url: String)?
             var abstract: PublicationAbstractFill?
             switch origin {
             case .downloaded(let publication) where shouldAttachSource(of: publication, toIdenticalPDF: existing):
                 let attached = try await OnlineSourceStore().attach(publication, to: existing, root: root)
-                guard var latest = state.papers.first(where: { $0.id == existing.id }) ?? archived?.paper else {
+                guard var latest = state.papers.first(where: { $0.id == existing.id }) else {
                     throw CancellationError()
                 }
                 latest.onlineSource = attached.onlineSource
@@ -181,10 +188,9 @@ extension ReaderModel {
             }
             let move: ShelfChange? =
                 shelfID != nil || moveDuplicateToShelf ? .move(paperID: existing.id, shelfID: shelfID) : nil
-            let restore = archived.map { PaperTrashChange.restore($0.id, deletedAt: $0.deletedAt) }
-            if restore != nil || move != nil || attachment != nil || link != nil || abstract != nil {
+            if move != nil || attachment != nil || link != nil || abstract != nil {
                 let saved = await save(
-                    cancellable: true, paperTrashChange: restore, shelfChange: move, publishingReflow: attachment,
+                    cancellable: true, shelfChange: move, publishingReflow: attachment,
                     linkingPublication: link,
                     fillingSourceAbstract: abstract)
                 if !saved, let path = attachment?.onlineSource?.archivePath {
@@ -192,7 +198,7 @@ extension ReaderModel {
                 }
                 try requireImportCommit(saved)
             }
-            status = archived == nil ? "论文已在书库中" : "已从最近删除恢复论文"
+            status = "论文已在书库中"
             return existing.id
         }
         switch origin {
@@ -210,7 +216,10 @@ extension ReaderModel {
         let id = imported.id
         pendingImportIDs.insert(id)
         defer { pendingImportIDs.remove(id) }
-        try requireImportCommit(await save(cancellable: true, adding: imported, importShelfID: shelfID))
+        try requireImportCommit(
+            await save(
+                cancellable: true, adding: imported, requestedAt: requestedAt, publicationID: origin.publicationID,
+                importShelfID: shelfID))
         retained = true
         status = "已加入书库"
         return id

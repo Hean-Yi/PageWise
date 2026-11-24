@@ -61,6 +61,7 @@ public struct LibraryView: View {
             } message: {
                 Text(model.message ?? "")
             }
+            .paperDeletionConfirmation()
             .task { await model.load() }
             .task(id: model.status) {
                 guard model.loaded, model.status != "仅保存在此设备", !model.isImporting, model.translating.isEmpty else {
@@ -258,8 +259,6 @@ public struct LibraryView: View {
                     ReadingCalendarView(model: model, date: $calendarDate)
                 case .notebooks:
                     ReadingNotebooksView(model: model, expandedHistory: $expandedNotebooks)
-                case .trash:
-                    RecentlyDeletedPapersView(model: model)
                 case .reader:
                     ReaderView(
                         model: model, sidebarOpen: assistantTab != nil,
@@ -278,13 +277,13 @@ public struct LibraryView: View {
     }
 
     private enum WorkspacePage {
-        case shelf, reader, calendar, notebooks, trash
+        case shelf, reader, calendar, notebooks
 
         var arrivalDistance: CGFloat {
             switch self {
             case .reader: 32
             case .shelf: -24
-            case .calendar, .notebooks, .trash: -16
+            case .calendar, .notebooks: -16
             }
         }
     }
@@ -293,7 +292,6 @@ public struct LibraryView: View {
         switch model.selectedSection {
         case "calendar": .calendar
         case "notebooks": .notebooks
-        case "trash": .trash
         default: model.currentEdition == nil ? .shelf : .reader
         }
     }
@@ -337,16 +335,6 @@ public struct LibraryView: View {
                     model.endReading()
                     model.selectedSection = "notebooks"
                     preferredColumn = .detail
-                }
-                if !model.state.trashedPapers.isEmpty || model.selectedSection == "trash" {
-                    navigation(
-                        "最近删除", icon: "trash", selected: model.selectedSection == "trash",
-                        count: model.state.trashedPapers.count
-                    ) {
-                        model.endReading()
-                        model.selectedSection = "trash"
-                        preferredColumn = .detail
-                    }
                 }
             }
             .animation(ReaderMotion.disclosure(reduceMotion), value: collection)

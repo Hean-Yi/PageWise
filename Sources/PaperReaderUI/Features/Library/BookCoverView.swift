@@ -101,6 +101,7 @@ private struct CoverPalette {
 }
 
 struct BookshelfItem: View {
+    @Environment(\.requestPaperDeletion) private var requestPaperDeletion
     @Bindable var model: ReaderModel
     let paper: Paper
     let recordFrame: (CGRect?) -> Void
@@ -185,7 +186,9 @@ struct BookshelfItem: View {
                 .accessibilityAddTraits(.isButton)
                 .accessibilityAction { model.select(paper.id) }
                 .accessibilityAction(named: "预览论文") { showPreview(.pinned(paper.id)) }
-                .accessibilityAction(named: "移到最近删除") { Task { await model.trashPaper(paper.id) } }
+                .accessibilityAction(named: "删除论文") {
+                    requestPaperDeletion?(PaperDeletionRequest(paper, model: model))
+                }
                 .help("\(paper.title) · \(progress.label) · 按住空格预览")
             HStack(spacing: 7) {
                 Button {
@@ -265,7 +268,7 @@ struct BookshelfItem: View {
             }
         }
         Divider()
-        TrashPaperButton(model: model, paperID: paper.id)
+        DeletePaperButton(paper: paper, model: model)
     }
 }
 

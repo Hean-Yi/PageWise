@@ -16,7 +16,6 @@ public final class LibraryAgent {
     @ObservationIgnored var sessionID = UUID()
     @ObservationIgnored var paperRegistry: Set<UUID> = []
     @ObservationIgnored var shelfRegistry: [UUID: String] = [:]
-    @ObservationIgnored var trashRegistry: [UUID: Date] = [:]
     var confirmingRemovals = Set<UUID>()
     @ObservationIgnored var candidates: [String: PaperCandidate] = [:]
     @ObservationIgnored var candidateIDs: [String: String] = [:]
@@ -223,7 +222,6 @@ public final class LibraryAgent {
         history.removeAll()
         paperRegistry.removeAll()
         shelfRegistry.removeAll()
-        trashRegistry.removeAll()
         candidates.removeAll()
         candidateIDs.removeAll()
         importedPapers.removeAll()
@@ -257,7 +255,9 @@ public final class LibraryAgent {
     }
 
     private func forgetStaleSourceContext() -> Bool {
-        let removed = paperRegistry.intersection(reader.state.trashedPapers.lazy.map(\.id))
+        guard !paperRegistry.isEmpty || !memoryVersions.isEmpty else { return false }
+        let livePapers = Set(reader.state.papers.lazy.map(\.id)).subtracting(reader.pendingImportIDs)
+        let removed = paperRegistry.subtracting(livePapers)
         if !removed.isEmpty {
             paperRegistry.subtract(removed)
             history.removeAll()
@@ -265,7 +265,6 @@ public final class LibraryAgent {
             return true
         }
         guard !memoryVersions.isEmpty else { return false }
-        let livePapers = Set(reader.state.papers.map(\.id)).subtracting(reader.pendingImportIDs)
         let live = reader.state.readingNotes.filter {
             memoryVersions[$0.id] != nil && $0.deletedAt == nil && livePapers.contains($0.paperID)
         }
@@ -360,7 +359,7 @@ public final class LibraryAgent {
         var instructions = Self.instructions
         if !organization.isEmpty {
             instructions +=
-                "\n整理时用 list_library 分页查看书架与论文，按 next_offset 取齐再归类。同名或范围不明时先 ask_user。已登记目标可直接复用，新书架用 create_shelf，按目标书架批量 move_papers；从书架移出用 unfiled。删书架或论文仅展示待确认卡，点击后生效；恢复先查 trash 再 restore_paper。本地文件用 prepare_local_import 打开文件选择卡。"
+                "\n整理时用 list_library 分页查看书架与论文，按 next_offset 取齐再归类。同名或范围不明时先 ask_user。已登记目标可直接复用，新书架用 create_shelf，按目标书架批量 move_papers；从书架移出用 unfiled。删论文用 prepare_delete_paper 展示待确认卡，读者在窗口确认后才会永久删除。移除书架保留其中全部论文。本地文件用 prepare_local_import 打开文件选择卡。"
             if let id = reference == nil ? reader.paper?.id : reference?.paperID,
                 reader.state.papers.contains(where: { $0.id == id })
             {

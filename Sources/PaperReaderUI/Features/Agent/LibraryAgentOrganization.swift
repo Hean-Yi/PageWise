@@ -44,23 +44,13 @@ extension LibraryAgent {
             onSubject("\(ids.count) 篇 → \(name)")
             guard await reader.movePapers(ids, to: destination) else { throw saveFailure }
             return receipt(["count": ids.count], message: "已归类 \(ids.count) 篇论文。")
-        case .restorePaper(let id):
-            guard let stamp = trashRegistry[id],
-                reader.state.trashedPapers.contains(where: { $0.id == id && $0.deletedAt == stamp })
-            else {
-                throw ReaderError.message("请从「最近删除」重新核对这篇论文。")
-            }
-            guard await reader.restorePaper(id) else { throw saveFailure }
-            trashRegistry[id] = nil
-            paperRegistry.insert(id)
-            return receipt(["paper_id": id.uuidString], message: "已恢复论文。")
         case .prepareDeletePaper(let id):
             let paper = try registeredPaper(id.uuidString, page: nil)
             var card = AgentCard(kind: .localPaper, title: paper.title)
             card.removal = .paper(id)
             card.removalGeneration = reader.lastPaperDeletion[id]
             onSubject(card.title)
-            return receipt(["status": "awaiting_confirmation"], message: "请核对下方论文，点「移到最近删除」后生效。", card: card)
+            return receipt(["status": "awaiting_confirmation"], message: "请核对下方论文，点击「删除论文」并在弹窗确认后永久删除。", card: card)
         case .prepareDeleteShelf(let id):
             let shelf = try registeredShelf(id)
             var card = AgentCard(kind: .localPaper, title: shelf.name)
@@ -115,8 +105,8 @@ extension LibraryAgent {
         let text: String
         switch card.removal {
         case .paper(let id):
-            saved = await reader.trashPaper(id)
-            text = "已将《\(card.title)》移到最近删除。"
+            saved = await reader.deletePaper(id)
+            text = "已永久删除《\(card.title)》。"
         case .shelf(let id, let members):
             saved = await reader.deleteShelf(id, expectedName: card.title, members: members)
             text = "已移除书架「\(card.title)」，其中论文已归入未分类。"
@@ -197,11 +187,6 @@ extension LibraryAgent {
             rows = state.shelves.dropFirst(offset).prefix(limit).map {
                 CatalogRow(shelfID: $0.id, title: $0.name, paperCount: counts[$0.id, default: 0])
             }
-        case .trash:
-            total = state.trashedPapers.count
-            rows = state.trashedPapers.dropFirst(offset).prefix(limit).map {
-                CatalogRow(paperID: $0.id, title: String($0.paper.title.prefix(300)))
-            }
         case .shelf, .papers, .unfiled:
             if let shelf { _ = try registeredShelf(shelf) }
             let papers = scope == .papers ? state.papers : state.papers.filter { state.shelfID(for: $0.id) == shelf }
@@ -215,16 +200,12 @@ extension LibraryAgent {
             let page = CatalogPage(results: rows, total: total, nextOffset: more ? offset + rows.count : nil)
             let bytes = try JSONEncoder().encode(page)
             if bytes.count <= limits.maxToolResultBytes, !rows.isEmpty || !more {
-                switch scope {
-                case .trash:
-                    for saved in state.trashedPapers.dropFirst(offset).prefix(rows.count) {
-                        trashRegistry[saved.id] = saved.deletedAt
-                    }
-                case .shelves:
+                if scope == .shelves {
                     for shelf in state.shelves.dropFirst(offset).prefix(rows.count) {
                         shelfRegistry[shelf.id] = shelf.name
                     }
-                default: paperRegistry.formUnion(rows.compactMap(\.paperID))
+                } else {
+                    paperRegistry.formUnion(rows.compactMap(\.paperID))
                 }
                 return AgentToolOutcome(
                     content: String(decoding: bytes, as: UTF8.self), cards: [], truncated: more,

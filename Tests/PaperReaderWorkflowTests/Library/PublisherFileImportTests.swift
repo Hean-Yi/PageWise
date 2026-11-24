@@ -69,34 +69,38 @@ import Testing
         #expect(restored.state.shelfID(for: id) == shelf)
     }
 
-    @Test func reimportRestoresArchivedPaperAndAnnotationsInOneCommit() async throws {
+    @Test func explicitReimportOfDeletedPDFCreatesAnIndependentPaperAndRejectsOlderDownloads() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let reader = try ReaderModel(root: root, credentials: WorkflowCredentials())
         await reader.load()
-        let originalShelf = try #require(await reader.createShelf(name: "待整理"))
         let url = root.appendingPathComponent("sample.pdf")
         try DemoPaper.write(to: url)
-        let id = try #require(await reader.importURLs([url], selectAfterImport: false, shelfID: originalShelf).first)
-        let mark = Highlight(
-            paperID: id, pageKey: "original-0", pageIndex: 0, text: "Attention", rects: [[1, 2, 3, 4]])
-        reader.state.highlights = [mark]
+        let id = try await reader.importPublisherPDF(url, for: citation)
+        let oldPaper = try #require(reader.state.papers.first)
+        reader.state.highlights = [
+            Highlight(paperID: id, pageKey: "original-0", pageIndex: 0, text: "Attention", rects: [[1, 2, 3, 4]])
+        ]
         #expect(await reader.save())
-        #expect(await reader.trashPaper(id))
+        #expect(await reader.deletePaper(id))
 
         #expect(await reader.importURLs([url], requestedAt: .distantPast).isEmpty)
-        await #expect(throws: (any Error).self) {
-            try await reader.importPublisherPDF(url, for: citation, shelfID: UUID())
+        let updatedPDF = root.appendingPathComponent("updated.pdf")
+        try (Data(contentsOf: url) + Data("\n% updated\n".utf8)).write(to: updatedPDF)
+        await #expect(throws: ReaderError.self) {
+            try await reader.importPublisherPDF(updatedPDF, for: citation, requestedAt: .distantPast)
         }
-        #expect(reader.state.papers.isEmpty && reader.state.trashedPapers.map(\.id) == [id])
+        #expect(reader.state.papers.isEmpty && reader.state.highlights.isEmpty)
+        #expect(!FileManager.default.fileExists(atPath: root.appendingPathComponent(oldPaper.originalPath).path))
 
         let destination = try #require(await reader.createShelf(name: "注意力"))
-        #expect(try await reader.importPublisherPDF(url, for: citation, shelfID: destination) == id)
+        let newID = try await reader.importPublisherPDF(url, for: citation, shelfID: destination)
+        #expect(newID != id)
         let reopened = try ReaderModel(root: root, credentials: WorkflowCredentials())
         await reopened.load()
-        #expect(reopened.state.trashedPapers.isEmpty && reopened.state.papers.map(\.id) == [id])
-        #expect(reopened.state.shelfID(for: id) == destination && reopened.importedPaperID(for: citation) == id)
-        #expect(reopened.state.highlights == [mark])
+        #expect(reopened.state.papers.map(\.id) == [newID])
+        #expect(reopened.state.shelfID(for: newID) == destination && reopened.importedPaperID(for: citation) == newID)
+        #expect(reopened.state.highlights.isEmpty)
         let paper = try #require(reopened.state.papers.first)
         #expect(try Data(contentsOf: root.appendingPathComponent(paper.originalPath)) == Data(contentsOf: url))
     }

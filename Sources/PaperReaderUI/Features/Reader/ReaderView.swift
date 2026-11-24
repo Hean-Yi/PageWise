@@ -209,7 +209,7 @@ struct ReaderView: View {
                     }
                 }
                 Divider()
-                TrashPaperButton(model: model, paperID: paper.id)
+                DeletePaperButton(paper: paper, model: model)
             }
         } label: {
             Image(systemName: "ellipsis").font(.body.weight(.semibold))

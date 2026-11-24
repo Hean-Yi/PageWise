@@ -1740,7 +1740,8 @@ private func libraryPayload(_ messages: [AgentMessage], _ call: String) throws -
     #expect(papers.allSatisfy { persisted.shelfID(for: $0.id) == shelf.id })
 }
 
-@Test @MainActor func agentOrganizerRemovalRequiresClickAndBlocksDeletedEvidenceBeforeRestore() async throws {
+@Test @MainActor func agentOrganizerOnlyPreparesPermanentDeletionAndDropsDeletedEvidenceAfterConfirmation() async throws
+{
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: root) }
     let reader = try await makeAgentReader(root)
@@ -1754,9 +1755,11 @@ private func libraryPayload(_ messages: [AgentMessage], _ call: String) throws -
         case 4: return tool("prepare_delete_paper", #"{"paper_id":"\#(paper.id)"}"#, id: "prepare")
         case 5:
             #expect(!messages.contains { $0.toolCallID == "catalog" })
-            return tool("list_library", #"{"scope":"trash"}"#, id: "trash")
-        case 6: return tool("restore_paper", #"{"paper_id":"\#(paper.id)"}"#, id: "restore")
-        default: return .init(role: "assistant", content: "已恢复。")
+            return tool("list_library", #"{"scope":"papers"}"#, id: "remaining")
+        default:
+            let records = try #require(try libraryPayload(messages, "remaining")["results"] as? [[String: Any]])
+            #expect(records.isEmpty)
+            return .init(role: "assistant", content: "书库已空。")
         }
     }
     let agent = LibraryAgent(reader: reader, client: model)
@@ -1772,12 +1775,13 @@ private func libraryPayload(_ messages: [AgentMessage], _ call: String) throws -
     #expect(!(await agent.confirmRemoval(cardID: removal.id)))
     #expect(!agent.open(cardID: open.id))
     #expect(!agent.prepareFollowUp(cardID: open.id))
-    #expect(reader.state.trashedPapers.map(\.id) == [paper.id])
-    agent.send("恢复刚才删除的论文")
+    #expect(reader.state.papers.isEmpty)
+    #expect(agent.turns.last?.answer.contains("已永久删除") == true)
+    agent.send("还剩下哪些论文？")
     try await eventually { !agent.isRunning }
-    #expect(agent.turns.last?.activities.map(\.status) == [.succeeded, .succeeded])
-    #expect(reader.state.papers.map(\.id) == [paper.id])
-    #expect(reader.state.trashedPapers.isEmpty)
+    #expect(agent.turns.last?.activities.map(\.status) == [.succeeded])
+    let persisted = try await reader.store.load()
+    #expect(persisted.papers.isEmpty)
 }
 
 @Test @MainActor func agentOrganizerLocalPickerUsesExistingImportAndShelfRemovalDetectsChangedMembership() async throws

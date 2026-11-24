@@ -77,7 +77,12 @@
         } while !presented && ContinuousClock.now < deadline
         try #require(presented)
 
-        try #require(await model.trashPaper(paperID))
+        let paper = try #require(model.state.papers.first { $0.id == paperID })
+        let deletion = PaperDeletionRequest(paper, model: model)
+        #expect(deletion.title == paper.title)
+        #expect(model.state.papers.contains { $0.id == paperID })
+        await deletion.confirm()
+        try #require(!model.state.papers.contains { $0.id == paperID })
         let removalDeadline = ContinuousClock.now + .seconds(3)
         while descendants(of: host).contains(where: { ($0 as? PaperDragSourceView)?.paperID == paperID }),
             ContinuousClock.now < removalDeadline
