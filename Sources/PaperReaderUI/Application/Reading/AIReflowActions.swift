@@ -63,6 +63,7 @@ extension ReaderModel {
     public func startAIReflow(regenerate: Bool = false) {
         guard loaded, let selected = currentEdition, !translating.contains(selected.id) else { return }
         let id = selected.id
+        let deletion = lastPaperDeletion[id]
         guard selected.usesSourceReflow else {
             message = "本地论文可在「双语重排」中阅读 PDF 段落对照。"
             return
@@ -102,6 +103,7 @@ extension ReaderModel {
             do {
                 let settings = self.modelSettings
                 let key = try await self.modelKey(for: settings)
+                try Task.checkCancellation()
                 guard !key.isEmpty else { throw ReaderError.message("请在模型设置中保存 API Key。") }
                 guard var current = self.state.papers.first(where: { $0.id == id }) else { return }
                 if current.reflowJob == nil || regenerate {
@@ -121,6 +123,7 @@ extension ReaderModel {
                     current.canReflow = true
                     guard await self.save(publishingReflow: current) else { throw ReaderError.message("任务未能保存。") }
                 }
+                try Task.checkCancellation()
                 guard var current = self.state.papers.first(where: { $0.id == id }), let jobID = current.reflowJob?.id
                 else { return }
                 if current.reflowJob?.finished == true {
@@ -134,6 +137,7 @@ extension ReaderModel {
                     current.reflowJob?.modelSettings = settings
                     guard await self.save(publishingReflow: current) else { throw ReaderError.message("模型配置未能保存。") }
                 }
+                try Task.checkCancellation()
                 if current.reflowJob?.failure != nil {
                     current.reflowJob?.failure = nil
                     guard await self.save(publishingReflow: current) else { throw ReaderError.message("恢复状态未能保存。") }
@@ -277,6 +281,7 @@ extension ReaderModel {
                         self.reflowStages[id] = "正在逐段生成，已完成内容可继续阅读"
                         continue
                     }
+                    try Task.checkCancellation()
                     structureRetries = 0
                     outputStalls = 0
                     guard var publication = self.state.papers.first(where: { $0.id == id }),
@@ -295,7 +300,9 @@ extension ReaderModel {
                     }
                 }
             } catch {
-                guard var publication = self.state.papers.first(where: { $0.id == id }) else { return }
+                guard self.lastPaperDeletion[id] == deletion,
+                    var publication = self.state.papers.first(where: { $0.id == id })
+                else { return }
                 let cancelled =
                     error is CancellationError || Task.isCancelled || (error as? URLError)?.code == .cancelled
                 let reason = cancelled ? "已暂停，可从已保存进度继续" : error.localizedDescription

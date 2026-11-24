@@ -4,6 +4,7 @@ import PaperReaderKit
 /// Captured before a model request. Published HTML sections can be appended while a discussion is in flight.
 struct DiscussionNoteScope {
     let paperID: UUID
+    let lastDeletion: Date?
     let digest: String
     let originalPath: String
     let pageCount: Int
@@ -86,7 +87,8 @@ extension ReaderModel {
             }
         }
         return DiscussionNoteScope(
-            paperID: paperID, digest: document.digest, originalPath: document.originalPath,
+            paperID: paperID, lastDeletion: lastPaperDeletion[paperID], digest: document.digest,
+            originalPath: document.originalPath,
             pageCount: document.pageCount,
             htmlReading: artifact, prefersHTML: active ? usesHTMLReading : artifact != nil,
             selectedPaperID: selectedPaperID, retainedID: active ? retainedReadingID : nil,
@@ -94,7 +96,7 @@ extension ReaderModel {
     }
 
     func validateDiscussionScope(_ scope: DiscussionNoteScope, usesHTMLAnchor: Bool = false) throws {
-        guard selectedPaperID == scope.selectedPaperID,
+        guard lastPaperDeletion[scope.paperID] == scope.lastDeletion, selectedPaperID == scope.selectedPaperID,
             state.papers.contains(where: { $0.id == scope.paperID && $0.digest == scope.digest }),
             !pendingImportIDs.contains(scope.paperID)
         else { throw ReaderError.message("当前论文已切换，请回到要标记的论文重试。") }

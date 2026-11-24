@@ -3,13 +3,14 @@ import Observation
 import PaperReaderKit
 
 enum ReaderOrigin: String {
-    case library, calendar, notebooks
+    case library, calendar, notebooks, trash
 
     var title: String {
         switch self {
         case .library: "书库"
         case .calendar: "阅读日历"
         case .notebooks: "阅读笔记"
+        case .trash: "最近删除"
         }
     }
 }
@@ -55,6 +56,7 @@ public final class ReaderModel {
     public var translating: Set<UUID> = []
     public private(set) var pendingArtifactIDs: Set<UUID> = []
     var pendingImportIDs: Set<UUID> = []
+    @ObservationIgnored var lastPaperDeletion: [UUID: Date] = [:]
     public private(set) var modelSettings = ModelSettings()
     public var selectionText = ""
     public var selectionRects: [[Double]] = []
@@ -244,7 +246,7 @@ public final class ReaderModel {
     }
 
     @discardableResult func save(
-        cancellable: Bool = false, adding importedPaper: Paper? = nil,
+        cancellable: Bool = false, adding importedPaper: Paper? = nil, paperTrashChange: PaperTrashChange? = nil,
         shelfChange: ShelfChange? = nil, importShelfID: UUID? = nil,
         orderChange: LibraryOrderChange? = nil, publishingReflow publication: Paper? = nil,
         linkingPublication link: (paperID: UUID, url: String)? = nil,
@@ -254,6 +256,9 @@ public final class ReaderModel {
     ) async -> Bool {
         guard loaded else { return false }
         let previous = saveQueue
+        let priorDeletion = publication.flatMap { lastPaperDeletion[$0.id] }
+        let trashGeneration: Date? =
+            if case .trash(let id, _) = paperTrashChange { lastPaperDeletion[id] } else { nil }
         let store = store
         let task = Task { @MainActor [weak self] in
             _ = await previous?.value
@@ -262,8 +267,18 @@ public final class ReaderModel {
                 if cancellable { try Task.checkCancellation() }
                 // Take the latest state after preceding writes. Uncommitted imports never enter
                 // public state or unrelated queued snapshots, and are published only after commit.
+                if case .trash(let id, _) = paperTrashChange {
+                    guard self.lastPaperDeletion[id] == trashGeneration else {
+                        throw ReaderError.message("论文的删除状态已变化，请重新选择。")
+                    }
+                    if self.readingPaper == id { self.endReading() }
+                }
                 var snapshot = self.state
+                if let paperTrashChange { try snapshot.apply(paperTrashChange) }
                 if let importedPaper {
+                    guard !snapshot.trashedPapers.contains(where: { $0.paper.digest == importedPaper.digest }) else {
+                        throw ReaderError.message("这篇论文已在最近删除中，请恢复原记录。")
+                    }
                     snapshot.papers.insert(importedPaper, at: 0)
                     if let importShelfID {
                         try snapshot.apply(.move(paperID: importedPaper.id, shelfID: importShelfID))
@@ -281,6 +296,7 @@ public final class ReaderModel {
                     snapshot.papers[index].linkedPublicationURLs = urls
                 }
                 if let publication {
+                    guard self.lastPaperDeletion[publication.id] == priorDeletion else { throw CancellationError() }
                     guard let index = snapshot.papers.firstIndex(where: { $0.id == publication.id }) else {
                         throw ReaderError.message("论文已不在书库中，未发布页面。")
                     }
@@ -341,6 +357,11 @@ public final class ReaderModel {
                 }
                 if let report { snapshot.chats.append(report) }
                 try await store.save(snapshot, respectingCancellation: cancellable)
+                if let paperTrashChange {
+                    if case .trash(let id, let date) = paperTrashChange { self.didTrashPaper(id, at: date) }
+                    // Reapply just this paper to live state. Other papers may have been edited during I/O.
+                    try self.state.apply(paperTrashChange)
+                }
                 if !additions.isEmpty { self.state.readingNotes.append(contentsOf: additions) }
                 if !noteMarks.isEmpty { self.state.highlights.append(contentsOf: noteMarks) }
                 if let report { self.state.chats.append(report) }

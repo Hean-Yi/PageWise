@@ -65,6 +65,7 @@ public actor LibraryStore {
         guard state.version == LibraryState.currentVersion else {
             throw ReaderError.message("不能写入不受支持的书库版本，原有资料已保留。")
         }
+        try state.validateTrash()
         try state.validateShelves()
         try state.validateOrdering()
         let data = try JSONEncoder().encode(state)

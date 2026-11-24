@@ -179,6 +179,7 @@ extension ReaderModel {
             in: scope, sources: proposal.sources, markdown: linked.markdown, requestID: turn.id, instruction: question,
             citations: linked.citations, dimension: proposal.dimension
         )
+        guard lastPaperDeletion[scope.paperID] == scope.lastDeletion else { return }
         turn.readingNoteID = note.id
         assistantDraft = nil
         state.chats.append(turn)

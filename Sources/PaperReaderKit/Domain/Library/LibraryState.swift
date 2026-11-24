@@ -1,9 +1,10 @@
 import Foundation
 
 public struct LibraryState: Codable, Sendable {
-    public static let currentVersion = 10
+    public static let currentVersion = 11
     public var version = currentVersion
     public var papers: [Paper] = []
+    public var trashedPapers: [TrashedPaper] = []
     public var readingNotes: [ReadingNote] = []
     public var highlights: [Highlight] = []
     public var chats: [ChatTurn] = []
@@ -19,7 +20,7 @@ public struct LibraryState: Codable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case version, papers, highlights, chats, memories, reading, workspace, bookmarks, shelves, paperShelfIDs
-        case manualPaperIDs, preferredSort, readingNotes
+        case manualPaperIDs, preferredSort, readingNotes, trashedPapers
     }
 
     public init(from decoder: any Decoder) throws {
@@ -81,6 +82,9 @@ public struct LibraryState: Codable, Sendable {
                 readingNotes[index].anchors = []
             }
         }
+        // v11 introduces reversible paper deletion; all older snapshots start with an empty trash.
+        trashedPapers = storedVersion >= 11 ? try values.decode([TrashedPaper].self, forKey: .trashedPapers) : []
+        try validateTrash()
         try validateOrdering()
         try validateShelves()
         version = Self.currentVersion
