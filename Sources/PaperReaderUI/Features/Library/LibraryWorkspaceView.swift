@@ -135,8 +135,8 @@ private struct ShelfWorkspaceContent: View {
                         if !query.isEmpty && collection != .all {
                             Text("搜索结果").font(.callout).foregroundStyle(ReaderTheme.muted).frame(height: 44)
                         }
-                        Spacer(minLength: 0)
-                        sortMenu.frame(height: 44)
+                        if collection != .all { Spacer(minLength: 0) }
+                        sortMenu.frame(height: collection == .all ? TopicShelvesView.rowHeight : 44)
                     }
                     Rectangle().fill(ReaderTheme.line).frame(height: 1).padding(.bottom, 24)
                     if onlineSearch.isExpanded {

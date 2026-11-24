@@ -10,43 +10,47 @@ struct TopicShelvesView: View {
     @State private var editingID: UUID?
     @State private var name = ""
     @State private var saving = false
-    @State private var scrollTargetID: ShelfScrollTarget? = .unclassified
     @FocusState private var nameFocused: Bool
     @Namespace private var shelfSelection
 
+    static var rowHeight: CGFloat {
+        #if os(macOS)
+            36
+        #else
+            44
+        #endif
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            ScrollView(.horizontal) {
-                HStack(spacing: 8) {
-                    shelfItem(name: "未分类论文", icon: "tray", shelfID: nil)
-                        .id(ShelfScrollTarget.unclassified)
-                    ForEach(model.state.shelves) { shelf in
-                        shelfItem(name: shelf.name, icon: "books.vertical", shelfID: shelf.id)
-                            .id(ShelfScrollTarget.shelf(shelf.id))
-                            .contextMenu {
-                                Button("打开书架") { selectedShelfID = shelf.id }
-                                Button("改名") { beginEditing(shelf) }
-                                    .disabled(saving)
-                                Button("删除书架", role: .destructive) {
-                                    Task {
-                                        if await model.deleteShelf(shelf.id), selectedShelfID == shelf.id {
-                                            selectedShelfID = nil
-                                        }
+        let membership = model.state.paperShelfIDs.values
+        let counts = membership.reduce(into: [UUID: Int]()) { $0[$1, default: 0] += 1 }
+        VStack(alignment: .leading, spacing: 8) {
+            ShelfRows {
+                shelfItem(name: "未分类论文", shelfID: nil, count: model.state.papers.count - membership.count)
+                ForEach(model.state.shelves) { shelf in
+                    shelfItem(name: shelf.name, shelfID: shelf.id, count: counts[shelf.id, default: 0])
+                        .contextMenu {
+                            Button("打开书架") { selectedShelfID = shelf.id }
+                            Button("改名") { beginEditing(shelf) }
+                                .disabled(saving)
+                            Button("删除书架", role: .destructive) {
+                                Task {
+                                    if await model.deleteShelf(shelf.id), selectedShelfID == shelf.id {
+                                        selectedShelfID = nil
                                     }
-                                }.disabled(saving)
-                            }
-                    }
-                    Button {
-                        beginEditing(nil)
-                    } label: {
-                        Image(systemName: "plus").frame(width: 44, height: 44)
-                    }
-                    .buttonStyle(.plain).foregroundStyle(ReaderTheme.muted)
-                    .help("新建书架").accessibilityLabel("新建书架").disabled(saving)
-                    .id(ShelfScrollTarget.add)
-                }.scrollTargetLayout()
+                                }
+                            }.disabled(saving)
+                        }
+                }
+                Button {
+                    beginEditing(nil)
+                } label: {
+                    Image(systemName: "plus")
+                        .frame(width: Self.rowHeight, height: Self.rowHeight).contentShape(Rectangle())
+                }
+                .buttonStyle(.plain).foregroundStyle(ReaderTheme.muted)
+                .help("新建书架").accessibilityLabel("新建书架").disabled(saving)
             }
-            .scrollPosition(id: $scrollTargetID, anchor: .leading)
             if editing {
                 nameEditor
                     .transition(reduceMotion ? .identity : .opacity.combined(with: .offset(y: -6)))
@@ -54,18 +58,11 @@ struct TopicShelvesView: View {
         }
         .animation(ReaderMotion.disclosure(reduceMotion), value: editing)
         .animation(ReaderMotion.disclosure(reduceMotion), value: selectedShelfID)
-        .onChange(of: selectedShelfID, initial: true) { previousID, id in
-            withAnimation(ReaderMotion.disclosure(reduceMotion || previousID == id)) {
-                // Keep scroll position separate from selection so manual scrolling does not change the shelf.
-                scrollTargetID = id.map(ShelfScrollTarget.shelf) ?? .unclassified
-            }
-        }
     }
 
-    private func shelfItem(name: String, icon: String, shelfID: UUID?) -> some View {
+    private func shelfItem(name: String, shelfID: UUID?, count: Int) -> some View {
         TopicShelfItem(
-            name: name, icon: icon,
-            count: model.state.papers.filter { model.state.shelfID(for: $0.id) == shelfID }.count,
+            name: name, isUnclassified: shelfID == nil, count: count,
             selected: selectedShelfID == shelfID, dragActive: dragActive,
             selection: shelfSelection,
             select: { selectedShelfID = shelfID },
@@ -129,15 +126,52 @@ struct TopicShelvesView: View {
     }
 }
 
-private enum ShelfScrollTarget: Hashable {
-    case unclassified
-    case shelf(UUID)
-    case add
+/// Measures shelf buttons at their natural widths and moves whole buttons onto the next row.
+struct ShelfRows: Layout {
+    private let columnSpacing: CGFloat = 4
+    private let rowSpacing: CGFloat = 2
+
+    func makeCache(subviews: Subviews) -> [CGSize] {
+        subviews.map { $0.sizeThatFits(.unspecified) }
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout [CGSize]) -> CGSize {
+        let width =
+            proposal.width.flatMap { $0.isFinite ? $0 : nil }
+            ?? cache.reduce(0) { $0 + $1.width } + CGFloat(max(0, cache.count - 1)) * columnSpacing
+        return CGSize(width: width, height: arrange(cache, width: width) { _, _ in })
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout [CGSize]) {
+        arrange(cache, width: bounds.width) { index, frame in
+            subviews[index].place(
+                at: CGPoint(x: bounds.minX + frame.minX, y: bounds.minY + frame.minY),
+                anchor: .topLeading, proposal: ProposedViewSize(frame.size))
+        }
+    }
+
+    @discardableResult
+    func arrange(_ sizes: [CGSize], width: CGFloat, place: (Int, CGRect) -> Void) -> CGFloat {
+        var origin = CGPoint.zero
+        var rowHeight: CGFloat = 0
+        for (index, size) in sizes.enumerated() {
+            let itemWidth = min(size.width, width)
+            if origin.x > 0 && origin.x + itemWidth > width {
+                origin.x = 0
+                origin.y += rowHeight + rowSpacing
+                rowHeight = 0
+            }
+            place(index, CGRect(origin: origin, size: CGSize(width: itemWidth, height: size.height)))
+            origin.x += itemWidth + columnSpacing
+            rowHeight = max(rowHeight, size.height)
+        }
+        return origin.y + rowHeight
+    }
 }
 
 private struct TopicShelfItem: View {
     let name: String
-    let icon: String
+    let isUnclassified: Bool
     let count: Int
     let selected: Bool
     let dragActive: Bool
@@ -151,13 +185,13 @@ private struct TopicShelfItem: View {
     var body: some View {
         Button(action: select) {
             HStack(spacing: 7) {
-                Image(systemName: icon).font(.system(size: 11))
-                Text(name).font(.system(size: 12, weight: selected ? .semibold : .regular))
-                    .lineLimit(1).frame(maxWidth: 180)
-                Text("\(count)").font(.system(size: 10)).foregroundStyle(ReaderTheme.muted)
+                if isUnclassified { Image(systemName: "tray").font(.system(size: 11)) }
+                Text(name).font(.system(size: 12, weight: .medium)).lineLimit(1)
+                Text("\(count)").font(.system(size: 10)).monospacedDigit().fixedSize().foregroundStyle(
+                    ReaderTheme.muted)
             }
             .foregroundStyle(selected || targeted ? ReaderTheme.accent : ReaderTheme.muted)
-            .padding(.horizontal, 12).frame(height: 44)
+            .padding(.horizontal, 10).frame(height: 32)
             .background(
                 ReaderTheme.accent.opacity(targeted ? 0.14 : selected ? 0.06 : 0),
                 in: RoundedRectangle(cornerRadius: 7)
@@ -172,6 +206,7 @@ private struct TopicShelfItem: View {
                 RoundedRectangle(cornerRadius: 7)
                     .strokeBorder(ReaderTheme.accent.opacity(targeted ? 0.8 : 0), lineWidth: 1.5)
             }
+            .frame(height: TopicShelvesView.rowHeight)
             .scaleEffect(targeted && !reduceMotion ? 1.04 : 1)
             .contentShape(RoundedRectangle(cornerRadius: 7))
         }
