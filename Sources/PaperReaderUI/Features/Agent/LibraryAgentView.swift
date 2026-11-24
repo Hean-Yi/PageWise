@@ -95,9 +95,9 @@ struct LibraryAgentView: View {
                     Button {
                         withAnimation(ReaderMotion.disclosure(reduceMotion)) { agent.clearFollowUp() }
                     } label: {
-                        Image(systemName: "xmark.circle.fill")
+                        Image(systemName: "xmark.circle.fill").readerIconTarget(macOS: 22)
                     }
-                    .buttonStyle(.plain).accessibilityLabel("移除追问来源").help("移除追问来源")
+                    .readerPlainButton(cornerRadius: 6).accessibilityLabel("移除追问来源").help("移除追问来源")
                 }
                 .font(.caption).foregroundStyle(ReaderTheme.muted)
                 .padding(.vertical, 5).padding(.horizontal, 8).background(ReaderTheme.elevated, in: Capsule())

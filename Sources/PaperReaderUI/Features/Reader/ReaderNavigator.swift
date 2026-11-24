@@ -291,9 +291,10 @@ struct ReaderNavigator: View {
                     Button {
                         query = ""
                     } label: {
-                        Image(systemName: "xmark.circle.fill")
+                        Image(systemName: "xmark.circle.fill").readerIconTarget(macOS: 22)
                     }
-                    .buttonStyle(.plain).foregroundStyle(ReaderTheme.muted).help("清除文内查找").accessibilityLabel("清除文内查找")
+                    .readerPlainButton(cornerRadius: 6).foregroundStyle(ReaderTheme.muted).help("清除文内查找")
+                    .accessibilityLabel("清除文内查找")
                 }
             }.font(.system(size: 12)).padding(10).background(ReaderTheme.surface, in: RoundedRectangle(cornerRadius: 8))
                 .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(ReaderTheme.line)).padding(14)

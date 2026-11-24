@@ -73,9 +73,9 @@ struct PaperAssistantView: View {
                     Button {
                         model.clearAssistantSelection()
                     } label: {
-                        Image(systemName: "xmark.circle.fill")
+                        Image(systemName: "xmark.circle.fill").readerIconTarget(macOS: 22)
                     }
-                    .buttonStyle(.plain).foregroundStyle(ReaderTheme.muted).accessibilityLabel("移除选文")
+                    .readerPlainButton(cornerRadius: 6).foregroundStyle(ReaderTheme.muted).accessibilityLabel("移除选文")
                 }.fixedSize(horizontal: false, vertical: true)
             }
             TextField("问这篇论文…", text: $question, axis: .vertical)

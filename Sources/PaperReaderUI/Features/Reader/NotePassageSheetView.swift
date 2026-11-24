@@ -4,6 +4,7 @@ import SwiftUI
 struct NotePassageSheetView: View {
     let model: ReaderModel
     let sheet: NotePassageSheet
+    @FocusState private var searchFocused: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -17,11 +18,14 @@ struct NotePassageSheetView: View {
                 Button {
                     model.notePassageSheet = nil
                 } label: {
-                    Image(systemName: "xmark.circle.fill").foregroundStyle(ReaderTheme.muted)
-                }.buttonStyle(.plain).accessibilityLabel("关闭").keyboardShortcut(.cancelAction)
+                    Image(systemName: "xmark").font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(ReaderTheme.muted).readerIconTarget()
+                }
+                .readerPlainButton().accessibilityLabel("关闭").help("关闭").keyboardShortcut(.cancelAction)
             }
             switch sheet {
-            case .picker(let draft): NotePassagePicker(model: model, draft: draft)
+            case .picker(let draft):
+                NotePassagePicker(model: model, draft: draft, searchFocused: $searchFocused)
             case .preview(let noteID, let citationID):
                 NotePassagePreviewView(model: model, noteID: noteID, citationID: citationID)
             }
@@ -29,6 +33,7 @@ struct NotePassageSheetView: View {
         .padding(22).background(ReaderTheme.surface)
         #if os(macOS)
             .frame(width: 500)
+            .defaultFocus($searchFocused, true)
         #endif
     }
 
@@ -43,6 +48,7 @@ struct NotePassageSheetView: View {
 private struct NotePassagePicker: View {
     let model: ReaderModel
     let draft: NotePassageDraft
+    let searchFocused: FocusState<Bool>.Binding
     @State private var query = ""
     @State private var choices: [Evidence] = []
     @State private var loading = true
@@ -53,9 +59,17 @@ private struct NotePassagePicker: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
                 Image(systemName: "magnifyingglass").foregroundStyle(ReaderTheme.muted)
-                TextField("搜索笔记或论文标题", text: $query).textFieldStyle(.plain)
+                TextField("搜索笔记或论文标题", text: $query)
+                    .textFieldStyle(.plain).focused(searchFocused).tint(ReaderTheme.accent)
             }
             .padding(9).background(ReaderTheme.canvas, in: RoundedRectangle(cornerRadius: 8))
+            .overlay {
+                if searchFocused.wrappedValue {
+                    RoundedRectangle(cornerRadius: 8)
+                        .strokeBorder(ReaderTheme.accent, lineWidth: 1)
+                        .allowsHitTesting(false).accessibilityHidden(true)
+                }
+            }
             Group {
                 if let error {
                     Text(error).foregroundStyle(ReaderTheme.muted)
@@ -89,8 +103,8 @@ private struct NotePassagePicker: View {
                                         Spacer(minLength: 0)
                                         Image(systemName: "plus").foregroundStyle(ReaderTheme.accent)
                                     }
-                                    .padding(.vertical, 9).contentShape(Rectangle())
-                                }.buttonStyle(.plain).disabled(insertion != nil)
+                                    .padding(.horizontal, 5).padding(.vertical, 9).contentShape(Rectangle())
+                                }.readerPlainButton().disabled(insertion != nil)
                                 Divider()
                             }
                         }

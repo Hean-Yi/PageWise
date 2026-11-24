@@ -90,14 +90,20 @@ extension ReaderIcon.Glyph {
                     (19, 8.2), (10.9, 17.7),
                 ], closed: true)
         case .favorite:
-            // A star with one folded, contrasting facet; reversing the facet marks selection.
-            art.outline.line(
-                [
-                    (12.7, 2.1), (15.1, 8.6), (22, 10), (16.6, 14.4),
-                    (17.5, 21.4), (11.7, 17.9), (5.4, 20.6), (7.4, 14),
-                    (2.4, 9), (9.3, 8.3),
-                ], closed: true)
-            art.spot.line([(12.7, 2.1), (11.6, 12.5), (2.4, 9), (9.3, 8.3)], closed: true)
+            // A cut-paper heart. The short ink cut reverses out when the heart is filled.
+            art.outline = Path { path in
+                path.move(to: CGPoint(x: 11.8, y: 20.7))
+                path.addQuadCurve(to: CGPoint(x: 2.2, y: 9.6), control: CGPoint(x: 2.2, y: 13))
+                path.addCurve(
+                    to: CGPoint(x: 11.8, y: 6.8),
+                    control1: CGPoint(x: 2.2, y: 3.1), control2: CGPoint(x: 8.2, y: 2.3))
+                path.addCurve(
+                    to: CGPoint(x: 21.8, y: 9), control1: CGPoint(x: 15.3, y: 1.5),
+                    control2: CGPoint(x: 21.8, y: 3.3))
+                path.addQuadCurve(to: CGPoint(x: 18.1, y: 15.1), control: CGPoint(x: 21.8, y: 11.8))
+                path.closeSubpath()
+            }
+            art.spot.line([(4.9, 9.7), (7.2, 10.8), (9.7, 15.8), (6.2, 12.7)], closed: true)
         case .calendar:
             // A tear-off date sheet with a printed top band and a single oversized numeral.
             art.spot.line([(3, 5), (20.6, 5), (20.6, 9.3), (3, 9.3)], closed: true)
