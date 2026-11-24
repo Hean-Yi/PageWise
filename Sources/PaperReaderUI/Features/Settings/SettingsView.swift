@@ -175,10 +175,23 @@ struct SettingsView: View {
     }
 
     private var compactNavigation: some View {
-        Picker("设置分类", selection: $category) {
-            ForEach(Category.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+        HStack(spacing: 3) {
+            ForEach(Category.allCases, id: \.self) { item in
+                let selected = category == item
+                Button {
+                    category = item
+                } label: {
+                    Text(item.rawValue).font(.callout.weight(selected ? .semibold : .regular))
+                        .foregroundStyle(selected ? ReaderTheme.accent : ReaderTheme.muted)
+                        .frame(maxWidth: .infinity, minHeight: 44)
+                        .sidebarSelectionTarget(selected).contentShape(Capsule())
+                }
+                .buttonStyle(.plain).accessibilityAddTraits(selected ? .isSelected : [])
+            }
         }
-        .pickerStyle(.segmented).labelsHidden().disabled(isTesting)
+        .sidebarSelectionIndicator(for: category, in: Capsule(), reduceMotion: reduceMotion)
+        .padding(3).background(ReaderTheme.sidebar, in: Capsule()).disabled(isTesting)
+        .accessibilityElement(children: .contain).accessibilityLabel("设置分类")
         .padding(.horizontal, 20).padding(.top, 18)
     }
 
@@ -221,11 +234,12 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 17) {
             VStack(alignment: .leading, spacing: 7) {
                 fieldLabel("服务预设")
-                Menu {
-                    Picker("服务预设", selection: Binding(get: { provider }, set: { selectProvider($0) })) {
-                        ForEach(ModelServicePreset.allCases) { Text($0.displayName).tag($0) }
-                    }.pickerStyle(.inline).labelsHidden()
-                } label: {
+                ReaderPopupMenu(
+                    "服务预设",
+                    items: ModelServicePreset.allCases.map { preset in
+                        .action(preset.displayName, selected: preset == provider) { selectProvider(preset) }
+                    }, width: 250
+                ) {
                     HStack(spacing: 12) {
                         Image(systemName: "network").readerSymbolInk().foregroundStyle(ReaderTheme.accent)
                             .accessibilityHidden(true)
@@ -238,8 +252,7 @@ struct SettingsView: View {
                     .background(fieldBackground(focused: false))
                     .accessibilityElement(children: .combine)
                 }
-                .readerMenuIconInteraction().menuIndicator(.hidden)
-                .accessibilityLabel("服务预设").accessibilityValue(provider.displayName)
+                .accessibilityValue(provider.displayName)
             }
             if provider == .custom {
                 input("API 地址", field: .address) {

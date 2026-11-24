@@ -111,18 +111,20 @@ struct TopicShelvesView<SortMenu: View>: View {
         ForEach(model.state.shelves) { shelf in
             shelfItem(name: shelf.name, shelfID: shelf.id, count: counts[shelf.id, default: 0])
                 .id(shelf.id)
-                .contextMenu {
-                    Button("打开书架") { selectedShelfID = shelf.id }
-                    Button("改名") { beginEditing(shelf) }
-                        .disabled(saving)
-                    Button("删除书架", role: .destructive) {
-                        Task {
-                            if await model.deleteShelf(shelf.id), selectedShelfID == shelf.id {
-                                selectedShelfID = nil
+                .readerContextMenu(
+                    shelf.name + "的选项",
+                    items: [
+                        .action("打开书架", icon: .library) { selectedShelfID = shelf.id },
+                        .action("改名", icon: .annotation, enabled: !saving) { beginEditing(shelf) },
+                        .divider,
+                        .action("删除书架", icon: .delete, enabled: !saving, destructive: true) {
+                            Task {
+                                if await model.deleteShelf(shelf.id), selectedShelfID == shelf.id {
+                                    selectedShelfID = nil
+                                }
                             }
-                        }
-                    }.disabled(saving)
-                }
+                        },
+                    ])
         }
     }
 

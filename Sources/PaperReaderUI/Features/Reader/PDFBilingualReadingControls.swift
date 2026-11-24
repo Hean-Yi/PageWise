@@ -7,34 +7,32 @@ struct PDFBilingualAppearanceMenu: View {
     @AppStorage("PDFBilingualFontSize") private var fontSize = 16
 
     var body: some View {
-        Menu {
-            Section("对照布局") {
-                Picker("对照布局", selection: $layout) {
-                    Text("段落对照").tag(PDFBilingualLayoutPreference.paragraph)
-                    Text("逐句上下").tag(PDFBilingualLayoutPreference.stacked)
-                    Text("左右并排").tag(PDFBilingualLayoutPreference.split).disabled(width < 570)
-                    Text("随窗口调整").tag(PDFBilingualLayoutPreference.auto)
-                }.pickerStyle(.inline).labelsHidden()
-                if layout.resolved(at: width) == .split {
-                    Toggle(
-                        "跟随原句",
-                        isOn: Binding(
-                            get: { model.pdfBilingual.followsScroll }, set: { model.pdfBilingual.followsScroll = $0 }))
-                }
+        ReaderPopupMenu("阅读外观", items: items) {
+            Image(systemName: "textformat.size").readerSymbolInk().readerIconTarget(macOS: 30)
+        }.fixedSize().help("阅读外观")
+    }
+
+    private var items: [ReaderMenuItem] {
+        let layouts: [(String, PDFBilingualLayoutPreference)] = [
+            ("段落对照", .paragraph), ("逐句上下", .stacked), ("左右并排", .split), ("随窗口调整", .auto),
+        ]
+        var items: [ReaderMenuItem] = [.section("对照布局")]
+        items += layouts.map { title, value in
+            .action(title, selected: layout == value, enabled: value != .split || width >= 570) {
+                layout = value
             }
-            Section("译文字号") {
-                Picker("译文字号", selection: $fontSize) {
-                    Text("小").tag(14)
-                    Text("标准").tag(16)
-                    Text("大").tag(19)
-                }.pickerStyle(.inline).labelsHidden()
-            }
-        } label: {
-            Image(systemName: "textformat.size").readerSymbolInk()
-                .frame(minWidth: 30, minHeight: 30).contentShape(Rectangle())
         }
-        .readerMenuIconInteraction().menuIndicator(.hidden).fixedSize()
-        .accessibilityLabel("阅读外观").help("阅读外观")
+        if layout.resolved(at: width) == .split {
+            items.append(
+                .action("跟随原句", selected: model.pdfBilingual.followsScroll) {
+                    model.pdfBilingual.followsScroll.toggle()
+                })
+        }
+        items += [.divider, .section("译文字号")]
+        items += [("小", 14), ("标准", 16), ("大", 19)].map { title, value in
+            .action(title, selected: fontSize == value) { fontSize = value }
+        }
+        return items
     }
 }
 
@@ -72,7 +70,7 @@ struct PDFTranslationStatusControl: View {
                 .readerIconButtonStyle(.borderless).accessibilityLabel(label).help(label)
                 .popover(isPresented: $showingDetails) {
                     details(status, paperID: paperID)
-                        .presentationCompactAdaptation(.popover)
+                        .readerPopupSurface()
                 }
             } else if layout == .paragraph && session.selectionSource == nil {
                 Button("翻译全文") { session.setParagraphLayout(true, model: model) }
@@ -108,12 +106,14 @@ struct PDFTranslationStatusControl: View {
         let progress = status.progress
         return VStack(alignment: .leading, spacing: 10) {
             Text("已处理 \(progress.processedPages) / \(progress.pageCount) 页")
-                .font(.headline).monospacedDigit()
+                .font(ReaderTheme.editorial(16, weight: .semibold)).monospacedDigit()
             if progress.partialPages > 0 { Text("\(progress.partialPages) 页有缺译") }
             if progress.skippedPages > 0 { Text("\(progress.skippedPages) 页保留原版") }
             switch status.phase {
             case .running:
-                if let page = progress.activePageIndex { Text("正在处理第 \(page + 1) 页").foregroundStyle(.secondary) }
+                if let page = progress.activePageIndex {
+                    Text("正在处理第 \(page + 1) 页").foregroundStyle(ReaderTheme.muted)
+                }
                 Button("暂停翻译") {
                     model.pdfDocumentTranslation.pause(paperID)
                     showingDetails = false
@@ -130,7 +130,8 @@ struct PDFTranslationStatusControl: View {
                 if progress.partialPages > 0 { Button("重试缺译部分", action: resume) }
             }
         }
-        .font(.callout).padding(16).frame(idealWidth: 240, maxWidth: 320, alignment: .leading)
+        .font(.callout).foregroundStyle(ReaderTheme.ink).tint(ReaderTheme.accent)
+        .buttonStyle(.borderless).padding(16).frame(idealWidth: 240, maxWidth: 320, alignment: .leading)
     }
 
     private func resume() {

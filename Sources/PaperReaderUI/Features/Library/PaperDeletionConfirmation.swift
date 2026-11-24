@@ -26,9 +26,15 @@ struct DeletePaperButton: View {
     @Environment(\.requestPaperDeletion) private var requestPaperDeletion
 
     var body: some View {
-        Button("删除论文…", systemImage: "trash", role: .destructive) {
+        Button(role: .destructive) {
             requestPaperDeletion?(PaperDeletionRequest(paper, model: model))
+        } label: {
+            ReaderIcon(.delete, size: 17)
+                .foregroundStyle(ReaderTheme.muted).readerIconTarget(macOS: 32)
         }
+        .readerIconButtonStyle(.plain)
+        .disabled(requestPaperDeletion == nil)
+        .help("删除论文").accessibilityLabel("删除论文")
     }
 }
 

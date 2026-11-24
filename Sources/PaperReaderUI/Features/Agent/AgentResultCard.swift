@@ -79,23 +79,16 @@ struct AgentResultCard: View {
     private func resultTile(for card: AgentCard) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             if !group.alternateVersionIDs.isEmpty {
-                Menu {
-                    ForEach(versions) { version in
-                        Button {
-                            selectedVersion = version.id
-                        } label: {
-                            if version.id == card.id {
-                                Label(versionLabel(version), systemImage: "checkmark")
-                            } else {
-                                Text(versionLabel(version))
-                            }
-                        }
+                ReaderPopupMenu(
+                    "选择论文版本",
+                    items: versions.map { version in
+                        .action(versionLabel(version), selected: version.id == card.id) { selectedVersion = version.id }
                     }
-                } label: {
-                    Label(versionLabel(card), systemImage: "square.stack").labelStyle(ReaderSymbolLabelStyle())
+                ) {
+                    ReaderMenuValueLabel(versionLabel(card))
                 }
-                .readerMenuIconInteraction().fixedSize().font(.caption)
-                .padding(.leading, 12).padding(.top, 8).accessibilityLabel("选择论文版本")
+                .fixedSize().font(.caption)
+                .padding(.leading, 12).padding(.top, 8).accessibilityValue(versionLabel(card))
             }
             if card.removal != nil || card.localImportDestination != nil {
                 label(for: card, accessory: nil)

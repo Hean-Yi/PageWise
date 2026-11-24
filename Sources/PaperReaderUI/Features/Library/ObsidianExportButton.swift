@@ -28,15 +28,16 @@ struct ObsidianExportButton: View {
                 }
             }.readerIconButtonStyle(.borderless)
             if offersDiscussion && model.hasObsidianDiscussion(paperID: paperID) {
-                Menu {
-                    Button("同时整理讨论…", systemImage: "text.bubble") {
-                        request?(ObsidianExportRequest(paperID: paperID, includeDiscussion: true))
-                    }
-                } label: {
-                    ReaderIcon(.chevron, size: 12).rotationEffect(.degrees(90))
-                }
-                .readerMenuIconInteraction().menuIndicator(.hidden).fixedSize()
-                .accessibilityLabel("更多整理选项")
+                ReaderPopupMenu(
+                    "更多整理选项",
+                    items: [
+                        .action("同时整理讨论…", icon: .discussion) {
+                            request?(ObsidianExportRequest(paperID: paperID, includeDiscussion: true))
+                        }
+                    ]
+                ) {
+                    ReaderIcon(.chevron, size: 12).rotationEffect(.degrees(90)).readerIconTarget(macOS: 24)
+                }.fixedSize()
             }
         }
         .buttonStyle(.borderless).tint(ReaderTheme.accent)

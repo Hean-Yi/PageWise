@@ -88,7 +88,7 @@ struct AgentTranscriptView: View {
             }
             .padding(13).frame(maxWidth: .infinity, alignment: .leading)
             .background(ReaderTheme.elevated, in: RoundedRectangle(cornerRadius: 12))
-            .contextMenu { AgentCopyButton(text: turn.question) }
+            .agentCopyMenu(turn.question)
         case .process:
             AgentProcessView(turn: turn, isRunning: agent.isRunning && agent.turns.last?.id == turn.id)
         case .answer:
@@ -172,16 +172,19 @@ private struct JumpToLatest: ViewModifier {
     }
 }
 
-struct AgentCopyButton: View {
-    let text: String
-    var body: some View {
-        Button("复制", systemImage: "doc.on.doc") {
-            #if os(macOS)
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(text, forType: .string)
-            #else
-                UIPasteboard.general.string = text
-            #endif
-        }
+extension View {
+    func agentCopyMenu(_ text: String) -> some View {
+        readerContextMenu(
+            "文本操作",
+            items: [
+                .action("复制") {
+                    #if os(macOS)
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(text, forType: .string)
+                    #else
+                        UIPasteboard.general.string = text
+                    #endif
+                }
+            ])
     }
 }

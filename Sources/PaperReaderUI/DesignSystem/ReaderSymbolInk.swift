@@ -5,10 +5,6 @@ extension View {
     /// its strokes while the underlying symbol, title and hit target stay in place.
     func readerSymbolInk() -> some View { modifier(SymbolInk()) }
 
-    /// A SwiftUI Menu continues to own tracking, keyboard opening and dismissal.
-    func readerMenuIconInteraction() -> some View {
-        menuStyle(.button).buttonStyle(ReaderMenuLabel())
-    }
 }
 
 struct ReaderSymbolLabelStyle: LabelStyle {
@@ -21,23 +17,6 @@ struct ReaderSymbolLabelStyle: LabelStyle {
             configuration.icon.readerSymbolInk()
         }
         if iconOnly { label.labelStyle(.iconOnly) } else { label.labelStyle(.titleAndIcon) }
-    }
-}
-
-private struct ReaderMenuLabel: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        MenuInk(label: configuration.label, pressed: configuration.isPressed)
-    }
-
-    private struct MenuInk: View {
-        let label: Configuration.Label
-        let pressed: Bool
-        @State private var hovered = false
-
-        var body: some View {
-            label.environment(\.readerIconInteraction, pressed ? .pressed : hovered ? .hovered : .idle)
-                .onHover { hovered = $0 }
-        }
     }
 }
 

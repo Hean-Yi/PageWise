@@ -111,7 +111,7 @@ struct AgentProcessView: View {
 
     private func progressNotes(_ notes: [AgentProcessNote], before index: Int) -> some View {
         ForEach(notes.filter { $0.beforeActivityCount == index }) { note in
-            Text(note.text).contextMenu { AgentCopyButton(text: note.text) }
+            Text(note.text).agentCopyMenu(note.text)
         }
     }
 
@@ -141,7 +141,7 @@ struct AgentProcessView: View {
             if activity.status == .failed || activity.resultCount == 0 || activity.toolName == "search_online",
                 let message = activity.message, !message.isEmpty, message != activity.subject
             {
-                Text(message).padding(.leading, 17).contextMenu { AgentCopyButton(text: message) }
+                Text(message).padding(.leading, 17).agentCopyMenu(message)
             }
             if canInspect && opened {
                 VStack(alignment: .leading, spacing: 4) {
@@ -150,7 +150,7 @@ struct AgentProcessView: View {
                             ["read_paper", "search_reading_notes"].contains(activity.toolName) && !card.excerpt.isEmpty
                             ? card.excerpt : card.title
                         SearchMatchText(content, query: card.searchQuery)
-                            .lineLimit(2).help(content).contextMenu { AgentCopyButton(text: content) }
+                            .lineLimit(2).help(content).agentCopyMenu(content)
                     }
                 }.padding(.leading, 17)
             }

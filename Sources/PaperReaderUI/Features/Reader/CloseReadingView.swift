@@ -73,7 +73,8 @@ struct CloseReadingControl: View {
                                         Circle().fill(dimension.swatch).frame(width: 10, height: 10)
                                     }
                                 }
-                            }.padding().presentationCompactAdaptation(.popover)
+                            }.font(.callout).foregroundStyle(ReaderTheme.ink).padding()
+                                .readerPopupSurface()
                         }
                 }
             }.readerIconButtonStyle(.plain).foregroundStyle(ReaderTheme.ink).font(.callout)

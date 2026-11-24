@@ -21,22 +21,17 @@ struct SearchView: View {
             HStack(spacing: 10) {
                 Text("在线查找").font(.system(size: 20, weight: .medium, design: .serif))
                 Spacer()
-                Menu {
-                    ForEach(PaperSearchScope.allCases, id: \.self) { scope in
-                        Button {
+                ReaderPopupMenu(
+                    "检索来源，" + scopeTitle(search.scope),
+                    items: PaperSearchScope.allCases.map { scope in
+                        .action(scopeTitle(scope), selected: scope == search.scope) {
                             search.selectScope(scope)
-                        } label: {
-                            if scope == search.scope {
-                                Label(scopeTitle(scope), systemImage: "checkmark")
-                            } else {
-                                Text(scopeTitle(scope))
-                            }
                         }
                     }
-                } label: {
-                    Text(scopeTitle(search.scope))
+                ) {
+                    ReaderMenuValueLabel(scopeTitle(search.scope)).font(.caption)
                 }
-                .accessibilityLabel("检索来源，" + scopeTitle(search.scope)).fixedSize().controlSize(.small)
+                .fixedSize()
                 .disabled(search.importingID != nil)
                 Button {
                     search.close()
@@ -152,12 +147,16 @@ private struct OnlineCandidateCard: View {
         HStack {
             if !item.year.isEmpty { Text(item.year).font(.caption).foregroundStyle(ReaderTheme.muted) }
             if versions.count > 1 {
-                Picker("论文版本", selection: Binding(get: { item.id }, set: { selectedVersionID = $0 })) {
-                    ForEach(versions) { version in
-                        Text(versionLabel(for: version)).tag(version.id)
+                ReaderPopupMenu(
+                    "论文版本，" + versionLabel(for: item),
+                    items: versions.map { version in
+                        .action(versionLabel(for: version), selected: version.id == item.id) {
+                            selectedVersionID = version.id
+                        }
                     }
-                }.pickerStyle(.menu).labelsHidden().fixedSize().controlSize(.small)
-                    .disabled(search.importingID != nil)
+                ) {
+                    ReaderMenuValueLabel(versionLabel(for: item)).font(.caption)
+                }.fixedSize().disabled(search.importingID != nil)
             } else {
                 Text(item.source.label).font(.caption).foregroundStyle(ReaderTheme.muted)
             }

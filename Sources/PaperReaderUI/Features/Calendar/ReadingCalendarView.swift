@@ -64,8 +64,17 @@ struct ReadingCalendarView: View {
         .sheet(isPresented: $showAdd) {
             NavigationStack {
                 Form {
-                    Picker("论文", selection: $addPaper) {
-                        ForEach(model.state.papers) { Text($0.title).tag(Optional($0.id)) }
+                    LabeledContent("论文") {
+                        let title = model.state.papers.first { $0.id == addPaper }?.title ?? "选择论文"
+                        ReaderPopupMenu(
+                            "论文，" + title,
+                            items: model.state.papers.map { paper in
+                                .action(paper.title, selected: paper.id == addPaper) { addPaper = paper.id }
+                            },
+                            width: 310
+                        ) {
+                            ReaderMenuValueLabel(title).lineLimit(1)
+                        }
                     }
                     DatePicker("开始时间", selection: $date)
                     Stepper("阅读 \(Int(minutes)) 分钟", value: $minutes, in: 1...480, step: 5)

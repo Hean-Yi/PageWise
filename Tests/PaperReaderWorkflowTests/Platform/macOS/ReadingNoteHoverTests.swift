@@ -61,6 +61,43 @@
         }
     }
 
+    @Test @MainActor func overlappingNoteMenuCanCancelAndSwitchWithTheKeyboard() async throws {
+        try await withNoteHoverReader(width: 1050) { web in
+            let checks = try await web.callAsyncJavaScript(
+                #"""
+                const section=document.querySelector('#reader section'),text=section.querySelector('p').firstChild;
+                const anchor={key:section.dataset.key,target:'source',start:0,end:12,text:text.data.slice(0,12)};
+                const notes=['first','second'].map(id=>({id,anchors:[anchor],markdown:id+' note'}));
+                const wait=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+                const key=(target,k)=>target.dispatchEvent(new KeyboardEvent('keydown',{key:k,bubbles:true,cancelable:true}));
+                paperNotes.sync(notes);await wait(110);
+                const rect=paperNoteLayout.rects([anchor])[0],point={clientX:rect.left+3,clientY:(rect.top+rect.bottom)/2};
+                text.parentElement.dispatchEvent(new PointerEvent('pointerdown',{...point,bubbles:true}));
+                text.parentElement.dispatchEvent(new MouseEvent('click',{...point,bubbles:true}));
+                await wait(110);
+                const card=document.querySelector('.reader-note-card.active'),trigger=card.querySelector('.note-choice-trigger');
+                if(card.dataset.noteId!=='first'||trigger.classList.contains('note-hidden')) return ['trigger'];
+                trigger.click();
+                const menu=card.querySelector('[role=menu]'),rows=menu.querySelectorAll('[role=menuitemradio]');
+                const errors=[];
+                if(!menu.matches(':popover-open')||rows.length!==2||rows[0].getAttribute('aria-checked')!=='true')errors.push('selected row');
+                if(!rows[1].textContent.includes('second note'))errors.push('preview');
+                key(rows[0],'ArrowDown');
+                if(document.activeElement!==rows[1])errors.push('move focus');
+                key(rows[1],'Escape');
+                if(menu.matches(':popover-open')||document.activeElement!==trigger||!paperNotes.editing())errors.push('cancel in place');
+                key(trigger,'ArrowDown');
+                key(document.activeElement,'End');key(document.activeElement,'Enter');await wait(110);
+                const active=document.querySelector('.reader-note-card.active');
+                if(active.dataset.noteId!=='second'||active.querySelector('.note-editor').value!=='second note')errors.push('switch editor');
+                if(document.querySelectorAll(':popover-open').length||!paperNotes.editing())errors.push('dismissed picker');
+                return errors;
+                """#,
+                arguments: [:], in: nil, contentWorld: .defaultClient)
+            #expect(checks as? [String] == [])
+        }
+    }
+
     enum NoteHoverFixture {
         static let install = #"""
             const root=document.getElementById('reader'),section=root.querySelector('section'),p=section.querySelector('p');

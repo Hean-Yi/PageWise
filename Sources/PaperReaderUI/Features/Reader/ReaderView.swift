@@ -156,8 +156,9 @@ struct ReaderView: View {
                     .accessibilityLabel(favorite ? "取消收藏" : "收藏论文")
                     .accessibilityAddTraits(favorite ? .isSelected : [])
                     .help(favorite ? "取消收藏" : "收藏论文")
+                    DeletePaperButton(paper: paper, model: model)
+                    readingStatusMenu(for: paper)
                 }
-                readingMenu
             }
             .padding(.horizontal, 3)
             .readerGlassSurface(in: Capsule(), fallback: ReaderTheme.elevated)
@@ -165,11 +166,6 @@ struct ReaderView: View {
         .readerGlassGroup()
         .buttonStyle(.borderless).padding(.horizontal, width < 520 ? 12 : 22).frame(height: 56)
         .background(ReaderTheme.canvas)
-        .alert("阅读提示", isPresented: $showWarnings) {
-            Button("好") {}
-        } message: {
-            Text(model.paper?.warnings.joined(separator: "\n") ?? "")
-        }
     }
 
     private func setBilingualReading(_ bilingual: Bool) {
@@ -182,54 +178,78 @@ struct ReaderView: View {
         }
     }
 
-    private var readingMenu: some View {
-        Menu {
-            if let paper = model.currentEdition {
-                let workspace = model.workspace(for: paper.id)
-                Menu("阅读状态") {
-                    Picker(
-                        "阅读状态",
-                        selection: Binding(
-                            get: { workspace.status }, set: { model.setReadingStatus($0, for: paper.id) })
-                    ) {
-                        ForEach([PaperReadingStatus.unread, .reading, .finished], id: \.self) { status in
-                            Text(status.title).tag(status)
-                        }
-                    }.pickerStyle(.inline).labelsHidden()
-                }
-                if !paper.warnings.isEmpty {
-                    Button("阅读提示") { showWarnings = true }
-                }
-                let olderVersions = paper.retainedReadings ?? []
-                let hasLegacyEdition = !paper.readingPages.isEmpty && !paper.hasPublishedSourceReading
-                let canRegenerate = paper.usesSourceReflow && !paper.readingPages.isEmpty
-                if !paper.previewPages.isEmpty || !olderVersions.isEmpty || hasLegacyEdition || canRegenerate {
-                    Menu("阅读版本") {
-                        if !paper.previewPages.isEmpty {
-                            Button("旧版固定页", action: model.openFixedPreview)
-                        }
-                        if !paper.readingPages.isEmpty {
-                            Button(hasLegacyEdition ? "已保存的旧双语版" : "当前双语版") { model.openRetainedReading(nil) }
-                        }
-                        ForEach(Array(olderVersions.enumerated()), id: \.element.id) { index, version in
-                            Button("保留版本 \(index + 1)") { model.openRetainedReading(version.id) }
-                        }
-                        if canRegenerate {
-                            Divider()
-                            Button("重新生成双语版") { translate(regenerate: true) }
-                                .disabled(model.translating.contains(paper.id))
+    private func readingStatusMenu(for paper: Paper) -> some View {
+        let status = model.workspace(for: paper.id).status
+        let items = PaperReadingStatus.allCases.map { choice in
+            ReaderMenuItem.action(choice.title, selected: status == choice) {
+                model.setReadingStatus(choice, for: paper.id)
+            }
+        }
+        return ReaderPopupMenu("阅读状态", items: items, width: 160) {
+            Image(systemName: "ellipsis").readerSymbolInk().font(.body.weight(.semibold))
+                .foregroundStyle(ReaderTheme.muted).readerIconTarget(macOS: 32)
+        }
+        .accessibilityValue(status.title).help("更改阅读状态")
+    }
+
+    private func readingVersions(for paper: Paper) -> [ReaderMenuItem] {
+        var items: [ReaderMenuItem] = []
+        if !paper.previewPages.isEmpty {
+            items.append(.action("旧版固定页", selected: model.mode == "reflow", run: model.openFixedPreview))
+        }
+        if !paper.readingPages.isEmpty {
+            let title = paper.hasPublishedSourceReading ? "当前双语版" : "已保存的旧双语版"
+            items.append(
+                .action(title, selected: model.mode == "translated" && model.retainedReadingID == nil) {
+                    model.openRetainedReading(nil)
+                })
+        }
+        for (index, version) in (paper.retainedReadings ?? []).enumerated() {
+            items.append(
+                .action(
+                    "保留版本 \(index + 1)", selected: model.mode == "translated" && model.retainedReadingID == version.id
+                ) {
+                    model.openRetainedReading(version.id)
+                })
+        }
+        if paper.usesSourceReflow && !paper.readingPages.isEmpty {
+            items.append(.divider)
+            items.append(
+                .action("重新生成双语版", enabled: !model.translating.contains(paper.id)) {
+                    translate(regenerate: true)
+                })
+        }
+        return items
+    }
+
+    @ViewBuilder private func editionControls(for paper: Paper) -> some View {
+        let versions = readingVersions(for: paper)
+        if !versions.isEmpty {
+            ReaderPopupMenu("阅读版本", items: versions) {
+                ReaderIcon(.source, size: 15).readerIconTarget()
+            }.help("阅读版本")
+        }
+        if !paper.warnings.isEmpty {
+            Button {
+                showWarnings = true
+            } label: {
+                Image(systemName: "info.circle").readerSymbolInk().readerIconTarget()
+            }.readerIconButtonStyle(.plain).accessibilityLabel("阅读提示").help("阅读提示")
+                .popover(isPresented: $showWarnings) {
+                    let warnings = Text(paper.warnings.joined(separator: "\n\n"))
+                        .font(.callout).foregroundStyle(ReaderTheme.ink)
+                        .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("阅读提示").font(ReaderTheme.editorial(16, weight: .semibold))
+                        ViewThatFits(in: .vertical) {
+                            warnings
+                            ScrollView { warnings }
                         }
                     }
+                    .padding(16).frame(width: 272, alignment: .leading).frame(maxHeight: 280)
+                    .readerPopupSurface()
                 }
-                Divider()
-                DeletePaperButton(paper: paper, model: model)
-            }
-        } label: {
-            Image(systemName: "ellipsis").readerSymbolInk().font(.body.weight(.semibold))
-                .frame(minWidth: 32, minHeight: 32).contentShape(Rectangle())
         }
-        .readerMenuIconInteraction().menuIndicator(.hidden).fixedSize()
-        .accessibilityLabel("更多阅读选项").help("更多阅读选项")
     }
 
     private func readingBar(width: CGFloat) -> some View {
@@ -273,8 +293,8 @@ struct ReaderView: View {
                 Button {
                     model.openReadingNote(summary)
                 } label: {
-                    Label("文末总结", readerIcon: .notebook).labelStyle(.titleAndIcon)
-                }.readerIconButtonStyle(.borderless)
+                    DocumentSummaryLinkLabel()
+                }.readerIconButtonStyle(.plain)
             }
             Button(action: model.toggleBookmark) {
                 Image(systemName: model.isCurrentPageBookmarked ? "bookmark.fill" : "bookmark").readerSymbolInk()
@@ -284,6 +304,7 @@ struct ReaderView: View {
             )
             .accessibilityLabel(model.isCurrentPageBookmarked ? "移除当前页书签" : "添加当前页书签")
             .keyboardShortcut("d")
+            if let paper = model.currentEdition { editionControls(for: paper) }
             if model.pdfBilingual.isOpen && isLocalPDF && !peekingAtOriginal {
                 PDFBilingualAppearanceMenu(model: model, layout: $pdfLayout, width: width)
             }

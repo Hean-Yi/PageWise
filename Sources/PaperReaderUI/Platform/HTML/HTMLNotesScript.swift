@@ -48,6 +48,7 @@ enum HTMLNotesScript {
           const flush=()=>send({kind:'noteFlush'});
           const store=e=>{e.markdown=e.input.value;e.html='';e.status.textContent='保存中…';send({kind:'noteChange',id:e.id,anchors:e.anchors,markdown:e.markdown});};
           const finish=()=>{
+            closeChoices();
             const e=records.get(editing);if(e){e.emergeAnimation?.cancel();e.entrance=false;if(e.input.value!==e.markdown)store(e);e.card.classList.remove('editing-live');e.input.classList.add('note-hidden');e.footer.classList.add('note-hidden');e.content.classList.remove('note-hidden');e.tabs.classList.add('note-hidden');body(e);flush();}
             if(e?.card.contains(document.activeElement))document.activeElement.blur();
             editing=null;active=null;undock();selection.clear();
@@ -56,6 +57,7 @@ enum HTMLNotesScript {
           const activate=(id,edit=false,backwards=false)=>{
             if(editing&&editing!==id){if(!edit)return;finish();}
             const e=records.get(id);if(!e)return;
+            if(choiceOwner && choiceOwner!==e)closeChoices();
             if(!edit&&active===id){reverse=backwards;layout.reverse(backwards);return;}
             active=id;e.previewBox=null;reverse=backwards;
             if(edit){
@@ -68,6 +70,61 @@ enum HTMLNotesScript {
           };
           const leave=()=>{cancelCrossing();if(active&&!editing){active=null;schedule(false);}};
           const button=(text,handler,label=text)=>{const b=document.createElement('button');b.type='button';b.textContent=text;b.setAttribute('aria-label',label);b.onclick=event=>{event.stopPropagation();handler();};return b;};
+          const choices=document.createElement('div');
+          choices.id='reader-note-choices';choices.popover='manual';choices.setAttribute('role','menu');choices.setAttribute('aria-label','重叠笔记');
+          let choiceOwner=null;
+          const closeChoices=(refocus=false)=>{
+            if(!choiceOwner)return;
+            const trigger=choiceOwner.choices;choiceOwner=null;trigger.setAttribute('aria-expanded','false');
+            if(choices.matches(':popover-open'))choices.hidePopover();
+            if(refocus)trigger.focus({preventScroll:true});
+          };
+          choices.addEventListener('beforetoggle',event=>{if(event.newState==='closed'&&choiceOwner){choiceOwner.choices.setAttribute('aria-expanded','false');choiceOwner=null;}});
+          const focusChoice=row=>{
+            row.focus({preventScroll:true});
+            if(row.offsetTop<choices.scrollTop)choices.scrollTop=row.offsetTop;
+            else if(row.offsetTop+row.offsetHeight>choices.scrollTop+choices.clientHeight)choices.scrollTop=row.offsetTop+row.offsetHeight-choices.clientHeight;
+          };
+          const openChoices=e=>{
+            if(choiceOwner===e){closeChoices(true);return;}
+            closeChoices();
+            const candidates=(e.choiceIDs||[]).map(id=>records.get(id)).filter(Boolean);
+            if(candidates.length<2)return;
+            const rows=candidates.map((item,i)=>{
+              const title=(i+1)+' · '+(item.dimensionTitle||'笔记');
+              const excerpt=item.summary.textContent.replace(/\s+/g,' ').trim().slice(0,75);
+              const row=button(title,()=>{
+                const edit=!!editing;closeChoices();activate(item.id,edit,true);
+                if(!edit){item.focusChoices=true;schedule(false);}
+              },excerpt?title+'，'+excerpt:title);
+              row.setAttribute('role','menuitemradio');row.setAttribute('aria-checked',String(item.id===e.id));row.tabIndex=-1;
+              if(excerpt){const small=document.createElement('small');small.textContent=excerpt;row.append(small);}
+              return row;
+            });
+            choices.replaceChildren(...rows);e.card.append(choices);choiceOwner=e;e.choices.setAttribute('aria-expanded','true');
+            choices.style.removeProperty('max-height');choices.showPopover();
+            const anchor=e.choices.getBoundingClientRect(),box=choices.getBoundingClientRect(),gap=6,edge=8;
+            const below=innerHeight-anchor.bottom-edge-gap,above=anchor.top-edge-gap;
+            const down=box.height<=below||below>=above,height=Math.max(1,Math.min(box.height,down?below:above));
+            choices.style.maxHeight=height+'px';
+            choices.style.left=Math.max(edge,Math.min(anchor.left,innerWidth-box.width-edge))+'px';
+            choices.style.top=(down?anchor.bottom+gap:anchor.top-gap-height)+'px';
+            focusChoice(rows[candidates.indexOf(e)]);
+          };
+          choices.addEventListener('keydown',event=>{
+            const rows=[...choices.children],index=rows.indexOf(document.activeElement);
+            if(event.key==='Escape'){event.preventDefault();event.stopPropagation();closeChoices(true);return;}
+            if(event.key==='Tab'){closeChoices(true);return;}
+            if(event.key==='Enter'||event.key===' '){event.preventDefault();event.stopPropagation();rows[index]?.click();return;}
+            const next={ArrowDown:(index+1)%rows.length,ArrowUp:(index-1+rows.length)%rows.length,Home:0,End:rows.length-1}[event.key];
+            if(next!==undefined){event.preventDefault();event.stopPropagation();focusChoice(rows[next]);}
+          });
+          const choiceTrigger=e=>{
+            const b=button('',()=>openChoices(e),'切换重叠笔记');b.className='note-choice-trigger note-hidden';
+            b.setAttribute('aria-haspopup','menu');b.setAttribute('aria-expanded','false');b.setAttribute('aria-controls',choices.id);
+            b.onkeydown=event=>{if(event.key==='ArrowDown'||event.key==='ArrowUp'){event.preventDefault();openChoices(e);}};
+            return b;
+          };
           const icons={source:'\#(iconSVG(.source))',citation:'\#(iconSVG(.citation))',delete:'\#(iconSVG(.delete))'};
           const reduceIconMotion=matchMedia('(prefers-reduced-motion:reduce)');
           const iconButton=(icon,label,handler)=>{
@@ -93,7 +150,7 @@ enum HTMLNotesScript {
           const make=note=>{
             const e={...note,persisted:false};e.card=document.createElement('article');e.card.className='reader-note-card';e.card.hidden=true;e.card.dataset.noteId=e.id;e.card.tabIndex=0;e.card.setAttribute('aria-label',e.dimensionTitle||'阅读笔记');
             const header=document.createElement('header'),title=document.createElement('strong');title.textContent=e.dimensionTitle||'笔记';header.append(title);
-            e.choices=document.createElement('select');e.choices.setAttribute('aria-label','重叠笔记');e.choices.className='note-hidden';e.choices.onchange=()=>activate(e.choices.value,!!editing);header.append(e.choices);
+            e.choices=choiceTrigger(e);header.append(e.choices);
             e.tabs=document.createElement('span');e.tabs.className='note-hidden';
             e.tabs.textContent='Markdown';header.append(e.tabs);
             header.append(iconButton('source','定位笔记原文',()=>{document.getElementById('block-'+e.anchors[0].key)?.scrollIntoView({block:'center'});schedule();}));
@@ -110,9 +167,9 @@ enum HTMLNotesScript {
               send({kind:'noteInsertPassage',id:e.id,anchors:e.anchors,markdown:e.input.value,from:e.editor.selectionStart,to:e.editor.selectionEnd});
             });
             const done=button('完成',finish);done.className='note-done';e.footer.append(e.status,insert,done);e.card.append(header,e.input,e.content,e.summary,e.footer);
-            e.card.addEventListener('mouseenter',()=>{cancelCrossing();if(!editing&&(active!==e.id||!reverse))activate(e.id,false,true);});
+            e.card.addEventListener('mouseenter',()=>{cancelCrossing();if(!choiceOwner&&!editing&&(active!==e.id||!reverse))activate(e.id,false,true);});
             e.card.addEventListener('focusin',()=>{if(!editing&&(active!==e.id||!reverse))activate(e.id,false,true);});
-            e.card.addEventListener('click',event=>{if(event.target.closest('button,.note-editor,a,summary,select,#annotation-menu'))return;if(editing!==e.id)activate(e.id,true,true);});
+            e.card.addEventListener('click',event=>{if(event.target.closest('button,.note-editor,a,summary,#reader-note-choices,#annotation-menu'))return;if(editing!==e.id)activate(e.id,true,true);});
             e.card.addEventListener('keydown',event=>{if(event.target===e.card&&(event.key==='Enter'||event.key===' ')){event.preventDefault();activate(e.id,true,true);}});
             body(e);layer.append(e.card);records.set(e.id,e);return e;
           };
@@ -177,6 +234,7 @@ enum HTMLNotesScript {
             layout.decorate(displayed,position,opening?false:reverse,opening);
             if(opening&&position){entry.entrance=false;emerge(entry,position);}
             if(entry?.needsFocus&&position){entry.needsFocus=false;entry.input.focus({preventScroll:true});}
+            if(entry?.focusChoices&&position){entry.focusChoices=false;entry.choices.focus({preventScroll:true});}
             const crossing=pendingCrossing;pendingCrossing=null;
             if(crossing&&entry?.id===crossing.id&&!editing)cross(entry,crossing.x,crossing.y,crossing.previous);
           };
@@ -209,8 +267,17 @@ enum HTMLNotesScript {
             const e=existing||make({id:crypto.randomUUID().toUpperCase(),anchors,markdown:'',html:''});activate(e.id,true);
           };
           const hits=(target,x,y,precise=false)=>(bySection.get(target.closest?.('section[data-key]')?.dataset.key)||[]).filter(e=>layout.hit(e.anchors,x,y,precise));
-          const setChoices=matches=>{for(const e of matches){e.choices.replaceChildren();e.choices.classList.toggle('note-hidden',matches.length<2);for(const [index,item] of matches.entries()){const o=document.createElement('option');o.value=item.id;o.textContent=(index+1)+' · '+(item.dimensionTitle||'笔记');o.selected=e.id===item.id;e.choices.append(o);}}};
+          const setChoices=matches=>{
+            const ids=matches.map(e=>e.id);
+            for(const [index,e] of matches.entries()){
+              if(e.choiceIDs?.length===ids.length&&ids.every((id,i)=>e.choiceIDs[i]===id))continue;
+              e.choiceIDs=ids;e.choices.classList.toggle('note-hidden',ids.length<2);
+              e.choices.textContent=(index+1)+' / '+ids.length;
+              e.choices.setAttribute('aria-label','切换重叠笔记，当前第 '+(index+1)+' 条，共 '+ids.length+' 条');
+            }
+          };
           document.addEventListener('pointerdown',event=>{
+            if(choiceOwner&&!choices.contains(event.target)&&!choiceOwner.choices.contains(event.target))closeChoices();
             pointer={x:event.clientX,y:event.clientY};
             if(appendixEditor?.editor && !appendix.contains(event.target))appendixEditor.finish();
             if(event.target.closest('.reader-note-card,#annotation-menu'))return;
@@ -248,7 +315,8 @@ enum HTMLNotesScript {
             if(matches.length){
               cancelCrossing();
               const e=matches.find(m=>m.id===active)||matches[0];
-              if(active!==e.id){setChoices(matches);activate(e.id);}
+              setChoices(matches);
+              if(active!==e.id){activate(e.id);}
               else if(reverse){reverse=false;layout.reverse(false);}
               return;
             }
@@ -258,14 +326,15 @@ enum HTMLNotesScript {
             cross(e,x,y,previous);
           };
           document.addEventListener('pointermove',event=>{
-            if(editing||appendixEditor?.editor||event.buttons||event.pointerType==='touch')return;
+            if(choiceOwner||editing||appendixEditor?.editor||event.buttons||event.pointerType==='touch')return;
             const x=event.clientX,y=event.clientY,previous=lastPoint;lastPoint={x,y};track(event.target,x,y,previous);
           });
-          document.addEventListener('mouseleave',()=>{lastPoint=null;leave();});
+          document.addEventListener('mouseleave',()=>{lastPoint=null;if(!choiceOwner)leave();});
           document.addEventListener('keydown',event=>{if(event.key==='Escape'&&active)finish();});
-          const resized=()=>{layout.invalidate();schedule();};
+          const resized=()=>{closeChoices();layout.invalidate();schedule();};
           window.addEventListener('resize',resized);
           document.addEventListener('scroll',()=>{
+            closeChoices();
             layout.scrolled();
             if(lastPoint&&!editing&&!scrollCheck){scrollCheck=true;requestAnimationFrame(()=>{
               scrollCheck=false;if(!lastPoint||editing)return;

@@ -223,14 +223,12 @@ struct BookshelfItem: View {
                 }.readerIconButtonStyle(.plain).focused($focus, equals: .favorite)
                     .help(workspace.isFavorite ? "取消收藏" : "收藏")
                     .accessibilityLabel("\(workspace.isFavorite ? "取消收藏" : "收藏") \(paper.title)")
-                Menu {
-                    actions
-                } label: {
+                ReaderPopupMenu(paper.title + "的选项", items: actions) {
                     Image(systemName: "ellipsis").readerSymbolInk().font(.system(size: 16, weight: .semibold))
                         .readerIconTarget(macOS: 30)
-                }.readerMenuIconInteraction().menuIndicator(.hidden).fixedSize()
+                }.fixedSize()
                     .foregroundStyle(ReaderTheme.muted).focused($focus, equals: .menu)
-                    .help("论文选项").accessibilityLabel("\(paper.title)的选项")
+                    .help("论文选项")
             }.frame(minHeight: 30).opacity(showsActions && !lifted ? 1 : 0)
                 .offset(arrangementOffset)
         }
@@ -244,43 +242,44 @@ struct BookshelfItem: View {
             recordFrame(nil)
         }
         .animation(ReaderMotion.feedback(reduceMotion), value: highlighted)
-        .contextMenu { actions }
+        .readerContextMenu(paper.title + "的选项", items: actions)
     }
 
-    @ViewBuilder private var actions: some View {
-        Button("预览论文") { showPreview(.pinned(paper.id)) }
-        Button("打开论文") { model.select(paper.id) }
-        Button(workspace.isFavorite ? "取消收藏" : "收藏") { model.toggleFavorite(paper.id) }
-        Button("向前移动") { moveEarlier?() }.disabled(moveEarlier == nil)
-        Button("向后移动") { moveLater?() }.disabled(moveLater == nil)
-        Menu("移动到书架") {
-            Button("未分类") { Task { await model.movePaper(paper.id, to: nil) } }
-            ForEach(model.state.shelves) { shelf in
-                Button {
-                    Task { await model.movePaper(paper.id, to: shelf.id) }
-                } label: {
-                    if model.state.shelfID(for: paper.id) == shelf.id {
-                        Label(shelf.name, systemImage: "checkmark")
-                    } else {
-                        Text(shelf.name)
-                    }
-                }
-            }
-        }
-        Divider()
-        ForEach(PaperReadingStatus.allCases, id: \.self) { value in
-            Button {
+    private var actions: [ReaderMenuItem] {
+        let status = progress.readingStatus
+        let statuses = PaperReadingStatus.allCases.map { value in
+            ReaderMenuItem.action(value.title, selected: value == status) {
                 model.setReadingStatus(value, for: paper.id)
-            } label: {
-                if progress.readingStatus == value {
-                    Label("标记为\(value.title)", systemImage: "checkmark")
-                } else {
-                    Text("标记为\(value.title)")
-                }
             }
         }
-        Divider()
-        DeletePaperButton(paper: paper, model: model)
+        return [
+            .action("预览论文", icon: .source) { showPreview(.pinned(paper.id)) },
+            .action("打开论文", icon: .paper) { model.select(paper.id) },
+            .action(workspace.isFavorite ? "取消收藏" : "收藏", icon: .favorite) { model.toggleFavorite(paper.id) },
+            .divider,
+            .submenu("移动到书架", items: shelfDestinations),
+            .action("向前移动", enabled: moveEarlier != nil) { moveEarlier?() },
+            .action("向后移动", enabled: moveLater != nil) { moveLater?() },
+            .section("阅读状态"),
+        ] + statuses + [
+            .divider,
+            .action("删除论文…", icon: .delete, enabled: requestPaperDeletion != nil, destructive: true) {
+                requestPaperDeletion?(PaperDeletionRequest(paper, model: model))
+            },
+        ]
+    }
+
+    private var shelfDestinations: [ReaderMenuItem] {
+        let current = model.state.shelfID(for: paper.id)
+        let unclassified = ReaderMenuItem.action("未分类", selected: current == nil) {
+            Task { await model.movePaper(paper.id, to: nil) }
+        }
+        return [unclassified]
+            + model.state.shelves.map { shelf in
+                .action(shelf.name, selected: current == shelf.id) {
+                    Task { await model.movePaper(paper.id, to: shelf.id) }
+                }
+            }
     }
 }
 

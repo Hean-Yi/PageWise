@@ -15,8 +15,18 @@ enum HTMLNoteStyle {
           .reader-note-card.at-top{border-top-left-radius:0;border-top-right-radius:0}
           .reader-note-card.at-bottom{border-bottom-left-radius:0;border-bottom-right-radius:0}
           .reader-note-card header{padding:10px 14px 6px;display:flex;align-items:center;gap:8px;flex-shrink:0;font:12px system-ui;color:#796e60}
-          .reader-note-card header strong{margin-right:auto;color:inherit;font-weight:650;white-space:nowrap;flex:none}.reader-note-card header select{min-width:0;max-width:40%;font:inherit}.reader-note-card:not(.active) header select,.reader-note-card:not(.active) header button{display:none}
+          .reader-note-card header strong{margin-right:auto;color:inherit;font-weight:650;white-space:nowrap;flex:none}.reader-note-card:not(.active) header button{display:none}
           .reader-note-card button{font:inherit;color:inherit;border:0;border-radius:6px;background:transparent;padding:4px 7px;cursor:pointer}
+          .reader-note-card .note-choice-trigger{display:inline-flex;align-items:center;gap:5px;white-space:nowrap;font-variant-numeric:tabular-nums;background:light-dark(#eee8de,#463d34)}
+          .note-choice-trigger::after{content:'';width:5px;height:5px;border:solid currentColor;border-width:0 1.5px 1.5px 0;transform:translateY(-1px) rotate(45deg)}
+          .note-choice-trigger[aria-expanded=true]::after{transform:translateY(1px) rotate(225deg)}
+          #reader-note-choices{position:fixed;inset:auto;box-sizing:border-box;margin:0;padding:5px;width:min(250px,calc(100vw - 16px));max-height:min(300px,70vh);overflow:auto;overscroll-behavior:contain;border:1px solid light-dark(#d9d1c2,#51493f);border-radius:10px;background:light-dark(#faf8f3,#302d28);color:light-dark(#39352f,#eee8dc);box-shadow:0 5px 18px #332d2829;font:13px/1.45 system-ui}
+          #reader-note-choices button{position:relative;display:block;width:100%;min-height:35px;padding:6px 27px 6px 9px;text-align:left;color:inherit}
+          #reader-note-choices button:is(:hover,:focus-visible){background:light-dark(#eee7dd,#423a30);outline:none}
+          #reader-note-choices button:focus-visible{box-shadow:inset 0 0 0 1px light-dark(#a45a43,#d99572)}
+          #reader-note-choices [aria-checked=true]::after{content:'';position:absolute;right:11px;top:13px;width:8px;height:4px;border:solid light-dark(#9f503a,#e8a086);border-width:0 0 1.8px 1.8px;transform:rotate(-45deg)}
+          #reader-note-choices small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:light-dark(#786f62,#c0b3a1)}
+          @media(pointer:coarse){#reader-note-choices button,.reader-note-card .note-choice-trigger{min-height:44px}}
           .reader-note-card button.note-icon-button,#reader-document-summary>header button.note-icon-button{display:inline-grid;place-items:center;width:28px;height:28px;padding:0;vertical-align:middle;flex:none}
           .note-icon-button .ink-plate{fill:light-dark(#9f503a,#e8a086)}
           @media(prefers-reduced-motion:no-preference){

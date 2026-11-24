@@ -415,18 +415,16 @@ private struct ShelfWorkspaceContent: View {
     }
 
     private var sortMenu: some View {
-        Menu {
-            Picker(
-                "排序",
-                selection: Binding(
-                    get: { sort },
-                    set: { value in Task { await model.selectLibrarySort(value) } })
-            ) {
-                ForEach(LibrarySort.allCases) { item in Text(item.title).tag(item) }
-            }.pickerStyle(.inline).labelsHidden()
-        } label: {
+        ReaderPopupMenu(
+            "排序，" + sort.title,
+            items: LibrarySort.allCases.map { item in
+                .action(item.title, selected: item == sort) {
+                    Task { await model.selectLibrarySort(item) }
+                }
+            }
+        ) {
             Label(sort.title, systemImage: "arrow.up.arrow.down").labelStyle(ReaderSymbolLabelStyle()).font(.caption)
-        }.readerMenuIconInteraction().fixedSize().foregroundStyle(ReaderTheme.muted)
+        }.fixedSize().foregroundStyle(ReaderTheme.muted)
     }
 }
 
