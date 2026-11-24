@@ -1,5 +1,6 @@
 import Foundation
 import PaperReaderKit
+import PaperReaderTestSupport
 import Testing
 
 @testable import PaperReaderUI
@@ -27,7 +28,7 @@ import Testing
     let block = TextBlock(sourcePage: -1, text: shared)
     let (reader, paper) = try await openDiscussionEdition(at: root, first: block)
     let original = root.appendingPathComponent(paper.originalPath)
-    try DemoPaper.write(to: original)
+    try AttentionFixture.write(to: original)
     let page = try PDFSentenceExtractor.extractPage(url: original, pageIndex: 1)
     reader.select(nil)
     let scope = try reader.discussionNoteScope(for: paper.id)

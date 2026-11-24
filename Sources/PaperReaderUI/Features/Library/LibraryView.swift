@@ -45,7 +45,8 @@ public struct LibraryView: View {
                         QuickStartOverlay(
                             step: step, targetRect: anchors[step].map { geometry[$0] },
                             nextTitle: guideNextTitle,
-                            onBack: { moveGuide(-1) }, onNext: { moveGuide(1) }, onSkip: finishGuide)
+                            onBack: { moveGuide(-1) }, onNext: { moveGuide(1) }, onSkip: finishGuide,
+                            onReadSample: openSample)
                     }
                 }
             }
@@ -105,9 +106,9 @@ public struct LibraryView: View {
                 } catch {}
             }
             .onChange(of: model.selectedPaperID) { _, id in
-                if let id {
+                if id != nil {
                     preferredColumn = .detail
-                    guide.chosePaper(id)
+                    guide.didChooseLibraryPaper()
                 }
                 paperQuestion = ""
                 if assistantTab != nil, id == nil || id != paperOpenedFromAgent {
@@ -130,7 +131,7 @@ public struct LibraryView: View {
 
     private var guideNextTitle: String? {
         if guide.deferred != nil { return "等待精读…" }
-        if guide.step == .modelSettings, model.state.papers.isEmpty { return "打开示例" }
+        if guide.step == .modelSettings { return "打开内置示例" }
         return nil
     }
 
@@ -139,7 +140,7 @@ public struct LibraryView: View {
             model.status = "精读正在进行，结束后可打开快速上手"
             return false
         }
-        guide = QuickStartNavigation(step: .importPaper, paperID: model.selectedPaperID)
+        guide = QuickStartNavigation(step: .importPaper)
         return true
     }
 
@@ -151,10 +152,7 @@ public struct LibraryView: View {
     private func moveGuide(_ distance: Int) {
         guard let current = guide.step else { return }
         if let next = QuickStartStep(rawValue: current.rawValue + distance) {
-            if next == .bilingual && model.state.papers.isEmpty && model.isImporting {
-                model.status = "论文正在导入，完成后即可打开"
-                return
-            }
+            if model.isImporting && (next == .bilingual || current == .bilingual) { return }
             guide.request(next, closeReadingActive: model.closeReadingPaperID != nil)
         } else if distance > 0 {
             finishGuide()
@@ -166,9 +164,18 @@ public struct LibraryView: View {
         let stayOnShelf = guide.isChoosingPaper
         Task {
             let ids = await model.importURLs(urls, selectAfterImport: !stayOnShelf)
-            if stayOnShelf, startingStep == guide.step, let last = ids.last {
-                guide.chosePaper(last)
+            if stayOnShelf, startingStep == guide.step, !ids.isEmpty {
+                guide.didChooseLibraryPaper()
             }
+        }
+    }
+
+    private func openSample() {
+        guard !model.isImporting else { return }
+        if guide.step != nil {
+            guide.request(.bilingual, closeReadingActive: model.closeReadingPaperID != nil)
+        } else {
+            Task { await model.openBundledSample() }
         }
     }
 
@@ -182,20 +189,15 @@ public struct LibraryView: View {
             assistantTab = nil
             preferredColumn = step == .discovery || step == .shelves ? .detail : .sidebar
         case .bilingual, .annotation, .assistant:
-            if !isReading {
-                let existing = guide.paperID.flatMap { id in model.state.papers.first { $0.id == id } }
-                if let paper = existing ?? recentPapers.first ?? model.state.papers.first {
-                    model.select(paper.id)
-                } else {
-                    await model.addDemo()
-                    guard !Task.isCancelled, guide.step == step else { return }
+            if guide.sampleID == nil || model.selectedPaperID != guide.sampleID || !isReading {
+                let sampleID = await model.openBundledSample()
+                guard !Task.isCancelled, guide.step == step else { return }
+                guard let sampleID else {
+                    guide.step = .modelSettings
+                    return
                 }
+                guide.sampleID = sampleID
             }
-            guard let id = model.selectedPaperID else {
-                guide.step = .importPaper
-                return
-            }
-            guide.paperID = id
             preferredColumn = .detail
             assistantTab = step == .assistant ? .paper : nil
             if step == .annotation { model.showOriginalReading() }
@@ -380,7 +382,7 @@ public struct LibraryView: View {
                 case .shelf:
                     LibraryWorkspaceView(
                         model: model, collection: $collection, selectedShelfID: $selectedShelfID,
-                        onlineSearch: onlineSearch, findRequest: findRequest)
+                        onlineSearch: onlineSearch, findRequest: findRequest, openSample: openSample)
                 }
             }
         }
@@ -526,22 +528,20 @@ public struct LibraryView: View {
     }
 }
 
-/// Keeps the chosen paper across library steps, including a multi-file import or a return from search.
+/// Only the bundled document can become the guide's reading example.
 struct QuickStartNavigation {
     var step: QuickStartStep?
-    var paperID: UUID?
+    var sampleID: UUID?
     private(set) var deferred: QuickStartStep?
 
-    init(step: QuickStartStep? = nil, paperID: UUID? = nil) {
+    init(step: QuickStartStep? = nil) {
         self.step = step
-        self.paperID = paperID
     }
 
     var isChoosingPaper: Bool { step == .importPaper || step == .discovery || step == .shelves }
 
-    mutating func chosePaper(_ id: UUID) {
+    mutating func didChooseLibraryPaper() {
         guard isChoosingPaper, let step else { return }
-        paperID = id
         self.step = QuickStartStep(rawValue: step.rawValue + 1)
     }
 

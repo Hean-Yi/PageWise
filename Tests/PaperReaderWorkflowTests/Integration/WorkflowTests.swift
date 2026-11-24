@@ -1,5 +1,7 @@
 import Foundation
+import PDFKit
 import PaperReaderKit
+import PaperReaderTestSupport
 import Testing
 
 @testable import PaperReaderUI
@@ -28,7 +30,7 @@ private struct FakeModelTransport: HTTPTransport {
     let db = root.appendingPathComponent("library.sqlite")
     try FileManager.default.removeItem(at: db)
     try FileManager.default.createDirectory(at: db, withIntermediateDirectories: false)
-    await model.addDemo()
+    #expect(await model.openBundledSample() == nil)
     #expect(model.state.papers.isEmpty)
     #expect(model.message != nil)
     #expect(model.status.contains("未保存"))
@@ -63,7 +65,7 @@ private struct FakeModelTransport: HTTPTransport {
     settings.model = "fixture"
     try model.saveSettings(settings, key: nil)
     let pdf = root.appendingPathComponent("example.pdf")
-    try DemoPaper.write(to: pdf)
+    try AttentionFixture.write(to: pdf)
     let id = try #require(await model.importURLs([pdf]).first)
     #expect(model.paper?.blocks.isEmpty == true)
     model.recordVisiblePage(1)
@@ -102,20 +104,41 @@ private struct FakeModelTransport: HTTPTransport {
     #expect(model.assistantSelectionText.isEmpty)
 }
 
-@Test @MainActor func quickStartReopensTheInstalledSampleAfterRelaunch() async throws {
+@Test(arguments: [false, true]) @MainActor
+func quickStartReopensTheInstalledSampleAfterRelaunch(existingPaper: Bool) async throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: root) }
     let reader = try ReaderModel(root: root, credentials: WorkflowCredentials())
     await reader.load()
-    await reader.addDemo()
+    var otherID: UUID?
+    if existingPaper {
+        let url = root.appendingPathComponent("personal.pdf")
+        try AttentionFixture.write(to: url)
+        let importedID: UUID = try #require(await reader.importURLs([url]).first)
+        #expect(reader.selectedPaperID == importedID)
+        otherID = importedID
+    }
+    let sampleID = try #require(await reader.openBundledSample())
     let first = try #require(reader.paper)
-    #expect(first.pageCount == 2)
-    #expect(reader.mode == "original")
-    let saved = try Data(contentsOf: root.appendingPathComponent(first.originalPath))
+    #expect(sampleID == first.id && sampleID != otherID && first.pageCount == 2 && reader.mode == "original")
+    let imported = root.appendingPathComponent(first.originalPath)
+    #expect(try Data(contentsOf: DemoPaper.fileURL()) == Data(contentsOf: imported))
+    let page = try #require(PDFDocument(url: imported)?.page(at: 0)?.string as NSString?)
+    let quote = "A higher average can hide a weaker result in every group."
+    let range = page.range(of: quote)
+    try #require(range.location != NSNotFound)
+    reader.captureSelection(text: quote, rects: [], page: 0, ranges: [range])
+    await reader.beginPDFReadingNote()
+    let draft = try #require(reader.pdfNoteEditor)
+    #expect(reader.updateReadingNote(id: draft.id, anchors: draft.note.anchors, markdown: "示例批注"))
+    await reader.flushReadingNotes()
+    await reader.flushReadingPosition()
     let next = try ReaderModel(root: root, credentials: WorkflowCredentials())
     await next.load()
-    await next.addDemo()
-    #expect(next.state.papers.count == 1)
-    #expect(next.selectedPaperID == first.id)
-    #expect(try Data(contentsOf: DemoPaper.fileURL()) == saved)
+    next.select(otherID)
+    #expect(await next.openBundledSample() == sampleID)
+    #expect(next.selectedPaperID == sampleID)
+    #expect(next.state.papers.count == (existingPaper ? 2 : 1))
+    let saved = try #require(next.currentReadingNotes.first)
+    #expect(saved.id == draft.id && saved.anchors == draft.note.anchors && saved.markdown == "示例批注")
 }

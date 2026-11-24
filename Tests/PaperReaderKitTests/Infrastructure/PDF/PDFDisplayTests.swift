@@ -1,5 +1,6 @@
 import Foundation
 import PDFKit
+import PaperReaderTestSupport
 import Testing
 
 @testable import PaperReaderKit
@@ -8,7 +9,7 @@ import Testing
     let root = try displayTestDirectory()
     defer { try? FileManager.default.removeItem(at: root) }
     let file = root.appendingPathComponent("original.pdf")
-    try DemoPaper.write(to: file)
+    try AttentionFixture.write(to: file)
     let bytes = try Data(contentsOf: file)
     let display = try PDFDisplayDocument.load(urls: [file], expectedPageCount: 2)
     let document = display.document
@@ -29,7 +30,7 @@ import Testing
     let root = try displayTestDirectory()
     defer { try? FileManager.default.removeItem(at: root) }
     let original = root.appendingPathComponent("demo.pdf")
-    try DemoPaper.write(to: original)
+    try AttentionFixture.write(to: original)
     let sourceDocument = try #require(PDFDocument(url: original))
     let urls = try (0..<sourceDocument.pageCount).map { index in
         let document = PDFDocument()
@@ -91,7 +92,7 @@ import Testing
     let root = try displayTestDirectory()
     defer { try? FileManager.default.removeItem(at: root) }
     let file = root.appendingPathComponent("original.pdf")
-    try DemoPaper.write(to: file)
+    try AttentionFixture.write(to: file)
     #expect(throws: (any Error).self) {
         try PDFDisplayDocument.load(urls: [file, root.appendingPathComponent("missing.pdf")], expectedPageCount: 3)
     }

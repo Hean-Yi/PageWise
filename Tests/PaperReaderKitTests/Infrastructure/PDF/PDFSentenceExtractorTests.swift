@@ -3,6 +3,7 @@ import CoreText
 import Foundation
 import ImageIO
 import PDFKit
+import PaperReaderTestSupport
 import Testing
 
 @testable import PaperReaderKit
@@ -160,7 +161,7 @@ import Testing
 @Test func pdfSentenceExtractorKeepsTitleAndAbstractSeparateFromByline() throws {
     let url = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID()).pdf")
     defer { try? FileManager.default.removeItem(at: url) }
-    try DemoPaper.write(to: url)
+    try AttentionFixture.write(to: url)
     let result = try PDFSentenceExtractor.extractPage(url: url, pageIndex: 0)
     #expect(result.sentences.prefix(2).map(\.text) == ["Understanding Attention", "Abstract"])
     #expect(result.sentences.contains { $0.text.contains("score") })

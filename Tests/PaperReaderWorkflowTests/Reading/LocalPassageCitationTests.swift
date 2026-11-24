@@ -2,6 +2,7 @@ import CoreText
 import Foundation
 import PDFKit
 import PaperReaderKit
+import PaperReaderTestSupport
 import Testing
 
 @testable import PaperReaderUI
@@ -19,11 +20,11 @@ import Testing
         warnings: [], canReflow: true)
     html.htmlReading = try await HTMLReadingStore().append(
         [BilingualBlock(block: block, translation: "原文译文。")], to: nil, paper: html, root: root)
-    try DemoPaper.write(to: root.appendingPathComponent(html.originalPath))
+    try AttentionFixture.write(to: root.appendingPathComponent(html.originalPath))
     let pdf = Paper(
         title: "Understanding Attention", digest: "attention", originalPath: "external.pdf", pageCount: 2, blocks: [],
         warnings: [], canReflow: false)
-    try DemoPaper.write(to: root.appendingPathComponent(pdf.originalPath))
+    try AttentionFixture.write(to: root.appendingPathComponent(pdf.originalPath))
     try #require(await reader.save(adding: html))
     try #require(await reader.save(adding: pdf))
     reader.select(html.id)
@@ -237,7 +238,7 @@ import Testing
     let beforeSecond = try await PDFReadingNoteLocator().citationContext(for: second, documentURL: file)
     #expect(afterFirst.after.contains("second trial") && beforeSecond.before.contains("second trial"))
     try FileManager.default.removeItem(at: file)
-    try DemoPaper.write(to: file)
+    try AttentionFixture.write(to: file)
     await #expect(throws: ReaderError.self) {
         try await PDFReadingNoteLocator().citationContext(for: second, documentURL: file)
     }

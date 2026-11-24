@@ -1,4 +1,5 @@
 import Foundation
+import PaperReaderTestSupport
 import Testing
 
 @testable import PaperReaderKit
@@ -56,7 +57,7 @@ private func sampleSettings() -> ModelSettings {
     try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: root) }
     let file = root.appendingPathComponent("sample.pdf")
-    try DemoPaper.write(to: file)
+    try AttentionFixture.write(to: file)
     let paper = try await PDFImporter(root: root).storeOriginal(at: file)
     let sentences = try PDFSentenceExtractor.extract(url: file, pageIndex: 0)
     let start = try #require(sentences.firstIndex(where: { $0.text.hasPrefix("Attention is a way") }))

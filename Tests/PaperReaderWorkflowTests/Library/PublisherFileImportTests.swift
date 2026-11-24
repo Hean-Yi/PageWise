@@ -1,5 +1,6 @@
 import Foundation
 import PaperReaderKit
+import PaperReaderTestSupport
 import Testing
 
 @testable import PaperReaderUI
@@ -16,7 +17,7 @@ import Testing
         await reader.load()
         let shelf = try #require(await reader.createShelf(name: "研究"))
         let url = root.appendingPathComponent("download.pdf")
-        try DemoPaper.write(to: url)
+        try AttentionFixture.write(to: url)
         let bytes = try Data(contentsOf: url)
         let id = try await reader.importPublisherPDF(url, for: citation, shelfID: shelf)
         #expect(reader.selectedPaperID == nil)
@@ -41,7 +42,7 @@ import Testing
         await reader.load()
         let shelf = try #require(await reader.createShelf(name: "已有书架"))
         let url = root.appendingPathComponent("original.pdf")
-        try DemoPaper.write(to: url)
+        try AttentionFixture.write(to: url)
         let id = try #require(await reader.importURLs([url], selectAfterImport: false, shelfID: shelf).first)
         let original = try #require(reader.state.papers.first)
         let reading = RetainedReading(paper: original)
@@ -75,7 +76,7 @@ import Testing
         let reader = try ReaderModel(root: root, credentials: WorkflowCredentials())
         await reader.load()
         let url = root.appendingPathComponent("sample.pdf")
-        try DemoPaper.write(to: url)
+        try AttentionFixture.write(to: url)
         let id = try await reader.importPublisherPDF(url, for: citation)
         let oldPaper = try #require(reader.state.papers.first)
         reader.state.highlights = [
@@ -111,7 +112,7 @@ import Testing
         let reader = try ReaderModel(root: root, credentials: WorkflowCredentials())
         await reader.load()
         let url = root.appendingPathComponent("download.pdf")
-        try DemoPaper.write(to: url)
+        try AttentionFixture.write(to: url)
         let bytes = try Data(contentsOf: url)
         let endings = ["\n% A\n", "\n% B\n"]
         let shelves = [
@@ -143,7 +144,7 @@ import Testing
         let reader = try ReaderModel(root: root, credentials: WorkflowCredentials())
         await reader.load()
         let url = root.appendingPathComponent("download.pdf")
-        try DemoPaper.write(to: url)
+        try AttentionFixture.write(to: url)
         let openRecord = PaperCandidate(
             id: "https://doi.org/10.18653/v1/2025.acl-long.12", title: "Publisher fixture", authors: "", year: "2025",
             source: .crossref)
@@ -167,7 +168,7 @@ import Testing
         try Data("<html>Sign in</html>".utf8).write(to: incomplete)
         await #expect(throws: ReaderError.self) { try await reader.importPublisherPDF(incomplete, for: citation) }
         let url = root.appendingPathComponent("download.pdf")
-        try DemoPaper.write(to: url)
+        try AttentionFixture.write(to: url)
         var invalid = citation
         invalid.id = "https://example.org/record"
         await #expect(throws: ReaderError.self) { try await reader.importPublisherPDF(url, for: invalid) }

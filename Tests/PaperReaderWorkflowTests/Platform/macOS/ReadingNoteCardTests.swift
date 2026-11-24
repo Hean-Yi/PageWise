@@ -1,6 +1,7 @@
 #if os(macOS)
     import Foundation
     import PaperReaderKit
+    import PaperReaderTestSupport
     import Testing
     import WebKit
     @testable import PaperReaderUI
@@ -441,7 +442,7 @@
         let model = try ReaderModel(root: root, credentials: WorkflowCredentials())
         await model.load()
         let file = root.appendingPathComponent("evidence.pdf")
-        try DemoPaper.write(to: file)
+        try AttentionFixture.write(to: file)
         let target = try #require(await model.importURLs([file]).first)
         model.select(target)
         let document = try #require(model.paper)

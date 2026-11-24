@@ -2,6 +2,7 @@ import CSQLite
 import Foundation
 import PDFKit
 import PaperReaderKit
+import PaperReaderTestSupport
 import Testing
 
 @testable import PaperReaderUI
@@ -477,7 +478,7 @@ func changingAgentServiceOrModelStartsFreshWireHistoryAndKeepsDisplayedTurns(cha
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: root) }
     let reader = try await makeAgentReader(root)
-    await reader.addDemo()
+    await reader.openBundledSample()
     let existing = try #require(reader.paper)
     reader.selectedPaperID = nil
     let discovery = AgentDiscoveryFixture(
@@ -584,7 +585,7 @@ func recommendedPaperDownloadsFromItsOwnCardWithoutAnotherModelRequest(retry: Bo
         try await eventually { agent.card(card.id)?.importState == .failed }
         #expect(agent.card(card.id)?.canImport == true && reader.state.papers.isEmpty)
     }
-    try DemoPaper.write(to: source)
+    try AttentionFixture.write(to: source)
     agent.confirmImport(cardID: card.id)
     agent.confirmImport(cardID: card.id)
     try await eventually { await discovery.waiting }
@@ -605,7 +606,7 @@ func downloadsFromTwoRecommendationCardsQueueOnceAndRespectCancellation(cancelSe
     defer { try? FileManager.default.removeItem(at: root) }
     let reader = try await makeAgentReader(root)
     let source = root.appendingPathComponent("fixture.pdf")
-    try DemoPaper.write(to: source)
+    try AttentionFixture.write(to: source)
     let discovery = AgentDiscoveryFixture(source: source, holdDownload: true, candidateCount: 2)
     let model = ScriptedLibraryModel(recommendTwoOnlinePapers)
     let agent = LibraryAgent(reader: reader, client: model, discovery: discovery)
@@ -670,7 +671,7 @@ func downloadsFromTwoRecommendationCardsQueueOnceAndRespectCancellation(cancelSe
     defer { try? FileManager.default.removeItem(at: root) }
     let reader = try await makeAgentReader(root)
     let source = root.appendingPathComponent("fixture.pdf")
-    try DemoPaper.write(to: source)
+    try AttentionFixture.write(to: source)
     let discovery = AgentDiscoveryFixture(source: source, holdDownload: true)
     let agent = LibraryAgent(reader: reader, client: ScriptedLibraryModel(onlineScript), discovery: discovery)
     agent.send("导入")
@@ -771,7 +772,7 @@ func downloadsFromTwoRecommendationCardsQueueOnceAndRespectCancellation(cancelSe
     defer { try? FileManager.default.removeItem(at: root) }
     let reader = try await makeAgentReader(root)
     let file = root.appendingPathComponent("fixture.pdf")
-    try DemoPaper.write(to: file)
+    try AttentionFixture.write(to: file)
     var database: OpaquePointer?
     #expect(sqlite3_open(root.appendingPathComponent("library.sqlite").path, &database) == SQLITE_OK)
     let lock = try #require(database)
@@ -883,7 +884,7 @@ func downloadsFromTwoRecommendationCardsQueueOnceAndRespectCancellation(cancelSe
     defer { try? FileManager.default.removeItem(at: root) }
     let reader = try await makeAgentReader(root)
     let source = root.appendingPathComponent("fixture.pdf")
-    try DemoPaper.write(to: source)
+    try AttentionFixture.write(to: source)
     let agent = LibraryAgent(
         reader: reader, client: ScriptedLibraryModel(onlineScript), discovery: AgentDiscoveryFixture(source: source))
     agent.send("导入")
@@ -918,7 +919,7 @@ private func repeatedOnlineScript(_ messages: [AgentMessage], _ count: Int) thro
     defer { try? FileManager.default.removeItem(at: root) }
     let reader = try await makeAgentReader(root)
     let source = root.appendingPathComponent("fixture.pdf")
-    try DemoPaper.write(to: source)
+    try AttentionFixture.write(to: source)
     let discovery = AgentDiscoveryFixture(source: source, holdDownload: true)
     let client = ScriptedLibraryModel(repeatedOnlineScript)
     let agent = LibraryAgent(reader: reader, client: client, discovery: discovery)
@@ -1246,7 +1247,7 @@ private actor DelayedHistorySearch: PaperDiscovery {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: root) }
     let reader = try await makeAgentReader(root)
-    try DemoPaper.write(to: root.appendingPathComponent("paper.pdf"))
+    try AttentionFixture.write(to: root.appendingPathComponent("paper.pdf"))
     let paper = Paper(
         title: "Understanding Attention", digest: "demo", originalPath: "paper.pdf",
         pageCount: 2, blocks: [], warnings: [], canReflow: false)
@@ -1327,7 +1328,7 @@ func closeReadingToolBecomesAvailableAsSoonAsTheTargetPaperIsRegistered(selected
     let primary = Paper(
         title: "Fixture Primary", digest: "primary", originalPath: "primary.pdf", pageCount: 2,
         blocks: [TextBlock(sourcePage: 1, text: primaryQuote)], warnings: [], canReflow: false)
-    try DemoPaper.write(to: root.appendingPathComponent(primary.originalPath))
+    try AttentionFixture.write(to: root.appendingPathComponent(primary.originalPath))
     let citedBlock = TextBlock(sourcePage: 0, text: "The comparison used identical training sets.")
     var cited = Paper(
         title: "Fixture Comparison", digest: "comparison", originalPath: "comparison.pdf", pageCount: 1,
@@ -1424,7 +1425,7 @@ func closeReadingToolBecomesAvailableAsSoonAsTheTargetPaperIsRegistered(selected
     let paper = Paper(
         title: "Attention", digest: "test", originalPath: "demo.pdf", pageCount: 2, blocks: [], warnings: [],
         canReflow: false)
-    try DemoPaper.write(to: root.appendingPathComponent(paper.originalPath))
+    try AttentionFixture.write(to: root.appendingPathComponent(paper.originalPath))
     try #require(await reader.save(adding: paper))
     let anchor = NoteAnchor(key: "original-0", target: "pdf", text: "Attention", start: 0, end: 9)
     let original = ReadingNote(
@@ -1505,7 +1506,7 @@ func closeReadingToolBecomesAvailableAsSoonAsTheTargetPaperIsRegistered(selected
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: root) }
     let reader = try await makeAgentReader(root)
-    try DemoPaper.write(to: root.appendingPathComponent("paper.pdf"))
+    try AttentionFixture.write(to: root.appendingPathComponent("paper.pdf"))
     let paper = Paper(
         title: "Attention", digest: "demo", originalPath: "paper.pdf", pageCount: 2, blocks: [], warnings: [],
         canReflow: false)
@@ -1595,7 +1596,7 @@ func publicationCardImportsTheSelectedPDFOrOpensTheMatchingShelfImport(importFro
     #expect(scopes.first?.availableToolNames?.contains("prepare_import") == false)
     #expect(scopes.dropFirst().allSatisfy { $0.availableToolNames?.contains("prepare_import") == true })
     let file = root.appendingPathComponent("user-selected.pdf")
-    try DemoPaper.write(to: file)
+    try AttentionFixture.write(to: file)
     agent.importPublisherPDF(file, cardID: UUID())
     #expect(agent.importTasks.isEmpty && reader.state.papers.isEmpty)
     if importFromShelf {
@@ -1661,7 +1662,7 @@ func publicationCardImportsTheSelectedPDFOrOpensTheMatchingShelfImport(importFro
     #expect(parent.canImport && !parent.hasDownload && version.canImport && version.sourceName == "arXiv")
     #expect(await discovery.downloads.isEmpty)
     let file = root.appendingPathComponent("publisher.pdf")
-    try DemoPaper.write(to: file)
+    try AttentionFixture.write(to: file)
     agent.importPublisherPDF(file, cardID: version.id)
     #expect(agent.importTasks.isEmpty)
     // The chosen publication waits for the library. The preprint can queue and cancel independently.
@@ -1745,7 +1746,7 @@ private func libraryPayload(_ messages: [AgentMessage], _ call: String) throws -
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: root) }
     let reader = try await makeAgentReader(root)
-    await reader.addDemo()
+    await reader.openBundledSample()
     let paper = try #require(reader.paper)
     let model = ScriptedLibraryModel { messages, step in
         switch step {
@@ -1791,7 +1792,7 @@ private func libraryPayload(_ messages: [AgentMessage], _ call: String) throws -
     let reader = try await makeAgentReader(root)
     let shelf = try #require(await reader.createShelf(name: "主题"))
     let pdf = root.appendingPathComponent("fixture.pdf")
-    try DemoPaper.write(to: pdf)
+    try AttentionFixture.write(to: pdf)
     let model = ScriptedLibraryModel { _, step in
         switch step {
         case 1: return tool("list_library", #"{"scope":"shelves"}"#, id: "shelves")
@@ -1828,7 +1829,7 @@ private func libraryPayload(_ messages: [AgentMessage], _ call: String) throws -
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: root) }
     let reader = try await makeAgentReader(root)
-    await reader.addDemo()
+    await reader.openBundledSample()
     let paper = try #require(reader.paper)
     let shelf = try #require(await reader.createShelf(name: "旧名称"))
     let model = ScriptedLibraryModel { _, step in

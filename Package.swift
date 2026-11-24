@@ -23,7 +23,12 @@ let package = Package(
             exclude: ["Platform/HTML/NoteEditor/Editor.js"],
             resources: [.copy("Platform/HTML/ReaderWarmup.html"), .copy("Platform/HTML/NoteEditor/NoteEditor.bundle")]),
         .executableTarget(name: "ReaderSmoke", dependencies: ["PaperReaderKit", "SwiftSoup"]),
-        .testTarget(name: "PaperReaderKitTests", dependencies: ["PaperReaderKit"]),
-        .testTarget(name: "PaperReaderWorkflowTests", dependencies: ["PaperReaderKit", "PaperReaderUI"]),
+        .target(
+            name: "PaperReaderTestSupport", path: "Tests/PaperReaderTestSupport",
+            resources: [.copy("Resources/Understanding Attention.pdf")]),
+        .testTarget(name: "PaperReaderKitTests", dependencies: ["PaperReaderKit", "PaperReaderTestSupport"]),
+        .testTarget(
+            name: "PaperReaderWorkflowTests",
+            dependencies: ["PaperReaderKit", "PaperReaderUI", "PaperReaderTestSupport"]),
     ]
 )

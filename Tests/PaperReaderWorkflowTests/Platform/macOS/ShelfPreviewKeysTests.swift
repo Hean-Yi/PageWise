@@ -34,7 +34,7 @@
         window.contentView = NSHostingView(
             rootView: LibraryWorkspaceView(
                 model: model, collection: .constant(.all), selectedShelfID: shelfBinding,
-                onlineSearch: OnlinePaperSearch(reader: model), findRequest: 0))
+                onlineSearch: OnlinePaperSearch(reader: model), findRequest: 0, openSample: {}))
         defer { window.contentView = nil }
         let host = try #require(window.contentView)
         func children(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(children) }

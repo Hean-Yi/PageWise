@@ -5,6 +5,28 @@ import Testing
 
 @testable import PaperReaderKit
 
+@Test func bundledReadingSampleHasSelectableEvidenceOnBothPages() throws {
+    let file = try DemoPaper.fileURL()
+    let document = try #require(PDFDocument(url: file))
+    #expect(document.pageCount == 2)
+    #expect(document.documentAttributes?[PDFDocumentAttribute.titleAttribute] as? String == DemoPaper.title)
+    let abstract = try PDFAbstractExtractor.extract(url: file, pages: document.pageCount)
+    #expect(abstract.sentences.first?.text.hasPrefix("A higher average can hide") == true)
+    let first = try PDFSentenceExtractor.extractPage(url: file, pageIndex: 0, includingIllustrations: true)
+    #expect(first.paragraphSentences.first?.text == DemoPaper.title)
+    #expect(
+        first.paragraphSentences.contains { $0.text == "Every fraction in the table is correct." && !$0.rects.isEmpty })
+    let table = try #require(first.illustrations.first?.table)
+    #expect(table.header == ["System", "Easy", "Hard", "All questions"])
+    #expect(table.rows.map(\.last) == ["63 / 100 (63%)", "77 / 100 (77%)"])
+    let second = try PDFSentenceExtractor.extractPage(url: file, pageIndex: 1, includingIllustrations: true)
+    #expect(
+        second.paragraphSentences.contains {
+            $0.text == "Were the systems tested on the same cases?" && !$0.rects.isEmpty
+        })
+    #expect(second.illustrations.contains { $0.presentation == .illustration && $0.imagePNG != nil })
+}
+
 @Test @MainActor func pdfImportPreservesOriginalAnnotationsAndDoesNotCreateReadingContent() async throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)

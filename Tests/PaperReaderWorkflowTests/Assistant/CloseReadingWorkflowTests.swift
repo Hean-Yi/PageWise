@@ -1,5 +1,6 @@
 import Foundation
 import PaperReaderKit
+import PaperReaderTestSupport
 import Testing
 
 @testable import PaperReaderUI
@@ -121,7 +122,7 @@ private actor CloseReadingTransport: HTTPTransport {
     settings.model = "fixture"
     try reader.saveSettings(settings, key: nil)
     let file = root.appendingPathComponent("attention.pdf")
-    try DemoPaper.write(to: file)
+    try AttentionFixture.write(to: file)
     let id = try #require(await reader.importURLs([file]).first)
     let block = TextBlock(sourcePage: -1, text: "This attention benchmark measures masking policies.")
     var other = Paper(

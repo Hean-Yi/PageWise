@@ -17,12 +17,13 @@ struct LibraryWorkspaceView: View {
     @Binding var selectedShelfID: UUID?
     @Bindable var onlineSearch: OnlinePaperSearch
     let findRequest: Int
+    let openSample: () -> Void
     @State private var query = ""
 
     var body: some View {
         ShelfWorkspaceContent(
             model: model, collection: $collection, selectedShelfID: $selectedShelfID, onlineSearch: onlineSearch,
-            findRequest: findRequest, query: $query,
+            findRequest: findRequest, openSample: openSample, query: $query,
             listing: ShelfListing(state: model.state, collection: collection, query: query, shelfID: selectedShelfID))
     }
 }
@@ -71,6 +72,7 @@ private struct ShelfWorkspaceContent: View {
     @Binding var selectedShelfID: UUID?
     @Bindable var onlineSearch: OnlinePaperSearch
     let findRequest: Int
+    let openSample: () -> Void
     @Binding var query: String
     let listing: ShelfListing
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -164,7 +166,8 @@ private struct ShelfWorkspaceContent: View {
                     if model.state.papers.isEmpty && collection == .all {
                         HStack(spacing: 14) {
                             Text("也可以拖入 PDF").foregroundStyle(ReaderTheme.muted)
-                            Button("试读示例") { Task { await model.addDemo() } }
+                            Button("试读内置示例", action: openSample)
+                                .disabled(model.isImporting)
                                 .buttonStyle(.plain).foregroundStyle(ReaderTheme.accent)
                         }.font(.system(size: 12)).padding(.top, 22)
                     } else if listing.entries.isEmpty {

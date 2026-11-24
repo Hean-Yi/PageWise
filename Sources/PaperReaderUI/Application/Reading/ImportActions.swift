@@ -240,10 +240,19 @@ extension ReaderModel {
             && ArxivClient.versionedIdentifier(download.candidate.id) != nil
     }
 
-    public func addDemo() async {
+    @discardableResult public func openBundledSample() async -> UUID? {
         do {
-            await importURLs([try DemoPaper.fileURL()])
-        } catch { message = error.localizedDescription }
+            let ids = await importURLs([try DemoPaper.fileURL()])
+            guard !Task.isCancelled else { return nil }
+            return ids.first
+        } catch {
+            message = error.localizedDescription
+            return nil
+        }
+    }
+
+    public func addDemo() async {
+        await openBundledSample()
     }
 
     public func pauseTranslation() { if let id = selectedPaperID { translationTasks[id]?.cancel() } }

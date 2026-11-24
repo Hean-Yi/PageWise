@@ -1,5 +1,6 @@
 import Foundation
 import PaperReaderKit
+import PaperReaderTestSupport
 import Testing
 
 @testable import PaperReaderUI
@@ -11,7 +12,7 @@ import Testing
         let reader = try ReaderModel(root: root, credentials: WorkflowCredentials())
         await reader.load()
         let file = root.appendingPathComponent("test.pdf")
-        try DemoPaper.write(to: file)
+        try AttentionFixture.write(to: file)
         let id = try #require(await reader.importURLs([file], selectAfterImport: false).first)
         let original = await reader.previewContent(for: id)
         #expect(original.abstract?.hasPrefix("Attention is a way") == true)
@@ -42,7 +43,7 @@ import Testing
         defer { try? FileManager.default.removeItem(at: root) }
         let store = try LibraryStore(directory: root)
         let input = root.appendingPathComponent("old-paper.pdf")
-        try DemoPaper.write(to: input)
+        try AttentionFixture.write(to: input)
         let paper = try await PDFImporter(root: root).storeOriginal(at: input)
         var library = LibraryState()
         library.papers = [paper]

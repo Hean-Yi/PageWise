@@ -1,6 +1,7 @@
 import Foundation
 import PDFKit
 import PaperReaderKit
+import PaperReaderTestSupport
 import Testing
 import WebKit
 
@@ -12,7 +13,7 @@ import WebKit
     let reader = try ReaderModel(root: root, credentials: WorkflowCredentials())
     await reader.load()
     let file = root.appendingPathComponent("fixture.pdf")
-    try DemoPaper.write(to: file)
+    try AttentionFixture.write(to: file)
     let data = try Data(contentsOf: file)
     let id = try #require(await reader.importURLs([file]).first)
     let document = try #require(PDFDocument(url: file))
@@ -60,7 +61,7 @@ import WebKit
     let reader = try ReaderModel(root: root, credentials: WorkflowCredentials())
     await reader.load()
     let url = root.appendingPathComponent("fixture.pdf")
-    try DemoPaper.write(to: url)
+    try AttentionFixture.write(to: url)
     let id = try #require(await reader.importURLs([url]).first)
     let note = ReadingNote(
         paperID: id, contentVersion: "",
@@ -103,7 +104,7 @@ import WebKit
     let reader = try ReaderModel(root: root, credentials: WorkflowCredentials())
     await reader.load()
     let url = root.appendingPathComponent("fixture.pdf")
-    try DemoPaper.write(to: url)
+    try AttentionFixture.write(to: url)
     let id = try #require(await reader.importURLs([url]).first)
     let version = try #require(reader.paper?.digest) + ":original-0"
     let quote = "Imagine a notebook"
@@ -145,7 +146,7 @@ func pdfDiscussionNoteKeepsTheColorAndInkOfAnOverlappingManualMark(style: Annota
     let reader = try ReaderModel(root: root, credentials: WorkflowCredentials())
     await reader.load()
     let url = root.appendingPathComponent("fixture.pdf")
-    try DemoPaper.write(to: url)
+    try AttentionFixture.write(to: url)
     let paperID = try #require(await reader.importURLs([url]).first)
     let locator = PDFReadingNoteLocator()
     let prefix = try #require(try await locator.locate(quote: "Multiple attention", pageIndex: 1, in: url).first)

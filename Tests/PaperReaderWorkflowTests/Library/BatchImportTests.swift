@@ -1,6 +1,7 @@
 import Foundation
 import PDFKit
 import PaperReaderKit
+import PaperReaderTestSupport
 import PaperReaderUI
 import Testing
 
@@ -124,7 +125,7 @@ func repeatedDownloadFillsMissingSameEditionAbstractAndKeepsIt(hasArchive: Bool)
 /// Distinct metadata gives each original teaching fixture a distinct digest, without network material.
 @MainActor private func batchFixture(named name: String, in root: URL) throws -> URL {
     let url = root.appendingPathComponent(name)
-    try DemoPaper.write(to: url)
+    try AttentionFixture.write(to: url)
     let document = try #require(PDFDocument(url: url))
     var attributes = document.documentAttributes ?? [:]
     attributes[PDFDocumentAttribute.titleAttribute] = url.deletingPathExtension().lastPathComponent

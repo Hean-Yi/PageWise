@@ -1,3 +1,4 @@
+import PaperReaderKit
 import SwiftUI
 
 enum QuickStartStep: Int, CaseIterable {
@@ -19,7 +20,7 @@ enum QuickStartStep: Int, CaseIterable {
     var instruction: String {
         switch self {
         case .importPaper:
-            "点「导入 PDF」选择本机文件。如果手边没有论文，继续向下，稍后用内置示例体验阅读。"
+            "点「导入 PDF」可添加自己的论文。也可以直接试读随应用附带的两页示例《\(DemoPaper.title)》。"
         case .discovery:
             "点加号封面，输入题名、关键词或 DOI。结果旁有「下载并导入」时，点一下就能加入书架。"
         case .shelves:
@@ -67,6 +68,7 @@ struct QuickStartOverlay: View {
     let onBack: () -> Void
     let onNext: () -> Void
     let onSkip: () -> Void
+    let onReadSample: () -> Void
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var cardHeight: CGFloat = 154
@@ -199,7 +201,10 @@ struct QuickStartOverlay: View {
                 Button("跳过", action: onSkip).buttonStyle(.plain)
                     .foregroundStyle(ReaderTheme.muted).keyboardShortcut(.cancelAction)
                 Spacer()
-                if step != .importPaper {
+                if step == .importPaper {
+                    Button("直接试读示例", action: onReadSample).buttonStyle(.plain)
+                        .foregroundStyle(ReaderTheme.accent)
+                } else {
                     Button("上一步", action: onBack).buttonStyle(.plain)
                         .keyboardShortcut(.leftArrow, modifiers: [.command, .option])
                 }

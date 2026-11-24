@@ -1,5 +1,6 @@
 import Foundation
 import PaperReaderKit
+import PaperReaderTestSupport
 import Testing
 
 @testable import PaperReaderUI
@@ -131,7 +132,7 @@ private actor DiscussionTransport: HTTPTransport {
     settings.model = "fixture"
     try model.saveSettings(settings, key: nil)
     let file = root.appendingPathComponent("discuss.pdf")
-    try DemoPaper.write(to: file)
+    try AttentionFixture.write(to: file)
     let paperID = try #require(await model.importURLs([file]).first)
     model.recordVisiblePage(1)
     await model.ask("这里为什么需要不同证据？")
@@ -169,13 +170,13 @@ private actor DiscussionTransport: HTTPTransport {
     settings.model = "fixture"
     try model.saveSettings(settings, key: nil)
     let file = root.appendingPathComponent("current.pdf")
-    try DemoPaper.write(to: file)
+    try AttentionFixture.write(to: file)
     let primary = try #require(await model.importURLs([file]).first)
     let otherRaw = "依照原文，这是本篇独有的未批注灰鲸事实。"
     let other = Paper(
         title: "先前读过的实验", digest: "comparison", originalPath: "comparison.pdf", pageCount: 2,
         blocks: [TextBlock(sourcePage: 0, text: otherRaw)], warnings: [], canReflow: false)
-    try DemoPaper.write(to: root.appendingPathComponent(other.originalPath))
+    try AttentionFixture.write(to: root.appendingPathComponent(other.originalPath))
     try #require(await model.save(adding: other))
     let anchor = NoteAnchor(key: "original-0", target: "pdf", text: "Attention", start: 0, end: 9)
     let observation = "排查混杂时，蓝鲸偏差要求固定推理预算。"
