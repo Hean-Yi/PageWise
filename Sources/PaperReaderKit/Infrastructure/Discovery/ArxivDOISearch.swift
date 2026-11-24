@@ -28,7 +28,9 @@ enum ArxivDOISearch {
             .init(name: "sort", value: "relevance"),
             .init(name: "page[size]", value: String(limit)),
             .init(name: "disable-facets", value: "true"),
-            .init(name: "fields[dois]", value: "doi,titles,creators,publicationYear,url,version,relatedIdentifiers"),
+            .init(
+                name: "fields[dois]",
+                value: "doi,titles,creators,publicationYear,url,version,relatedIdentifiers,descriptions"),
         ]
         guard let url = components.url else { throw ArxivQueryError.invalidQuery }
         var request = URLRequest(url: url, timeoutInterval: 20)
@@ -91,6 +93,11 @@ enum ArxivDOISearch {
             let titles: [Title]?
             let creators: [Creator]?
             let publicationYear: Int?
+            struct Description: Decodable {
+                let description: String?
+                let descriptionType: String?
+            }
+            let descriptions: [Description]?
         }
 
         let id: String
@@ -125,7 +132,8 @@ enum ArxivDOISearch {
                 id: "https://arxiv.org/abs/" + resolved,
                 title: title.split(whereSeparator: \.isWhitespace).joined(separator: " "),
                 authors: (attributes.creators ?? []).map(\.displayName).joined(separator: ", "),
-                year: String(year), pdfURL: pdf)
+                year: String(year), pdfURL: pdf,
+                abstract: attributes.descriptions?.first(where: { $0.descriptionType == "Abstract" })?.description)
             let publicationDOIs = Set(
                 (attributes.relatedIdentifiers ?? []).compactMap { link -> String? in
                     guard link.relatedIdentifierType == "DOI",

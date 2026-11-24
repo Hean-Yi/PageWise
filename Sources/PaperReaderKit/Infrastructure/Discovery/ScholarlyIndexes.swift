@@ -38,7 +38,7 @@ actor ScholarlyIndexes {
         var components = URLComponents(string: "https://api.crossref.org/works")!
         var items: [URLQueryItem] = [
             .init(name: "rows", value: String(count)),
-            .init(name: "select", value: "DOI,title,author,issued,relation,license,link"),
+            .init(name: "select", value: "DOI,title,author,issued,relation,license,link,abstract"),
         ]
         let exactDOI = PaperCandidate.queryDOI(query)
         if let doi = exactDOI {
@@ -86,7 +86,7 @@ actor ScholarlyIndexes {
         components.percentEncodedPath = "/recommendations/v1/papers/forpaper/" + encoded
         components.queryItems = [
             .init(name: "limit", value: String(min(limit, 40))),
-            .init(name: "fields", value: "title,authors,year,externalIds,openAccessPdf"),
+            .init(name: "fields", value: "title,authors,year,externalIds,openAccessPdf,abstract"),
         ]
         return try await records(components, source: .semanticScholar, limit: limit) { data in
             try JSONDecoder().decode(ScholarRecommendations.self, from: data).recommendedPapers.map(\.candidate)

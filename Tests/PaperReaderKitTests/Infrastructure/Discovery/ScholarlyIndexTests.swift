@@ -34,6 +34,7 @@ private actor IndexFixture: HTTPTransport {
                 {"message":{"items":[
                     {"DOI":"10.1000/Reader","title":[" Reading  metadata "],"issued":{"date-parts":[[2025,2]]},
                      "author":[{"given":"Kay","family":"Chan"},{"name":"Example Group"}],
+                     "abstract":"<jats:p>Evidence from <jats:italic>two</jats:italic> settings.</jats:p>",
                      "relation":{"has-preprint":[{"id":"10.48550/arXiv.2501.12345"}]},
                      "link":[{"URL":"https://example.org/reader.pdf","content-type":"application/pdf"}]},
                     {"DOI":"10.1000/other","title":["Different record"]}]}}
@@ -48,6 +49,7 @@ private actor IndexFixture: HTTPTransport {
     let paper = try #require(batches.0.first)
     #expect(paper.source == .crossref && paper.id == "https://doi.org/10.1000/reader" && paper.doi == "10.1000/reader")
     #expect(paper.title == "Reading metadata" && paper.authors == "Kay Chan, Example Group" && paper.year == "2025")
+    #expect(paper.abstractText == "Evidence from two settings.")
     #expect(paper.relatedArxivID == "2501.12345" && !paper.canDownload)
     let requests = await transport.requests
     #expect(requests.count == 1)

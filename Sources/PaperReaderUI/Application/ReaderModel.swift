@@ -51,6 +51,7 @@ public final class ReaderModel {
     let pdfBilingual = PDFBilingualSession()
     let pdfDocumentTranslation = PDFDocumentTranslationController()
     let pdfTranslations: PDFSentenceTranslationStore
+    let previewReader = PaperPreviewReader()
     let translationValidation: PDFTranslationValidationConfiguration?
     public var visiblePage = 0 {
         didSet {

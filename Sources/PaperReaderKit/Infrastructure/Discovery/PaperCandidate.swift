@@ -1,4 +1,5 @@
 import Foundation
+import SwiftSoup
 
 public enum PaperSearchSource: String, Sendable, CaseIterable {
     case arxiv, crossref, dblp, semanticScholar
@@ -36,6 +37,7 @@ public struct PaperCandidate: Identifiable, Sendable {
     var indexedCopy: IndexedOpenCopy?
     public var source: PaperSearchSource
     public var doi: String?
+    public var abstractText: String?
     /// Explicit identifier supplied by a scholarly index for the corresponding preprint.
     public var relatedArxivID: String?
     public var alternateVersions: [PaperCandidate] = []
@@ -43,7 +45,7 @@ public struct PaperCandidate: Identifiable, Sendable {
 
     public init(
         id: String, title: String, authors: String, year: String, pdfURL: URL? = nil,
-        source: PaperSearchSource = .arxiv, doi: String? = nil, relatedArxivID: String? = nil
+        source: PaperSearchSource = .arxiv, doi: String? = nil, relatedArxivID: String? = nil, abstract: String? = nil
     ) {
         self.id = id
         self.title = title
@@ -53,6 +55,10 @@ public struct PaperCandidate: Identifiable, Sendable {
         self.source = source
         self.doi = doi
         self.relatedArxivID = relatedArxivID
+        if let abstract, !abstract.isEmpty, abstract.utf8.count <= 48_000 {
+            let plain = abstract.contains("<") ? (try? SwiftSoup.parseBodyFragment(abstract).text()) : abstract
+            self.abstractText = plain?.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        }
     }
 
     public var verified: Self? {
@@ -65,7 +71,6 @@ public struct PaperCandidate: Identifiable, Sendable {
     public var landingPageLabel: String { Self.landingPageLabel(for: landingURL) }
     public static func landingPageLabel(for url: URL?) -> String { url?.host == "doi.org" ? "查看出版页" : "查看来源页" }
     public var canDownload: Bool { verifiedRecord?.pdfURL != nil }
-
     public var canAttemptDownload: Bool {
         guard let record = verifiedRecord else { return false }
         return record.pdfURL != nil || record.doi != nil || record.source == .semanticScholar

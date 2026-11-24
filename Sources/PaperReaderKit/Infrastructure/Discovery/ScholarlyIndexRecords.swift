@@ -86,12 +86,13 @@ struct CrossrefPage: Decodable {
         let title: [String]?
         let author: [Author]?
         let issued: Issued?
+        let abstract: String?
         let relation: [String: [Relation]]?
         let license: [License]?
         let link: [FullTextLink]?
         enum CodingKeys: String, CodingKey {
             case doi = "DOI"
-            case title, author, issued, relation, license, link
+            case title, author, issued, relation, license, link, abstract
         }
 
         var candidate: PaperCandidate? {
@@ -103,7 +104,7 @@ struct CrossrefPage: Decodable {
                 id: "https://doi.org/" + doi, title: title.split(whereSeparator: \.isWhitespace).joined(separator: " "),
                 authors: (author ?? []).compactMap(\.displayName).joined(separator: ", "),
                 year: year.map(String.init) ?? "",
-                source: .crossref, doi: doi, relatedArxivID: arxivID)
+                source: .crossref, doi: doi, relatedArxivID: arxivID, abstract: abstract)
             if license?.contains(where: \.coversPublishedVersion) == true {
                 for link in link ?? [] where link.version == "vor" && link.contentType == "application/pdf" {
                     paper.pdfURL = link.url.flatMap(URL.init(string:))
@@ -220,6 +221,7 @@ struct ScholarRecord: Decodable {
     let year: Int?
     let externalIds: ExternalIDs?
     let openAccessPdf: OpenPDF?
+    let abstract: String?
 
     var candidate: PaperCandidate? {
         guard let title, let paperId, paperId.range(of: #"^[0-9a-fA-F]{40}$"#, options: .regularExpression) != nil
@@ -230,6 +232,7 @@ struct ScholarRecord: Decodable {
         return PaperCandidate(
             id: doi.map { "https://doi.org/" + $0 } ?? "https://www.semanticscholar.org/paper/" + paperId.lowercased(),
             title: title, authors: (authors ?? []).compactMap(\.name).joined(separator: ", "),
-            year: year.map(String.init) ?? "", pdfURL: pdf, source: .semanticScholar, doi: doi, relatedArxivID: arxivID)
+            year: year.map(String.init) ?? "", pdfURL: pdf, source: .semanticScholar, doi: doi, relatedArxivID: arxivID,
+            abstract: abstract)
     }
 }

@@ -4,7 +4,7 @@ import Testing
 @testable import PaperReaderKit
 
 private actor SentenceReplies: HTTPTransport {
-    enum Mode { case correct, reverseIDs, loseUnit, failAfterFirst, missVariable }
+    enum Mode { case correct, reverseIDs, loseUnit, failAfterFirst, missVariable, preview }
     let mode: Mode
     private(set) var counts: [Int] = []
     private(set) var paragraphGroups: [[Int]] = []
@@ -28,7 +28,9 @@ private actor SentenceReplies: HTTPTransport {
         var pairs = sources.compactMap { source -> [String: String]? in
             guard let id = source["id"] as? String else { return nil }
             let translated: String
-            if let text = source["en"] as? String, text.hasPrefix("The threshold T") {
+            if mode == .preview {
+                translated = "这是已经保存在设备上的摘要译句。"
+            } else if let text = source["en"] as? String, text.hasPrefix("The threshold T") {
                 translated = mode == .missVariable ? "阈值保持恒定。" : "阈值 T 保持恒定。"
             } else {
                 translated = mode == .loseUnit ? "延迟在 3.25 以下，见 [12]。" : "延迟在 3.25 ms以下，见[12]。"
@@ -47,6 +49,34 @@ private func sampleSettings() -> ModelSettings {
     configuration.model = "deepseek-flash"
     configuration.baseURL = "https://api.deepseek.com"
     return configuration
+}
+
+@Test func coverPreviewReadsOnlyCompleteCachedPDFTranslations() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let file = root.appendingPathComponent("sample.pdf")
+    try DemoPaper.write(to: file)
+    let paper = try await PDFImporter(root: root).storeOriginal(at: file)
+    let sentences = try PDFSentenceExtractor.extract(url: file, pageIndex: 0)
+    let start = try #require(sentences.firstIndex(where: { $0.text.hasPrefix("Attention is a way") }))
+    let last = try #require(sentences.firstIndex(where: { $0.text.hasSuffix("interpreted carefully.") }))
+    let abstract = Array(sentences[start...last])
+    #expect(abstract.count > 1)
+    let store = PDFSentenceTranslationStore(root: root)
+    let reader = PaperPreviewReader()
+    let transport = SentenceReplies(.preview)
+    let client = ModelClient(transport: transport)
+    let config = sampleSettings()
+    for batch in [Array(abstract.prefix(1)), Array(abstract.dropFirst())] {
+        try await store.translate(
+            documentHash: paper.digest, sentences: batch, settings: config, client: client, key: { "fixture" })
+        let count = await transport.counts.count
+        let content = try await reader.read(paper: paper, root: root, store: store, settings: config)
+        #expect(content.isChineseAbstract == (batch.first?.id != abstract.first?.id))
+        if content.isChineseAbstract { #expect(content.abstract?.contains("已经保存在设备上") == true) }
+        #expect(await transport.counts.count == count)
+    }
 }
 
 private func sampleSentences(_ count: Int) -> [PDFSourceSentence] {

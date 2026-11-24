@@ -1,6 +1,15 @@
 import PaperReaderKit
 import SwiftUI
 
+// Hover changes need no parent redraw. Read this value only at the start of a space gesture.
+@MainActor private final class ShelfPointer {
+    var paperID: UUID?
+
+    func update(_ id: UUID, inside: Bool) {
+        if inside { paperID = id } else if paperID == id { paperID = nil }
+    }
+}
+
 struct LibraryWorkspaceView: View {
     @Bindable var model: ReaderModel
     @Binding var collection: LibraryCollection
@@ -12,6 +21,25 @@ struct LibraryWorkspaceView: View {
     @State private var arrangement = CoverArrangement()
     private var sort: LibrarySort { model.state.preferredSort }
     @FocusState private var searchFocused: Bool
+    @Namespace private var covers
+    @State private var preview: ShelfPreviewTarget?
+    @State private var pointer = ShelfPointer()
+
+    private func showPreview(_ target: ShelfPreviewTarget) {
+        guard preview == nil, arrangement.sourceID == nil else { return }
+        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.24)) { preview = target }
+    }
+
+    @discardableResult private func dismissPreview() -> Bool {
+        guard preview != nil else { return false }
+        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.18)) { preview = nil }
+        return true
+    }
+
+    private func releasePreview() -> Bool {
+        if case .held = preview { return dismissPreview() }
+        return false
+    }
 
     private var papers: [Paper] {
         LibraryQuery.papers(in: model.state, collection: collection, query: query, sort: sort).filter {
@@ -82,12 +110,49 @@ struct LibraryWorkspaceView: View {
                     }
                 }.padding(.horizontal, inset).padding(.top, compact ? 24 : 32).padding(.bottom, 44)
             }
+            .allowsHitTesting(preview == nil)
+            .accessibilityHidden(preview != nil)
+            .overlay {
+                if let preview, let paper = model.state.papers.first(where: { $0.id == preview.paperID }) {
+                    ShelfPaperPreview(paper: paper, model: model, covers: covers) {
+                        dismissPreview()
+                    } open: {
+                        self.preview = nil
+                        model.select(paper.id)
+                    }
+                    .id(paper.id)
+                    .transition(.opacity)
+                }
+            }
+            #if os(macOS)
+                .background {
+                    ShelfPreviewKeys(
+                        hovered: { pointer.paperID },
+                        press: { id in
+                            guard preview == nil, arrangement.sourceID == nil else { return false }
+                            showPreview(.held(id))
+                            return true
+                        }, release: releasePreview, dismiss: dismissPreview)
+                }
+            #endif
         }.onChange(of: query) { _, _ in arrangement.end() }
-            .onChange(of: collection) { _, _ in arrangement.end() }
-            .onChange(of: selectedShelfID) { _, _ in arrangement.end() }
+            .onChange(of: collection) { _, _ in
+                arrangement.end()
+                preview = nil
+            }
+            .onChange(of: selectedShelfID) { _, _ in
+                arrangement.end()
+                preview = nil
+            }
             .onChange(of: sort) { _, _ in arrangement.end() }
-            .onDisappear { arrangement.end() }
-            .onChange(of: findRequest) { _, _ in searchFocused = true }
+            .onDisappear {
+                arrangement.end()
+                preview = nil
+            }
+            .onChange(of: findRequest) { _, _ in
+                preview = nil
+                searchFocused = true
+            }
             .animation(reduceMotion ? nil : .easeInOut(duration: 0.22), value: onlineSearch.isExpanded)
             .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: selectedShelfID)
             .onChange(of: onlineSearch.isExpanded) { _, expanded in if expanded { searchFocused = false } }
@@ -110,7 +175,9 @@ struct LibraryWorkspaceView: View {
             width: CGFloat(to % columns - from % columns) * (width + 36),
             height: CGFloat(to / columns - from / columns) * (width / 0.70 + 77))
         return BookshelfItem(
-            model: model, paper: paper, lifted: arrangement.sourceID == paper.id,
+            model: model, paper: paper, covers: covers, previewed: preview?.paperID == paper.id,
+            showPreview: showPreview, releasePreview: releasePreview,
+            hoverCover: { pointer.update(paper.id, inside: $0) }, lifted: arrangement.sourceID == paper.id,
             arrangementOffset: offset,
             beginDrag: {
                 arrangement.begin(paper.id, visible: ids, state: model.state, unfinishedFirst: collection == .all)

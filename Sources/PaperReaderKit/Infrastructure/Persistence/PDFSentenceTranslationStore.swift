@@ -22,6 +22,10 @@ public actor PDFSentenceTranslationStore {
         directory = root.appendingPathComponent("PDFTranslations", isDirectory: true)
     }
 
+    func hasSavedPage(documentHash: String, among pages: Range<Int>) -> Bool {
+        pages.contains { FileManager.default.fileExists(atPath: pageURL(documentHash: documentHash, page: $0).path) }
+    }
+
     /// Opens an existing translation without credentials. Prefer the configured edition, then the latest saved one.
     public func cached(documentHash: String, sentences: [PDFSourceSentence], settings: ModelSettings? = nil) throws
         -> [String: String]

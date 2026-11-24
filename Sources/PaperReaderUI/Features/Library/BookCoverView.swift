@@ -103,6 +103,11 @@ private struct CoverPalette {
 struct BookshelfItem: View {
     @Bindable var model: ReaderModel
     let paper: Paper
+    let covers: Namespace.ID
+    let previewed: Bool
+    let showPreview: (ShelfPreviewTarget) -> Void
+    let releasePreview: () -> Bool
+    let hoverCover: (Bool) -> Void
     var lifted = false
     var arrangementOffset = CGSize.zero
     var beginDrag: () -> Void = {}
@@ -116,7 +121,7 @@ struct BookshelfItem: View {
     @FocusState private var focus: Control?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    private enum Control: Hashable { case cover, favorite, menu }
+    private enum Control: Hashable { case cover, preview, favorite, menu }
     private var workspace: PaperWorkspace { model.workspace(for: paper.id) }
     private var progress: ReadingProgress { .resolve(paper: paper, workspace: workspace) }
     private var highlighted: Bool { hovered || focus != nil }
@@ -125,12 +130,17 @@ struct BookshelfItem: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 15) {
             ZStack {
-                BookCoverView(paper: paper, progress: progress)
-                    .shadow(
-                        color: .black.opacity(highlighted ? 0.16 : 0.09), radius: highlighted ? 10 : 4, x: 0,
-                        y: highlighted ? 8 : 3
-                    )
-                    .offset(y: highlighted && !reduceMotion ? -6 : 0)
+                Color.clear.aspectRatio(0.70, contentMode: .fit).accessibilityHidden(true)
+                if !previewed {
+                    BookCoverView(paper: paper, progress: progress)
+                        .matchedGeometryEffect(id: paper.id, in: covers)
+                        .transition(.identity)
+                        .shadow(
+                            color: .black.opacity(highlighted ? 0.16 : 0.09), radius: highlighted ? 10 : 4, x: 0,
+                            y: highlighted ? 8 : 3
+                        )
+                        .offset(y: highlighted && !reduceMotion ? -6 : 0)
+                }
             }
             .opacity(lifted ? 0.28 : 1)
             .offset(arrangementOffset)
@@ -150,8 +160,14 @@ struct BookshelfItem: View {
                 }
             #endif
             .focusable().focused($focus, equals: .cover)
-            .onKeyPress(keys: [.return, .space]) { _ in
+            .onKeyPress(.return) {
                 model.select(paper.id)
+                return .handled
+            }
+            .onKeyPress(keys: [.space], phases: [.down, .repeat, .up]) { key in
+                guard key.modifiers.isEmpty else { return .ignored }
+                if key.phase == .down { showPreview(.held(paper.id)) }
+                if key.phase == .up { _ = releasePreview() }
                 return .handled
             }
             .accessibilityElement(children: .ignore)
@@ -159,8 +175,17 @@ struct BookshelfItem: View {
             .accessibilityValue(progress.label)
             .accessibilityAddTraits(.isButton)
             .accessibilityAction { model.select(paper.id) }
-            .help("\(paper.title) · \(progress.label)")
+            .accessibilityAction(named: "预览论文") { showPreview(.pinned(paper.id)) }
+            .help("\(paper.title) · \(progress.label) · 按住空格预览")
             HStack(spacing: 7) {
+                Button {
+                    showPreview(.pinned(paper.id))
+                } label: {
+                    Image(systemName: "eye").frame(width: 30, height: 30).contentShape(Rectangle())
+                }
+                .buttonStyle(.plain).focused($focus, equals: .preview)
+                .foregroundStyle(ReaderTheme.muted).help("预览论文（按住空格）")
+                .accessibilityLabel("预览论文：\(paper.title)")
                 Spacer(minLength: 0)
                 Button {
                     model.toggleFavorite(paper.id)
@@ -184,12 +209,17 @@ struct BookshelfItem: View {
                 .offset(arrangementOffset)
         }
         .contentShape(Rectangle())
-        .onHover { hovered = $0 }
+        .onHover {
+            hovered = $0
+            hoverCover($0)
+        }
+        .onDisappear { hoverCover(false) }
         .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: highlighted)
         .contextMenu { actions }
     }
 
     @ViewBuilder private var actions: some View {
+        Button("预览论文") { showPreview(.pinned(paper.id)) }
         Button("打开论文") { model.select(paper.id) }
         Button(workspace.isFavorite ? "取消收藏" : "收藏") { model.toggleFavorite(paper.id) }
         Button("向前移动") { moveEarlier?() }.disabled(moveEarlier == nil)

@@ -10,6 +10,7 @@ public actor OnlineSourceStore {
         }
         var paper = paper
         var source = OnlinePaperSource(candidateID: candidate.id, notice: download.sourceNotice)
+        source.abstractText = candidate.abstractText
         if candidate.source != .arxiv {
             source.originalPDFOnly = true
             source.notice = (download.sourceNotice ?? "已取得原版 PDF。") + "未取得同版本的重排源码。"

@@ -285,7 +285,8 @@ private final class FeedParser: NSObject, XMLParserDelegate {
             let candidate = PaperCandidate(
                 id: sourceURL.absoluteString, title: title, authors: authors.joined(separator: ", "),
                 year: String((fields["published"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines).prefix(4)),
-                pdfURL: url, doi: fields["arxiv:doi"].flatMap(PaperCandidate.normalizedDOI))
+                pdfURL: url, doi: fields["arxiv:doi"].flatMap(PaperCandidate.normalizedDOI), abstract: fields["summary"]
+            )
             if let candidate = ArxivClient.verified(candidate) { results.append(candidate) }
         }
         current = ""

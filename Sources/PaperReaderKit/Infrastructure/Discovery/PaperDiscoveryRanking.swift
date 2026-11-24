@@ -12,6 +12,7 @@ enum PaperDiscoveryRanking {
                 if let earlier = records[id] {
                     var best = earlier.pdfURL == nil && record.pdfURL != nil ? record : earlier
                     best.relatedArxivID = best.relatedArxivID ?? earlier.relatedArxivID ?? record.relatedArxivID
+                    best.abstractText = best.abstractText ?? earlier.abstractText ?? record.abstractText
                     records[id] = best
                 } else {
                     records[id] = record
