@@ -4,7 +4,6 @@ import SwiftUI
 struct ReaderNotesView: View {
     @Bindable var model: ReaderModel
     let summarize: () -> Void
-    let saveNote: () -> Void
     let didNavigate: () -> Void
 
     var body: some View {
@@ -20,12 +19,10 @@ struct ReaderNotesView: View {
                 }.padding(20)
             }
             Divider()
-            Button(action: saveNote) {
-                Label("将笔记导出到 Obsidian", systemImage: "note.text")
-                    .labelStyle(.titleAndIcon)
-                    .font(.system(size: 12, weight: .medium)).frame(maxWidth: .infinity).padding(.vertical, 12)
-                    .background(ReaderTheme.elevated, in: RoundedRectangle(cornerRadius: 9))
-            }.buttonStyle(.plain).padding(16)
+            if let paperID = model.selectedPaperID {
+                ObsidianExportButton(model: model, paperID: paperID, offersDiscussion: true)
+                    .font(.callout.weight(.medium)).padding(12)
+            }
         }
     }
 

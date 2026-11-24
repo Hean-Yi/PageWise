@@ -54,3 +54,27 @@ import Testing
     let remaining = PaperReadingNotebook.notebooks(in: state)
     #expect(remaining.map(\.id) == [b.id, a.id] && remaining.last?.entries.map(\.id) == [standalone.id])
 }
+
+@Test func notebookKeepsAnnotationOnlyRunsAndOmitsDeletedOrUnrelatedAnnotations() {
+    let paper = Paper(
+        title: "Fixture", digest: "fixture", originalPath: "fixture.pdf", pageCount: 1, blocks: [], warnings: [],
+        canReflow: false)
+    func note(_ text: String, paperID: UUID) -> ReadingNote {
+        ReadingNote(paperID: paperID, contentVersion: "fixture", anchors: [], markdown: text)
+    }
+    let primary = note("核心批注", paperID: paper.id)
+    let other = note("另一条批注", paperID: paper.id)
+    var deleted = note("已删除", paperID: paper.id)
+    deleted.deletedAt = Date()
+    let unrelated = note("其他论文", paperID: UUID())
+    var report = ChatTurn(paperID: paper.id, question: "AI 精读", selection: "", answer: "分析过的页数", evidence: [])
+    report.closeReadingVersion = "fixture"
+    report.closeReadingNoteIDs = [deleted.id, unrelated.id, primary.id, primary.id, other.id]
+    var state = LibraryState()
+    state.papers = [paper]
+    state.readingNotes = [primary, other, deleted, unrelated]
+    state.chats = [report]
+    let entry = PaperReadingNotebook.notebooks(in: state).first?.entries.first
+    #expect(entry?.id == report.id && entry?.note == primary)
+    #expect(entry?.annotations == [other])
+}

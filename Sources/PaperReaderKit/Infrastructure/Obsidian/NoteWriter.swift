@@ -11,6 +11,9 @@ public enum NoteMerger {
     {
         let start = "<!-- paperreader:\(paperID.uuidString):begin -->"
         let end = "<!-- paperreader:\(paperID.uuidString):end -->"
+        guard !body.contains(start), !body.contains(end) else {
+            throw ReaderError.message("笔记正文含有当前笔记的管理标记，请移除标记后再保存。")
+        }
         let managed = "\(start)\n\(body)\n\(end)"
         let digest = hash(managed)
         let startCount = existing.components(separatedBy: start).count - 1
@@ -58,25 +61,60 @@ public actor VaultService {
         var baseline: String
         var discussion: String
         var summary: String
+        var vaultID: String?
+        var pending: Bool?
     }
-    public func recover(_ paper: Paper) throws -> Paper {
-        let recordURL = recoveryDirectory.appendingPathComponent(paper.id.uuidString + ".json")
-        guard FileManager.default.fileExists(atPath: recordURL.path) else { return paper }
-        let record = try JSONDecoder().decode(BindingRecord.self, from: Data(contentsOf: recordURL))
-        guard record.filename == URL(fileURLWithPath: record.filename).lastPathComponent else { return paper }
+
+    private func recordURL(for id: UUID) -> URL { recoveryDirectory.appendingPathComponent(id.uuidString + ".json") }
+
+    private func bindings(for id: UUID) throws -> [BindingRecord] {
+        let file = recordURL(for: id)
+        guard FileManager.default.fileExists(atPath: file.path) else { return [] }
+        let data = try Data(contentsOf: file)
+        let decoder = JSONDecoder()
+        if let records = try? decoder.decode([BindingRecord].self, from: data) { return records }
+        // Older versions stored a single binding without a vault identifier.
+        return [try decoder.decode(BindingRecord.self, from: data)]
+    }
+
+    private func bindings(in records: [BindingRecord], vaultID: String, paper: Paper) -> [BindingRecord] {
+        if records.isEmpty, let filename = paper.notePath, let baseline = paper.noteBaseline {
+            // Libraries predating the recovery journal can prove ownership with the stored file hash.
+            return [
+                BindingRecord(
+                    filename: filename, baseline: baseline, discussion: paper.savedDiscussion, summary: paper.summary)
+            ]
+        }
+        return records.filter { $0.vaultID == vaultID || $0.vaultID == nil }
+    }
+
+    public func recover(_ paper: Paper) throws -> Paper { try exportContext(for: paper).paper }
+
+    public func exportContext(for paper: Paper) throws -> (destination: URL, paper: Paper) {
         let folder = try directory()
         let access = folder.startAccessingSecurityScopedResource()
         defer { if access { folder.stopAccessingSecurityScopedResource() } }
-        let target = folder.appendingPathComponent(record.filename)
-        guard let text = try? String(contentsOf: target, encoding: .utf8),
-            NoteMerger.managedHash(text, paperID: paper.id) == record.baseline
-        else { return paper }
+        let records = bindings(
+            in: try bindings(for: paper.id), vaultID: NoteMerger.hash(folder.standardizedFileURL.path), paper: paper)
         var recovered = paper
-        recovered.notePath = record.filename
-        recovered.noteBaseline = record.baseline
+        recovered.notePath = nil
+        recovered.noteBaseline = nil
+        recovered.savedDiscussion = ""
+        guard let filename = records.first?.filename, filename == URL(fileURLWithPath: filename).lastPathComponent
+        else {
+            return (folder, recovered)
+        }
+        let target = folder.appendingPathComponent(filename)
+        guard (try? FileManager.default.destinationOfSymbolicLink(atPath: target.path)) == nil,
+            let text = try? String(contentsOf: target, encoding: .utf8),
+            let baseline = NoteMerger.managedHash(text, paperID: paper.id),
+            let record = records.first(where: { $0.filename == filename && $0.baseline == baseline })
+        else { return (folder, recovered) }
+        recovered.notePath = filename
+        recovered.noteBaseline = baseline
         recovered.savedDiscussion = record.discussion
         if recovered.summary.isEmpty { recovered.summary = record.summary }
-        return recovered
+        return (folder, recovered)
     }
 
     public func select(_ url: URL) throws {
@@ -153,38 +191,122 @@ public actor VaultService {
         }
     }
 
+    public func saveReadingDocument(paper: Paper, body: String, root: URL, destination: URL) throws -> (
+        path: String, baseline: String
+    ) {
+        try Task.checkCancellation()
+        guard try directory().standardizedFileURL.path == destination.standardizedFileURL.path else {
+            throw ReaderError.message("Obsidian 目录已变更，请在新目录中重新保存。")
+        }
+        let ink = try exportInk(paperID: paper.id, root: root)
+        let document = ink.isEmpty ? body : body + "\n\n## 手写批注\n\n" + ink.joined(separator: "\n\n")
+        try Task.checkCancellation()
+        return try save(paper: paper, body: document)
+    }
+
+    private static func titleStem(_ title: String) -> String {
+        let separators = CharacterSet(charactersIn: #"/\:*?"<>|[]#^"#)
+            .union(.controlCharacters).union(.whitespacesAndNewlines)
+        let text = title.precomposedStringWithCanonicalMapping.components(separatedBy: separators)
+            .filter { !$0.isEmpty }.joined(separator: " ")
+        var stem = ""
+        var bytes = 0
+        for character in text {
+            let size = String(character).utf8.count
+            guard bytes + size <= 180 else { break }
+            stem.append(character)
+            bytes += size
+        }
+        stem = stem.trimmingCharacters(in: CharacterSet(charactersIn: ". "))
+        return stem.isEmpty ? "阅读笔记" : stem
+    }
+
     public func save(paper: Paper, body: String) throws -> (path: String, baseline: String) {
         let folder = try directory()
         let access = folder.startAccessingSecurityScopedResource()
         defer { if access { folder.stopAccessingSecurityScopedResource() } }
-        let filename = paper.notePath ?? "PaperReader-\(paper.id.uuidString).md"
-        guard filename == URL(fileURLWithPath: filename).lastPathComponent else { throw ReaderError.message("笔记路径无效。") }
-        let file = folder.appendingPathComponent(filename)
-        let coordinator = NSFileCoordinator()
-        var coordinationError: NSError?
-        var result: Result<NoteMergeResult, Error>?
-        coordinator.coordinate(writingItemAt: file, options: .forReplacing, error: &coordinationError) { target in
-            result = Result {
-                let exists = FileManager.default.fileExists(atPath: target.path)
-                let existing =
-                    exists
-                    ? try String(contentsOf: target, encoding: .utf8)
-                    : "# \(paper.title.replacingOccurrences(of: "\n", with: " "))\n\n## 我的笔记\n\n"
-                let merged = try NoteMerger.merge(
-                    existing: existing, body: body, paperID: paper.id, baseline: paper.noteBaseline)
-                // Journal before the external write. Recovery only trusts it when the file's managed hash matches.
-                try FileManager.default.createDirectory(at: recoveryDirectory, withIntermediateDirectories: true)
-                let record = BindingRecord(
-                    filename: filename, baseline: merged.baseline, discussion: paper.savedDiscussion,
-                    summary: paper.summary)
-                let recordURL = recoveryDirectory.appendingPathComponent(paper.id.uuidString + ".json")
-                try JSONEncoder().encode(record).write(to: recordURL, options: .atomic)
-                try Data(merged.text.utf8).write(to: target, options: .atomic)
-                return merged
+        let journal = recordURL(for: paper.id)
+        let records = try bindings(for: paper.id)
+        let vaultID = NoteMerger.hash(folder.standardizedFileURL.path)
+        let local = bindings(in: records, vaultID: vaultID, paper: paper)
+        let boundName = local.first?.filename ?? (records.isEmpty ? paper.notePath : nil)
+        let stem = Self.titleStem(paper.title)
+        let suffix = String(paper.id.uuidString.prefix(8))
+        var attempt = 0
+        while true {
+            let filename: String
+            if let boundName {
+                filename = boundName
+            } else {
+                switch attempt {
+                case 0: filename = "\(stem).md"
+                case 1: filename = "\(stem) — \(suffix).md"
+                default: filename = "\(stem) — \(suffix)-\(attempt).md"
+                }
             }
+            guard !filename.isEmpty, filename != ".", filename != "..",
+                filename == URL(fileURLWithPath: filename).lastPathComponent
+            else { throw ReaderError.message("笔记路径无效。") }
+
+            let file = folder.appendingPathComponent(filename)
+            let coordinator = NSFileCoordinator()
+            var coordinationError: NSError?
+            var result: Result<String?, Error>?
+            coordinator.coordinate(writingItemAt: file, options: .forReplacing, error: &coordinationError) { target in
+                result = Result {
+                    let manager = FileManager.default
+                    let isLink = (try? manager.destinationOfSymbolicLink(atPath: target.path)) != nil
+                    let exists = manager.fileExists(atPath: target.path)
+                    if boundName == nil && (exists || isLink) { return nil }
+                    guard !isLink else { throw ReaderError.message("笔记已被替换为符号链接，请检查笔记目录。") }
+                    if !exists, local.contains(where: { $0.pending != true }) {
+                        throw ReaderError.message("原 Obsidian 笔记已移动或删除，请检查笔记目录。")
+                    }
+                    let existing =
+                        exists
+                        ? try String(contentsOf: target, encoding: .utf8)
+                        : "# \(paper.title.replacingOccurrences(of: "\n", with: " "))\n\n## 我的笔记\n\n"
+                    let currentHash = NoteMerger.managedHash(existing, paperID: paper.id)
+                    let prior = local.first { $0.filename == filename && $0.baseline == currentHash }
+                    guard !exists || prior != nil else {
+                        throw ReaderError.message("Obsidian 中的生成内容已被修改。本次保存已停止，原笔记保持不变。")
+                    }
+                    let merged = try NoteMerger.merge(
+                        existing: existing, body: body, paperID: paper.id, baseline: prior?.baseline)
+                    try manager.createDirectory(at: recoveryDirectory, withIntermediateDirectories: true)
+                    let others = records.filter { $0.vaultID != nil && $0.vaultID != vaultID }
+                    var next = BindingRecord(
+                        filename: filename, baseline: merged.baseline, discussion: paper.savedDiscussion,
+                        summary: paper.summary, vaultID: vaultID, pending: true)
+                    // Either content can be on disk after interruption. Both baselines belong to this vault.
+                    var pending = others + [next]
+                    if var prior {
+                        prior.vaultID = vaultID
+                        prior.pending = nil
+                        pending.append(prior)
+                    }
+                    try JSONEncoder().encode(pending).write(to: journal, options: .atomic)
+                    let data = Data(merged.text.utf8)
+                    if exists {
+                        try data.write(to: target, options: .atomic)
+                    } else {
+                        let staging = try manager.url(
+                            for: .itemReplacementDirectory, in: .userDomainMask, appropriateFor: target, create: true)
+                        defer { try? manager.removeItem(at: staging) }
+                        let temporary = staging.appendingPathComponent("note.md")
+                        try data.write(to: temporary)
+                        // A same-volume move publishes the complete file and refuses an occupied destination.
+                        try manager.moveItem(at: temporary, to: target)
+                    }
+                    next.pending = nil
+                    try JSONEncoder().encode(others + [next]).write(to: journal, options: .atomic)
+                    return merged.baseline
+                }
+            }
+            if let coordinationError { throw coordinationError }
+            guard let result else { throw ReaderError.message("无法协调笔记写入。") }
+            if let baseline = try result.get() { return (filename, baseline) }
+            attempt += 1
         }
-        if let coordinationError { throw coordinationError }
-        guard let result else { throw ReaderError.message("无法协调笔记写入。") }
-        return (filename, try result.get().baseline)
     }
 }

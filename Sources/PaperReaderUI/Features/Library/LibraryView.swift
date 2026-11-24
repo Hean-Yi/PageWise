@@ -8,7 +8,6 @@ public struct LibraryView: View {
     @State private var assistantTab: AssistantTab?
     @State private var paperOpenedFromAgent: UUID?
     @State private var paperQuestion = ""
-    @State private var askSave = false
     @State private var agentDraft = ""
     @State private var showImporter = false
     @State private var showSettings = false
@@ -271,7 +270,7 @@ public struct LibraryView: View {
                         WorkspaceAssistantSidebar(
                             model: model, agent: agent, isReading: isReading, tab: isReading ? assistantTab : .library,
                             select: { self.assistantTab = $0 }, question: $paperQuestion, agentDraft: $agentDraft,
-                            openSettings: { showSettings = true }, saveNote: { askSave = true },
+                            openSettings: { showSettings = true },
                             didNavigate: {
                                 if !inline {
                                     self.assistantTab = nil
@@ -300,11 +299,7 @@ public struct LibraryView: View {
             .clipped()
             .animation(ReaderMotion.disclosure(reduceMotion), value: sidebarVisible)
         }
-        .confirmationDialog("将本次讨论整理到笔记？", isPresented: $askSave, titleVisibility: .visible) {
-            Button("包含讨论，保存笔记") { Task { await model.saveToObsidian(includeDiscussion: true) } }
-            Button("不包含讨论，保存笔记") { Task { await model.saveToObsidian(includeDiscussion: false) } }
-            Button("取消", role: .cancel) {}
-        }
+        .obsidianExportPresentation(model: model)
         .background(ReaderTheme.canvas)
         .task { HTMLWebViewPool.prewarm() }
         #if os(macOS)

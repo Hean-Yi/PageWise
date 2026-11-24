@@ -33,6 +33,7 @@ struct ReadingNotebooksView: View {
             HStack(alignment: .firstTextBaseline, spacing: 12) {
                 Text(notebook.title).font(ReaderTheme.editorial(21, weight: .medium)).accessibilityAddTraits(.isHeader)
                 Spacer(minLength: 6)
+                ObsidianExportButton(model: model, paperID: notebook.id).font(.callout)
                 Button {
                     model.select(notebook.id)
                     model.showOriginalReading()
@@ -74,25 +75,47 @@ struct ReadingNotebooksView: View {
     private func noteRow(_ entry: PaperReadingNotebook.Entry) -> some View {
         let excerpt = ReadingNoteSummary.text(entry.note.markdown)
         let general = entry.focus.isEmpty || entry.focus == "AI 精读"
-        return Button {
-            model.select(entry.note.paperID)
-            model.openReadingNote(entry.note)
-        } label: {
-            HStack(spacing: 14) {
-                VStack(alignment: .leading, spacing: 7) {
-                    Text(general ? (excerpt.isEmpty ? "文末笔记" : excerpt) : entry.focus)
-                        .font(.body.weight(.medium)).lineLimit(2)
-                    if !general && !excerpt.isEmpty {
-                        Text(excerpt).font(.callout).foregroundStyle(ReaderTheme.muted).lineLimit(2)
+        return VStack(alignment: .leading, spacing: 0) {
+            Button {
+                model.select(entry.note.paperID)
+                model.openReadingNote(entry.note)
+            } label: {
+                HStack(spacing: 14) {
+                    VStack(alignment: .leading, spacing: 7) {
+                        Text(general ? (excerpt.isEmpty ? "文末笔记" : excerpt) : entry.focus)
+                            .font(.body.weight(.medium)).lineLimit(2)
+                        if !general && !excerpt.isEmpty {
+                            Text(excerpt).font(.callout).foregroundStyle(ReaderTheme.muted).lineLimit(2)
+                        }
+                        Text(entry.date.formatted(date: .abbreviated, time: .shortened))
+                            .font(.caption).foregroundStyle(ReaderTheme.muted)
                     }
-                    Text(entry.date.formatted(date: .abbreviated, time: .shortened))
-                        .font(.caption).foregroundStyle(ReaderTheme.muted)
+                    Spacer(minLength: 8)
+                    Image(systemName: "chevron.forward").font(.caption).foregroundStyle(ReaderTheme.muted)
                 }
-                Spacer(minLength: 8)
-                Image(systemName: "chevron.forward").font(.caption).foregroundStyle(ReaderTheme.muted)
+                .padding(16).frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
             }
-            .padding(16).frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
+            .buttonStyle(.plain)
+            if !entry.annotations.isEmpty {
+                DisclosureGroup("段落批注 · \(entry.annotations.count)") {
+                    ForEach(entry.annotations) { note in
+                        Button {
+                            model.select(note.paperID)
+                            model.openReadingNote(note)
+                        } label: {
+                            HStack(spacing: 8) {
+                                Circle().fill(note.dimension?.swatch ?? ReaderTheme.muted).frame(width: 8, height: 8)
+                                Text(ReadingNoteSummary.text(note.markdown)).lineLimit(2)
+                                    .multilineTextAlignment(.leading)
+                                Spacer()
+                                Image(systemName: "chevron.forward").font(.caption)
+                            }.padding(.vertical, 6).contentShape(Rectangle())
+                        }.buttonStyle(.plain).foregroundStyle(ReaderTheme.ink)
+                    }
+                }
+                .font(.callout).foregroundStyle(ReaderTheme.muted)
+                .padding(.horizontal, 16).padding(.bottom, 12)
+            }
         }
-        .buttonStyle(.plain)
     }
 }

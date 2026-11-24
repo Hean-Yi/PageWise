@@ -67,6 +67,7 @@ struct PaperAssistantCitations: View {
             }
             if let ids = turn.closeReadingNoteIDs {
                 CloseReadingNoteList(ids: ids, model: model, didNavigate: didNavigate)
+                ObsidianExportButton(model: model, paperID: turn.paperID).font(.callout)
             }
         }
         .task(id: turn.id) {

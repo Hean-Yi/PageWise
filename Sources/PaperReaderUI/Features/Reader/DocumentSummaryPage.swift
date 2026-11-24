@@ -25,6 +25,7 @@ struct DocumentSummaryPage: View {
                     }.help("引用阅读笔记")
                     Button("完成", action: finishEditing)
                 } else {
+                    ObsidianExportButton(model: model, paperID: note.paperID)
                     Button {
                         model.editingDocumentSummary = true
                     } label: {

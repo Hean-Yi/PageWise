@@ -121,7 +121,14 @@ struct SettingsView: View {
         }
         .fileImporter(isPresented: $chooseFolder, allowedContentTypes: [.folder]) { result in
             switch result {
-            case .success(let url): Task { await model.selectVault(url) }
+            case .success(let url):
+                Task {
+                    if !(await model.selectVault(url)), let message = model.message {
+                        model.message = nil
+                        feedback = message
+                        feedbackIsError = true
+                    }
+                }
             case .failure(let error):
                 if (error as NSError).code != NSUserCancelledError { showError(error) }
             }
@@ -312,7 +319,7 @@ struct SettingsView: View {
                 Button("选择目录…") { chooseFolder = true }
             }
             .padding(13).background(fieldBackground(focused: false))
-            Text("选定目录即生效。在笔记侧栏点击「将笔记导出到 Obsidian」时才写入。")
+            Text("点击「整理到 Obsidian」时，阅读笔记会保存到这个目录。")
                 .font(.callout).foregroundStyle(ReaderTheme.muted)
             Divider().padding(.vertical, 5)
             fieldLabel("设备存储")

@@ -338,3 +338,57 @@ private func closeReadingWorkflowFailuresLeaveNoPartialNotesOrReport(
     let hit = try #require(try await reader.readingNoteEvidence(query: "加权", paperID: id).first)
     #expect(reader.jump(to: hit) && reader.requestedReadingNote == note.id)
 }
+
+@Test @MainActor func obsidianUsesTheEditableCloseReadingNotebookAndRefreshesOneFile() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let api = CloseReadingTransport()
+    let (reader, id, _) = try await closeReadingLibrary(root: root, api: api)
+    let report = try await reader.runCloseReading(id)
+    let entry = try #require(PaperReadingNotebook.notebooks(in: reader.state).first { $0.id == id }?.entries.first)
+    #expect(entry.id == report.id && entry.annotations.count == closeReadingSources.count)
+    #expect(!reader.hasObsidianDiscussion(paperID: id))
+
+    let folder = root.appendingPathComponent("Obsidian")
+    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    await reader.selectVault(folder)
+    reader.select(nil)
+    try #require(await reader.saveToObsidian(paperID: id))
+    let bound = try #require(try await reader.store.load().papers.first { $0.id == id }?.notePath)
+    let file = folder.appendingPathComponent(bound)
+    let saved = try String(contentsOf: file, encoding: .utf8)
+    for source in closeReadingSources { #expect(saved.contains(source.quote)) }
+    for stage in CloseReadingStage.allCases { #expect(saved.contains(notebookHeading(stage.rawValue))) }
+    let userTail = "\n我在 Obsidian 里写的补充。\n"
+    try Data((saved + userTail).utf8).write(to: file, options: .atomic)
+
+    reader.select(id)
+    reader.openReadingNote(entry.note)
+    let revision = "我重新核对了实验的对照条件。"
+    try #require(reader.updateDocumentSummary(id: entry.note.id, markdown: entry.note.markdown + "\n\n" + revision))
+    let mark = try #require(entry.annotations.first)
+    reader.openReadingNote(mark)
+    let margin = "该段的实际输入值得单独列出。"
+    try #require(reader.updateReadingNote(id: mark.id, anchors: mark.anchors, markdown: margin))
+    let discussion = ChatTurn(paperID: id, question: "独立讨论问题", selection: "", answer: "独立讨论内容", evidence: [])
+    reader.state.chats.append(discussion)
+    #expect(reader.hasObsidianDiscussion(paperID: id))
+    try #require(await reader.saveToObsidian(paperID: id))
+    let updated = try String(contentsOf: file, encoding: .utf8)
+    #expect(updated.hasSuffix(userTail) && updated.contains(margin))
+    #expect(updated.components(separatedBy: revision).count == 2)
+    #expect(!updated.contains(discussion.question) && !updated.contains(discussion.answer))
+    #expect(await api.requests == 2)
+    #expect(try FileManager.default.contentsOfDirectory(atPath: folder.path) == [bound])
+
+    let reopened = try ReaderModel(root: root, client: ModelClient(transport: api), credentials: WorkflowCredentials())
+    await reopened.load()
+    let restored = try #require(PaperReadingNotebook.notebooks(in: reopened.state).first { $0.id == id }?.entries.first)
+    #expect(restored.note.id == entry.note.id && restored.note.markdown.contains(revision))
+    #expect(restored.annotations.first { $0.id == mark.id }?.markdown == margin)
+    let conflicted = updated.replacingOccurrences(of: revision, with: "我在 Obsidian 修改了受管内容。")
+    try Data(conflicted.utf8).write(to: file, options: .atomic)
+    #expect(await !reopened.saveToObsidian(paperID: id))
+    #expect(try String(contentsOf: file, encoding: .utf8) == conflicted)
+    #expect(reopened.message?.contains("修改") == true)
+}

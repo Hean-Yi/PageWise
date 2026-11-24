@@ -23,7 +23,6 @@ struct WorkspaceAssistantSidebar: View {
     @Binding var question: String
     @Binding var agentDraft: String
     let openSettings: () -> Void
-    let saveNote: () -> Void
     let didNavigate: () -> Void
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
@@ -129,7 +128,7 @@ struct WorkspaceAssistantSidebar: View {
                     } else {
                         openSettings()
                     }
-                }, saveNote: saveNote, didNavigate: didNavigate)
+                }, didNavigate: didNavigate)
         case .paper:
             PaperAssistantView(
                 model: model, question: $question, openSettings: openSettings, didNavigate: didNavigate,

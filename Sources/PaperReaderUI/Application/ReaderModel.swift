@@ -90,6 +90,7 @@ public final class ReaderModel {
     var loadedNavigationDocumentID: String?
     public var navigationLoading = false
     public var vaultName = "未选择目录"
+    var obsidianExportPaperID: UUID?
     public var loaded = false
     public var loadFailure: String?
     public let root: URL
@@ -257,7 +258,8 @@ public final class ReaderModel {
         linkingPublication link: (paperID: UUID, url: String)? = nil,
         fillingSourceAbstract: PublicationAbstractFill? = nil,
         presentingReflow: (paperID: UUID, jobID: UUID)? = nil, insertingNote: AnchoredNoteInsertion? = nil,
-        closeReading: (notes: [AnchoredNoteInsertion], report: ChatTurn)? = nil
+        closeReading: (notes: [AnchoredNoteInsertion], report: ChatTurn)? = nil,
+        obsidianBinding: ObsidianNoteBinding? = nil
     ) async -> Bool {
         guard loaded else { return false }
         let previous = saveQueue
@@ -285,6 +287,7 @@ public final class ReaderModel {
                         try snapshot.apply(.move(paperID: importedPaper.id, shelfID: importShelfID))
                     }
                 }
+                obsidianBinding?.apply(to: &snapshot)
                 if let shelfChange { try snapshot.apply(shelfChange) }
                 if let orderChange { try snapshot.apply(orderChange) }
                 fillingSourceAbstract?.apply(to: &snapshot)
@@ -365,6 +368,7 @@ public final class ReaderModel {
                 if !additions.isEmpty { self.state.readingNotes.append(contentsOf: additions) }
                 if !noteMarks.isEmpty { self.state.highlights.append(contentsOf: noteMarks) }
                 if let report { self.state.chats.append(report) }
+                obsidianBinding?.apply(to: &self.state)
                 if let importedPaper { self.state.papers.insert(importedPaper, at: 0) }
                 fillingSourceAbstract?.apply(to: &self.state)
                 if let link, let index = self.state.papers.firstIndex(where: { $0.id == link.paperID }) {
@@ -485,11 +489,20 @@ public final class ReaderModel {
         return result.warning
     }
 
-    public func selectVault(_ url: URL) async {
+    public func hasObsidianDirectory() async -> Bool {
+        (try? await vault.directory()) != nil
+    }
+
+    @discardableResult
+    public func selectVault(_ url: URL) async -> Bool {
         do {
             try await vault.select(url)
             vaultName = url.lastPathComponent
-        } catch { message = error.localizedDescription }
+            return true
+        } catch {
+            message = error.localizedDescription
+            return false
+        }
     }
 
 }

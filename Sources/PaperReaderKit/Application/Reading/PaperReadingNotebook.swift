@@ -7,6 +7,7 @@ public struct PaperReadingNotebook: Identifiable, Sendable {
         public let date: Date
         public let focus: String
         public let note: ReadingNote
+        public let annotations: [ReadingNote]
     }
 
     public let id: UUID
@@ -14,19 +15,33 @@ public struct PaperReadingNotebook: Identifiable, Sendable {
     public let entries: [Entry]
 
     public static func notebooks(in library: LibraryState) -> [Self] {
-        let summaries = Dictionary(
-            library.readingNotes.lazy.filter { $0.isDocumentSummary && $0.deletedAt == nil }.map { ($0.id, $0) },
+        let active = Dictionary(
+            library.readingNotes.lazy.filter { $0.deletedAt == nil }.map { ($0.id, $0) },
             uniquingKeysWith: { first, _ in first })
         let reports = library.chats.reversed().compactMap { turn -> Entry? in
-            guard turn.closeReadingVersion != nil, let id = turn.readingNoteID, let note = summaries[id],
-                note.paperID == turn.paperID
-            else { return nil }
-            return Entry(id: turn.id, date: turn.createdAt, focus: turn.question, note: note)
+            guard turn.closeReadingVersion != nil else { return nil }
+            var seen = Set<UUID>()
+            let annotations = (turn.closeReadingNoteIDs ?? []).compactMap { id -> ReadingNote? in
+                guard seen.insert(id).inserted, let note = active[id], note.paperID == turn.paperID,
+                    !note.isDocumentSummary
+                else { return nil }
+                return note
+            }
+            if let id = turn.readingNoteID, let note = active[id], note.paperID == turn.paperID,
+                note.isDocumentSummary
+            {
+                return Entry(
+                    id: turn.id, date: turn.createdAt, focus: turn.question, note: note, annotations: annotations)
+            }
+            guard let first = annotations.first else { return nil }
+            return Entry(
+                id: turn.id, date: turn.createdAt, focus: turn.question, note: first,
+                annotations: Array(annotations.dropFirst()))
         }
         let referenced = Set(reports.map(\.note.id))
         let standalone = library.readingNotes.reversed().compactMap { note -> Entry? in
             guard note.isDocumentSummary, note.deletedAt == nil, !referenced.contains(note.id) else { return nil }
-            return Entry(id: note.id, date: note.createdAt, focus: "", note: note)
+            return Entry(id: note.id, date: note.createdAt, focus: "", note: note, annotations: [])
         }
         let ordered = (reports + standalone).sorted { $0.date > $1.date }
         let grouped = Dictionary(grouping: ordered, by: \.note.paperID)
