@@ -42,15 +42,6 @@ extension ReaderModel {
             ? visiblePage : (pdfBilingual.reflowTextSelection.first?.sentence.pageIndex ?? selectionPage)
         let useOriginalPage = mode == "original" && paper.blocks.isEmpty
         let config = modelSettings
-        let history = currentChats.filter { turn in
-            turn.evidence.allSatisfy { source in
-                guard let id = source.readingNoteID else { return source.paperID == nil || source.paperID == paper.id }
-                guard let paperID = source.paperID, let note = referencedReadingNote(id: id, paperID: paperID) else {
-                    return false
-                }
-                return ReadingNoteMemoryIndex.searchableBody(note.markdown).contains(source.text)
-            }
-        }
         let pinnedIDs: Set<UUID>
         if !selection.isEmpty, usesHTMLReading, !htmlSelection.isEmpty {
             let selectedKeys = Set(htmlSelection.map(\.pageKey))
@@ -84,14 +75,25 @@ extension ReaderModel {
             let memoryQuery = [question, String(selection.prefix(900)), paper.title].joined(separator: " ")
             let readingNotes = try await readingNoteEvidence(query: memoryQuery, excluding: paper.id, limit: 5)
             guard lastPaperDeletion[paper.id] == deletion else { return }
-            let evidence = Retriever.context(
+            let recalled = noteScope == nil ? readingNotes : []
+            async let ranked = Retriever.context(
                 question: question, selection: selection, current: paper, notes: notes,
-                readingNotes: noteScope == nil ? readingNotes : [],
+                readingNotes: recalled,
                 selectedBlockIDs: pinnedIDs, originalPages: originalPages)
+            let evidence = await ranked.filter { $0.readingNoteID == nil || referencedReadingNote(for: $0) != nil }
+            try Task.checkCancellation()
+            guard lastPaperDeletion[paper.id] == deletion else { return }
+            let history = state.chats.filter { turn in
+                turn.paperID == paper.id
+                    && turn.evidence.allSatisfy { source in
+                        if source.readingNoteID != nil { return referencedReadingNote(for: source) != nil }
+                        return source.paperID == nil || source.paperID == paper.id
+                    }
+            }
             if let scope = noteScope {
                 let context = PaperDiscussionNote(
                     paperID: paper.id, selection: selectedEvidence, history: history, retrieved: evidence,
-                    related: readingNotes)
+                    related: readingNotes.filter { referencedReadingNote(for: $0) != nil })
                 try await recordDiscussionNote(
                     question: question, scope: scope, paper: paper, selection: selection, context: context,
                     config: config, key: key)

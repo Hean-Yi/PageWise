@@ -251,9 +251,5 @@ extension ReaderModel {
         }
     }
 
-    public func addDemo() async {
-        await openBundledSample()
-    }
-
     public func pauseTranslation() { if let id = selectedPaperID { translationTasks[id]?.cancel() } }
 }

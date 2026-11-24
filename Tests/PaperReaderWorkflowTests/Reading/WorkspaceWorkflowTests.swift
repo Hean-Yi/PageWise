@@ -185,7 +185,7 @@ import Testing
     defer { try? FileManager.default.removeItem(at: root) }
     let model = try ReaderModel(root: root)
     await model.load()
-    await model.addDemo()
+    _ = try #require(await model.openBundledSample())
     // A previously saved source block exercises citation navigation independently of import.
     model.state.papers[0].blocks = [TextBlock(sourcePage: 1, text: "Original fixture evidence.")]
     let paper = try #require(model.paper)

@@ -41,10 +41,6 @@ public struct DeviceModelCredentials: ModelCredentialStore {
         return try JSONDecoder().decode(ModelSettings.self, from: Data(contentsOf: file))
     }
 
-    public func key(for settings: ModelSettings) throws -> String {
-        try credentials.load(account: settings.credentialID ?? "model-key")
-    }
-
     public func keyForRequest(_ settings: ModelSettings) async throws -> String {
         try await credentials.loadForRequest(account: settings.credentialID ?? "model-key")
     }
@@ -53,12 +49,6 @@ public struct DeviceModelCredentials: ModelCredentialStore {
         let saved = try load()
         guard try saved.endpointURL() == draft.endpointURL() else { return "" }
         return try await keyForRequest(saved)
-    }
-
-    public func keyForDraft(_ draft: ModelSettings) throws -> String {
-        let saved = try load()
-        guard try saved.endpointURL() == draft.endpointURL() else { return "" }
-        return try key(for: saved)
     }
 
     public func save(_ draft: ModelSettings, key: String?, removeKey: Bool = false) throws -> SaveResult {

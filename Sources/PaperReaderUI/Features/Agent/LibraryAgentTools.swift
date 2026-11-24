@@ -157,7 +157,16 @@ extension LibraryAgent {
         case .searchLibrary(let query):
             onSubject(query)
             let limit = min(max(0, limits.maxResults), 20)
-            let hits = LibraryAgentSearch.search(query, papers: reader.state.papers, limit: limit + 1)
+            let papers = reader.state.papers.filter { !reader.pendingImportIDs.contains($0.id) }
+            async let ranked = LibraryAgentSearch.search(query, papers: papers, limit: limit + 1)
+            let matches = await ranked
+            try check(epoch)
+            let pageCounts = Dictionary(
+                reader.state.papers.lazy.filter { !self.reader.pendingImportIDs.contains($0.id) }.map {
+                    ($0.id, $0.pageCount)
+                },
+                uniquingKeysWith: { first, _ in first })
+            let hits = matches.filter { pageCounts[$0.paperID] != nil }
             let pairs = hits.prefix(limit).map { hit -> (ToolRecord, AgentCard) in
                 var card = AgentCard(kind: hit.blockID == nil ? .localPaper : .evidence, title: hit.title)
                 card.searchQuery = query
@@ -167,7 +176,7 @@ extension LibraryAgent {
                 card.excerpt = hit.excerpt
                 card.subtitle = hit.sourcePage.map { "原文第 \($0) 页" } ?? "本地论文"
                 return (
-                    ToolRecord(card: card, pageCount: reader.state.papers.first { $0.id == hit.paperID }?.pageCount),
+                    ToolRecord(card: card, pageCount: pageCounts[hit.paperID]),
                     card
                 )
             }
@@ -180,14 +189,11 @@ extension LibraryAgent {
             let hits = try await reader.readingNoteEvidence(query: query, limit: limit + 1)
             try check(epoch)
             let pairs = hits.prefix(limit).compactMap { hit -> (ToolRecord, AgentCard)? in
-                guard let id = hit.readingNoteID, let paperID = hit.paperID,
-                    let note = reader.referencedReadingNote(id: id, paperID: paperID),
-                    ReadingNoteMemoryIndex.searchableBody(note.markdown).contains(hit.text)
-                else { return nil }
+                guard let note = reader.referencedReadingNote(for: hit) else { return nil }
                 var card = AgentCard(kind: .evidence, title: hit.title)
                 card.searchQuery = query
                 card.paperID = hit.paperID
-                card.readingNoteID = id
+                card.readingNoteID = note.id
                 card.noteModifiedAt = note.modifiedAt
                 card.sourcePage = hit.sourcePage.map { $0 + 1 }
                 card.subtitle = "阅读笔记"

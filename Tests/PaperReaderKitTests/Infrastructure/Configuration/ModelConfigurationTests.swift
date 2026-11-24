@@ -58,7 +58,7 @@ import Testing
     }
 }
 
-@Test @MainActor func configurationMigratesLegacyAndDoesNotReuseKeyForChangedAddress() throws {
+@Test @MainActor func configurationMigratesLegacyAndDoesNotReuseKeyForChangedAddress() async throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: root) }
@@ -67,12 +67,12 @@ import Testing
     let credentials = MemoryCredentials()
     let store = ModelConfigurationStore(directory: root, credentials: credentials)
     var draft = try store.load()
-    #expect(try store.key(for: draft) == "legacy-test-only")
+    #expect(try await store.keyForRequest(draft) == "legacy-test-only")
     draft.baseURL = "https://example.invalid/v1"
-    #expect(try store.keyForDraft(draft).isEmpty)
+    #expect(try await store.keyForDraftRequest(draft).isEmpty)
     let result = try store.save(draft, key: nil)
     #expect(result.settings.credentialID != nil)
-    #expect(try store.key(for: result.settings).isEmpty)
+    #expect(try await store.keyForRequest(result.settings).isEmpty)
     #expect(credentials.values.isEmpty)
 }
 
@@ -93,7 +93,7 @@ import Testing
     }
 }
 
-@Test @MainActor func configurationReplacesRetainsAndRemovesCredentials() throws {
+@Test @MainActor func configurationReplacesRetainsAndRemovesCredentials() async throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: root) }
@@ -102,16 +102,16 @@ import Testing
     var draft = ModelSettings()
     draft.model = "test"
     let saved = try store.save(draft, key: "replacement-only")
-    #expect(try store.key(for: saved.settings) == "replacement-only")
+    #expect(try await store.keyForRequest(saved.settings) == "replacement-only")
     #expect(credentials.values.count == 1)
     let retained = try store.save(saved.settings, key: "")
     #expect(retained.settings.credentialID == saved.settings.credentialID)
     let cleared = try store.save(retained.settings, key: nil, removeKey: true)
-    #expect(try store.key(for: cleared.settings).isEmpty)
+    #expect(try await store.keyForRequest(cleared.settings).isEmpty)
     #expect(credentials.values.isEmpty)
 }
 
-@Test @MainActor func keychainFailureDoesNotPublishSettingsAndCleanupFailureIsVisible() throws {
+@Test @MainActor func keychainFailureDoesNotPublishSettingsAndCleanupFailureIsVisible() async throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: root) }
@@ -126,10 +126,10 @@ import Testing
     credentials.rejectDeletes = true
     let saved = try store.save(draft, key: "replacement-only")
     #expect(saved.warning != nil)
-    #expect(try store.key(for: saved.settings) == "replacement-only")
+    #expect(try await store.keyForRequest(saved.settings) == "replacement-only")
 }
 
-@Test @MainActor func configurationCanRemoveLegacyKeyWithoutModelName() throws {
+@Test @MainActor func configurationCanRemoveLegacyKeyWithoutModelName() async throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: root) }
@@ -144,7 +144,7 @@ import Testing
     #expect(cleared.settings.model.isEmpty)
     #expect(cleared.settings.baseURL == previous.baseURL)
     #expect(cleared.settings.credentialID != nil)
-    #expect(try store.key(for: cleared.settings).isEmpty)
+    #expect(try await store.keyForRequest(cleared.settings).isEmpty)
     #expect(credentials.values.isEmpty)
     #expect(try store.load() == cleared.settings)
 }
@@ -163,7 +163,7 @@ import Testing
     #expect(credentials.values == ["model-key": "legacy-test-only"])
 }
 
-@Test @MainActor func configurationReportsFailureToCleanUncommittedKey() throws {
+@Test @MainActor func configurationReportsFailureToCleanUncommittedKey() async throws {
     // The missing parent directory makes the settings write fail after the Keychain write.
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     let credentials = MemoryCredentials()
@@ -180,6 +180,6 @@ import Testing
         #expect(!error.localizedDescription.contains("uncommitted-test-only"))
     }
     #expect(try store.load() == previous)
-    #expect(try store.key(for: previous) == "legacy-test-only")
+    #expect(try await store.keyForRequest(previous) == "legacy-test-only")
     #expect(credentials.values.count == 2)
 }

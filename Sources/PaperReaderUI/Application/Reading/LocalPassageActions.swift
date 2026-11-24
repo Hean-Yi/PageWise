@@ -213,6 +213,14 @@ extension ReaderModel {
         }
     }
 
+    func referencedReadingNote(for evidence: Evidence) -> ReadingNote? {
+        guard let id = evidence.readingNoteID, let paper = evidence.paperID, !evidence.text.isEmpty,
+            let note = referencedReadingNote(id: id, paperID: paper),
+            ReadingNoteMemoryIndex.searchableBody(note.markdown).contains(evidence.text)
+        else { return nil }
+        return note
+    }
+
     private func noteTarget(_ citation: LocalPassageCitation, id: UUID) throws -> (ReadingNote, Paper) {
         guard let paper = state.papers.first(where: { $0.id == citation.paperID && $0.digest == citation.digest }),
             let note = referencedReadingNote(id: id, paperID: paper.id),
@@ -231,11 +239,6 @@ extension ReaderModel {
             query: query, notes: state.readingNotes, paperTitles: titles,
             excluding: excluding, paperID: paperID, limit: limit)
         try Task.checkCancellation()
-        return hits.filter {
-            guard let id = $0.readingNoteID, let paper = $0.paperID,
-                let note = referencedReadingNote(id: id, paperID: paper)
-            else { return false }
-            return ReadingNoteMemoryIndex.searchableBody(note.markdown).contains($0.text)
-        }
+        return hits.filter { referencedReadingNote(for: $0) != nil }
     }
 }

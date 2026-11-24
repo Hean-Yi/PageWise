@@ -15,16 +15,22 @@ public enum Retriever {
             selectedBlockIDs.contains(current.blocks[index].id)
                 || (!selection.isEmpty && current.blocks[index].text.contains(selection))
         }
-        let total = current.blocks.reduce(0) { $0 + $1.text.count }
+        let characterBudget = 18_000
+        var total = 0
+        for block in current.blocks {
+            total += block.text.count
+            if total > characterBudget { break }
+        }
         var indices = pinned
+        var included = Set(pinned)
         func add(_ index: Int) {
-            if current.blocks.indices.contains(index), !indices.contains(index) { indices.append(index) }
+            if current.blocks.indices.contains(index), included.insert(index).inserted { indices.append(index) }
         }
         for index in pinned {
             add(index - 1)
             add(index + 1)
         }
-        if total <= 18_000 {
+        if total <= characterBudget {
             for index in current.blocks.indices { add(index) }
         } else {
             let scores = current.blocks.map { rank($0.text) }
@@ -34,12 +40,13 @@ public enum Retriever {
             for index in ranked.prefix(12) { add(index) }
             add(0)
         }
-        let ordered = indices.map { current.blocks[$0] }
         var result: [Evidence] = []
         var used = 0
-        for block in ordered where used < 18_000 && !block.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        {
-            let budget = 18_000 - used
+        for index in indices {
+            guard used < characterBudget else { break }
+            let block = current.blocks[index]
+            guard !block.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { continue }
+            let budget = characterBudget - used
             let text: String
             if block.text.count > budget, !selection.isEmpty, let match = block.text.range(of: selection) {
                 let start = block.text.index(
@@ -56,8 +63,8 @@ public enum Retriever {
             used += text.count
         }
         if result.isEmpty {
-            for var page in originalPages where page.paperID == current.id && used < 18_000 {
-                page.text = String(page.text.prefix(18_000 - used))
+            for var page in originalPages where page.paperID == current.id && used < characterBudget {
+                page.text = String(page.text.prefix(characterBudget - used))
                 result.append(page)
                 used += page.text.count
             }
