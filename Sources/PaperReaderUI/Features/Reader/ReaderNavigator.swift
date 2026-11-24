@@ -117,12 +117,13 @@ struct ReaderNavigator: View {
             .animation(ReaderMotion.feedback(reduceMotion), value: searching)
             outline(groups, items: items, active: active)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .opacity(searching ? 0 : 1)
                 .allowsHitTesting(!searching)
                 .accessibilityHidden(searching)
                 .overlay {
                     ZStack {
                         if searching {
-                            search.background(ReaderTheme.sidebar)
+                            search
                                 .onAppear { searchFocused = true }
                                 .transition(.opacity)
                         }
@@ -131,7 +132,7 @@ struct ReaderNavigator: View {
                     .allowsHitTesting(searching)
                     .accessibilityHidden(!searching)
                 }
-        }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading).background(ReaderTheme.sidebar)
+        }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .task(id: model.navigationDocumentID) { await model.loadNavigation() }
             .onChange(of: findRequest) { _, _ in
                 searching = true
@@ -225,10 +226,8 @@ struct ReaderNavigator: View {
                         Label("文末总结", readerIcon: .notebook)
                             .frame(maxWidth: .infinity, alignment: .leading).padding(12).contentShape(Rectangle())
                     }.buttonStyle(.plain)
-                        .background(
-                            model.presentedSummaryID == summary.id ? ReaderTheme.elevated : .clear,
-                            in: RoundedRectangle(cornerRadius: 7)
-                        )
+                        .background { rowBackground(selected: model.presentedSummaryID == summary.id) }
+                        .accessibilityAddTraits(model.presentedSummaryID == summary.id ? .isSelected : [])
                         .padding(.horizontal, 8)
                 }
             }
@@ -249,9 +248,14 @@ struct ReaderNavigator: View {
     }
 
     private func rowBackground(selected: Bool) -> some View {
-        RoundedRectangle(cornerRadius: 7)
-            .fill(selected ? ReaderTheme.elevated : .clear)
-            .animation(ReaderMotion.feedback(reduceMotion), value: chosenID)
+        ZStack {
+            if selected {
+                Color.clear.readerGlassSurface(in: RoundedRectangle(cornerRadius: 7), fallback: ReaderTheme.elevated)
+                    .transition(.opacity)
+            }
+        }
+        .animation(ReaderMotion.feedback(reduceMotion), value: selected)
+        .allowsHitTesting(false).accessibilityHidden(true)
     }
 
     private func chapterLink(_ item: PaperNavigationItem, selected: Bool) -> some View {
@@ -296,8 +300,8 @@ struct ReaderNavigator: View {
                     .readerPlainButton(cornerRadius: 6).foregroundStyle(ReaderTheme.muted).help("清除文内查找")
                     .accessibilityLabel("清除文内查找")
                 }
-            }.font(.system(size: 12)).padding(10).background(ReaderTheme.surface, in: RoundedRectangle(cornerRadius: 8))
-                .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(ReaderTheme.line)).padding(14)
+            }.font(.system(size: 12)).padding(10)
+                .readerGlassSurface(in: RoundedRectangle(cornerRadius: 8), bordered: true).padding(14)
             if query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 if model.paper?.blocks.isEmpty == true {
                     Label("没有可检索文字", systemImage: "doc.questionmark").font(.caption)

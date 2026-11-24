@@ -115,11 +115,7 @@ struct QuickStartOverlay: View {
 
                 cardContent(hasTarget: target != nil)
                     .frame(width: cardWidth)
-                    .background(ReaderTheme.surface, in: RoundedRectangle(cornerRadius: 14))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 14).strokeBorder(ReaderTheme.line).allowsHitTesting(false)
-                    }
-                    .shadow(color: .black.opacity(0.14), radius: 14, y: 5)
+                    .readerGlassSurface(in: RoundedRectangle(cornerRadius: 14), bordered: true)
                     .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { cardHeight = $0 }
                     .position(x: card.midX, y: card.midY)
             }

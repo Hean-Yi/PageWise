@@ -16,7 +16,7 @@ private struct AssistantComposerSurface: ViewModifier {
             content
             .padding(16)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(ReaderTheme.surface, in: shape)
+            .readerGlassSurface(in: shape)
             .overlay {
                 shape.strokeBorder(
                     emphasized ? ReaderTheme.accent : ReaderTheme.muted.opacity(0.55),

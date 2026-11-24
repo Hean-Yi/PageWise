@@ -13,6 +13,10 @@ enum ReaderMotion {
         reduceMotion ? nil : .smooth(duration: 0.28)
     }
 
+    static func sidebar(_ reduceMotion: Bool) -> Animation? {
+        reduceMotion ? nil : .smooth(duration: 0.34)
+    }
+
     static func arrival(y: CGFloat = 0) -> AnyTransition {
         .asymmetric(insertion: .opacity.combined(with: .offset(y: y)), removal: .identity)
     }

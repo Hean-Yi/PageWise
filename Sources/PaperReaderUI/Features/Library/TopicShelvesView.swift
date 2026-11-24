@@ -48,8 +48,11 @@ struct TopicShelvesView<SortMenu: View>: View {
                 .buttonStyle(.plain).font(.system(size: 12, weight: .medium))
                 .foregroundStyle(ReaderTheme.muted)
                 .frame(height: shelfControlSize)
+                .padding(.leading, 9)
+                .readerGlassSurface(in: Capsule(), fallback: ReaderTheme.elevated)
                 .fixedSize()
             }
+            .readerGlassGroup()
             if editing {
                 nameEditor
                     .quickStartTarget(.shelves)
@@ -264,8 +267,8 @@ private struct TopicShelfItem: View {
             .padding(.horizontal, 10).frame(height: 32)
             .background {
                 if selected {
-                    RoundedRectangle(cornerRadius: 8)
-                        .fill(ReaderTheme.accent.opacity(0.09))
+                    Color.clear
+                        .readerGlassSurface(in: RoundedRectangle(cornerRadius: 8), fallback: ReaderTheme.elevated)
                         .overlay(alignment: .bottom) {
                             Capsule().fill(ReaderTheme.accent).frame(width: 20, height: 2)
                         }

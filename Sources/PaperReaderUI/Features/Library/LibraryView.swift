@@ -27,9 +27,9 @@ public struct LibraryView: View {
     @State private var findRequest = 0
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.colorScheme) private var colorScheme
     @ScaledMetric(relativeTo: .subheadline) private var sidebarFontSize: CGFloat = 13
-    @Namespace private var sidebarSelection
     private let timer = Timer.publish(every: 60, on: .main, in: .common).autoconnect()
 
     public init(
@@ -217,7 +217,7 @@ public struct LibraryView: View {
                 }
             }
             .modifier(
-                WorkspaceArrival(destination: CGPoint(x: isReading ? 9 : 0, y: 0), background: ReaderTheme.sidebar)
+                WorkspaceArrival(destination: CGPoint(x: isReading ? 9 : 0, y: 0), background: sidebarBackground)
             )
             .navigationSplitViewColumnWidth(min: 210, ideal: 244, max: 320)
         } detail: {
@@ -246,7 +246,7 @@ public struct LibraryView: View {
                     )
                     .overlay {
                         Label("添加到书库", systemImage: "arrow.down.doc").font(.title2.weight(.medium)).padding(30)
-                            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
+                            .readerGlassSurface(in: RoundedRectangle(cornerRadius: 14), bordered: true)
                     }.padding(12).allowsHitTesting(false).transition(.opacity)
             }
         }
@@ -268,9 +268,10 @@ public struct LibraryView: View {
             let sidebarVisible = assistantTab != nil
             ZStack(alignment: .trailing) {
                 workspaceContent
-                    .transaction(value: sidebarVisible) { $0.animation = nil }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .padding(.trailing, inline && sidebarVisible ? sidebarWidth : 0)
+                    // Give PDFKit and WebKit the new viewport once, independent of the pane's slide.
+                    .transaction(value: sidebarVisible) { $0.animation = nil }
                 ZStack(alignment: .trailing) {
                     if let assistantTab {
                         WorkspaceAssistantSidebar(
@@ -295,25 +296,22 @@ public struct LibraryView: View {
                             }
                         }
                         .accessibilityAction(.escape) { self.assistantTab = nil }
-                        .transition(.move(edge: .trailing))
+                        .transition(reduceMotion ? .identity : .move(edge: .trailing))
                     }
                 }
                 .frame(width: sidebarWidth)
                 .allowsHitTesting(sidebarVisible)
                 .accessibilityHidden(!sidebarVisible)
+                .animation(ReaderMotion.sidebar(reduceMotion), value: sidebarVisible)
             }
             .clipped()
-            .animation(ReaderMotion.disclosure(reduceMotion), value: sidebarVisible)
         }
         .obsidianExportPresentation(model: model)
         .background(ReaderTheme.canvas)
         .task { HTMLWebViewPool.prewarm() }
-        #if os(macOS)
-            .toolbarBackground(ReaderTheme.canvas, for: .windowToolbar)
-            .toolbarBackgroundVisibility(.visible, for: .windowToolbar)
-        #else
+        .readerSystemToolbarBackground()
+        #if os(iOS)
             .toolbar(removing: .title)
-            .toolbarBackground(ReaderTheme.canvas, for: .navigationBar)
         #endif
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
@@ -348,11 +346,11 @@ public struct LibraryView: View {
                             Text(model.status).font(.caption).lineLimit(1)
                         }
                     }.padding(.horizontal, 18).padding(.vertical, 12)
-                        .background(.regularMaterial, in: Capsule()).padding(18)
+                        .readerGlassSurface(in: Capsule(), bordered: true).padding(18)
                 } else if let toast {
                     Label(toast, systemImage: "checkmark.circle.fill").font(.caption).lineLimit(2)
                         .padding(.horizontal, 18).padding(.vertical, 12)
-                        .background(.regularMaterial, in: Capsule()).padding(18).allowsHitTesting(false)
+                        .readerGlassSurface(in: Capsule(), bordered: true).padding(18).allowsHitTesting(false)
                 }
             }
             .animation(ReaderMotion.feedback(reduceMotion), value: busy || toast != nil)
@@ -427,6 +425,14 @@ public struct LibraryView: View {
         }.sorted { $0.date > $1.date }.prefix(8).map(\.paper)
     }
 
+    private var sidebarBackground: Color {
+        if #available(macOS 26, iOS 26, *), !reduceTransparency {
+            // Let NavigationSplitView supply the native sidebar material.
+            return .clear
+        }
+        return ReaderTheme.sidebar
+    }
+
     private var sidebar: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 10) {
@@ -463,8 +469,10 @@ public struct LibraryView: View {
                     if guide.step == .notebook { finishGuide() }
                 }.quickStartTarget(.notebook)
             }
-            .animation(ReaderMotion.disclosure(reduceMotion), value: collection)
-            .animation(ReaderMotion.disclosure(reduceMotion), value: model.selectedSection)
+            .sidebarSelectionIndicator(
+                for: model.selectedSection == "library" ? collection.id : model.selectedSection,
+                in: RoundedRectangle(cornerRadius: 9), reduceMotion: reduceMotion
+            )
             .padding(.horizontal, 10)
             let recent = recentPapers
             if !recent.isEmpty {
@@ -498,8 +506,7 @@ public struct LibraryView: View {
                 } label: {
                     Label("导入 PDF", systemImage: "plus").font(.callout.weight(.medium))
                         .frame(maxWidth: .infinity).frame(minHeight: 40)
-                        .background(ReaderTheme.surface, in: RoundedRectangle(cornerRadius: 10))
-                        .overlay { RoundedRectangle(cornerRadius: 10).strokeBorder(ReaderTheme.line) }
+                        .readerGlassSurface(in: RoundedRectangle(cornerRadius: 10), bordered: true)
                 }
                 .quickStartTarget(.importPaper)
                 Button {
@@ -512,7 +519,7 @@ public struct LibraryView: View {
                         .keyboardShortcut(",")
                     #endif
             }.buttonStyle(.plain).foregroundStyle(ReaderTheme.ink).padding(.horizontal, 17).padding(.vertical, 12)
-        }.frame(maxHeight: .infinity).background(ReaderTheme.sidebar)
+        }.frame(maxHeight: .infinity)
     }
 
     private var sidebarCollections: [(collection: LibraryCollection, icon: ReaderIcon.Glyph)] {
@@ -533,12 +540,7 @@ public struct LibraryView: View {
                 }
             }.foregroundStyle(ReaderTheme.ink)
                 .padding(.horizontal, 12).frame(minHeight: 38)
-                .background {
-                    if selected {
-                        RoundedRectangle(cornerRadius: 9).fill(ReaderTheme.accent.opacity(0.095))
-                            .matchedGeometryEffect(id: "library-selection", in: sidebarSelection)
-                    }
-                }
+                .sidebarSelectionTarget(selected)
                 .contentShape(Rectangle())
         }.buttonStyle(.plain).accessibilityAddTraits(selected ? .isSelected : [])
     }

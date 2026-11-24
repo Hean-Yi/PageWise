@@ -72,10 +72,10 @@ struct LibrarySearchField: View {
                 }
             }
             .font(.callout).padding(.horizontal, 12).frame(minHeight: 36)
-            .background(ReaderTheme.surface, in: RoundedRectangle(cornerRadius: 10))
+            .readerGlassSurface(in: RoundedRectangle(cornerRadius: 10), bordered: true)
             .overlay {
                 RoundedRectangle(cornerRadius: 10)
-                    .strokeBorder(input.focus.wrappedValue ? ReaderTheme.accent : ReaderTheme.line)
+                    .strokeBorder(ReaderTheme.accent.opacity(input.focus.wrappedValue ? 1 : 0))
                     .animation(ReaderMotion.feedback(reduceMotion), value: input.focus.wrappedValue)
                     .allowsHitTesting(false)
             }
@@ -192,10 +192,8 @@ private struct LibrarySearchSuggestions: ViewModifier {
                 }
             }
             .frame(width: width, height: height)
-            .background(ReaderTheme.surface, in: RoundedRectangle(cornerRadius: 12))
             .clipShape(RoundedRectangle(cornerRadius: 12))
-            .overlay { RoundedRectangle(cornerRadius: 12).strokeBorder(ReaderTheme.line).allowsHitTesting(false) }
-            .shadow(color: .black.opacity(0.12), radius: 10, y: 4)
+            .readerGlassSurface(in: RoundedRectangle(cornerRadius: 12), bordered: true)
             .accessibilityElement(children: .contain).accessibilityLabel("书库搜索结果")
             .position(
                 x: min(max(field.maxX - width, 8), size.width - width - 8) + width / 2,

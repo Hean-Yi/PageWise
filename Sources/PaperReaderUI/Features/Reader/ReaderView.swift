@@ -140,24 +140,29 @@ struct ReaderView: View {
                 bilingual: Binding(
                     get: { model.pdfBilingual.isOpen || model.mode != "original" },
                     set: { selected in setBilingualReading(selected) }))
-            if let paper = model.currentEdition {
-                let favorite = model.workspace(for: paper.id).isFavorite
-                Button {
-                    model.toggleFavorite(paper.id)
-                } label: {
-                    ReaderIcon(.favorite, size: 17, filled: favorite)
-                        .foregroundStyle(favorite ? ReaderTheme.accent : ReaderTheme.muted)
-                        .readerIconTarget(macOS: 32)
-                        .contentTransition(.opacity)
-                        .animation(ReaderMotion.feedback(reduceMotion), value: favorite)
+            HStack(spacing: 2) {
+                if let paper = model.currentEdition {
+                    let favorite = model.workspace(for: paper.id).isFavorite
+                    Button {
+                        model.toggleFavorite(paper.id)
+                    } label: {
+                        ReaderIcon(.favorite, size: 17, filled: favorite)
+                            .foregroundStyle(favorite ? ReaderTheme.accent : ReaderTheme.muted)
+                            .readerIconTarget(macOS: 32)
+                            .contentTransition(.opacity)
+                            .animation(ReaderMotion.feedback(reduceMotion), value: favorite)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(favorite ? "取消收藏" : "收藏论文")
+                    .accessibilityAddTraits(favorite ? .isSelected : [])
+                    .help(favorite ? "取消收藏" : "收藏论文")
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel(favorite ? "取消收藏" : "收藏论文")
-                .accessibilityAddTraits(favorite ? .isSelected : [])
-                .help(favorite ? "取消收藏" : "收藏论文")
+                readingMenu
             }
-            readingMenu
+            .padding(.horizontal, 3)
+            .readerGlassSurface(in: Capsule(), fallback: ReaderTheme.elevated)
         }
+        .readerGlassGroup()
         .buttonStyle(.borderless).padding(.horizontal, width < 520 ? 12 : 22).frame(height: 56)
         .background(ReaderTheme.canvas)
         .alert("阅读提示", isPresented: $showWarnings) {
@@ -251,8 +256,7 @@ struct ReaderView: View {
                         .frame(width: 28).focused($pageFocused).onSubmit(jumpToPage).accessibilityLabel("跳转页码")
                     Text("/ \(pageCount)").foregroundStyle(ReaderTheme.muted)
                 }.font(.system(size: 11, design: .monospaced)).padding(.horizontal, 9).padding(.vertical, 5)
-                    .background(ReaderTheme.surface, in: RoundedRectangle(cornerRadius: 6))
-                    .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(ReaderTheme.line))
+                    .readerGlassSurface(in: RoundedRectangle(cornerRadius: 6), bordered: true)
                     .help("输入原页页码并回车跳转")
                 if !continuousParagraphs {
                     Button {

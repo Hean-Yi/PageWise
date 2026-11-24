@@ -3,7 +3,6 @@ import SwiftUI
 struct ReaderModePicker: View {
     @Binding var bilingual: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.layoutDirection) private var layoutDirection
     @FocusState private var focusedMode: Bool?
     @ScaledMetric(relativeTo: .callout) private var segmentWidth: CGFloat = 74
@@ -22,7 +21,7 @@ struct ReaderModePicker: View {
             .allowsHitTesting(false)
         }
         .padding(3)
-        .background { track }
+        .readerGlassSurface(in: Capsule(), fallback: ReaderTheme.elevated, bordered: true)
         .fixedSize()
         .animation(ReaderMotion.navigation(reduceMotion), value: bilingual)
         .accessibilityElement(children: .contain)
@@ -56,14 +55,5 @@ struct ReaderModePicker: View {
         .buttonStyle(.plain)
         .focused($focusedMode, equals: bilingualMode)
         .accessibilityAddTraits(selected ? .isSelected : [])
-    }
-
-    @ViewBuilder private var track: some View {
-        if #available(macOS 26, iOS 26, *), !reduceTransparency {
-            Capsule().fill(.clear).glassEffect(.regular, in: .capsule)
-        } else {
-            Capsule().fill(ReaderTheme.elevated)
-                .overlay { Capsule().strokeBorder(ReaderTheme.line, lineWidth: 1) }
-        }
     }
 }

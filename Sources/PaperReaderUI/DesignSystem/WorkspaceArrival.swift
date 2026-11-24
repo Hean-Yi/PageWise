@@ -5,13 +5,14 @@ import SwiftUI
 struct WorkspaceArrival: ViewModifier {
     let destination: CGPoint
     let background: Color
+    var usesCompactNavigation = true
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.horizontalSizeClass) private var sizeClass
     @Environment(\.layoutDirection) private var layoutDirection
 
     func body(content: Content) -> some View {
         // In compact columns NavigationSplitView supplies the platform transition.
-        let skipArrival = reduceMotion || sizeClass == .compact
+        let skipArrival = reduceMotion || (usesCompactNavigation && sizeClass == .compact)
         let location = CGPoint(
             x: layoutDirection == .rightToLeft ? -destination.x : destination.x, y: destination.y)
         content

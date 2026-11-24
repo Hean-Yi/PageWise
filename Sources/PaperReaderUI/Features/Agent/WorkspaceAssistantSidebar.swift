@@ -25,7 +25,6 @@ struct WorkspaceAssistantSidebar: View {
     let openSettings: () -> Void
     let didNavigate: () -> Void
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     var body: some View {
         VStack(spacing: 0) {
@@ -41,16 +40,14 @@ struct WorkspaceAssistantSidebar: View {
                     .font(.headline).accessibilityAddTraits(.isHeader)
                     Spacer(minLength: 0)
                 }
-                if model.busyAI && isReading {
-                    ProgressView().controlSize(.small).opacity(tab == .library ? 0 : 1)
-                        .accessibilityHidden(tab == .library)
-                }
             }.padding(.horizontal, 14).frame(height: 56)
             Divider()
-            ZStack {
-                tabContent.id(tab).transition(.opacity)
-            }
-            .animation(ReaderMotion.disclosure(reduceMotion), value: tab)
+            let index = AssistantTab.allCases.firstIndex(of: tab) ?? 0
+            tabContent.modifier(
+                WorkspaceArrival(
+                    destination: CGPoint(x: CGFloat(index) * 12, y: 0), background: ReaderTheme.canvas,
+                    usesCompactNavigation: false)
+            )
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(ReaderTheme.canvas)
@@ -60,19 +57,19 @@ struct WorkspaceAssistantSidebar: View {
     }
 
     private var tabBar: some View {
-        let tabs = AssistantTab.allCases
-        return HStack(spacing: 0) {
-            ForEach(tabs, id: \.self) { item in
+        HStack(spacing: 0) {
+            ForEach(AssistantTab.allCases, id: \.self) { item in
                 let selected = tab == item
                 Button {
                     if !selected { select(item) }
                 } label: {
-                    HStack(spacing: 6) {
-                        ReaderIcon(item.icon, size: 17)
-                        if selected {
-                            Text(item.rawValue).font(.callout.weight(.medium)).lineLimit(1)
-                                .transition(.opacity)
+                    ViewThatFits(in: .horizontal) {
+                        HStack(spacing: 5) {
+                            tabIcon(item)
+                            Text(item.rawValue).font(.callout.weight(.medium))
                         }
+                        .fixedSize(horizontal: true, vertical: false)
+                        tabIcon(item)
                     }
                     .padding(.horizontal, 4)
                     .frame(minWidth: 0, maxWidth: .infinity)
@@ -82,6 +79,8 @@ struct WorkspaceAssistantSidebar: View {
                         .frame(minHeight: 44)
                     #endif
                     .foregroundStyle(selected ? ReaderTheme.accent : ReaderTheme.muted)
+                    .sidebarSelectionTarget(selected)
+                    .padding(.horizontal, 2)
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -89,32 +88,18 @@ struct WorkspaceAssistantSidebar: View {
                 .accessibilityAddTraits(selected ? .isSelected : [])
             }
         }
-        .background {
-            GeometryReader { geometry in
-                let width = geometry.size.width / CGFloat(tabs.count)
-                if let index = tabs.firstIndex(of: tab) {
-                    HStack(spacing: 0) {
-                        Color.clear.frame(width: CGFloat(index) * width)
-                        tabIndicator.padding(.horizontal, 2).frame(width: width)
-                    }
-                }
-            }
-            .allowsHitTesting(false).accessibilityHidden(true)
-        }
-        .animation(ReaderMotion.navigation(reduceMotion), value: tab)
+        .sidebarSelectionIndicator(for: tab, in: Capsule(), reduceMotion: reduceMotion)
     }
 
-    @ViewBuilder private var tabIndicator: some View {
-        let paperCapsule = Capsule().fill(ReaderTheme.elevated)
-        #if os(macOS)
-            if #available(macOS 26, *), !reduceTransparency {
-                Color.clear.glassEffect(.regular, in: .capsule)
+    private func tabIcon(_ item: AssistantTab) -> some View {
+        ZStack {
+            if model.busyAI && item == tab && item != .library {
+                ProgressView().controlSize(.small)
             } else {
-                paperCapsule
+                ReaderIcon(item.icon, size: 17)
             }
-        #else
-            paperCapsule
-        #endif
+        }
+        .frame(width: 17, height: 17)
     }
 
     @ViewBuilder private var tabContent: some View {

@@ -63,5 +63,7 @@ struct DocumentSummaryPage: View {
             }
             .tint(ReaderTheme.muted).help("删除总结")
         }
+        .padding(.horizontal, 8)
+        .readerGlassSurface(in: Capsule(), fallback: ReaderTheme.elevated)
     }
 }
