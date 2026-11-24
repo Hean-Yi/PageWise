@@ -26,6 +26,7 @@ struct WorkspaceAssistantSidebar: View {
     let saveNote: () -> Void
     let didNavigate: () -> Void
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     var body: some View {
         VStack(spacing: 0) {
@@ -91,13 +92,26 @@ struct WorkspaceAssistantSidebar: View {
                 if let index = tabs.firstIndex(of: tab) {
                     HStack(spacing: 0) {
                         Color.clear.frame(width: CGFloat(index) * width)
-                        Capsule().fill(ReaderTheme.elevated).padding(.horizontal, 2).frame(width: width)
+                        tabIndicator.padding(.horizontal, 2).frame(width: width)
                     }
                 }
             }
             .allowsHitTesting(false).accessibilityHidden(true)
         }
         .animation(ReaderMotion.navigation(reduceMotion), value: tab)
+    }
+
+    @ViewBuilder private var tabIndicator: some View {
+        let paperCapsule = Capsule().fill(ReaderTheme.elevated)
+        #if os(macOS)
+            if #available(macOS 26, *), !reduceTransparency {
+                Color.clear.glassEffect(.regular, in: .capsule)
+            } else {
+                paperCapsule
+            }
+        #else
+            paperCapsule
+        #endif
     }
 
     @ViewBuilder private var tabContent: some View {
