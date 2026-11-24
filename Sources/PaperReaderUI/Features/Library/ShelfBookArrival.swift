@@ -1,34 +1,33 @@
 import SwiftUI
 
-/// A single, finite playback drives the cover artwork. Cells keep their final
-/// layout, native drag targets and keyboard focus throughout the shelf change.
-struct ShelfBookArrival: ViewModifier {
-    nonisolated static let duration = 0.44
-    let position: Int
-    let columns: Int
-    let fromTrailing: Bool
-    @Environment(\.shelfArrivalTime) private var time
+/// Only newly inserted covers settle onto the shelf. SwiftUI interpolates the visual
+/// transforms while layout, drop targets and keyboard focus use the destination slots.
+enum ShelfBookArrival {
+    static let duration = 0.30
 
-    func body(content: Content) -> some View {
-        let lift = Self.lift(at: time, position: position, columns: columns, fromTrailing: fromTrailing)
-        let lean = position.isMultiple(of: 2) ? -1.45 : 1.1
-        content
-            .rotationEffect(.degrees(lean * lift), anchor: .bottom)
-            .offset(y: -22 * lift)
-    }
-
-    static func lift(at time: Double, position: Int, columns: Int, fromTrailing: Bool = false) -> Double {
+    static func delay(position: Int, columns: Int) -> Double {
         let row = position / columns
-        let column = fromTrailing ? columns - 1 - position % columns : position % columns
-        // Repeat the rhythm down a long shelf so a deep scroll has the same
-        // short stagger as the first screen. No book waits more than 80 ms.
-        let delay = 0.014 * Double(min(column, 4)) + 0.008 * Double(row % 4)
-        let progress = min(1, max(0, (time - delay) / 0.36))
-        let remaining = 1 - progress
-        return remaining * remaining * (1 - 2.4 * progress)
+        let column = position % columns
+        // The stagger stays within one short beat, even far down a large shelf.
+        return 0.012 * Double(min(column, 3)) + 0.006 * Double(row % 3)
     }
-}
 
-extension EnvironmentValues {
-    @Entry var shelfArrivalTime = ShelfBookArrival.duration
+    static func transition(position: Int, columns: Int) -> AnyTransition {
+        let animation = Animation.timingCurve(0.22, 0.78, 0.25, 1, duration: duration)
+            .delay(delay(position: position, columns: columns))
+        return .asymmetric(
+            insertion: .modifier(active: Pose(lift: 1), identity: Pose(lift: 0)).animation(animation),
+            removal: .identity)
+    }
+
+    private struct Pose: ViewModifier {
+        let lift: CGFloat
+
+        func body(content: Content) -> some View {
+            content
+                .scaleEffect(1 - 0.014 * lift, anchor: .bottom)
+                .offset(y: -16 * lift)
+                .opacity(1 - 0.40 * Double(lift))
+        }
+    }
 }

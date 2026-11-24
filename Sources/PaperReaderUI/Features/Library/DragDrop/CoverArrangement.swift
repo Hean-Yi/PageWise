@@ -1,48 +1,61 @@
 import Foundation
 import Observation
-import PaperReaderKit
 
-/// Temporary drag state never mutates the library. Destinations are stationary grid slots,
-/// so a neighboring cover moving under the cursor cannot reverse the previous preview.
+/// Keep the hit targets fixed. Only the dragged cover and its intervening neighbors move.
 @MainActor @Observable final class CoverArrangement {
     private(set) var sourceID: UUID?
-    private(set) var original: [UUID] = []
-    private(set) var preview: [UUID] = []
-    private var finished: Set<UUID> = []
+    private(set) var destinationIndex: Int?
+    private var original: [UUID] = []
+    private var slots: [UUID: Int] = [:]
+    private var firstFinishedIndex: Int?
     private var unfinishedFirst = false
     private(set) var committing = false
 
-    func begin(_ id: UUID, visible: [UUID], state: LibraryState, unfinishedFirst: Bool) {
-        guard !committing, visible.contains(id) else { return }
-        sourceID = id
+    private var sourceIndex: Int? { sourceID.flatMap { slots[$0] } }
+
+    var preview: [UUID] {
+        guard let from = sourceIndex, let to = destinationIndex, from != to else { return original }
+        var result = original
+        let id = result.remove(at: from)
+        result.insert(id, at: to)
+        return result
+    }
+
+    func begin(_ id: UUID, visible: [UUID], firstFinishedIndex: Int?, unfinishedFirst: Bool) {
+        guard !committing, let index = visible.firstIndex(of: id) else { return }
         original = visible
-        preview = visible
-        finished = Set(LibraryQuery.papers(in: state, collection: .finished).map(\.id))
+        slots = Dictionary(uniqueKeysWithValues: visible.enumerated().map { ($1, $0) })
+        sourceID = id
+        destinationIndex = index
+        self.firstFinishedIndex = firstFinishedIndex
         self.unfinishedFirst = unfinishedFirst
     }
 
     func accepts(_ id: UUID, at slot: UUID) -> Bool {
-        sourceID == id && original.contains(slot) && !committing
-            && (!unfinishedFirst || finished.contains(id) == finished.contains(slot))
+        guard !committing, id == sourceID, let from = sourceIndex, let to = slots[slot] else { return false }
+        guard let boundary = firstFinishedIndex else { return true }
+        return (from < boundary) == (to < boundary)
     }
 
     func hover(_ id: UUID, at slot: UUID) {
-        guard accepts(id, at: slot), let destination = original.firstIndex(of: slot) else { return }
-        var next = original.filter { $0 != id }
-        next.insert(id, at: destination)
-        preview = next
+        guard accepts(id, at: slot), let next = slots[slot], next != destinationIndex else { return }
+        destinationIndex = next
     }
 
     func offset(for id: UUID) -> Int {
-        guard let from = original.firstIndex(of: id), let to = preview.firstIndex(of: id) else { return 0 }
-        return to - from
+        guard let index = slots[id], let from = sourceIndex, let to = destinationIndex else { return 0 }
+        if index == from { return to - from }
+        if from < index && index <= to { return -1 }
+        if to <= index && index < from { return 1 }
+        return 0
     }
 
     func end() {
         guard !committing else { return }
         sourceID = nil
-        preview = []
+        destinationIndex = nil
         original = []
+        slots = [:]
     }
 
     func reserveDrop() -> Bool {

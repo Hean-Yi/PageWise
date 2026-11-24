@@ -4,7 +4,6 @@
 
     /// A hover gesture must work without first clicking or moving keyboard focus to the cover.
     struct ShelfPreviewKeys: NSViewRepresentable {
-        var selectedShelfID: UUID?
         var hovered: (CGPoint) -> UUID? = { _ in nil }
         let press: (UUID) -> Bool
         let release: () -> Bool
@@ -12,12 +11,6 @@
 
         func makeNSView(context: Context) -> Monitor { Monitor() }
         func updateNSView(_ view: Monitor, context: Context) {
-            // Switching shelves can leave the previous text editor active even after its content is gone.
-            if let previous = view.actions, previous.selectedShelfID != selectedShelfID, let window = view.window,
-                (window.firstResponder as? NSText)?.isEditable == true
-            {
-                window.makeFirstResponder(nil)
-            }
             view.actions = self
         }
 

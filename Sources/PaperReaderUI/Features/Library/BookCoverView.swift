@@ -6,9 +6,8 @@ struct BookCoverView: View {
     let paper: Paper
     var progress: ReadingProgress? = nil
 
-    private var palette: CoverPalette { CoverPalette.forDigest(paper.digest) }
-
     var body: some View {
+        let palette = CoverPalette.forDigest(paper.digest)
         GeometryReader { geometry in
             let scale = geometry.size.width / 220
             ZStack(alignment: .leading) {
@@ -85,17 +84,20 @@ private struct CoverPalette {
     let paper: Color
     let ink: Color
 
-    static func forDigest(_ digest: String) -> CoverPalette {
-        let value = digest.utf8.reduce(UInt64(5381)) { ($0 &* 33) &+ UInt64($1) }
+    private static let palettes: [Self] = {
         let darkInk = Color(red: 0.19, green: 0.20, blue: 0.17)
         let lightInk = Color(red: 0.99, green: 0.96, blue: 0.90)
-        let palettes = [
-            CoverPalette(paper: Color(red: 0.80, green: 0.81, blue: 0.71), ink: darkInk),
-            CoverPalette(paper: Color(red: 0.28, green: 0.34, blue: 0.31), ink: lightInk),
-            CoverPalette(paper: Color(red: 0.92, green: 0.84, blue: 0.73), ink: darkInk),
-            CoverPalette(paper: Color(red: 0.61, green: 0.34, blue: 0.26), ink: lightInk),
-            CoverPalette(paper: Color(red: 0.78, green: 0.82, blue: 0.83), ink: darkInk),
+        return [
+            Self(paper: Color(red: 0.80, green: 0.81, blue: 0.71), ink: darkInk),
+            Self(paper: Color(red: 0.28, green: 0.34, blue: 0.31), ink: lightInk),
+            Self(paper: Color(red: 0.92, green: 0.84, blue: 0.73), ink: darkInk),
+            Self(paper: Color(red: 0.61, green: 0.34, blue: 0.26), ink: lightInk),
+            Self(paper: Color(red: 0.78, green: 0.82, blue: 0.83), ink: darkInk),
         ]
+    }()
+
+    static func forDigest(_ digest: String) -> Self {
+        let value = digest.utf8.reduce(UInt64(5381)) { ($0 &* 33) &+ UInt64($1) }
         return palettes[Int(value % UInt64(palettes.count))]
     }
 }
@@ -104,7 +106,6 @@ struct BookshelfItem: View {
     @Environment(\.requestPaperDeletion) private var requestPaperDeletion
     @Bindable var model: ReaderModel
     let paper: Paper
-    let arrival: ShelfBookArrival
     let recordFrame: (CGRect?) -> Void
     var searchLocated = false
     let previewed: Bool
@@ -154,7 +155,6 @@ struct BookshelfItem: View {
             .shadow(
                 color: .black.opacity(highlighted ? 0.16 : 0.09), radius: highlighted ? 10 : 4, y: highlighted ? 8 : 3
             )
-            .modifier(arrival)
     }
 
     var body: some View {

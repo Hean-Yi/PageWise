@@ -70,18 +70,33 @@ public enum LibraryQuery {
         in state: LibraryState, collection: LibraryCollection = .all, query: String = "", sort: LibrarySort = .recent
     ) -> [Paper] {
         let terms = query.split(whereSeparator: \.isWhitespace)
-        let finishedIDs = Set(
-            state.papers.filter {
-                collection == .all
-                    && LibraryCollection.finished.includes(
-                        state.workspace[$0.id.uuidString] ?? PaperWorkspace(), for: $0)
-            }.map(\.id))
-        let ranks = Dictionary(uniqueKeysWithValues: state.manualPaperIDs.enumerated().map { ($1, $0) })
-        return state.papers.filter { paper in
-            let preferences = state.workspace[paper.id.uuidString] ?? PaperWorkspace()
-            return collection.includes(preferences, for: paper)
+        let visible = state.papers.filter { paper in
+            (collection == .all
+                || collection.includes(state.workspace[paper.id.uuidString] ?? PaperWorkspace(), for: paper))
                 && matches(paper.title, terms: terms)
-        }.sorted { lhs, rhs in
+        }
+        return sorted(visible, in: state, sort: sort, unfinishedFirst: collection == .all)
+    }
+
+    /// A nil shelf contains unfiled papers. Search and status collections still span the library.
+    public static func papers(onShelf shelfID: UUID?, in state: LibraryState, sort: LibrarySort) -> [Paper] {
+        let members = state.papers.filter { state.shelfID(for: $0.id) == shelfID }
+        return sorted(members, in: state, sort: sort, unfinishedFirst: true)
+    }
+
+    private static func sorted(_ papers: [Paper], in state: LibraryState, sort: LibrarySort, unfinishedFirst: Bool)
+        -> [Paper]
+    {
+        let finishedIDs: Set<UUID> =
+            unfinishedFirst
+            ? Set(
+                papers.lazy.filter {
+                    LibraryCollection.finished.includes(state.workspace[$0.id.uuidString] ?? PaperWorkspace(), for: $0)
+                }.map(\.id)) : []
+        let ranks =
+            sort == .manual
+            ? Dictionary(uniqueKeysWithValues: state.manualPaperIDs.enumerated().map { ($1, $0) }) : [:]
+        return papers.sorted { lhs, rhs in
             let leftFinished = finishedIDs.contains(lhs.id)
             let rightFinished = finishedIDs.contains(rhs.id)
             if leftFinished != rightFinished { return !leftFinished }

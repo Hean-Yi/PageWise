@@ -8,7 +8,7 @@ import Testing
     let state = arrangementFixture()
     let ids = state.papers.map(\.id)
     let drag = CoverArrangement()
-    drag.begin(ids[0], visible: ids, state: state, unfinishedFirst: true)
+    drag.begin(ids[0], visible: ids, firstFinishedIndex: nil, unfinishedFirst: true)
     drag.hover(ids[0], at: ids[2])
     #expect(drag.preview == [ids[1], ids[2], ids[0], ids[3]])
     #expect(drag.offset(for: ids[0]) == 2)
@@ -26,17 +26,32 @@ import Testing
 }
 
 @MainActor @Test func coverPreviewRejectsCrossingFinishedGroupAndCanReturnToOriginalSlot() {
-    var state = arrangementFixture()
-    let ids = state.papers.map(\.id)
-    state.workspace[ids[3].uuidString] = PaperWorkspace(status: .finished)
+    let ids = arrangementFixture().papers.map(\.id)
     let drag = CoverArrangement()
-    drag.begin(ids[0], visible: ids, state: state, unfinishedFirst: true)
+    drag.begin(ids[0], visible: ids, firstFinishedIndex: 3, unfinishedFirst: true)
     #expect(!drag.accepts(ids[0], at: ids[3]))
     drag.hover(ids[0], at: ids[3])
     #expect(drag.preview == ids)
     drag.hover(ids[0], at: ids[2])
     drag.hover(ids[0], at: ids[0])
     #expect(drag.preview == ids)
+}
+
+@MainActor @Test func coverOffsetsMatchEveryReorderInBothDirections() {
+    let ids = arrangementFixture().papers.map(\.id)
+    let drag = CoverArrangement()
+    for from in ids.indices {
+        drag.begin(ids[from], visible: ids, firstFinishedIndex: nil, unfinishedFirst: false)
+        for to in ids.indices {
+            drag.hover(ids[from], at: ids[to])
+            let preview = drag.preview
+            #expect(preview[to] == ids[from])
+            for index in ids.indices {
+                #expect(preview[index + drag.offset(for: ids[index])] == ids[index])
+            }
+        }
+        drag.end()
+    }
 }
 
 @MainActor @Test func dropReservationSurvivesNativeEndAndPersistsAfterRestart() async throws {
@@ -50,7 +65,7 @@ import Testing
     await model.load()
     let ids = initial.papers.map(\.id)
     let drag = CoverArrangement()
-    drag.begin(ids[0], visible: ids, state: model.state, unfinishedFirst: true)
+    drag.begin(ids[0], visible: ids, firstFinishedIndex: nil, unfinishedFirst: true)
     drag.hover(ids[0], at: ids[2])
     #expect(drag.reserveDrop())
     #expect(!drag.reserveDrop())
@@ -90,7 +105,7 @@ import Testing
     try FileManager.default.moveItem(at: root, to: savedRoot)
     defer { try? FileManager.default.moveItem(at: savedRoot, to: root) }
     let drag = CoverArrangement()
-    drag.begin(ids[0], visible: ids, state: model.state, unfinishedFirst: true)
+    drag.begin(ids[0], visible: ids, firstFinishedIndex: nil, unfinishedFirst: true)
     drag.hover(ids[0], at: ids[2])
     #expect(drag.reserveDrop())
     #expect(!(await drag.commit(model: model)))

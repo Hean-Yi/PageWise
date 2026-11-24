@@ -110,6 +110,30 @@ func allLibrarySortsKeepUnfinishedFirstAndPreserveOrderWithinEachGroup(sort: Lib
     #expect(LibraryQuery.papers(in: state, sort: sort).map(\.id) == expected.map { papers[$0].id })
 }
 
+@Test(arguments: LibrarySort.allCases)
+func shelfQueryPreservesTheLibraryOrderWithinEachShelf(sort: LibrarySort) throws {
+    let shelf = try Shelf(name: "Methods")
+    let other = try Shelf(name: "Systems")
+    var state = LibraryState()
+    state.papers = ["Delta", "Beta", "Gamma", "Alpha", "Rho"].enumerated().map {
+        queryPaper($0.element, added: TimeInterval($0.offset))
+    }
+    try state.apply(.create(shelf))
+    try state.apply(.create(other))
+    let ids = state.papers.map(\.id)
+    try state.apply(.move(paperID: ids[2], shelfID: shelf.id))
+    try state.apply(.move(paperID: ids[3], shelfID: shelf.id))
+    try state.apply(.move(paperID: ids[4], shelfID: other.id))
+    state.workspace[ids[1].uuidString] = PaperWorkspace(status: .finished)
+    state.workspace[ids[3].uuidString] = PaperWorkspace(status: .finished)
+    state.manualPaperIDs = Array(ids.reversed())
+    let all = LibraryQuery.papers(in: state, sort: sort)
+    for id in [nil, shelf.id, other.id] as [UUID?] {
+        let expected = all.filter { state.shelfID(for: $0.id) == id }
+        #expect(LibraryQuery.papers(onShelf: id, in: state, sort: sort).map(\.id) == expected.map(\.id))
+    }
+}
+
 @Test(arguments: LibraryCollection.allCases)
 func libraryCollectionMembershipMatchesQueriesForLegacyCompletionAndFavorites(collection: LibraryCollection) {
     let automatic = queryPaper("Legacy completion", added: 3)

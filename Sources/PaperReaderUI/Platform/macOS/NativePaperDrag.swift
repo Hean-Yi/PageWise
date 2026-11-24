@@ -205,6 +205,11 @@ import PaperReaderKit
         override func mouseUp(with event: NSEvent) {
             guard pressed else { return }
             pressed = false
+            // This NSView receives the click instead of a SwiftUI Button. Transfer focus on
+            // the click itself, including when the user chooses the already-active shelf.
+            if let window, (window.firstResponder as? NSText)?.isEditable == true {
+                window.makeFirstResponder(nil)
+            }
             activate?()
         }
 

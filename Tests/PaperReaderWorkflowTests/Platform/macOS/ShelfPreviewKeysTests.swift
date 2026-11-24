@@ -72,6 +72,14 @@
             host.layoutSubtreeIfNeeded()
             try await Task.sleep(for: .milliseconds(20))
         }
+        // Picking the active topic must also exit search even though the selection ID stays equal.
+        if editingSearch {
+            let search = try #require(children(host).compactMap { $0 as? NSTextField }.first { $0.isEditable })
+            try #require(window.makeFirstResponder(search))
+            target.mouseDown(with: try click(.leftMouseDown, on: target))
+            target.mouseUp(with: try click(.leftMouseUp, on: target))
+            #expect((window.firstResponder as? NSText)?.isEditable != true)
+        }
         var cover: PaperDragSourceView?
         repeat {
             host.layoutSubtreeIfNeeded()

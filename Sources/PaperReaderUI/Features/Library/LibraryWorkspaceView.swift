@@ -48,8 +48,10 @@ private struct ShelfListing {
     let recent: Paper?
 
     init(state: LibraryState, collection: LibraryCollection, shelfID: UUID?) {
-        let sorted = LibraryQuery.papers(in: state, collection: collection, sort: state.preferredSort)
-        let visible = collection == .all ? sorted.filter { state.shelfID(for: $0.id) == shelfID } : sorted
+        let visible =
+            collection == .all
+            ? LibraryQuery.papers(onShelf: shelfID, in: state, sort: state.preferredSort)
+            : LibraryQuery.papers(in: state, collection: collection, sort: state.preferredSort)
         entries = Array(visible.enumerated())
         ids = visible.map(\.id)
         firstFinishedIndex =
@@ -84,7 +86,6 @@ private struct ShelfWorkspaceContent: View {
     }
     @State private var preview: Preview?
     @State private var locations = ShelfCoverLocations()
-    @State private var arrivalFromTrailing = false
     private struct ShelfSelection: Equatable {
         let collection: LibraryCollection
         let shelfID: UUID?
@@ -189,7 +190,7 @@ private struct ShelfWorkspaceContent: View {
                             .padding(.bottom, 26)
                     }
                     LazyVGrid(columns: columns, alignment: .leading, spacing: 32) {
-                        if collection != .reading && collection != .finished {
+                        if leadingCoverCount != 0 {
                             AddPaperCover { onlineSearch.open(shelfID: collection == .all ? selectedShelfID : nil) }
                                 .quickStartTarget(onlineSearch.isExpanded ? nil : .discovery)
                         }
@@ -199,25 +200,15 @@ private struct ShelfWorkspaceContent: View {
                                 width: min(236, (available - CGFloat(count - 1) * 36) / CGFloat(count))
                             )
                             .id(ScrollTarget.paper(paper.id))
-                            .transition(reduceMotion ? .identity : ReaderMotion.arrival(y: 5))
+                            .transition(
+                                reduceMotion
+                                    ? .identity
+                                    : ShelfBookArrival.transition(position: index + leadingCoverCount, columns: count))
                         }
-                    }.padding(.top, 5)
-                        .animation(ReaderMotion.disclosure(reduceMotion), value: sort)
-                        .transaction(value: selection) {
-                            $0.animation = nil
-                            $0.disablesAnimations = true
-                        }
-                        .keyframeAnimator(initialValue: ShelfBookArrival.duration, trigger: selection) {
-                            [reduceMotion] grid, time in
-                            grid.environment(\.shelfArrivalTime, reduceMotion ? ShelfBookArrival.duration : time)
-                        } keyframes: { _ in
-                            if reduceMotion {
-                                MoveKeyframe(ShelfBookArrival.duration)
-                            } else {
-                                MoveKeyframe(0)
-                                LinearKeyframe(ShelfBookArrival.duration, duration: ShelfBookArrival.duration)
-                            }
-                        }
+                    }
+                    .padding(.top, 5)
+                    .animation(ReaderMotion.disclosure(reduceMotion), value: sort)
+                    .animation(ReaderMotion.navigation(reduceMotion), value: selection)
                     if model.state.papers.isEmpty && collection == .all {
                         HStack(spacing: 14) {
                             Text("也可以拖入 PDF").foregroundStyle(ReaderTheme.muted)
@@ -231,7 +222,6 @@ private struct ShelfWorkspaceContent: View {
                     }
                 }.padding(.horizontal, inset).padding(.top, compact ? 24 : 32).padding(.bottom, 44)
                     .animation(ReaderMotion.disclosure(reduceMotion), value: onlineSearch.isExpanded)
-                    .animation(ReaderMotion.navigation(reduceMotion), value: collection)
             }
             .allowsHitTesting(preview == nil)
             .accessibilityHidden(preview != nil)
@@ -256,7 +246,6 @@ private struct ShelfWorkspaceContent: View {
             #if os(macOS)
                 .background {
                     ShelfPreviewKeys(
-                        selectedShelfID: selectedShelfID,
                         hovered: { point in
                             listing.ids.first { locations.frames[$0]?.contains(point) == true } ?? locations.paperID
                                 ?? (preview?.flight.returning == true ? preview?.target.paperID : nil)
@@ -265,18 +254,7 @@ private struct ShelfWorkspaceContent: View {
                 }
             #endif
         }.coordinateSpace(.named(ShelfCoverFlight.coordinateSpace))
-            .onChange(of: selection) { previous, selected in
-                if previous.collection == selected.collection {
-                    let shelves = model.state.shelves
-                    let from = shelves.firstIndex { $0.id == previous.shelfID } ?? -1
-                    let to = shelves.firstIndex { $0.id == selected.shelfID } ?? -1
-                    arrivalFromTrailing = to < from
-                } else {
-                    let categories = LibraryCollection.allCases
-                    let from = categories.firstIndex(of: previous.collection) ?? 0
-                    let to = categories.firstIndex(of: selected.collection) ?? 0
-                    arrivalFromTrailing = to < from
-                }
+            .onChange(of: selection) {
                 dismissSearchRequest += 1
                 arrangement.end()
                 preview = nil
@@ -298,18 +276,18 @@ private struct ShelfWorkspaceContent: View {
             }
     }
 
+    // The add tile occupies the first slot but is never a reorder destination.
+    private var leadingCoverCount: Int { collection == .reading || collection == .finished ? 0 : 1 }
+
     private func bookshelfItem(_ paper: Paper, index: Int, columns: Int, width: CGFloat) -> some View {
         let destination = index + arrangement.offset(for: paper.id)
-        // Add-cover occupies the first grid cell but is never a reorder destination.
-        let leading = collection != .reading && collection != .finished ? 1 : 0
-        let from = index + leading
-        let to = destination + leading
+        let from = index + leadingCoverCount
+        let to = destination + leadingCoverCount
         let offset = CGSize(
             width: CGFloat(to % columns - from % columns) * (width + 36),
             height: CGFloat(to / columns - from / columns) * (width / 0.70 + 77))
         return BookshelfItem(
             model: model, paper: paper,
-            arrival: ShelfBookArrival(position: from, columns: columns, fromTrailing: arrivalFromTrailing),
             recordFrame: { locations.frames[paper.id] = $0 },
             searchLocated: searchReveal?.paperID == paper.id,
             previewed: preview?.target.paperID == paper.id && preview?.flight.awaitingLift == false,
@@ -318,7 +296,8 @@ private struct ShelfWorkspaceContent: View {
             arrangementOffset: offset,
             beginDrag: {
                 arrangement.begin(
-                    paper.id, visible: listing.ids, state: model.state, unfinishedFirst: collection == .all)
+                    paper.id, visible: listing.ids, firstFinishedIndex: listing.firstFinishedIndex,
+                    unfinishedFirst: collection == .all)
             },
             endDrag: { arrangement.end() },
             acceptsDrop: { arrangement.accepts($0, at: paper.id) },
@@ -331,7 +310,7 @@ private struct ShelfWorkspaceContent: View {
             moveEarlier: orderAction(at: index, delta: -1),
             moveLater: orderAction(at: index, delta: 1)
         )
-        .animation(ReaderMotion.disclosure(reduceMotion), value: arrangement.preview)
+        .animation(ReaderMotion.disclosure(reduceMotion), value: arrangement.destinationIndex)
         .animation(ReaderMotion.feedback(reduceMotion), value: arrangement.sourceID)
     }
 
