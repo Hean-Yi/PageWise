@@ -128,17 +128,18 @@ private struct ShelfWorkspaceContent: View {
                     if let recent = listing.recent {
                         continueReading(recent).padding(.bottom, 22)
                     }
-                    HStack(alignment: .top, spacing: 12) {
-                        if collection == .all {
-                            TopicShelvesView(
-                                model: model, selectedShelfID: $selectedShelfID, dragActive: arrangement.sourceID != nil
-                            )
-                        }
-                        if !query.isEmpty && collection != .all {
-                            Text("搜索结果").font(.callout).foregroundStyle(ReaderTheme.muted).frame(height: 44)
-                        }
-                        if collection != .all { Spacer(minLength: 0) }
-                        sortMenu.frame(height: collection == .all ? TopicShelvesView.rowHeight : 44)
+                    if collection == .all {
+                        TopicShelvesView(
+                            model: model, selectedShelfID: $selectedShelfID, dragActive: arrangement.sourceID != nil
+                        ) { sortMenu }
+                    } else {
+                        HStack(spacing: 12) {
+                            if !query.isEmpty {
+                                Text("搜索结果").font(.callout).foregroundStyle(ReaderTheme.muted)
+                            }
+                            Spacer(minLength: 0)
+                            sortMenu
+                        }.frame(height: 44)
                     }
                     Rectangle().fill(ReaderTheme.line).frame(height: 1).padding(.bottom, 24)
                     if onlineSearch.isExpanded {

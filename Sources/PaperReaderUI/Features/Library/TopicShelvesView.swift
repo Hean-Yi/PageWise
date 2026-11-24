@@ -1,11 +1,14 @@
 import PaperReaderKit
 import SwiftUI
 
-struct TopicShelvesView: View {
+struct TopicShelvesView<SortMenu: View>: View {
     @Bindable var model: ReaderModel
     @Binding var selectedShelfID: UUID?
     var dragActive = false
+    @ViewBuilder let sortMenu: SortMenu
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var expanded = false
+    @State private var overflows = false
     @State private var editing = false
     @State private var editingID: UUID?
     @State private var name = ""
@@ -13,43 +16,43 @@ struct TopicShelvesView: View {
     @FocusState private var nameFocused: Bool
     @Namespace private var shelfSelection
 
-    static var rowHeight: CGFloat {
-        #if os(macOS)
-            36
-        #else
-            44
-        #endif
-    }
-
     var body: some View {
-        let membership = model.state.paperShelfIDs.values
-        let counts = membership.reduce(into: [UUID: Int]()) { $0[$1, default: 0] += 1 }
         VStack(alignment: .leading, spacing: 8) {
-            ShelfRows {
-                shelfItem(name: "未分类论文", shelfID: nil, count: model.state.papers.count - membership.count)
-                ForEach(model.state.shelves) { shelf in
-                    shelfItem(name: shelf.name, shelfID: shelf.id, count: counts[shelf.id, default: 0])
-                        .contextMenu {
-                            Button("打开书架") { selectedShelfID = shelf.id }
-                            Button("改名") { beginEditing(shelf) }
-                                .disabled(saving)
-                            Button("删除书架", role: .destructive) {
-                                Task {
-                                    if await model.deleteShelf(shelf.id), selectedShelfID == shelf.id {
-                                        selectedShelfID = nil
-                                    }
-                                }
-                            }.disabled(saving)
+            HStack(alignment: .top, spacing: 8) {
+                if expanded {
+                    ShelfRows { shelfItems }
+                        .transition(.identity)
+                } else {
+                    scrollingShelves
+                        .transition(.identity)
+                }
+                HStack(spacing: 0) {
+                    sortMenu.padding(.trailing, 6)
+                    if expanded || overflows {
+                        Button {
+                            withAnimation(ReaderMotion.disclosure(reduceMotion)) { expanded.toggle() }
+                        } label: {
+                            Image(systemName: "chevron.down")
+                                .rotationEffect(.degrees(expanded ? 180 : 0))
+                                .frame(width: shelfControlSize, height: shelfControlSize)
+                                .contentShape(Rectangle())
                         }
+                        .help(expanded ? "收起书架" : "展开全部书架")
+                        .accessibilityLabel(expanded ? "收起书架" : "展开全部书架")
+                    }
+                    Button {
+                        beginEditing(nil)
+                    } label: {
+                        Image(systemName: "plus")
+                            .frame(width: shelfControlSize, height: shelfControlSize)
+                            .contentShape(Rectangle())
+                    }
+                    .help("新建书架").accessibilityLabel("新建书架").disabled(saving)
                 }
-                Button {
-                    beginEditing(nil)
-                } label: {
-                    Image(systemName: "plus")
-                        .frame(width: Self.rowHeight, height: Self.rowHeight).contentShape(Rectangle())
-                }
-                .buttonStyle(.plain).foregroundStyle(ReaderTheme.muted)
-                .help("新建书架").accessibilityLabel("新建书架").disabled(saving)
+                .buttonStyle(.plain).font(.system(size: 12, weight: .medium))
+                .foregroundStyle(ReaderTheme.muted)
+                .frame(height: shelfControlSize)
+                .fixedSize()
             }
             if editing {
                 nameEditor
@@ -58,6 +61,51 @@ struct TopicShelvesView: View {
         }
         .animation(ReaderMotion.disclosure(reduceMotion), value: editing)
         .animation(ReaderMotion.disclosure(reduceMotion), value: selectedShelfID)
+    }
+
+    private var scrollingShelves: some View {
+        ScrollViewReader { reader in
+            ScrollView(.horizontal) {
+                HStack(spacing: 4) { shelfItems }
+            }
+            .scrollIndicators(.hidden)
+            .frame(height: shelfControlSize)
+            .onScrollGeometryChange(for: Bool.self) { geometry in
+                // Compare against the room available without the disclosure to avoid a resize feedback loop.
+                let available = geometry.containerSize.width + (overflows ? shelfControlSize : 0)
+                return geometry.contentSize.width > available + 0.5
+            } action: { _, overflow in
+                overflows = overflow
+            }
+            .onChange(of: selectedShelfID, initial: true) { previous, selected in
+                withAnimation(ReaderMotion.disclosure(reduceMotion || previous == selected)) {
+                    if let selected { reader.scrollTo(selected) } else { reader.scrollTo("unclassified") }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder private var shelfItems: some View {
+        let membership = model.state.paperShelfIDs.values
+        let counts = membership.reduce(into: [UUID: Int]()) { $0[$1, default: 0] += 1 }
+        shelfItem(name: "未分类论文", shelfID: nil, count: model.state.papers.count - membership.count)
+            .id("unclassified")
+        ForEach(model.state.shelves) { shelf in
+            shelfItem(name: shelf.name, shelfID: shelf.id, count: counts[shelf.id, default: 0])
+                .id(shelf.id)
+                .contextMenu {
+                    Button("打开书架") { selectedShelfID = shelf.id }
+                    Button("改名") { beginEditing(shelf) }
+                        .disabled(saving)
+                    Button("删除书架", role: .destructive) {
+                        Task {
+                            if await model.deleteShelf(shelf.id), selectedShelfID == shelf.id {
+                                selectedShelfID = nil
+                            }
+                        }
+                    }.disabled(saving)
+                }
+        }
     }
 
     private func shelfItem(name: String, shelfID: UUID?, count: Int) -> some View {
@@ -124,6 +172,14 @@ struct TopicShelvesView: View {
             if saved { cancelEditing() }
         }
     }
+}
+
+private var shelfControlSize: CGFloat {
+    #if os(macOS)
+        36
+    #else
+        44
+    #endif
 }
 
 /// Measures shelf buttons at their natural widths and moves whole buttons onto the next row.
@@ -206,7 +262,7 @@ private struct TopicShelfItem: View {
                 RoundedRectangle(cornerRadius: 7)
                     .strokeBorder(ReaderTheme.accent.opacity(targeted ? 0.8 : 0), lineWidth: 1.5)
             }
-            .frame(height: TopicShelvesView.rowHeight)
+            .frame(height: shelfControlSize)
             .scaleEffect(targeted && !reduceMotion ? 1.04 : 1)
             .contentShape(RoundedRectangle(cornerRadius: 7))
         }
