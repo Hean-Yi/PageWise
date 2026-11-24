@@ -2,7 +2,17 @@
 
 本地优先的 Mac / iPad 论文阅读 MVP：线上论文下载、TeX 优先的双语 HTML、原版 PDF 逐句对照、批注、问答、阅读笔记与 Obsidian 导出。最低 macOS 15 / 暂定 iPadOS 18；两端独立运行，目前没有跨设备自动同步。
 
-## 启动与检查
+## 安装 Mac 试用版
+
+1. 在运行 macOS 15 或更新版本的 Mac 上，双击收到的 `PaperReader-0.1.0-macOS.dmg`，把 PaperReader 拖到「应用程序」，再从「应用程序」打开。此试用包同时包含 Apple 芯片和 Intel 版本。
+2. 首次打开空书库时，「快速上手」会逐步高亮实际界面中的控件。你可以从高亮的「导入 PDF」打开自己的论文，也可以继续引导，用两页的原创示例《Understanding Attention》离线体验阅读。在标注这一步，试着在原文里选中一句话，底栏的铅笔就能用来写笔记。
+3. 想看中文译文或向论文提问时，按 `⌘,` 打开「设置 → 模型服务」，选服务预设，填入自己的 API 密钥并保存。打开一篇论文，点「双语重排」开始翻译，或在右侧「论文助读」提问。
+
+随时可以从 Mac 的「帮助 → 快速上手」或应用内的「设置 → 快速上手」重看引导。
+
+本次试用包使用本地临时签名，尚未经过 Apple 公证。若首次打开时 macOS 提示无法验证开发者，可先与分享者确认文件来源及校验值，再按系统提供的步骤处理。[Apple 的打开说明](https://support.apple.com/zh-cn/102445)
+
+## 从源码构建与检查
 
 ```bash
 bash scripts/run-mac.sh
@@ -10,6 +20,8 @@ bash scripts/check.sh
 ```
 
 需要 Xcode。也可打开 `PaperReader.xcodeproj`，选择 PaperReader 或 PaperReader-iPad scheme。Mac 使用本地 ad-hoc 签名；iPad 模拟器可构建，真机需配置自己的 Team。只有修改 `project.yml` 时才需要重新运行 XcodeGen。
+
+运行 `bash scripts/package-mac.sh` 可重新构建 Mac 试用包，生成的 DMG 位于仓库的 `Artifacts/` 目录。
 
 `check.sh` 执行严格 Swift 格式检查、自动化测试、离线冒烟、Mac 与 iPad 模拟器构建。默认使用原创 fixture 和假服务，不调用真实模型。视觉验收必须构建后通过 Computer Use 检查实际 Mac 窗口，见 [MVP 状态](docs/mvp-status.md)。
 
