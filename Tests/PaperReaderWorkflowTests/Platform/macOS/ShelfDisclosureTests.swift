@@ -58,23 +58,14 @@
         let document = try #require(scroll.documentView)
         try #require(document.bounds.width > scroll.contentSize.width)
         let target = try #require(descendants(host).compactMap { $0 as? ShelfDropTargetView }.first)
-        // NSEvent(cgEvent:) otherwise inherits the real mouse position, which may be over
-        // another window. Keep the gesture at one screen point as the tab slides underneath.
-        let point = target.convert(CGPoint(x: target.bounds.midX, y: target.bounds.midY), to: nil)
-        let screenPoint = window.convertPoint(toScreen: point)
-        let primary = try #require(NSScreen.screens.first)
-        let pointer = CGPoint(x: screenPoint.x, y: primary.frame.maxY - screenPoint.y)
-        for phase in [CGScrollPhase.began, .changed, .ended] {
-            let wheel = try #require(
-                CGEvent(
-                    scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 2, wheel1: 0,
-                    wheel2: phase == .changed ? -Int32(document.bounds.width.rounded(.up)) : 0, wheel3: 0))
-            wheel.setIntegerValueField(.scrollWheelEventScrollPhase, value: Int64(phase.rawValue))
-            wheel.location = pointer
-            let event = try #require(NSEvent(cgEvent: wheel))
-            target.scrollWheel(with: event)
-            try await Task.sleep(for: .milliseconds(20))
-        }
+        // Reveal an actual offscreen shelf using its native responder. The layout assertion
+        // belongs to this window even while other tests exercise key windows and text input.
+        let targets = descendants(host).compactMap { $0 as? ShelfDropTargetView }
+        let last = try #require(
+            targets.max { $0.convert($0.bounds, to: document).midX < $1.convert($1.bounds, to: document).midX })
+        let lastFrame = last.convert(last.bounds, to: document)
+        try #require(!scroll.documentVisibleRect.intersects(lastFrame))
+        _ = last.scrollToVisible(last.bounds)
         let endOffset = document.bounds.width - scroll.contentSize.width
         let deadline = ContinuousClock.now + .seconds(2)
         while scroll.contentView.bounds.minX < endOffset - 1, ContinuousClock.now < deadline {
