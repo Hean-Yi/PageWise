@@ -82,6 +82,7 @@ public final class ReaderModel {
     }
     var jumpPassageAnchors: [NoteAnchor] = []
     var jumpOutlineItem: PaperNavigationItem?
+    var outlineArrival: OutlineArrival?
     public var navigationItems: [PaperNavigationItem] = []
     var loadedNavigationDocumentID: String?
     public var navigationLoading = false
@@ -198,6 +199,7 @@ public final class ReaderModel {
         requestedReadingNote = nil
         let changedPaper = selectedPaperID != id
         if changedPaper {
+            outlineArrival = nil
             closeReadingTask?.cancel()
             pdfBilingual.close()
             translationPauseReason = nil

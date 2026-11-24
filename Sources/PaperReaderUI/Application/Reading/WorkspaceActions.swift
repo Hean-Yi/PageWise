@@ -1,6 +1,12 @@
 import Foundation
 import PaperReaderKit
 
+struct OutlineArrival: Equatable {
+    let revision = UUID()
+    let itemID: String
+    let forward: Bool
+}
+
 extension ReaderModel {
     public func workspace(for paperID: UUID) -> PaperWorkspace {
         state.workspace[paperID.uuidString] ?? PaperWorkspace()
@@ -252,14 +258,27 @@ extension ReaderModel {
     }
 
     public func navigate(to item: PaperNavigationItem) {
-        guard displayedNavigationItems.contains(where: { $0.id == item.id }), let index = navigationIndex(for: item)
+        let items = displayedNavigationItems
+        guard let ordinal = items.firstIndex(where: { $0.id == item.id }), let index = navigationIndex(for: item)
         else { return }
+        let previousPage = visiblePage
         if item.readingSectionID != nil {
             navigateToPage(index)
         } else {
+            guard let paper, (0..<paper.pageCount).contains(index) else { return }
             navigateToSourcePage(index)
             if mode == "original", jumpPage == item.sourcePage { jumpOutlineItem = item }
         }
+        guard jumpPage != nil else { return }
+        let forward: Bool
+        if visiblePage == previousPage, let previous = outlineArrival?.itemID,
+            let previousOrdinal = items.firstIndex(where: { $0.id == previous })
+        {
+            forward = ordinal >= previousOrdinal
+        } else {
+            forward = visiblePage >= previousPage
+        }
+        outlineArrival = OutlineArrival(itemID: item.id, forward: forward)
     }
 
     public func loadNavigation() async {

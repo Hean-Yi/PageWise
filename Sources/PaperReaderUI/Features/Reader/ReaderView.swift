@@ -63,7 +63,8 @@ struct ReaderView: View {
     }
 
     private var documentCanvas: some View {
-        ZStack {
+        let reduceMotion = self.reduceMotion
+        return ZStack {
             if model.usesHTMLReading {
                 HTMLCanvas(model: model, sidebarOpen: sidebarOpen)
                     .transition(ReaderMotion.arrival())
@@ -83,7 +84,18 @@ struct ReaderView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .animation(ReaderMotion.navigation(reduceMotion), value: model.usesHTMLReading)
         .animation(ReaderMotion.navigation(reduceMotion), value: model.showingReflowLoading)
+        .keyframeAnimator(initialValue: CGFloat.zero, trigger: model.outlineArrival?.revision) { surface, offset in
+            surface.offset(y: reduceMotion ? 0 : offset)
+        } keyframes: { _ in
+            if !reduceMotion, let arrival = model.outlineArrival {
+                MoveKeyframe(arrival.forward ? 18 : -18)
+                SpringKeyframe(0, duration: 0.29, spring: .smooth(duration: 0.29))
+            } else {
+                MoveKeyframe(0)
+            }
+        }
         .background(ReaderTheme.surface)
+        .clipped()
         .overlay {
             GeometryReader { proxy in
                 ZStack(alignment: .bottomTrailing) {

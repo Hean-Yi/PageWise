@@ -94,6 +94,10 @@ struct PDFBilingualReadingView: View {
         .onChange(of: model.jumpPage) { _, _ in
             if paragraphVisible { session.consumeParagraphJump(model) }
         }
+        .onChange(of: model.outlineArrival?.revision) { _, _ in
+            // Two headings can request different ranges on the same page in consecutive frames.
+            if paragraphVisible { session.consumeParagraphJump(model) }
+        }
         .onChange(of: session.isOpen) { _, _ in peekingAtOriginal = false }
         .onChange(of: session.selectionRequestRevision) { _, _ in peekingAtOriginal = false }
         .onChange(of: layout) { _, newLayout in

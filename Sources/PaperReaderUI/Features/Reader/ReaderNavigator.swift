@@ -29,6 +29,11 @@ struct ReaderNavigator: View {
         var id: String { heading.id }
     }
 
+    private struct OutlinePosition: Equatable {
+        let index: Int
+        let request: UUID?
+    }
+
     private func chapters(from items: [PaperNavigationItem]) -> [Chapter] {
         var chapters: [Chapter] = []
         for item in items where item.isOutline {
@@ -159,10 +164,8 @@ struct ReaderNavigator: View {
                             } label: {
                                 Text("\(item.sourcePage + 1)").monospacedDigit()
                                     .frame(maxWidth: .infinity, minHeight: 36)
-                                    .background(
-                                        active?.id == item.id ? ReaderTheme.elevated : .clear,
-                                        in: RoundedRectangle(cornerRadius: 7)
-                                    ).contentShape(Rectangle())
+                                    .background { rowBackground(selected: active?.id == item.id) }
+                                    .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain).id(item.id).help(item.title).accessibilityLabel(item.title)
                             .accessibilityAddTraits(active?.id == item.id ? .isSelected : [])
@@ -195,7 +198,7 @@ struct ReaderNavigator: View {
                                 }
                                 chapterLink(group.heading, selected: selected)
                             }
-                            .background(selected ? ReaderTheme.elevated : .clear, in: RoundedRectangle(cornerRadius: 7))
+                            .background { rowBackground(selected: selected) }
                             .id(group.id)
                             if open {
                                 ForEach(group.children) { child in
@@ -205,10 +208,7 @@ struct ReaderNavigator: View {
                                             Rectangle().fill(ReaderTheme.line).frame(width: 1)
                                         }
                                         .padding(.leading, 26)
-                                        .background(
-                                            child.id == active?.id ? ReaderTheme.elevated : .clear,
-                                            in: RoundedRectangle(cornerRadius: 7)
-                                        )
+                                        .background { rowBackground(selected: child.id == active?.id) }
                                         .id(child.id)
                                         .transition(.opacity)
                                 }
@@ -239,11 +239,19 @@ struct ReaderNavigator: View {
                     if let current { scroll.scrollTo(current.id) }
                 }
             }
-            .onChange(of: visibleIndex) { _, _ in
+            .onChange(of: OutlinePosition(index: visibleIndex, request: model.outlineArrival?.revision)) { old, new in
                 guard let active else { return }
-                scroll.scrollTo(current.flatMap { expanded.contains($0.id) ? nil : $0.id } ?? active.id)
+                let target = current.flatMap { expanded.contains($0.id) ? nil : $0.id } ?? active.id
+                let tapped = new.request != nil && old.request != new.request
+                withAnimation(ReaderMotion.disclosure(reduceMotion || !tapped)) { scroll.scrollTo(target) }
             }
         }
+    }
+
+    private func rowBackground(selected: Bool) -> some View {
+        RoundedRectangle(cornerRadius: 7)
+            .fill(selected ? ReaderTheme.elevated : .clear)
+            .animation(ReaderMotion.feedback(reduceMotion), value: chosenID)
     }
 
     private func chapterLink(_ item: PaperNavigationItem, selected: Bool) -> some View {
