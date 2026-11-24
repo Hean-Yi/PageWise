@@ -6,6 +6,8 @@ struct PaperAssistantView: View {
     @Binding var question: String
     let openSettings: () -> Void
     let didNavigate: () -> Void
+    let relatedPapers: () -> Void
+    let canFindRelated: Bool
     @FocusState private var composerFocused: Bool
 
     private var displayedChats: [ChatTurn] {
@@ -81,6 +83,11 @@ struct PaperAssistantView: View {
                 .frame(minHeight: 60, alignment: .top)
                 .focused($composerFocused).onSubmit(send).accessibilityLabel("向论文助读提问")
             HStack {
+                Button(action: relatedPapers) {
+                    Label("相关论文", systemImage: "point.3.connected.trianglepath.dotted")
+                }
+                .font(.callout).buttonStyle(.borderless).foregroundStyle(ReaderTheme.muted)
+                .help("查找与当前论文相关的研究").disabled(!canFindRelated)
                 if let last = model.currentChats.last, last.readingNoteID == nil, !last.answer.isEmpty {
                     Button {
                         guard (try? model.modelSettings.normalized()) != nil else {

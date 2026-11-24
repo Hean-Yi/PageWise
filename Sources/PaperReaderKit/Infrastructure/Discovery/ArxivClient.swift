@@ -1,30 +1,30 @@
 import Foundation
 
-public struct PaperCandidate: Identifiable, Sendable {
-    public var id: String
-    public var title: String
-    public var authors: String
-    public var year: String
-    public var pdfURL: URL
-    public var indexedByDataCite = false
-    public init(id: String, title: String, authors: String, year: String, pdfURL: URL) {
-        self.id = id
-        self.title = title
-        self.authors = authors
-        self.year = year
-        self.pdfURL = pdfURL
-    }
-}
-
 public protocol PaperDiscovery: Sendable {
     func search(_ query: String) async throws -> [PaperCandidate]
     func search(_ query: String, limit: Int) async throws -> [PaperCandidate]
+    func discover(
+        _ query: String, scope: PaperSearchScope, limit: Int, onUpdate: @Sendable (OnlineDiscoveryResult) async -> Void
+    ) async throws -> OnlineDiscoveryResult
+    func related(title: String, sourceID: String?, limit: Int) async throws -> [PaperCandidate]
     func download(_ candidate: PaperCandidate) async throws -> URL
     func structuredContent(_ candidate: PaperCandidate) async throws -> [TextBlock]?
     func downloadPublication(_ candidate: PaperCandidate) async throws -> DownloadedPublication
 }
 
 extension PaperDiscovery {
+    public func discover(_ query: String, scope: PaperSearchScope, limit: Int) async throws -> OnlineDiscoveryResult {
+        try await discover(query, scope: scope, limit: limit) { _ in }
+    }
+    public func discover(
+        _ query: String, scope: PaperSearchScope, limit: Int, onUpdate: @Sendable (OnlineDiscoveryResult) async -> Void
+    ) async throws -> OnlineDiscoveryResult {
+        guard scope == .all || scope == .arxiv else { throw ReaderError.message("此服务不支持所选检索源。") }
+        return OnlineDiscoveryResult(candidates: try await search(query, limit: limit))
+    }
+    public func related(title: String, sourceID: String?, limit: Int) async throws -> [PaperCandidate] {
+        throw ReaderError.message("此服务不支持相关论文推荐。")
+    }
     public func search(_ query: String, limit: Int) async throws -> [PaperCandidate] {
         guard limit > 0 else { return [] }
         return Array(try await search(query).prefix(limit))
@@ -169,12 +169,14 @@ public actor ArxivClient: PaperDiscovery {
         return delegate.results
     }
     public func download(_ candidate: PaperCandidate) async throws -> URL {
-        guard let candidate = Self.verified(candidate) else { throw ReaderError.message("论文下载来源无效。") }
+        guard let candidate = Self.verified(candidate), let pdfURL = candidate.pdfURL else {
+            throw ReaderError.message("论文下载来源无效。")
+        }
         try Task.checkCancellation()
-        let (data, response) = try await transport.data(for: URLRequest(url: candidate.pdfURL))
+        let (data, response) = try await transport.data(for: URLRequest(url: pdfURL))
         try Task.checkCancellation()
         guard response.statusCode == 200, Self.trustedOrigin(response.url),
-            response.url?.path == candidate.pdfURL.path, data.count <= 50_000_000,
+            response.url?.path == pdfURL.path, data.count <= 50_000_000,
             data.prefix(1_024).range(of: Data("%PDF-".utf8)) != nil
         else { throw ReaderError.message("全文下载失败或不是有效 PDF，可手动导入。") }
         let target = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).pdf")
@@ -190,14 +192,14 @@ public actor ArxivClient: PaperDiscovery {
 
     /// Only arXiv IDs and matching PDF paths can become import capabilities.
     public static func verified(_ candidate: PaperCandidate) -> PaperCandidate? {
-        guard let source = URL(string: candidate.id), trustedOrigin(source), trustedOrigin(candidate.pdfURL),
-            source.path.hasPrefix("/abs/"), candidate.pdfURL.path.hasPrefix("/pdf/")
+        guard candidate.source == .arxiv, let source = URL(string: candidate.id), trustedOrigin(source),
+            let pdfURL = candidate.pdfURL, trustedOrigin(pdfURL),
+            source.path.hasPrefix("/abs/"), pdfURL.path.hasPrefix("/pdf/")
         else { return nil }
         let identifier = String(source.path.dropFirst(5))
-        let pdfID = String(candidate.pdfURL.path.dropFirst(5)).replacingOccurrences(
+        let pdfID = String(pdfURL.path.dropFirst(5)).replacingOccurrences(
             of: #"\.pdf$"#, with: "", options: .regularExpression)
-        let pattern = #"^(?:[0-9]{4}\.[0-9]{4,5}|[A-Za-z-]+(?:\.[A-Za-z-]+)?/[0-9]{7})(?:v[1-9][0-9]*)?$"#
-        guard identifier.range(of: pattern, options: .regularExpression) != nil, identifier == pdfID,
+        guard PaperCandidate.arxivIdentifier(identifier) != nil, identifier == pdfID,
             !candidate.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
             candidate.title.utf8.count <= 2_000, candidate.authors.utf8.count <= 8_000,
             candidate.year.utf8.count <= 16
@@ -237,7 +239,7 @@ private final class FeedParser: NSObject, XMLParserDelegate {
                 namespaceURI == nil || namespaceURI == "" || namespaceURI == "http://www.w3.org/2005/Atom"
                 ? elementName : ""
         }
-        current = elementName
+        current = namespaceURI == "http://arxiv.org/schemas/atom" && elementName == "doi" ? "arxiv:doi" : elementName
         if elementName == "entry" {
             sawEntry = true
             inEntry = true
@@ -283,7 +285,7 @@ private final class FeedParser: NSObject, XMLParserDelegate {
             let candidate = PaperCandidate(
                 id: sourceURL.absoluteString, title: title, authors: authors.joined(separator: ", "),
                 year: String((fields["published"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines).prefix(4)),
-                pdfURL: url)
+                pdfURL: url, doi: fields["arxiv:doi"].flatMap(PaperCandidate.normalizedDOI))
             if let candidate = ArxivClient.verified(candidate) { results.append(candidate) }
         }
         current = ""

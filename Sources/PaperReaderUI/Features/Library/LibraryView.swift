@@ -23,9 +23,11 @@ public struct LibraryView: View {
     @Environment(\.scenePhase) private var scenePhase
     private let timer = Timer.publish(every: 60, on: .main, in: .common).autoconnect()
 
-    public init(model: ReaderModel, agent: LibraryAgent? = nil, discovery: any PaperDiscovery = ArxivClient()) {
+    public init(
+        model: ReaderModel, agent: LibraryAgent? = nil, discovery: any PaperDiscovery = FederatedPaperDiscovery.shared
+    ) {
         self.model = model
-        _agent = State(initialValue: agent ?? LibraryAgent(reader: model))
+        _agent = State(initialValue: agent ?? LibraryAgent(reader: model, discovery: discovery))
         _onlineSearch = State(initialValue: OnlinePaperSearch(reader: model, discovery: discovery))
     }
 

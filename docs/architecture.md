@@ -89,6 +89,8 @@ Swift Package 自动递归发现每个 target 目录下的 Swift 文件。当前
 | `UI/Application/Reading/PDFDocumentTranslationController` | 管理每篇论文的翻译任务与进度、用户暂停和应用生命周期 |
 | `UI/Application/Reading/PDFBilingualSession` | 原页、译句、选区和暂停/恢复的协调 |
 | `UI/Platform/HTML/{PDFSentenceTextCanvas,PDFReadingTableScript}` | 呈现逐句对照、连续段落和可选表格，连接视口页码、选文复制与原页定位 |
+| `Infrastructure/Discovery/{FederatedPaperDiscovery,ScholarlyIndexes,PaperDiscoveryRanking}` | 多索引并发检索、按 DOI 和显式版本关联合并结果、Semantic Scholar 相关推荐 |
+| `Infrastructure/Discovery/OpenAccessPDFDownloader` | 出版记录的开放 PDF 来源校验与下载 |
 | `Infrastructure/Discovery/ArxivClient` | 可信候选与同版本 TeX/PDF 下载 |
 | `Infrastructure/TeX` | 有界解包、静态包含/宏展开、语义标记、源码保存和 TeX/HTML 路由 |
 | `Infrastructure/HTML` | HTML 净化、图片本地化、公式处理与最终阅读文件追加 |

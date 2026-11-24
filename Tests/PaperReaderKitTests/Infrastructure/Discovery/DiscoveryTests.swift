@@ -41,8 +41,8 @@ private struct FeedTransport: HTTPTransport {
     #expect(result.count == 1)
     #expect(result[0].authors == "Example Author")
     #expect(result[0].year == "2020")
-    #expect(result[0].pdfURL.scheme == "https")
-    #expect(result[0].pdfURL.host == "arxiv.org")
+    #expect(result[0].pdfURL?.scheme == "https")
+    #expect(result[0].pdfURL?.host == "arxiv.org")
     #expect(ArxivClient.normalized(result[0].title) != ArxivClient.normalized("Attention all need"))
 }
 

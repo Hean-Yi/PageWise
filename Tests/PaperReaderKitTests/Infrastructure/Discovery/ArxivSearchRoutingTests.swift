@@ -76,7 +76,7 @@ private actor SearchRoutingTransport: HTTPTransport {
     let transport = SearchRoutingTransport([.doiMatch])
     let hits = try await ArxivClient(transport: transport).search("Windowed Ledger", limit: 1)
     #expect(hits.map(\.id) == ["https://arxiv.org/abs/2601.00001v2"])
-    #expect(hits.first?.pdfURL.absoluteString == "https://arxiv.org/pdf/2601.00001v2")
+    #expect(hits.first?.pdfURL?.absoluteString == "https://arxiv.org/pdf/2601.00001v2")
     #expect(hits.first?.indexedByDataCite == true)
     #expect(await transport.hosts == [SearchRoutingTransport.doiHost])
 }

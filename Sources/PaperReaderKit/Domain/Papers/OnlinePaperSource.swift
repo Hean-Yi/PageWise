@@ -7,6 +7,8 @@ public struct OnlinePaperSource: Codable, Sendable, Equatable {
     public var archivePath: String?
     public var archiveDigest: String?
     public var notice: String?
+    /// Publisher PDF imports have no verified, same-edition source for bilingual reflow.
+    public var originalPDFOnly: Bool?
     public init(candidateID: String, archivePath: String? = nil, archiveDigest: String? = nil, notice: String? = nil) {
         self.candidateID = candidateID
         self.archivePath = archivePath

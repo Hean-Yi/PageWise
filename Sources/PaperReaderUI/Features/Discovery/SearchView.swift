@@ -6,12 +6,37 @@ struct SearchView: View {
     let targetName: String
     @FocusState private var searchFocused: Bool
 
+    private func scopeTitle(_ scope: PaperSearchScope) -> String {
+        switch scope {
+        case .all: "全部来源"
+        case .arxiv: "arXiv"
+        case .crossref: "Crossref"
+        case .dblp: "DBLP"
+        }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             HStack(spacing: 10) {
                 Text("在线查找").font(.system(size: 20, weight: .medium, design: .serif))
-                Text("arXiv").font(.system(size: 11, design: .monospaced)).foregroundStyle(ReaderTheme.muted)
                 Spacer()
+                Menu {
+                    ForEach(PaperSearchScope.allCases, id: \.self) { scope in
+                        Button {
+                            search.selectScope(scope)
+                        } label: {
+                            if scope == search.scope {
+                                Label(scopeTitle(scope), systemImage: "checkmark")
+                            } else {
+                                Text(scopeTitle(scope))
+                            }
+                        }
+                    }
+                } label: {
+                    Text(scopeTitle(search.scope))
+                }
+                .accessibilityLabel("检索来源，" + scopeTitle(search.scope)).fixedSize().controlSize(.small)
+                .disabled(search.importingID != nil)
                 Button {
                     search.close()
                 } label: {
@@ -20,7 +45,7 @@ struct SearchView: View {
             }
             HStack(spacing: 12) {
                 Image(systemName: "magnifyingglass").foregroundStyle(ReaderTheme.accent)
-                TextField("输入论文标题", text: $search.query).textFieldStyle(.plain)
+                TextField("题名、关键词或 DOI", text: $search.query).textFieldStyle(.plain)
                     .focused($searchFocused).onSubmit { search.search() }.autocorrectionDisabled()
                     .disabled(search.importingID != nil)
                 Button("查找") { search.search() }.buttonStyle(.borderedProminent)
@@ -48,10 +73,12 @@ struct SearchView: View {
                         }
                     }
                 }
+            } else if let notice = search.sourceNotice {
+                Text(notice).font(.caption).foregroundStyle(ReaderTheme.muted)
             } else if search.searched && search.results.isEmpty && !search.isSearching {
                 Text("未找到论文，试试更短的标题").font(.caption).foregroundStyle(ReaderTheme.muted)
             }
-            ForEach(search.results) { item in candidateCard(item) }
+            ForEach(search.results) { item in OnlineCandidateCard(search: search, candidate: item) }
         }
         .padding(22).frame(maxWidth: .infinity, alignment: .leading)
         .background(ReaderTheme.elevated.opacity(0.7), in: RoundedRectangle(cornerRadius: 14))
@@ -63,14 +90,33 @@ struct SearchView: View {
         }
     }
 
-    private func candidateCard(_ item: PaperCandidate) -> some View {
+}
+
+private struct OnlineCandidateCard: View {
+    let search: OnlinePaperSearch
+    let candidate: PaperCandidate
+    @State private var selectedVersionID: String?
+
+    var body: some View {
+        let versions = [candidate] + candidate.alternateVersions
+        let item = versions.first { $0.id == selectedVersionID } ?? candidate
         VStack(alignment: .leading, spacing: 10) {
             Text(item.title).font(.system(size: 15, weight: .medium)).fixedSize(horizontal: false, vertical: true)
-            Text(item.authors).font(.caption).foregroundStyle(ReaderTheme.muted).lineLimit(2)
+            if !item.authors.isEmpty {
+                Text(item.authors).font(.caption).foregroundStyle(ReaderTheme.muted).lineLimit(2)
+            }
             HStack {
-                Text(item.year).font(.caption).foregroundStyle(ReaderTheme.muted)
-                if item.indexedByDataCite { Text("DataCite 索引").font(.caption).foregroundStyle(ReaderTheme.muted) }
-                Link("arXiv 来源", destination: URL(string: item.id) ?? item.pdfURL).font(.caption)
+                if !item.year.isEmpty { Text(item.year).font(.caption).foregroundStyle(ReaderTheme.muted) }
+                if versions.count > 1 {
+                    Picker("论文版本", selection: Binding(get: { item.id }, set: { selectedVersionID = $0 })) {
+                        ForEach(versions) { version in
+                            Text(versionLabel(for: version)).tag(version.id)
+                        }
+                    }.pickerStyle(.menu).labelsHidden().fixedSize().controlSize(.small)
+                        .disabled(search.importingID != nil)
+                } else {
+                    Text(item.source.label).font(.caption).foregroundStyle(ReaderTheme.muted)
+                }
                 Spacer()
                 if search.imported[item.id] != nil {
                     Label("已入库", systemImage: "checkmark.circle.fill").font(.caption).foregroundStyle(
@@ -78,9 +124,16 @@ struct SearchView: View {
                 } else if search.importingID == item.id {
                     ProgressView().controlSize(.small)
                     Button("停止导入") { search.cancelImport() }.buttonStyle(.bordered).controlSize(.small)
-                } else {
-                    Button(search.importErrors[item.id] == nil ? "导入论文" : "重试导入") { search.confirmImport(item) }
+                } else if item.canDownload {
+                    if let url = item.landingURL {
+                        Link(destination: url) { Image(systemName: "arrow.up.right.square") }
+                            .accessibilityLabel("查看来源页").help("查看来源页")
+                    }
+                    Button(search.importErrors[item.id] == nil ? "下载并导入" : "重试导入") { search.confirmImport(item) }
                         .buttonStyle(.borderedProminent).controlSize(.small).disabled(search.importingID != nil)
+                } else if let url = item.landingURL {
+                    Link(destination: url) { Label(item.landingPageLabel, systemImage: "arrow.up.right.square") }
+                        .buttonStyle(.bordered).controlSize(.small)
                 }
             }
             if search.importingID == item.id {
@@ -92,5 +145,12 @@ struct SearchView: View {
                 Text(error).font(.caption).foregroundStyle(ReaderTheme.accent)
             }
         }.padding(16).background(ReaderTheme.surface, in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    private func versionLabel(for item: PaperCandidate) -> String {
+        if item.source == .arxiv, let id = ArxivClient.versionedIdentifier(item.id), let v = id.lastIndex(of: "v") {
+            return "arXiv " + id[v...]
+        }
+        return item.source.label
     }
 }

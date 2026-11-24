@@ -28,7 +28,7 @@ enum ArxivDOISearch {
             .init(name: "sort", value: "relevance"),
             .init(name: "page[size]", value: String(limit)),
             .init(name: "disable-facets", value: "true"),
-            .init(name: "fields[dois]", value: "doi,titles,creators,publicationYear,url,version"),
+            .init(name: "fields[dois]", value: "doi,titles,creators,publicationYear,url,version,relatedIdentifiers"),
         ]
         guard let url = components.url else { throw ArxivQueryError.invalidQuery }
         var request = URLRequest(url: url, timeoutInterval: 20)
@@ -67,6 +67,12 @@ enum ArxivDOISearch {
                 let title: String
                 let titleType: String?
             }
+            struct RelatedIdentifier: Decodable {
+                let relatedIdentifier: String?
+                let relatedIdentifierType: String?
+                let relationType: String?
+            }
+            let relatedIdentifiers: [RelatedIdentifier]?
             struct Creator: Decodable {
                 let name: String
                 let givenName: String?
@@ -120,6 +126,16 @@ enum ArxivDOISearch {
                 title: title.split(whereSeparator: \.isWhitespace).joined(separator: " "),
                 authors: (attributes.creators ?? []).map(\.displayName).joined(separator: ", "),
                 year: String(year), pdfURL: pdf)
+            let publicationDOIs = Set(
+                (attributes.relatedIdentifiers ?? []).compactMap { link -> String? in
+                    guard link.relatedIdentifierType == "DOI",
+                        ["IsVersionOf", "IsPreprintOf", "IsIdenticalTo"].contains(link.relationType),
+                        let doi = link.relatedIdentifier.flatMap(PaperCandidate.normalizedDOI),
+                        !doi.hasPrefix(prefix)
+                    else { return nil }
+                    return doi
+                })
+            if publicationDOIs.count == 1 { record.doi = publicationDOIs.first }
             record.indexedByDataCite = true
             return ArxivClient.verified(record)
         }

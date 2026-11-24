@@ -67,7 +67,7 @@ private func doiRow(_ id: String, landing: String? = nil, version: String? = "2"
     #expect(results.first?.title == "Machine Reading With Evidence")
     #expect(results.first?.authors == "Alex Lee, Example Collaboration")
     #expect(results.first?.year == "2026")
-    #expect(results.first?.pdfURL.absoluteString == "https://arxiv.org/pdf/2601.00123v2")
+    #expect(results.first?.pdfURL?.absoluteString == "https://arxiv.org/pdf/2601.00123v2")
 }
 
 @Test func arxivDOISearchDistinguishesEmptyResultsAndUnusableResponses() async throws {

@@ -8,6 +8,12 @@ struct AgentToolOutcome {
     var message: String?
     var clarification: AgentClarification?
     var presentation: [AgentPresentedResult]?
+    var versionCards: [AgentCard] = []
+}
+
+struct AgentRecommendationSeed: Sendable {
+    let title: String
+    let sourceID: String?
 }
 
 struct AgentNoteRequest: Sendable {
@@ -41,7 +47,10 @@ enum AgentSourceTarget: Hashable {
 }
 
 extension LibraryAgent {
-    func execute(_ call: AgentToolCall, epoch: UUID, noteRequest: AgentNoteRequest? = nil, onSubject: (String) -> Void)
+    func execute(
+        _ call: AgentToolCall, epoch: UUID, noteRequest: AgentNoteRequest? = nil,
+        recommendationSeed: AgentRecommendationSeed? = nil, onSubject: @escaping @MainActor @Sendable (String) -> Void
+    )
         async throws -> AgentToolOutcome
     {
         let arguments = try AgentToolArguments.parse(
@@ -211,43 +220,36 @@ extension LibraryAgent {
             return try result(
                 pairs, truncated: passages.count > pairs.count || passages.contains { $0.text.count > 2_000 },
                 message: passages.isEmpty ? "这一页暂无已索引的正文。" : nil)
-        case .searchOnline(let query, let requestedCount):
+        case .searchOnline(let query, let requestedCount, let scope):
             onSubject(query)
             let limit = min(requestedCount ?? limits.maxResults, 20)
             guard limit > 0 else { return try result([], truncated: true) }
-            let found = try await discovery.search(query, limit: limit + 1)
+            let report = try await discovery.discover(query, scope: scope, limit: limit + 1) { [weak self] partial in
+                guard !partial.candidates.isEmpty else { return }
+                await MainActor.run {
+                    guard self?.epoch == epoch, !Task.isCancelled else { return }
+                    onSubject("\(query) · 已找到 \(min(limit, partial.candidates.count)) 篇")
+                }
+            }
             try check(epoch)
-            var seen: Set<String> = []
-            let verified = found.prefix(40).compactMap(ArxivClient.verified).filter { seen.insert($0.id).inserted }
-            let pairs = verified.prefix(limit).map { candidate -> (ToolRecord, AgentCard) in
-                let id = candidateIDs[candidate.id] ?? UUID().uuidString
-                var card = candidateCard(candidate, id: id)
-                if let paperID = importedPapers[id], reader.state.papers.contains(where: { $0.id == paperID }) {
-                    card.importState = .imported
-                    card.paperID = paperID
-                }
-                return (ToolRecord(card: card, authors: candidate.authors, year: candidate.year), card)
-            }
-            let outcome = try result(
-                pairs, truncated: found.count > 40 || verified.count > pairs.count,
-                message: found.first?.indexedByDataCite == true ? "候选来自 DataCite 登记的 arXiv 元数据，来源链接指向 arXiv 原文。" : nil)
-            for (card, candidate) in zip(outcome.cards, verified) {
-                if let id = card.candidateID {
-                    candidates[id] = candidate
-                    candidateIDs[candidate.id] = id
-                }
-            }
-            return outcome
+            onSubject(query)
+            return try onlineResults(report.candidates, limit: limit, notice: report.notice)
+        case .recommendRelated(let requestedCount):
+            guard let seed = recommendationSeed else { throw ReaderError.message("请打开一篇论文，或从推荐卡片追问。") }
+            onSubject(seed.title)
+            let limit = min(requestedCount ?? limits.maxResults, 20)
+            guard limit > 0 else { return try result([], truncated: true) }
+            let found = try await discovery.related(title: seed.title, sourceID: seed.sourceID, limit: limit + 1)
+            try check(epoch)
+            return try onlineResults(
+                found, limit: limit,
+                notice: found.isEmpty ? "Semantic Scholar 未返回《\(String(seed.title.prefix(300)))》的推荐。" : nil)
         case .prepareImport(let id):
             guard let candidate = candidates[id] else { throw ReaderError.message("候选ID不属于本次会话，请先在线检索。") }
+            guard candidate.canDownload else { throw ReaderError.message("可以在结果卡打开该记录的来源页。") }
             onSubject(candidate.title)
             var card = candidateCard(candidate, id: id)
-            if let paperID = importedPapers[id], reader.state.papers.contains(where: { $0.id == paperID }) {
-                card.importState = .imported
-                card.paperID = paperID
-            } else if card.importState == .unprepared {
-                card.importState = .ready
-            }
+            if card.importState == .unprepared { card.importState = .ready }
             let message: String
             switch card.importState {
             case .queued: message = "已排队，等待下载。"
@@ -282,19 +284,73 @@ extension LibraryAgent {
         return paper
     }
 
+    private func onlineResults(_ found: [PaperCandidate], limit: Int, notice: String?) throws -> AgentToolOutcome {
+        var seen: Set<String> = []
+        let verified = found.prefix(40).compactMap(\.verified).filter { seen.insert($0.id).inserted }
+        var records: [UUID: PaperCandidate] = [:]
+        var variants: [UUID: [AgentCard]] = [:]
+        var ids: [String: String] = [:]
+        func registeredCard(_ candidate: PaperCandidate) -> AgentCard {
+            let id = candidateIDs[candidate.id] ?? ids[candidate.id] ?? UUID().uuidString
+            ids[candidate.id] = id
+            let best: PaperCandidate
+            if !candidate.canDownload, let known = candidates[id], known.canDownload {
+                best = known
+            } else {
+                best = candidate
+            }
+            let card = candidateCard(best, id: id)
+            records[card.id] = best
+            return card
+        }
+        let pairs = verified.prefix(limit).map { candidate -> (ToolRecord, AgentCard) in
+            var card = registeredCard(candidate)
+            let versions = candidate.alternateVersions.compactMap(\.verified).map(registeredCard)
+            card.alternateVersionIDs = versions.map(\.id)
+            variants[card.id] = versions
+            var record = ToolRecord(card: card)
+            if !versions.isEmpty {
+                record.versions = versions.map { version in
+                    var item: [String: String] = [:]
+                    item["source"] = version.sourceName
+                    item["year"] = version.year
+                    item["candidate_id"] = version.hasDownload ? version.candidateID : nil
+                    return item
+                }
+            }
+            return (record, card)
+        }
+        var outcome = try result(pairs, truncated: found.count > 40 || verified.count > pairs.count, message: notice)
+        outcome.versionCards = outcome.cards.flatMap { variants[$0.id] ?? [] }
+        for card in outcome.cards + outcome.versionCards {
+            if let candidate = records[card.id], let id = card.candidateID {
+                candidates[id] = candidate
+                candidateIDs[candidate.id] = id
+            }
+        }
+        return outcome
+    }
+
     private func candidateCard(_ candidate: PaperCandidate, id: String) -> AgentCard {
         var card = AgentCard(kind: .onlineCandidate, title: candidate.title)
         card.authors = candidate.authors
         card.year = candidate.year
-        card.subtitle = [candidate.authors, candidate.year, "arXiv"].filter { !$0.isEmpty }.joined(separator: " · ")
+        card.sourceName = candidate.source.label
+        card.hasDownload = candidate.canDownload
+        card.subtitle = [candidate.authors, candidate.year, candidate.source.label].filter { !$0.isEmpty }.joined(
+            separator: " · ")
         card.candidateID = id
-        card.sourceURL = URL(string: candidate.id)
+        card.sourceURL = candidate.landingURL
         if candidates[id] != nil,
             let previous = turns.flatMap(\.cards).last(where: { $0.candidateID == id })
         {
             card.importState = previous.importState
             card.importError = previous.importError
             card.paperID = previous.paperID
+        }
+        if let paperID = importedPapers[id], reader.state.papers.contains(where: { $0.id == paperID }) {
+            card.importState = .imported
+            card.paperID = paperID
         }
         return card
     }
@@ -318,9 +374,12 @@ extension LibraryAgent {
         }
     }
 
-    static func errorResult(_ message: String, canRefineQuery: Bool? = nil, maxBytes: Int) throws -> String {
+    static func errorResult(
+        _ message: String, seedTitle: String? = nil, canRefineQuery: Bool? = nil, maxBytes: Int
+    ) throws -> String {
         let payload = ToolPayload(
-            ok: false, results: [], truncated: false, message: message, canRefineQuery: canRefineQuery)
+            ok: false, results: [], truncated: false, message: message, canRefineQuery: canRefineQuery,
+            seedTitle: seedTitle.map { String($0.prefix(300)) })
         let data = try JSONEncoder().encode(payload)
         guard data.count <= maxBytes else { throw ReaderError.message("工具结果超过长度上限。") }
         return String(decoding: data, as: UTF8.self)
@@ -333,11 +392,13 @@ private struct ToolPayload: Encodable {
     var truncated: Bool
     var message: String?
     var canRefineQuery: Bool?
+    var seedTitle: String?
     let dataOnly = true
     enum CodingKeys: String, CodingKey {
         case ok, results, truncated, message
         case dataOnly = "data_only"
         case canRefineQuery = "can_refine_query"
+        case seedTitle = "seed_title"
     }
 }
 
@@ -355,12 +416,15 @@ private struct ToolRecord: Encodable {
     var text: String?
     var sourceURL: String?
     var importStatus: String?
+    var source: String?
+    var versions: [[String: String]]?
     init(card: AgentCard, pageCount: Int? = nil, authors: String? = nil, year: String? = nil) {
         resultID = card.id
-        self.authors = authors
-        self.year = year
+        self.authors = authors ?? card.authors
+        self.year = year ?? card.year
+        source = card.sourceName
         paperID = card.paperID?.uuidString
-        candidateID = card.candidateID
+        candidateID = card.hasDownload ? card.candidateID : nil
         readingNoteID = card.readingNoteID
         title = card.title
         sourcePage = card.sourcePage
@@ -368,10 +432,12 @@ private struct ToolRecord: Encodable {
         blockID = card.blockID?.uuidString
         text = card.excerpt.isEmpty ? nil : card.excerpt
         sourceURL = card.sourceURL?.absoluteString
-        importStatus = card.candidateID == nil ? nil : card.importState.rawValue
+        if card.kind == .onlineCandidate {
+            importStatus = card.hasDownload ? card.importState.rawValue : "publication_page_only"
+        }
     }
     enum CodingKeys: String, CodingKey {
-        case title, text, authors, year
+        case title, text, authors, year, source, versions
         case resultID = "result_id"
         case paperID = "paper_id"
         case candidateID = "candidate_id"

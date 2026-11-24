@@ -30,7 +30,7 @@ private func abstractHTML(
 func abstractPinsAnIdentifiedVersionOfTheRequestedPaper(html: String) throws {
     let pinned = try ArxivAbstractVersion.parse(html, candidate: candidate, identifier: "2401.00001")
     #expect(pinned.id == "https://arxiv.org/abs/2401.00001v2")
-    #expect(pinned.pdfURL.absoluteString == "https://arxiv.org/pdf/2401.00001v2")
+    #expect(pinned.pdfURL?.absoluteString == "https://arxiv.org/pdf/2401.00001v2")
     #expect(pinned.title == "Verified fixture title")
 }
 

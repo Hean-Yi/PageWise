@@ -199,17 +199,27 @@ public struct AgentClient: AgentCompleting {
                     "source_page": .init(type: "integer", description: "One-based original page"),
                 ], ["paper_id", "source_page"]),
             make(
-                "search_online", "Find arXiv candidates for downloads, new papers or online recommendations.",
+                "search_online", "Find papers by title, author or topic across arXiv, Crossref and DBLP in one call.",
                 [
-                    "query": .init(type: "string", description: "Paper title keywords"),
+                    "query": .init(type: "string", description: "Title, DOI or research keywords"),
+                    "source": .init(
+                        type: "string", description: "Default all. Restrict only when the reader names a source.",
+                        choices: ["all", "arxiv", "crossref", "dblp"]),
                     "limit": .init(
                         type: "integer",
                         description: "Start with 3 hits for a known title. For discovery, size to the request."),
                 ], ["query"]),
             make(
+                "recommend_related",
+                "Find related work on Semantic Scholar using the current paper or reader-selected card. The app supplies the seed.",
+                ["limit": .init(type: "integer", description: "Number of candidates to inspect")], []),
+            make(
                 "prepare_import",
                 "Use an existing candidate_id directly to show a download card. The reader clicks to import.",
-                ["candidate_id": .init(type: "string", description: "Candidate ID from search_online")],
+                [
+                    "candidate_id": .init(
+                        type: "string", description: "Candidate ID of a downloadable search or recommendation result")
+                ],
                 ["candidate_id"]),
             make(
                 "open_paper",

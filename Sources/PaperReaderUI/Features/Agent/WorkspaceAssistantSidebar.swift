@@ -73,7 +73,15 @@ struct WorkspaceAssistantSidebar: View {
                     }, saveNote: saveNote, didNavigate: didNavigate)
             case .paper:
                 PaperAssistantView(
-                    model: model, question: $question, openSettings: openSettings, didNavigate: didNavigate)
+                    model: model, question: $question, openSettings: openSettings, didNavigate: didNavigate,
+                    relatedPapers: {
+                        guard (try? model.modelSettings.normalized()) != nil else {
+                            openSettings()
+                            return
+                        }
+                        select(.library)
+                        agent.findRelatedToCurrentPaper()
+                    }, canFindRelated: !agent.isRunning && model.paper != nil)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)

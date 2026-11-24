@@ -81,7 +81,9 @@ struct AgentProcessView: View {
             if last.status == .cancelled { return "执行已停止" }
             if last.toolName == "ask_user" { return "已询问偏好" }
         }
-        let searches = turn.activities.filter { ["search_library", "search_online"].contains($0.toolName) }
+        let searches = turn.activities.filter {
+            ["search_library", "search_online", "recommend_related"].contains($0.toolName)
+        }
         let papers = Set(
             searches.flatMap { turn.cards(for: $0) }.compactMap { $0.candidateID ?? $0.paperID?.uuidString })
         let recommendations = turn.presentedResults.filter { $0.purpose == .recommendation }.count
@@ -92,6 +94,9 @@ struct AgentProcessView: View {
             return count == 0 ? "未检索到匹配笔记" : "检索到 \(count) 条笔记"
         }
         if !papers.isEmpty { return "检索到 \(papers.count) 篇论文" }
+        if searches.contains(where: { $0.toolName == "search_online" && $0.message != nil }) {
+            return "部分来源未完成检索"
+        }
         if !searches.isEmpty, searches.allSatisfy({ $0.resultCount == 0 }) { return "未检索到匹配论文" }
         return turn.activities.isEmpty ? "工作进展" : "执行过程 · \(turn.activities.count) 步"
     }
@@ -106,7 +111,8 @@ struct AgentProcessView: View {
         let records = turn.cards(for: activity)
         let canInspect =
             !records.isEmpty
-            && ["search_library", "search_online", "search_reading_notes", "read_paper"].contains(activity.toolName)
+            && ["search_library", "search_online", "recommend_related", "search_reading_notes", "read_paper"].contains(
+                activity.toolName)
         let opened = inspectedCalls.contains(activity.id)
         return VStack(alignment: .leading, spacing: 4) {
             if canInspect {
@@ -122,7 +128,7 @@ struct AgentProcessView: View {
             if let subject = activity.subject, !subject.isEmpty {
                 Text(subject).lineLimit(2).padding(.leading, 17)
             }
-            if activity.status == .failed || activity.resultCount == 0,
+            if activity.status == .failed || activity.resultCount == 0 || activity.toolName == "search_online",
                 let message = activity.message, !message.isEmpty, message != activity.subject
             {
                 Text(message).padding(.leading, 17).contextMenu { AgentCopyButton(text: message) }
@@ -155,7 +161,10 @@ struct AgentProcessView: View {
             if activity.status == .failed { Text("失败") }
             if activity.status == .cancelled { Text("已停止") }
             if let count = activity.resultCount,
-                ["search_library", "search_online", "search_reading_notes", "read_paper", "present_results"].contains(
+                [
+                    "search_library", "search_online", "recommend_related", "search_reading_notes", "read_paper",
+                    "present_results",
+                ].contains(
                     activity.toolName)
             {
                 Text(activity.isTruncated ? "前 \(count) 项" : "\(count) 项").monospacedDigit()
@@ -172,7 +181,8 @@ struct AgentProcessView: View {
         switch activity.toolName {
         case "search_library": "检索书库"
         case "search_reading_notes": "检索笔记"
-        case "search_online": "检索 arXiv"
+        case "search_online": "在线检索论文"
+        case "recommend_related": "检索相关论文"
         case "read_paper": "阅读原文"
         case "prepare_import": "准备导入"
         case "open_paper": "定位论文"

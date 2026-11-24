@@ -51,6 +51,10 @@ extension ReaderModel {
             openRetainedReading(nil)
             return true
         }
+        if current.onlineSource?.originalPDFOnly == true {
+            message = current.onlineSource?.notice
+            return true
+        }
         guard (try? modelSettings.normalized()) != nil else { return false }
         startAIReflow(regenerate: current.reflowJob.map { !$0.supportsContinuation } ?? false)
         return true
@@ -61,6 +65,10 @@ extension ReaderModel {
         let id = selected.id
         guard selected.usesSourceReflow else {
             message = "本地论文可在「双语重排」中阅读 PDF 段落对照。"
+            return
+        }
+        if selected.onlineSource?.originalPDFOnly == true {
+            message = selected.onlineSource?.notice
             return
         }
         if regenerate, selected.onlineSource == nil, selected.sourceURL == nil {

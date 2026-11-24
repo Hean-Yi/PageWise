@@ -4,7 +4,7 @@ import PaperReaderKit
 extension LibraryAgent {
     public func confirmImport(cardID: UUID) {
         guard let card = card(cardID), let id = card.candidateID, let candidate = candidates[id],
-            ArxivClient.verified(candidate) != nil
+            candidate.canDownload
         else { return }
         if let paperID = importedPapers[id], reader.state.papers.contains(where: { $0.id == paperID }) {
             paperRegistry.insert(paperID)

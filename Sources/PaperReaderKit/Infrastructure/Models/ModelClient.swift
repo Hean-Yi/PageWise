@@ -2,10 +2,20 @@ import Foundation
 
 public protocol HTTPTransport: Sendable {
     func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse)
+    func downloadFile(for request: URLRequest, maximumBytes: Int64) async throws -> (URL, HTTPURLResponse)
     func stream(for request: URLRequest, onData: @Sendable (Data) async throws -> Void) async throws -> HTTPURLResponse
 }
 
 extension HTTPTransport {
+    public func downloadFile(for request: URLRequest, maximumBytes: Int64) async throws -> (URL, HTTPURLResponse) {
+        let (data, response) = try await data(for: request)
+        guard data.count <= maximumBytes else { throw ReaderError.message("全文超出下载大小限制。") }
+        try Task.checkCancellation()
+        let target = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try data.write(to: target, options: .withoutOverwriting)
+        return (target, response)
+    }
+
     public func stream(for request: URLRequest, onData: @Sendable (Data) async throws -> Void) async throws
         -> HTTPURLResponse
     {
@@ -15,7 +25,20 @@ extension HTTPTransport {
     }
 }
 
-private final class NoRedirects: NSObject, URLSessionTaskDelegate {
+private final class NoRedirects: NSObject, URLSessionDownloadDelegate {
+    let maximumBytes: Int64?
+    init(maximumBytes: Int64? = nil) { self.maximumBytes = maximumBytes }
+    func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {
+    }
+    func urlSession(
+        _ session: URLSession, downloadTask: URLSessionDownloadTask, didWriteData bytesWritten: Int64,
+        totalBytesWritten: Int64, totalBytesExpectedToWrite: Int64
+    ) {
+        if let maximumBytes, max(totalBytesWritten, totalBytesExpectedToWrite) > maximumBytes {
+            downloadTask.cancel()
+        }
+    }
+
     func urlSession(
         _ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
         newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void
@@ -32,6 +55,21 @@ public struct NetworkTransport: HTTPTransport {
         configuration.timeoutIntervalForResource = 300
         session = URLSession(configuration: configuration, delegate: NoRedirects(), delegateQueue: nil)
     }
+    public func downloadFile(for request: URLRequest, maximumBytes: Int64) async throws -> (URL, HTTPURLResponse) {
+        let (file, response) = try await session.download(
+            for: request, delegate: NoRedirects(maximumBytes: maximumBytes))
+        do {
+            try Task.checkCancellation()
+            guard let http = response as? HTTPURLResponse else { throw ReaderError.message("服务器返回了无效响应。") }
+            let size = try file.resourceValues(forKeys: [.fileSizeKey]).fileSize
+            guard let size, size <= maximumBytes else { throw ReaderError.message("全文超出下载大小限制。") }
+            return (file, http)
+        } catch {
+            try? FileManager.default.removeItem(at: file)
+            throw error
+        }
+    }
+
     public func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) {
         let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse else { throw ReaderError.message("服务器返回了无效响应。") }

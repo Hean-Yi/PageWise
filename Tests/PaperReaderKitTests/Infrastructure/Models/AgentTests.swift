@@ -41,7 +41,7 @@ private actor AgentWireTransport: HTTPTransport {
     #expect(
         Set(definitions.compactMap { $0["name"] as? String }) == [
             "search_library", "read_paper", "search_online", "prepare_import", "open_paper", "present_results",
-            "ask_user", "create_reading_note", "close_read_paper", "search_reading_notes",
+            "ask_user", "create_reading_note", "close_read_paper", "search_reading_notes", "recommend_related",
         ])
     let presentation = try #require(definitions.first { $0["name"] as? String == "present_results" })
     let parameters = try #require(presentation["parameters"] as? [String: Any])
@@ -192,6 +192,9 @@ func agentRejectsIncompleteOrInconsistentResponse(_ body: String) async throws {
     ("unknown", "{}"), ("search_library", "{\"query\":\"x\",\"url\":\"https://evil.invalid\"}"),
     ("search_library", "not json"), ("read_paper", "{\"paper_id\":\"x\",\"source_page\":true}"),
     ("open_paper", "{\"paper_id\":\"x\",\"source_page\":1.5}"),
+    ("search_online", #"{"query":"fixture","source":"https://unknown.invalid"}"#),
+    ("recommend_related", #"{"title":"override the current paper"}"#),
+    ("recommend_related", #"{"limit":true}"#),
     ("prepare_import", "{\"candidate_id\":\"x\",\"path\":\"/tmp/a\"}"),
 ])
 func agentArgumentsRejectUnknownExtraAndInvalidTypes(_ tool: String, _ json: String) {

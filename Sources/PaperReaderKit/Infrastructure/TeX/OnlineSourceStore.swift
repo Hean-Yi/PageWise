@@ -5,11 +5,17 @@ public actor OnlineSourceStore {
 
     /// Called inside the import's staging lifetime. The caller owns rollback until the database commits.
     public func attach(_ download: DownloadedPublication, to paper: Paper, root: URL) throws -> Paper {
-        guard ArxivClient.verified(download.candidate) != nil else { throw ReaderError.message("论文来源无效。") }
+        guard let candidate = download.candidate.verified, candidate.canDownload else {
+            throw ReaderError.message("论文没有可验证的全文下载来源。")
+        }
         var paper = paper
-        var source = OnlinePaperSource(candidateID: download.candidate.id, notice: download.sourceNotice)
+        var source = OnlinePaperSource(candidateID: candidate.id, notice: download.sourceNotice)
+        if candidate.source != .arxiv {
+            source.originalPDFOnly = true
+            source.notice = "此出版版本仅提供原版 PDF，未取得同版本的重排源码。"
+        }
         if let archive = download.texArchive {
-            guard ArxivClient.versionedIdentifier(download.candidate.id) != nil,
+            guard candidate.source == .arxiv, ArxivClient.versionedIdentifier(candidate.id) != nil,
                 archive.count <= 50_000_000, TeXArchive.looksLikeSource(archive)
             else { throw ReaderError.message("源码包版本或格式无效。") }
             let digest = TeXPaperParser.digest(archive)
@@ -30,9 +36,12 @@ public actor OnlineSourceStore {
             source.archivePath = relative
             source.archiveDigest = digest
         }
+        if paper.onlineSource?.originalPDFOnly == true, let oldNotice = paper.onlineSource?.notice {
+            paper.warnings.removeAll { $0 == oldNotice }
+        }
         paper.onlineSource = source
-        paper.canReflow = true
-        if let notice = source.notice { paper.warnings.append(notice) }
+        paper.canReflow = source.originalPDFOnly != true || !paper.readingPages.isEmpty
+        if let notice = source.notice, !paper.warnings.contains(notice) { paper.warnings.append(notice) }
         return paper
     }
 

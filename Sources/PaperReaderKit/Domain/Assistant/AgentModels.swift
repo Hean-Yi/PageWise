@@ -17,10 +17,13 @@ public struct AgentCard: Identifiable, Sendable {
     public var noteModifiedAt: Date?
     public var candidateID: String?
     public var sourceURL: URL?
+    public var sourceName: String?
+    public var alternateVersionIDs: [UUID] = []
+    public var hasDownload = false
     public var importState: AgentImportState = .unprepared
     public var importError: String?
     public var canImport: Bool {
-        candidateID != nil && [.unprepared, .ready, .failed, .cancelled].contains(importState)
+        hasDownload && candidateID != nil && [.unprepared, .ready, .failed, .cancelled].contains(importState)
     }
     public var canOpen: Bool { paperID != nil }
     public init(kind: Kind, title: String) {

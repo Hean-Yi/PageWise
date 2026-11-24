@@ -1493,3 +1493,116 @@ func closeReadingToolBecomesAvailableAsSoonAsTheTargetPaperIsRegistered(selected
     #expect(reader.state.readingNotes == [note])
     #expect(reader.state.highlights.count == 1)
 }
+
+private actor PublicationWorkflowFixture: PaperDiscovery {
+    var queriedScope: PaperSearchScope?
+    var seedTitle: String?
+    var seedSource: String?
+    var downloads: [String] = []
+
+    let version = PaperCandidate(
+        id: "https://arxiv.org/abs/2401.00017v2", title: "Fixture Preprint", authors: "Test Author", year: "2024",
+        pdfURL: URL(string: "https://arxiv.org/pdf/2401.00017v2"))
+    let publication = PaperCandidate(
+        id: "https://doi.org/10.9999/fixture", title: "Fixture Proceedings", authors: "Test Author", year: "2025",
+        source: .crossref, doi: "10.9999/fixture")
+
+    func search(_ query: String) async throws -> [PaperCandidate] { throw ReaderError.message("预期调用指定来源的检索") }
+
+    func discover(
+        _ query: String, scope: PaperSearchScope, limit: Int, onUpdate: @Sendable (OnlineDiscoveryResult) async -> Void
+    ) async throws -> OnlineDiscoveryResult {
+        queriedScope = scope
+        return .init(candidates: [publication])
+    }
+
+    func related(title: String, sourceID: String?, limit: Int) async throws -> [PaperCandidate] {
+        seedTitle = title
+        seedSource = sourceID
+        var entry = publication
+        entry.alternateVersions = [version]
+        return [entry]
+    }
+
+    func download(_ candidate: PaperCandidate) async throws -> URL {
+        downloads.append(candidate.id)
+        throw ReaderError.message("测试在记录下载版本后停止")
+    }
+}
+
+@Test @MainActor func agentPresentsPublicationOnlyAndHonorsExplicitSourceWithoutPreparingImport() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let reader = try await makeAgentReader(root)
+    let discovery = PublicationWorkflowFixture()
+    let model = ScriptedLibraryModel { messages, count in
+        switch count {
+        case 1: return tool("search_online", #"{"query":"fixture","source":"crossref"}"#, id: "crossref")
+        case 2:
+            let json = try #require(messages.last?.content)
+            #expect(json.contains("publication_page_only"))
+            #expect(!json.contains("candidate_id"))
+            return try present(candidateResultIDs(in: messages, callID: "crossref"), id: "show")
+        default: return .init(role: "assistant", content: "已找到正式发表版本。")
+        }
+    }
+    let agent = LibraryAgent(reader: reader, client: model, discovery: discovery)
+    agent.send("只查 Crossref，推荐这篇论文")
+    try await eventually { !agent.isRunning }
+    #expect(await discovery.queriedScope == .crossref)
+    let card = try #require(agent.turns.first?.cards.first)
+    #expect(card.sourceName == "Crossref")
+    #expect(card.sourceURL?.absoluteString == discovery.publication.id)
+    #expect(!card.canImport && agent.turns[0].presentedResults.first?.id == card.id)
+    let scopes = await model.requestLimits
+    #expect(scopes.allSatisfy { $0.availableToolNames?.contains("prepare_import") == false })
+    agent.confirmImport(cardID: card.id)
+    #expect(await discovery.downloads.isEmpty)
+}
+
+@Test @MainActor func relatedWorkUsesCurrentPaperAndKeepsVersionChoiceBoundToDownloadAndFollowUp() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let reader = try await makeAgentReader(root)
+    var paper = Paper(
+        title: "Local fixture", digest: "fixture", originalPath: "demo.pdf", pageCount: 1, blocks: [],
+        warnings: [], canReflow: false)
+    paper.onlineSource = .init(candidateID: "https://doi.org/10.9999/current")
+    reader.state.papers = [paper]
+    reader.selectedPaperID = paper.id
+    let discovery = PublicationWorkflowFixture()
+    let model = ScriptedLibraryModel { messages, count in
+        switch count {
+        case 1: return tool("recommend_related", #"{"limit":3}"#, id: "related")
+        case 2:
+            let ids = try candidateResultIDs(in: messages, callID: "related")
+            #expect(ids.count == 1)
+            return try present(ids, id: "show")
+        case 4: return tool("recommend_related", "{}", id: "followup-related")
+        default: return .init(role: "assistant", content: "可以继续读这篇。")
+        }
+    }
+    let agent = LibraryAgent(reader: reader, client: model, discovery: discovery)
+    agent.findRelatedToCurrentPaper()
+    try await eventually { !agent.isRunning }
+    #expect(await discovery.seedTitle == paper.title)
+    #expect(await discovery.seedSource == paper.onlineSource?.candidateID)
+    let turn = try #require(agent.turns.first)
+    #expect(turn.activities.map(\.toolName) == ["recommend_related", "present_results"])
+    #expect(turn.activities.first?.resultCount == 1)
+    let rootID = try #require(turn.presentedResults.first?.id)
+    let parent = try #require(agent.card(rootID))
+    let versionID = try #require(parent.alternateVersionIDs.first)
+    let version = try #require(agent.card(versionID))
+    #expect(!parent.canImport && version.canImport && version.sourceName == "arXiv")
+    #expect(await discovery.downloads.isEmpty)
+    agent.confirmImport(cardID: version.id)
+    try await eventually { agent.card(version.id)?.importState == .failed }
+    #expect(await discovery.downloads == [discovery.version.id])
+    #expect(agent.card(parent.id)?.importState == .unprepared)
+    #expect(agent.prepareFollowUp(cardID: version.id))
+    agent.send("以这个预印本为起点继续找", referencing: version.id)
+    try await eventually { !agent.isRunning }
+    #expect(await discovery.seedSource == discovery.version.id)
+    #expect(await discovery.queriedScope == nil)
+}

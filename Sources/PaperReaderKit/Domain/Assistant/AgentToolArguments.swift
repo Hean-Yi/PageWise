@@ -20,7 +20,8 @@ public enum AgentToolArguments: Sendable, Equatable {
     case askUser(AgentClarification)
     case searchLibrary(String)
     case searchReadingNotes(String)
-    case searchOnline(String, limit: Int? = nil)
+    case searchOnline(String, limit: Int? = nil, scope: PaperSearchScope = .all)
+    case recommendRelated(limit: Int?)
     case presentResults(AgentPresentedResult.Purpose, [Selection])
     case readPaper(id: String, sourcePage: Int)
     case prepareImport(String)
@@ -48,6 +49,14 @@ public enum AgentToolArguments: Sendable, Equatable {
                 value.doubleValue.rounded() == value.doubleValue
             else { throw ReaderError.message("原文页码必须是一基正整数。") }
             return value.intValue
+        }
+        func searchLimit() throws -> Int? {
+            guard let raw = values["limit"] else { return nil }
+            guard let count = raw as? NSNumber, CFGetTypeID(count) != CFBooleanGetTypeID(),
+                count.doubleValue >= 1, count.doubleValue <= Double(min(limits.maxResults, 20)),
+                count.doubleValue.rounded() == count.doubleValue
+            else { throw ReaderError.message("检索数量须为正整数，当前上限为 \(max(0, min(limits.maxResults, 20)))。") }
+            return count.intValue
         }
         switch name {
         case "close_read_paper":
@@ -116,14 +125,13 @@ public enum AgentToolArguments: Sendable, Equatable {
             try keys(["query"], required: ["query"])
             return .searchLibrary(try string("query", max: 512))
         case "search_online":
-            try keys(["query", "limit"], required: ["query"])
-            let query = try string("query", max: 512)
-            guard let raw = values["limit"] else { return .searchOnline(query) }
-            guard let count = raw as? NSNumber, CFGetTypeID(count) != CFBooleanGetTypeID(),
-                count.doubleValue >= 1, count.doubleValue <= Double(min(limits.maxResults, 20)),
-                count.doubleValue.rounded() == count.doubleValue
-            else { throw ReaderError.message("检索数量须为正整数，当前上限为 \(max(0, min(limits.maxResults, 20)))。") }
-            return .searchOnline(query, limit: count.intValue)
+            try keys(["query", "limit", "source"], required: ["query"])
+            let raw = values["source"] == nil ? "all" : try string("source", max: 24)
+            guard let scope = PaperSearchScope(rawValue: raw) else { throw ReaderError.message("检索来源无效。") }
+            return .searchOnline(try string("query", max: 512), limit: try searchLimit(), scope: scope)
+        case "recommend_related":
+            try keys(["limit"], required: [])
+            return .recommendRelated(limit: try searchLimit())
         case "read_paper":
             try keys(["paper_id", "source_page"], required: ["paper_id", "source_page"])
             return .readPaper(id: try string("paper_id", max: 128), sourcePage: try page())

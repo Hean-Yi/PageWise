@@ -4,12 +4,29 @@ import SwiftUI
 /// A selected result always keeps the identity and actions of its registered source.
 struct AgentResultCard: View {
     let result: AgentPresentedResult
-    let card: AgentCard
+    let group: AgentCard
     let agent: LibraryAgent
     let didNavigate: () -> Void
-    let followUp: () -> Void
+    let followUp: (AgentCard) -> Void
     @Environment(\.openURL) private var openURL
     @State private var showsExcerpt = false
+    @State private var selectedVersion: UUID?
+
+    private var versions: [AgentCard] {
+        [group] + group.alternateVersionIDs.compactMap { agent.card($0) }
+    }
+
+    private var card: AgentCard {
+        guard let selectedVersion, group.alternateVersionIDs.contains(selectedVersion) else { return group }
+        return agent.card(selectedVersion) ?? group
+    }
+
+    private func versionLabel(_ item: AgentCard) -> String {
+        let suffix = item.sourceURL.flatMap { ArxivClient.versionedIdentifier($0.absoluteString) }?
+            .split(separator: "v").last
+        let version = suffix.map { "v" + String($0) }
+        return [item.sourceName, version, item.year].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
+    }
 
     private var purpose: (title: String, icon: String) {
         switch card.readingNoteID == nil ? result.purpose : .readingNote {
@@ -24,7 +41,7 @@ struct AgentResultCard: View {
 
     private var metadata: String? {
         if card.kind == .onlineCandidate {
-            return ["arXiv", card.year].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
+            return [card.sourceName, card.year].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
         }
         return card.sourcePage.map { "第 \($0) 页" }
     }
@@ -40,6 +57,25 @@ struct AgentResultCard: View {
 
     private var resultTile: some View {
         VStack(alignment: .leading, spacing: 0) {
+            if !group.alternateVersionIDs.isEmpty {
+                Menu {
+                    ForEach(versions) { version in
+                        Button {
+                            selectedVersion = version.id
+                        } label: {
+                            if version.id == card.id {
+                                Label(versionLabel(version), systemImage: "checkmark")
+                            } else {
+                                Text(versionLabel(version))
+                            }
+                        }
+                    }
+                } label: {
+                    Label(versionLabel(card), systemImage: "square.stack")
+                }
+                .menuStyle(.borderlessButton).fixedSize().font(.caption)
+                .padding(.leading, 12).padding(.top, 8).accessibilityLabel("选择论文版本")
+            }
             primaryAction
             if let error = card.importError {
                 Text(error).font(.caption).foregroundStyle(ReaderTheme.muted)
@@ -47,10 +83,19 @@ struct AgentResultCard: View {
             }
             HStack(spacing: 12) {
                 if card.kind == .onlineCandidate {
-                    importAction
+                    if card.hasDownload || card.importState == .imported {
+                        importAction
+                    } else if let url = card.sourceURL {
+                        Link(destination: url) {
+                            Label(url.host == "doi.org" ? "查看出版页" : "查看来源页", systemImage: "arrow.up.right")
+                        }
+                        .buttonStyle(.bordered)
+                    }
                     Spacer(minLength: 4)
                 }
-                Button(action: followUp) {
+                Button {
+                    followUp(card)
+                } label: {
                     Label("追问", systemImage: "bubble.left")
                 }
                 .buttonStyle(.borderless).foregroundStyle(ReaderTheme.muted)
@@ -63,13 +108,15 @@ struct AgentResultCard: View {
     }
 
     @ViewBuilder private var primaryAction: some View {
-        if card.kind == .onlineCandidate, let url = card.sourceURL {
+        if card.kind == .onlineCandidate && !card.hasDownload {
+            label(accessory: nil)
+        } else if card.kind == .onlineCandidate, let url = card.sourceURL {
             Button {
                 openURL(url)
             } label: {
                 label(accessory: "arrow.up.right")
             }
-            .buttonStyle(AssistantToolButtonStyle(embedded: true)).help("在 arXiv 查看《\(card.title)》")
+            .buttonStyle(AssistantToolButtonStyle(embedded: true)).help("打开《\(card.title)》的来源页")
             .accessibilityHint("在浏览器中查看论文")
         } else if agent.canOpen(card) {
             Button(action: open) { label(accessory: "chevron.forward") }

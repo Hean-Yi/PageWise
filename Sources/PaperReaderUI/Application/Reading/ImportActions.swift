@@ -19,7 +19,7 @@ extension ReaderModel {
             message = "线上资料与导入论文不匹配，未导入。"
             return []
         }
-        if let metadata, ArxivClient.verified(metadata) == nil {
+        if let metadata, !metadata.canDownload {
             message = "论文来源无效，未导入。"
             return []
         }
@@ -48,17 +48,17 @@ extension ReaderModel {
                 defer { if !retained { try? FileManager.default.removeItem(at: importedDirectory) } }
                 try Task.checkCancellation()
                 if let existing = state.papers.first(where: { $0.digest == imported.digest }) {
-                    if let publication, existing.onlineSource?.archivePath == nil,
-                        existing.sourceURL == nil || existing.sourceURL == publication.candidate.id,
-                        existing.onlineSource == nil
-                            || existing.onlineSource?.candidateID == publication.candidate.id
-                    {
+                    if let publication, shouldAttachSource(of: publication, toIdenticalPDF: existing) {
                         let attached = try await OnlineSourceStore().attach(publication, to: existing, root: root)
                         guard var latest = state.papers.first(where: { $0.id == existing.id }) else {
                             throw CancellationError()
                         }
                         latest.onlineSource = attached.onlineSource
-                        latest.canReflow = true
+                        latest.canReflow = attached.canReflow
+                        if existing.onlineSource?.originalPDFOnly == true, let oldNotice = existing.onlineSource?.notice
+                        {
+                            latest.warnings.removeAll { $0 == oldNotice }
+                        }
                         latest.warnings = Array(Set(latest.warnings + attached.warnings)).sorted()
                         guard await save(cancellable: true, publishingReflow: latest) else {
                             if let path = attached.onlineSource?.archivePath {
@@ -104,6 +104,14 @@ extension ReaderModel {
             }
         }
         return importedIDs
+    }
+
+    private func shouldAttachSource(of download: DownloadedPublication, toIdenticalPDF paper: Paper) -> Bool {
+        guard paper.onlineSource?.archivePath == nil else { return false }
+        let savedSource = paper.onlineSource?.candidateID ?? paper.sourceURL
+        if savedSource == nil || savedSource == download.candidate.id { return true }
+        return paper.onlineSource?.originalPDFOnly == true && download.candidate.source == .arxiv
+            && ArxivClient.versionedIdentifier(download.candidate.id) != nil
     }
 
     public func addDemo() async {

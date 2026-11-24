@@ -343,3 +343,67 @@ private struct OnlineToolReplyEcho: AgentCompleting {
     #expect(restarted.state.papers.count == 1)
     #expect(restarted.state.paperShelfIDs.isEmpty)
 }
+
+@MainActor @Test func onlinePublisherCardCanImportSelectedVersionAndKeepsMetadataOnlyCardReadOnly() async throws {
+    let model = try await onlineModel()
+    defer { try? FileManager.default.removeItem(at: model.root) }
+    let source = model.root.appendingPathComponent("fixture.pdf")
+    try DemoPaper.write(to: source)
+    let metadata = PaperCandidate(
+        id: "https://doi.org/10.1234/test", title: "Metadata", authors: "", year: "", source: .crossref)
+    let publication = PaperCandidate(
+        id: "https://doi.org/10.18653/v1/2025.acl-long.12", title: "Publisher fixture", authors: "", year: "2025",
+        source: .crossref)
+    var preprint = onlineFixtureCandidate()
+    preprint.alternateVersions = [publication]
+    let discovery = InlineDiscoveryFixture(source: source, searchResults: [metadata, preprint])
+    let search = OnlinePaperSearch(reader: model, discovery: discovery)
+    search.open(shelfID: nil)
+    search.query = "fixture"
+    search.search()
+    await search.searchTask?.value
+    #expect(search.results.count == 2)
+    #expect(search.results.first?.landingURL?.host == "doi.org")
+    search.confirmImport(metadata)
+    #expect(search.importTask == nil)
+    #expect(await discovery.downloads == 0)
+
+    search.confirmImport(publication)
+    await search.importTask?.value
+    let paper = try #require(model.state.papers.first)
+    #expect(paper.title == publication.title)
+    #expect(paper.onlineSource?.candidateID == publication.id)
+    #expect(paper.onlineSource?.originalPDFOnly == true)
+    #expect(!paper.canReflow && paper.usesSourceReflow)
+    model.select(paper.id)
+    #expect(model.openBilingualReading(translatingDocument: true))
+    #expect(model.message == paper.onlineSource?.notice)
+    #expect(!model.pdfBilingual.isOpen && model.translating.isEmpty)
+    let restarted = try ReaderModel(root: model.root)
+    await restarted.load()
+    #expect(restarted.state.papers.first?.onlineSource == paper.onlineSource)
+}
+
+@MainActor @Test func identicalPublisherPDFGainsPinnedPreprintSourceWithoutLosingCitationOrDuplicatingPaper()
+    async throws
+{
+    let model = try await onlineModel()
+    defer { try? FileManager.default.removeItem(at: model.root) }
+    let url = model.root.appendingPathComponent("fixture.pdf")
+    try DemoPaper.write(to: url)
+    let publisher = PaperCandidate(
+        id: "https://doi.org/10.18653/v1/2025.acl-long.12", title: "Journal edition", authors: "", year: "2025",
+        source: .crossref)
+    let preprint = PaperCandidate(
+        id: "https://arxiv.org/abs/2401.00001v1", title: "Preprint title", authors: "", year: "2024",
+        pdfURL: URL(string: "https://arxiv.org/pdf/2401.00001v1")!)
+    let ids = await model.importURLs([url], metadata: publisher)
+    let first = try #require(model.paper)
+    let notice = try #require(first.onlineSource?.notice)
+    #expect(await model.importURLs([url], metadata: preprint) == ids)
+    let upgraded = try #require(model.paper)
+    #expect(model.state.papers.count == 1 && upgraded.id == first.id)
+    #expect(upgraded.sourceURL == publisher.id && upgraded.title == first.title)
+    #expect(upgraded.canReflow && upgraded.onlineSource?.candidateID == preprint.id)
+    #expect(!upgraded.warnings.contains(notice))
+}

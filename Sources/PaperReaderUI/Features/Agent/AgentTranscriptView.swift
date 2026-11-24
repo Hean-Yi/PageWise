@@ -97,7 +97,7 @@ struct AgentTranscriptView: View {
             if let result = turn.presentedResults.first(where: { $0.id == id }),
                 let card = turn.cards.first(where: { $0.id == id })
             {
-                AgentResultCard(result: result, card: card, agent: agent, didNavigate: didNavigate) { followUp(card) }
+                AgentResultCard(result: result, group: card, agent: agent, didNavigate: didNavigate, followUp: followUp)
             }
         case .clarification:
             if let clarification = turn.clarification {

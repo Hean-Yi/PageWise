@@ -6,6 +6,8 @@ import PaperReaderKit
 @MainActor @Observable
 public final class OnlinePaperSearch {
     public var query = ""
+    public private(set) var scope: PaperSearchScope = .all
+    public private(set) var sourceNotice: String?
     public private(set) var results: [PaperCandidate] = []
     public private(set) var isExpanded = false
     private var activeQuery: String?
@@ -35,7 +37,7 @@ public final class OnlinePaperSearch {
     @ObservationIgnored var searchTask: Task<Void, Never>?
     @ObservationIgnored var importTask: Task<Void, Never>?
 
-    public init(reader: ReaderModel, discovery: any PaperDiscovery = ArxivClient()) {
+    public init(reader: ReaderModel, discovery: any PaperDiscovery = FederatedPaperDiscovery.shared) {
         self.reader = reader
         self.discovery = discovery
     }
@@ -50,6 +52,7 @@ public final class OnlinePaperSearch {
             cancelSearch()
             targetShelfID = shelfID
             results = []
+            sourceNotice = nil
             searched = false
             failure = nil
             imported = [:]
@@ -80,24 +83,37 @@ public final class OnlinePaperSearch {
         activeQuery = nil
     }
 
+    func selectScope(_ scope: PaperSearchScope) {
+        guard self.scope != scope, importTask == nil else { return }
+        self.scope = scope
+        let hadSearch = isSearching || searched || error != nil
+        cancelSearch()
+        results = []
+        failure = nil
+        sourceNotice = nil
+        searched = false
+        if hadSearch { search() }
+    }
+
     public func search() {
         guard canSearch else { return }
         let term = query.trimmingCharacters(in: .whitespacesAndNewlines)
         cancelSearch()
         let token = generation
         activeQuery = term
+        sourceNotice = nil
         failure = nil
         results = []
         searched = false
         searchTask = Task { [weak self] in
             guard let self else { return }
             do {
-                let candidates = try await self.discovery.search(term)
-                guard token == self.generation, !Task.isCancelled else { return }
-                var seen: Set<String> = []
-                self.results = candidates.filter {
-                    ArxivClient.verified($0) != nil && seen.insert($0.id).inserted
+                let result = try await self.discovery.discover(term, scope: self.scope, limit: 8) {
+                    [weak self] update in
+                    await self?.apply(update, generation: token)
                 }
+                guard token == self.generation, !Task.isCancelled else { return }
+                self.apply(result, generation: token)
                 self.searched = true
             } catch is CancellationError {
                 // A cancelled search has no result count to show.
@@ -109,6 +125,13 @@ public final class OnlinePaperSearch {
             self.activeQuery = nil
             self.searchTask = nil
         }
+    }
+
+    private func apply(_ result: OnlineDiscoveryResult, generation: UUID) {
+        guard generation == self.generation, !Task.isCancelled else { return }
+        var seen: Set<String> = []
+        results = result.candidates.compactMap(\.verified).filter { seen.insert($0.id).inserted }
+        sourceNotice = result.notice
     }
 
     private static func webSearchURL(for term: String, error: any Error) -> URL? {
@@ -126,8 +149,10 @@ public final class OnlinePaperSearch {
     public func cancelImport() { importTask?.cancel() }
 
     public func confirmImport(_ candidate: PaperCandidate) {
-        guard results.contains(where: { $0.id == candidate.id }), ArxivClient.verified(candidate) != nil,
-            importTask == nil, !closing
+        guard importTask == nil, !closing,
+            let candidate = results.lazy.flatMap({ [$0] + $0.alternateVersions }).first(where: { $0.id == candidate.id }
+            ),
+            candidate.canDownload
         else { return }
         if let id = imported[candidate.id], reader.state.papers.contains(where: { $0.id == id }),
             reader.state.shelfID(for: id) == targetShelfID
@@ -139,7 +164,7 @@ public final class OnlinePaperSearch {
             importErrors[candidate.id] = "目标书架已删除，请关闭查找后从其他书架重试。"
             return
         }
-        importStage = "下载 TeX 与原版 PDF"
+        importStage = candidate.source == .arxiv ? "下载 TeX 与原版 PDF" : "下载原版 PDF"
         importingID = candidate.id
         importErrors[candidate.id] = nil
         importTask = Task { [weak self] in
@@ -157,7 +182,6 @@ public final class OnlinePaperSearch {
                 let download = try await self.discovery.downloadPublication(candidate)
                 let url = download.pdfURL
                 defer { try? FileManager.default.removeItem(at: url) }
-                self.importStage = "获取正文与图片"
                 try Task.checkCancellation()
                 self.importStage = "本地处理"
                 let ids = await self.reader.importURLs(
