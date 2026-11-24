@@ -142,7 +142,7 @@ extension PDFSentenceTextCanvas {
             const fields=[];
             for (const cell of row.cells) {
               if (!range.intersectsNode(cell)) continue;
-              const part=selectedText(range,cell);
+              const part=selectedRange(range,cell).toString();
               if (!part && cell.textContent) continue;
               const column=Number(cell.dataset.column ?? cell.cellIndex);
               const complete=part===cell.textContent;

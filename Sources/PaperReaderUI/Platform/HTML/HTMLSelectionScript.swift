@@ -2,6 +2,21 @@ import Foundation
 
 /// Language-scoped text ranges and shared objects, without rewriting published text.
 enum HTMLSelectionScript {
+    /// One rectangle per visual run. The native selection range stays available to the keyboard and clipboard.
+    static let textInk = #"""
+        function appendTextInk(pixels,range,color,underline=false) {
+          for(const rect of range.getClientRects()){
+            if(rect.width<=.01||rect.height<=0)continue;
+            const pixel=document.createElement('span');
+            Object.assign(pixel.style,{position:'absolute',left:(rect.left+scrollX)+'px',width:rect.width+'px',
+              top:((underline?rect.bottom-2:rect.top)+scrollY)+'px'});
+            if(underline)pixel.style.borderBottom='2px solid '+color;
+            else{pixel.style.height=rect.height+'px';pixel.style.background=color;}
+            pixels.append(pixel);
+          }
+        }
+        """#
+
     static let source = #"""
         (() => {
           const root = document.getElementById('reader');
@@ -95,7 +110,7 @@ enum HTMLSelectionScript {
           });
           const colors={yellow:'#f2d36b',red:'#f5aaa6',green:'#b7db9e',blue:'#b5d5f8',purple:'#cbb7ed',pink:'#edbdd8',orange:'#f5c28f',gray:'#d1d4d7'};
           const style=document.createElement('style');
-          style.textContent='#reader{position:relative;z-index:1}#reader::selection,#reader ::selection{background:transparent;color:inherit}::highlight(reader-selection){background:transparent;color:inherit}[data-reader-selected]{outline:2px solid #424953!important;outline-offset:2px}[data-reader-saved]{outline:2px solid #c9a331;outline-offset:2px}';
+          style.textContent='#reader{position:relative;z-index:1}html.reading-range::selection,html.reading-range body::selection,#reader::selection,#reader ::selection{background:transparent;color:inherit}::highlight(reader-selection){background:transparent;color:inherit}[data-reader-selected]{outline:2px solid #424953!important;outline-offset:2px}[data-reader-saved]{outline:2px solid #c9a331;outline-offset:2px}';
           for(const [color,hex] of Object.entries(colors)) for(const kind of ['highlight','underline']) {
             const name=color==='yellow' && kind==='highlight' ? 'saved' : 'saved-'+color+'-'+kind;
             style.textContent+='::highlight('+name+'){background:transparent;'+(kind==='highlight' ? 'color:#292e2e' : '')+'}';
@@ -116,21 +131,14 @@ enum HTMLSelectionScript {
 
           // Each text slice owns its paint in a stable stacking position. Hover can clip
           // and restore a slice without measuring or replacing highlights in other paragraphs.
+          \#(textInk)
           const paintEntry=entry=>{
             const {range,highlight,container,color,kind}=entry,visible=visibleRanges([range]);
             for(const fragment of entry.fragments)highlight.delete(fragment);
             entry.fragments=visible.flatMap(lineRanges);
             for(const fragment of entry.fragments)highlight.add(fragment);
             const pixels=document.createDocumentFragment(),isLine=kind==='underline';
-            for(const fragment of isLine?visible:entry.fragments)for(const rect of fragment.getClientRects()){
-              if(rect.width<=.01||rect.height<=0)continue;
-              const pixel=document.createElement('span');
-              Object.assign(pixel.style,{position:'absolute',left:(rect.left+scrollX)+'px',width:rect.width+'px',
-                top:((isLine?rect.bottom-2:rect.top)+scrollY)+'px'});
-              if(isLine)pixel.style.borderBottom='2px solid '+color;
-              else{pixel.style.height=rect.height+'px';pixel.style.background=color;}
-              pixels.append(pixel);
-            }
+            for(const fragment of isLine?visible:entry.fragments)appendTextInk(pixels,fragment,color,isLine);
             container.replaceChildren(pixels);
           };
           const visitOverlaps=(ranges,visit)=>{
@@ -198,6 +206,7 @@ enum HTMLSelectionScript {
           const publish = () => {paint();send({kind:'selection',parts});window.paperAnnotationMenu?.selectionChanged();};
           const update = () => {
             const selection=getSelection();
+            document.documentElement.classList.toggle('reading-range',!!(CSS.highlights&&selection&&!selection.isCollapsed&&root.contains(selection.anchorNode)));
             if(window.paperNotes?.preservingSelection() || (selection?.isCollapsed && window.paperAnnotationMenu?.preservingSelection()))return;
             parts=[];
             if(selection && !selection.isCollapsed && selection.rangeCount) {

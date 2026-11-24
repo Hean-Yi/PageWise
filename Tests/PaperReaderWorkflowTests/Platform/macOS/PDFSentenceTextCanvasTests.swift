@@ -6,6 +6,68 @@
 
     @testable import PaperReaderUI
 
+    @Test @MainActor func pdfSelectionPaintTracksTheSelectedCharactersAcrossSoftWraps() async throws {
+        let prose = String(repeating: "There is another reason to be cautious about this result. ", count: 5)
+        let row = PDFSourceSentence(id: "en", text: prose, pageIndex: 0, rects: [], paragraphID: "p")
+        let canvas = PDFSentenceTextCanvas(
+            sentences: [row], translations: ["en": "谨慎看待这一结果。"], layout: .paragraph, fontSize: 18,
+            focusedID: nil, focusRevision: 0, followsScroll: false, sourceScrollID: nil, sourceScrollRevision: 0,
+            pdfSelectedIDs: [], onScroll: { _ in }, onSelection: { _ in }, onFocus: { _ in })
+        let coordinator = canvas.makeCoordinator()
+        let web = coordinator.makeView()
+        defer { coordinator.stop(web) }
+        web.frame = CGRect(x: 0, y: 0, width: 1120, height: 480)
+        func evaluate(_ script: String) async throws -> Bool {
+            try await web.callAsyncJavaScript(script, arguments: [:], in: nil, contentWorld: .defaultClient) as? Bool
+                == true
+        }
+        for _ in 0..<160 {
+            if (try? await evaluate("return !!document.querySelector('.en')?.firstChild")) == true { break }
+            try await Task.sleep(for: .milliseconds(25))
+        }
+        let selected = try await evaluate(
+            """
+            const node=document.querySelector('.en').firstChild;
+            const range=document.createRange();range.setStart(node,12);range.setEnd(node,13);
+            const top=range.getBoundingClientRect().top;
+            let end=13;
+            while(end<node.length-7 && range.getBoundingClientRect().top<top+2){
+              range.setStart(node,end);range.setEnd(node,++end);
+            }
+            getSelection().setBaseAndExtent(node,end+6,node,12);
+            const clipboard=new DataTransfer();
+            document.dispatchEvent(new ClipboardEvent('copy',{clipboardData:clipboard,cancelable:true}));
+            return clipboard.getData('text/plain')===node.data.slice(12,end+6);
+            """)
+        #expect(selected)
+        let boundsCheck = """
+            const runs=[...getSelection().getRangeAt(0).getClientRects()].filter(r=>r.width>0);
+            const ink=[...document.querySelectorAll('#pdf-text-selection span')].map(e=>e.getBoundingClientRect());
+            const paper=document.querySelector('p').getBoundingClientRect();
+            return runs.length>=2 && runs.length===ink.length && ink.every((r,i)=>
+              Math.abs(r.x-runs[i].x)<0.1 && Math.abs(r.y-runs[i].y)<0.1 &&
+              Math.abs(r.width-runs[i].width)<0.1 && r.left>=paper.left-1 && r.right<=paper.right+1)
+              && getComputedStyle(document.documentElement,'::selection').backgroundColor==='rgba(0, 0, 0, 0)'
+              && !!document.querySelector('.zh.counterpart');
+            """
+        for width in [1120, 420] {
+            web.frame.size.width = CGFloat(width)
+            for _ in 0..<80 {
+                if (try? await evaluate(boundsCheck)) == true { break }
+                try await Task.sleep(for: .milliseconds(15))
+            }
+            #expect(try await evaluate(boundsCheck))
+        }
+        _ = try await evaluate("getSelection().removeAllRanges();return true")
+        for _ in 0..<80 {
+            if try await evaluate("return !document.querySelector('#pdf-text-selection span')") { break }
+            try await Task.sleep(for: .milliseconds(15))
+        }
+        #expect(
+            try await evaluate(
+                "return !document.querySelector('.reading-range, .counterpart, #pdf-text-selection span')"))
+    }
+
     @Test @MainActor func pdfReflowNotesUnderlineOnlyAnchoredCharactersAndOpenTheirEditor() async throws {
         let sentence = PDFSourceSentence(
             id: "s", text: "word then word.", pageIndex: 0, rects: [], paragraphID: "p",

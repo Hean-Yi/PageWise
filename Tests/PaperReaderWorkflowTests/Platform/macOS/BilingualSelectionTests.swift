@@ -72,6 +72,16 @@
         #expect(
             try await js(
                 web,
+                """
+                const paragraphs=[originalNode,blocks[1].querySelector('p')].map(n=>n.getBoundingClientRect());
+                const ink=[...document.querySelectorAll('#reader-selection-backgrounds span')];
+                return ink.length>=2 && ink.every(n=>{const r=n.getBoundingClientRect();
+                  return paragraphs.some(p=>r.left>=p.left-1 && r.right<=p.right+1 && r.top>=p.top-1 && r.bottom<=p.bottom+1);
+                }) && getComputedStyle(document.body,'::selection').backgroundColor==='rgba(0, 0, 0, 0)';
+                """) as? Bool == true)
+        #expect(
+            try await js(
+                web,
                 "return [...CSS.highlights.get('reader-selection')].every(r=>r.startContainer===r.endContainer && !r.startContainer.parentElement.closest('.translation'))"
             ) as? Bool == true)
         #expect(

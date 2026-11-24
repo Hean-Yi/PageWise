@@ -478,6 +478,10 @@ extension PDFSentenceTextCanvas {
         .page-supplement[open] summary{margin-bottom:.6em}
         .page-source{border:0;background:none;color:var(--focus);padding:0;cursor:pointer;font:inherit;text-decoration:underline;text-underline-offset:.2em}
         ::selection{background:rgba(160,125,89,.30)}
+        html.reading-range::selection,html.reading-range body::selection,html.reading-range main::selection,
+        html.reading-range main ::selection{background:transparent;color:inherit}
+        main{position:relative;z-index:1}
+        #pdf-text-selection{position:absolute;inset:0 auto auto 0;width:0;height:0;pointer-events:none}
         </style></head><body><main aria-label="本页逐句译文"></main></body></html>
         """
 
@@ -532,41 +536,56 @@ extension PDFSentenceTextCanvas {
             },70);
           },{passive:true});
           \(tableScript)
-          function selectedText(range, text) {
+          \(HTMLSelectionScript.textInk)
+          const selectionInk=document.createElement('div');
+          selectionInk.id='pdf-text-selection';selectionInk.setAttribute('aria-hidden','true');document.body.append(selectionInk);
+          function selectedRange(range, node) {
             const content = document.createRange();
-            content.selectNodeContents(text);
-            const overlap = range.cloneRange();
-            if (overlap.compareBoundaryPoints(Range.START_TO_START, content) < 0) {
-              overlap.setStart(text, 0);
+            content.selectNodeContents(node);
+            if (range.compareBoundaryPoints(Range.START_TO_START, content) > 0) {
+              content.setStart(range.startContainer,range.startOffset);
             }
-            if (overlap.compareBoundaryPoints(Range.END_TO_END, content) > 0) {
-              overlap.setEnd(text, text.childNodes.length);
+            if (range.compareBoundaryPoints(Range.END_TO_END, content) < 0) {
+              content.setEnd(range.endContainer,range.endOffset);
             }
-            return overlap.toString();
+            return content;
           }
-          function selectedPieces(includeOriginal=false) {
+          function selectedPieces() {
             const selection = getSelection();
             if (!selection.rangeCount || selection.isCollapsed) return [];
             const anchor = selection.anchorNode;
             const start = anchor.nodeType === Node.TEXT_NODE ? anchor.parentElement : anchor;
-            const language = main.dataset.selecting || sideOf(start);
+            if (!main.contains(start)) return [];
+            const anchorText=start.closest('.en,.zh,.source-line');
+            const language = anchorText ? sideOf(anchorText) : main.dataset.selecting || sideOf(start);
             const range = selection.getRangeAt(0);
             const pieces = [];
-            const selector=includeOriginal && language==='en' ? '.en,.source-line' : '.'+language;
+            const selector=language==='en' ? '.en,.source-line' : '.zh';
             for (const text of main.querySelectorAll(selector)) {
-              if (!range.intersectsNode(text)) continue;
-              const value = selectedText(range,text);
-              if (value.length) pieces.push({id:text.dataset.sentence, group:text.dataset.sourceGroup, text:value, language});
+              const node=text.firstChild;
+              if (node?.nodeType!==Node.TEXT_NODE || !range.intersectsNode(node)) continue;
+              const clipped=selectedRange(range,node);
+              if (!clipped.collapsed) pieces.push({id:text.dataset.sentence, group:text.dataset.sourceGroup, range:clipped, language});
             }
             return pieces;
           }
+          function paintSelection(pieces) {
+            document.documentElement.classList.toggle('reading-range',pieces.length>0);
+            const pixels=document.createDocumentFragment();
+            for (const piece of pieces) appendTextInk(pixels,piece.range,'rgba(160,125,89,.30)');
+            selectionInk.replaceChildren(pixels);
+          }
+          const refreshSelectionInk=()=>{if(selectionInk.childElementCount)paintSelection(selectedPieces());};
+          new ResizeObserver(refreshSelectionInk).observe(main);
+          document.fonts?.addEventListener('loadingdone',refreshSelectionInk);
           main.addEventListener('pointerdown', event => {
             const text = event.target.closest('.en,.zh,.source-line');
             if (text) main.dataset.selecting = sideOf(text);
             else delete main.dataset.selecting;
           });
           document.addEventListener('selectionchange', () => {
-            const pieces = selectedPieces();
+            const pieces=selectedPieces();
+            paintSelection(pieces);
             if (paragraphMode) {
               for (const el of main.querySelectorAll('.counterpart')) el.classList.remove('counterpart');
               for (const piece of pieces) {
@@ -574,7 +593,7 @@ extension PDFSentenceTextCanvas {
                 pairs.get(piece.id)?.[opposite].classList.add('counterpart');
               }
             }
-            const ids = pieces.map(piece => piece.id);
+            const ids = pieces.map(piece => piece.id).filter(Boolean);
             if (ids.join('|') !== lastSelection.join('|')) {
               lastSelection = ids;
               post({action:'selection',ids});
@@ -588,7 +607,7 @@ extension PDFSentenceTextCanvas {
                 event.clipboardData.setData('text/plain',cells);event.preventDefault();return;
               }
             }
-            const pieces = selectedPieces(true);
+            const pieces = selectedPieces();
             if (!pieces.length || !event.clipboardData) return;
             let plain = '';
             let paragraph;
@@ -596,7 +615,7 @@ extension PDFSentenceTextCanvas {
               const next = piece.group ?? pairs.get(piece.id).group;
               if (paragraph && paragraph !== next) plain += '\\n\\n';
               else if (plain && piece.language === 'en') plain += ' ';
-              plain += piece.text;
+              plain += piece.range.toString();
               paragraph = next;
             }
             event.clipboardData.setData('text/plain', plain);
