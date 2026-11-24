@@ -1,6 +1,6 @@
 import Foundation
 
-/// An explicitly marked Mac acceptance build may use its isolated library's local credential for the selected model service.
+/// Local Mac validation uses a library-scoped opt-in so rebuilding the debug app preserves the test configuration.
 public struct PDFTranslationValidationConfiguration: Sendable {
     public let settings: ModelSettings
     let key: String
@@ -14,7 +14,9 @@ public struct PDFTranslationValidationConfiguration: Sendable {
 
     public static func load(root: URL) -> Self? {
         #if DEBUG && os(macOS)
-            guard Bundle.main.object(forInfoDictionaryKey: "PaperReaderPDFValidation") as? Bool == true,
+            let buildOptIn = Bundle.main.object(forInfoDictionaryKey: "PaperReaderPDFValidation") as? Bool == true
+            let localOptIn = root.appendingPathComponent(".enable-deepseek-validation")
+            guard buildOptIn || FileManager.default.fileExists(atPath: localOptIn.path),
                 let content = try? String(contentsOf: root.appendingPathComponent(".env"), encoding: .utf8)
             else { return nil }
             let prefix = "DEEPSEEK_API_KEY="
