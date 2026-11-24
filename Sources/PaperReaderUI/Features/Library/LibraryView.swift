@@ -24,7 +24,6 @@ public struct LibraryView: View {
     @State private var findRequest = 0
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.horizontalSizeClass) private var sizeClass
     @Namespace private var sidebarSelection
     private let timer = Timer.publish(every: 60, on: .main, in: .common).autoconnect()
 
@@ -96,12 +95,11 @@ public struct LibraryView: View {
             ZStack {
                 if isReading {
                     ReaderNavigator(model: model, findRequest: findRequest) { preferredColumn = .detail }
-                        .transition(ReaderMotion.arrival())
                 } else {
-                    sidebar.transition(ReaderMotion.arrival())
+                    sidebar
                 }
             }
-            .animation(pageAnimation, value: isReading)
+            .modifier(WorkspaceArrival(page: isReading, distance: isReading ? 9 : -9, background: ReaderTheme.sidebar))
             .navigationSplitViewColumnWidth(min: 210, ideal: 244, max: 320)
         } detail: {
             detailContent
@@ -247,47 +245,62 @@ public struct LibraryView: View {
     }
 
     private var workspaceContent: some View {
-        ZStack {
+        let page = workspacePage
+        return ZStack {
             if let failure = model.loadFailure {
                 ContentUnavailableView(
                     "无法打开书库", systemImage: "externaldrive.badge.exclamationmark", description: Text(failure))
             } else if !model.loaded {
                 ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if model.selectedSection == "calendar" {
-                ReadingCalendarView(model: model, date: $calendarDate).transition(ReaderMotion.arrival(y: 5))
-            } else if model.selectedSection == "notebooks" {
-                ReadingNotebooksView(model: model, expandedHistory: $expandedNotebooks).transition(ReaderMotion.arrival(y: 5))
-            } else if model.paper != nil {
-                ReaderView(
-                    model: model, sidebarOpen: assistantTab != nil,
-                    explainSelection: {
-                        paperQuestion = "请结合全文解释选中内容。"
-                        assistantTab = .paper
-                    }, openSettings: { showSettings = true }
-                )
-                .transition(ReaderMotion.arrival(x: 14))
             } else {
-                LibraryWorkspaceView(
-                    model: model, collection: $collection, selectedShelfID: $selectedShelfID,
-                    onlineSearch: onlineSearch, findRequest: findRequest
-                )
-                .transition(ReaderMotion.arrival(x: -10))
+                switch page {
+                case .calendar:
+                    ReadingCalendarView(model: model, date: $calendarDate)
+                case .notebooks:
+                    ReadingNotebooksView(model: model, expandedHistory: $expandedNotebooks)
+                case .reader:
+                    ReaderView(
+                        model: model, sidebarOpen: assistantTab != nil,
+                        explainSelection: {
+                            paperQuestion = "请结合全文解释选中内容。"
+                            assistantTab = .paper
+                        }, openSettings: { showSettings = true })
+                case .shelf:
+                    LibraryWorkspaceView(
+                        model: model, collection: $collection, selectedShelfID: $selectedShelfID,
+                        onlineSearch: onlineSearch, findRequest: findRequest)
+                }
             }
         }
-        .animation(pageAnimation, value: isReading)
-        .animation(pageAnimation, value: model.selectedSection)
+        .modifier(WorkspaceArrival(page: page, distance: page.arrivalDistance, background: ReaderTheme.canvas))
     }
 
-    // Compact NavigationSplitView provides its own push and pop.
-    private var pageAnimation: Animation? { ReaderMotion.navigation(reduceMotion || sizeClass == .compact) }
+    private enum WorkspacePage {
+        case shelf, reader, calendar, notebooks
 
-    private var isReading: Bool { model.selectedSection == "library" && model.paper != nil }
+        var arrivalDistance: CGFloat {
+            switch self {
+            case .reader: 32
+            case .shelf: -24
+            case .calendar, .notebooks: -16
+            }
+        }
+    }
+
+    private var workspacePage: WorkspacePage {
+        switch model.selectedSection {
+        case "calendar": .calendar
+        case "notebooks": .notebooks
+        default: model.currentEdition == nil ? .shelf : .reader
+        }
+    }
+
+    private var isReading: Bool { workspacePage == .reader }
 
     private var recentPapers: [Paper] {
-        model.state.papers.filter { model.workspace(for: $0.id).lastOpenedAt != nil }.sorted {
-            (model.workspace(for: $0.id).lastOpenedAt ?? .distantPast)
-                > (model.workspace(for: $1.id).lastOpenedAt ?? .distantPast)
-        }
+        model.state.papers.compactMap { paper in
+            model.workspace(for: paper.id).lastOpenedAt.map { (paper: paper, date: $0) }
+        }.sorted { $0.date > $1.date }.prefix(8).map(\.paper)
     }
 
     private var sidebar: some View {
@@ -296,6 +309,7 @@ public struct LibraryView: View {
                 Image(systemName: "book.pages.fill").font(.system(size: 20, weight: .regular))
                     .foregroundStyle(ReaderTheme.accent).accessibilityHidden(true)
                 Text("PaperReader").font(ReaderTheme.editorial(24, weight: .medium)).foregroundStyle(ReaderTheme.ink)
+                    .lineLimit(1).minimumScaleFactor(0.8)
             }.padding(.horizontal, 21).padding(.top, 17).padding(.bottom, 27)
             VStack(spacing: 3) {
                 ForEach([LibraryCollection.all, .finished, .favorites]) { item in
@@ -325,12 +339,13 @@ public struct LibraryView: View {
             .animation(ReaderMotion.disclosure(reduceMotion), value: collection)
             .animation(ReaderMotion.disclosure(reduceMotion), value: model.selectedSection)
             .padding(.horizontal, 10)
-            if !recentPapers.isEmpty {
+            let recent = recentPapers
+            if !recent.isEmpty {
                 Text("最近打开").font(.caption.weight(.medium)).foregroundStyle(ReaderTheme.muted)
                     .padding(.horizontal, 23).padding(.top, 28).padding(.bottom, 9)
                 ScrollView {
                     VStack(spacing: 2) {
-                        ForEach(recentPapers.prefix(8)) { paper in
+                        ForEach(recent) { paper in
                             Button {
                                 model.select(paper.id)
                                 preferredColumn = .detail

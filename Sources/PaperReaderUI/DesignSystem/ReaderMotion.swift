@@ -13,8 +13,7 @@ enum ReaderMotion {
         reduceMotion ? nil : .smooth(duration: 0.28)
     }
 
-    // Release the old native canvas immediately. Only the arriving surface travels.
-    static func arrival(x: CGFloat = 0, y: CGFloat = 0) -> AnyTransition {
-        .asymmetric(insertion: .opacity.combined(with: .offset(x: x, y: y)), removal: .identity)
+    static func arrival(y: CGFloat = 0) -> AnyTransition {
+        .asymmetric(insertion: .opacity.combined(with: .offset(y: y)), removal: .identity)
     }
 }

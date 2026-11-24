@@ -120,3 +120,7 @@ Swift Package 自动递归发现每个 target 目录下的 Swift 文件。当前
 快照 v9 显式清除未完成 TeX/HTML 任务的旧窗口计划与窗口提交索引，避免已删除元数据改变来源摘要后阻断恢复；已完成来源 ID、已发布内容和用户记录不变。下一次继续只规划未发布部分。
 
 书库快照 v10 按已保存精读报告的笔记 ID 识别旧的全文总结，保留 Markdown 和引用，并把其位置迁到文末。文末页属于阅读器，原始 PDF 与已发布 HTML 的页码、段落和批注坐标沿用原有版本。
+
+`Application/Reading/PaperReadingNotebook` 通过精读报告的论文 ID 和文末笔记 ID 关联当前有效的 `ReadingNote`。书库按论文分组展示，历史各次保留自己的报告时间和关注点，打开时读取原笔记。独立保存的文末笔记按创建时间列入同一索引。设置中的研究记忆复用 `Features/Memory/MemoryView`，继续通过 `ReaderModel` 编辑和删除。
+
+`Domain/Reading/ReadingMetrics` 按所选日的起止时间截取 `ReadingEntry`，分别计算每篇论文和全日的时间并集。`Features/Calendar` 展示聚合结果，明细通过原记录 ID 修正，数据库继续逐条保存阅读活动。
