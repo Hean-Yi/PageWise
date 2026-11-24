@@ -103,7 +103,7 @@ private struct CoverPalette {
 struct BookshelfItem: View {
     @Bindable var model: ReaderModel
     let paper: Paper
-    let covers: Namespace.ID
+    let recordFrame: (CGRect?) -> Void
     let previewed: Bool
     let showPreview: (ShelfPreviewTarget) -> Void
     let releasePreview: () -> Bool
@@ -128,55 +128,58 @@ struct BookshelfItem: View {
     private var showsActions: Bool { highlighted }
 
     var body: some View {
+        let progress = self.progress
         VStack(alignment: .leading, spacing: 15) {
-            ZStack {
-                Color.clear.aspectRatio(0.70, contentMode: .fit).accessibilityHidden(true)
-                if !previewed {
-                    BookCoverView(paper: paper, progress: progress)
-                        .matchedGeometryEffect(id: paper.id, in: covers)
-                        .transition(.identity)
-                        .shadow(
-                            color: .black.opacity(highlighted ? 0.16 : 0.09), radius: highlighted ? 10 : 4, x: 0,
-                            y: highlighted ? 8 : 3
+            BookCoverView(paper: paper, progress: progress)
+                .onGeometryChange(for: CGRect.self) { geometry in
+                    geometry.frame(in: .named(ShelfCoverFlight.coordinateSpace))
+                } action: { frame in
+                    recordFrame(frame)
+                }
+                .shadow(
+                    color: .black.opacity(highlighted ? 0.16 : 0.09), radius: highlighted ? 10 : 4,
+                    y: highlighted ? 8 : 3
+                )
+                .opacity(previewed ? 0 : 1)
+                .animation(nil, value: previewed)
+                .offset(y: highlighted && !reduceMotion ? -6 : 0)
+                .opacity(lifted ? 0.28 : 1)
+                .offset(arrangementOffset)
+                .contentShape(Rectangle())
+                #if os(macOS)
+                    .overlay {
+                        NativePaperDrag(
+                            paper: paper, progress: progress, reduceMotion: reduceMotion,
+                            begin: beginDrag, end: endDrag, accepts: acceptsDrop, hover: hoverDrop,
+                            receive: receiveDrop,
+                            focus: { focus = .cover }, open: { model.select(paper.id) })
+                    }
+                #else
+                    .overlay {
+                        TouchPaperDrag(
+                            paper: paper, progress: progress, open: { model.select(paper.id) },
+                            begin: beginDrag, end: endDrag, accepts: acceptsDrop, hover: hoverDrop, receive: receiveDrop
                         )
-                        .offset(y: highlighted && !reduceMotion ? -6 : 0)
+                    }
+                #endif
+                .focusable().focused($focus, equals: .cover)
+                .onKeyPress(.return) {
+                    model.select(paper.id)
+                    return .handled
                 }
-            }
-            .opacity(lifted ? 0.28 : 1)
-            .offset(arrangementOffset)
-            .contentShape(Rectangle())
-            #if os(macOS)
-                .overlay {
-                    NativePaperDrag(
-                        paper: paper, progress: progress, reduceMotion: reduceMotion,
-                        begin: beginDrag, end: endDrag, accepts: acceptsDrop, hover: hoverDrop, receive: receiveDrop,
-                        focus: { focus = .cover }, open: { model.select(paper.id) })
+                .onKeyPress(keys: [.space], phases: [.down, .repeat, .up]) { key in
+                    guard key.modifiers.isEmpty else { return .ignored }
+                    if key.phase == .down { showPreview(.held(paper.id)) }
+                    if key.phase == .up { _ = releasePreview() }
+                    return .handled
                 }
-            #else
-                .overlay {
-                    TouchPaperDrag(
-                        paper: paper, progress: progress, open: { model.select(paper.id) },
-                        begin: beginDrag, end: endDrag, accepts: acceptsDrop, hover: hoverDrop, receive: receiveDrop)
-                }
-            #endif
-            .focusable().focused($focus, equals: .cover)
-            .onKeyPress(.return) {
-                model.select(paper.id)
-                return .handled
-            }
-            .onKeyPress(keys: [.space], phases: [.down, .repeat, .up]) { key in
-                guard key.modifiers.isEmpty else { return .ignored }
-                if key.phase == .down { showPreview(.held(paper.id)) }
-                if key.phase == .up { _ = releasePreview() }
-                return .handled
-            }
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel("打开论文：\(paper.title)")
-            .accessibilityValue(progress.label)
-            .accessibilityAddTraits(.isButton)
-            .accessibilityAction { model.select(paper.id) }
-            .accessibilityAction(named: "预览论文") { showPreview(.pinned(paper.id)) }
-            .help("\(paper.title) · \(progress.label) · 按住空格预览")
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("打开论文：\(paper.title)")
+                .accessibilityValue(progress.label)
+                .accessibilityAddTraits(.isButton)
+                .accessibilityAction { model.select(paper.id) }
+                .accessibilityAction(named: "预览论文") { showPreview(.pinned(paper.id)) }
+                .help("\(paper.title) · \(progress.label) · 按住空格预览")
             HStack(spacing: 7) {
                 Button {
                     showPreview(.pinned(paper.id))
@@ -213,7 +216,10 @@ struct BookshelfItem: View {
             hovered = $0
             hoverCover($0)
         }
-        .onDisappear { hoverCover(false) }
+        .onDisappear {
+            hoverCover(false)
+            recordFrame(nil)
+        }
         .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: highlighted)
         .contextMenu { actions }
     }

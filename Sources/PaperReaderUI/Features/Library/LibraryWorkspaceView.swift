@@ -1,8 +1,9 @@
 import PaperReaderKit
 import SwiftUI
 
-// Hover changes need no parent redraw. Read this value only at the start of a space gesture.
-@MainActor private final class ShelfPointer {
+// Scrolling and hovering record the visible covers without invalidating the grid.
+@MainActor private final class ShelfCoverLocations {
+    var frames: [UUID: CGRect] = [:]
     var paperID: UUID?
 
     func update(_ id: UUID, inside: Bool) {
@@ -16,41 +17,99 @@ struct LibraryWorkspaceView: View {
     @Binding var selectedShelfID: UUID?
     @Bindable var onlineSearch: OnlinePaperSearch
     let findRequest: Int
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var query = ""
+
+    var body: some View {
+        ShelfWorkspaceContent(
+            model: model, collection: $collection, selectedShelfID: $selectedShelfID, onlineSearch: onlineSearch,
+            findRequest: findRequest, query: $query,
+            listing: ShelfListing(state: model.state, collection: collection, query: query, shelfID: selectedShelfID))
+    }
+}
+
+// Shelf membership, reading status and ordering only change with the library or its filters.
+// Keeping this work outside the interactive view avoids sorting while lifting or returning a cover.
+private struct ShelfListing {
+    let entries: [(offset: Int, element: Paper)]
+    let ids: [UUID]
+    let firstFinishedIndex: Int?
+    let recent: Paper?
+
+    init(state: LibraryState, collection: LibraryCollection, query: String, shelfID: UUID?) {
+        let sorted = LibraryQuery.papers(in: state, collection: collection, query: query, sort: state.preferredSort)
+        let scoped = collection == .all && (shelfID != nil || query.isEmpty)
+        let visible = scoped ? sorted.filter { state.shelfID(for: $0.id) == shelfID } : sorted
+        entries = Array(visible.enumerated())
+        ids = visible.map(\.id)
+        firstFinishedIndex =
+            collection == .all
+            ? visible.firstIndex {
+                LibraryCollection.finished.includes(state.workspace[$0.id.uuidString] ?? PaperWorkspace(), for: $0)
+            } : nil
+        if collection == .all, shelfID == nil, query.isEmpty {
+            if state.preferredSort == .recent {
+                recent = sorted.first {
+                    guard let workspace = state.workspace[$0.id.uuidString], workspace.position != nil else {
+                        return false
+                    }
+                    return LibraryCollection.reading.includes(workspace, for: $0)
+                }
+            } else {
+                recent = LibraryQuery.papers(in: state, collection: .reading).first {
+                    state.workspace[$0.id.uuidString]?.position != nil
+                }
+            }
+        } else {
+            recent = nil
+        }
+    }
+}
+
+private struct ShelfWorkspaceContent: View {
+    @Bindable var model: ReaderModel
+    @Binding var collection: LibraryCollection
+    @Binding var selectedShelfID: UUID?
+    @Bindable var onlineSearch: OnlinePaperSearch
+    let findRequest: Int
+    @Binding var query: String
+    let listing: ShelfListing
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var arrangement = CoverArrangement()
     private var sort: LibrarySort { model.state.preferredSort }
     @FocusState private var searchFocused: Bool
-    @Namespace private var covers
-    @State private var preview: ShelfPreviewTarget?
-    @State private var pointer = ShelfPointer()
+    private struct Preview {
+        var target: ShelfPreviewTarget
+        var flight: ShelfCoverFlight
+    }
+    @State private var preview: Preview?
+    @State private var locations = ShelfCoverLocations()
 
-    private func showPreview(_ target: ShelfPreviewTarget) {
-        guard preview == nil, arrangement.sourceID == nil else { return }
-        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.24)) { preview = target }
+    @discardableResult private func showPreview(_ target: ShelfPreviewTarget) -> Bool {
+        guard arrangement.sourceID == nil, let frame = locations.frames[target.paperID], !frame.isEmpty else {
+            return false
+        }
+        if let preview {
+            guard preview.target.paperID == target.paperID, preview.flight.returning else { return false }
+            self.preview = Preview(target: target, flight: preview.flight.reversed(at: .now, landing: frame))
+        } else {
+            preview = Preview(target: target, flight: ShelfCoverFlight(onShelf: frame))
+        }
+        return true
     }
 
     @discardableResult private func dismissPreview() -> Bool {
-        guard preview != nil else { return false }
-        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.18)) { preview = nil }
+        guard let preview else { return false }
+        if preview.flight.awaitingLift || reduceMotion || locations.frames[preview.target.paperID] == nil {
+            self.preview = nil
+        } else if !preview.flight.returning, let frame = locations.frames[preview.target.paperID] {
+            self.preview?.flight = preview.flight.reversed(at: .now, landing: frame)
+        }
         return true
     }
 
     private func releasePreview() -> Bool {
-        if case .held = preview { return dismissPreview() }
+        if case .held = preview?.target { return dismissPreview() }
         return false
-    }
-
-    private var papers: [Paper] {
-        LibraryQuery.papers(in: model.state, collection: collection, query: query, sort: sort).filter {
-            collection != .all || (selectedShelfID == nil && !query.isEmpty)
-                || model.state.shelfID(for: $0.id) == selectedShelfID
-        }
-    }
-    private var recent: Paper? {
-        LibraryQuery.papers(in: model.state, collection: .reading).first {
-            model.workspace(for: $0.id).position != nil
-        }
     }
 
     var body: some View {
@@ -64,7 +123,7 @@ struct LibraryWorkspaceView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
                     header(compact: compact).padding(.bottom, compact ? 22 : 30)
-                    if collection == .all && selectedShelfID == nil && query.isEmpty, let recent {
+                    if let recent = listing.recent {
                         continueReading(recent).padding(.bottom, 22)
                     }
                     HStack(alignment: .top, spacing: 12) {
@@ -89,9 +148,9 @@ struct LibraryWorkspaceView: View {
                         if collection != .reading && collection != .finished {
                             AddPaperCover { onlineSearch.open(shelfID: collection == .all ? selectedShelfID : nil) }
                         }
-                        ForEach(papers) { paper in
+                        ForEach(listing.entries, id: \.element.id) { index, paper in
                             bookshelfItem(
-                                paper, columns: count,
+                                paper, index: index, columns: count,
                                 width: min(236, (available - CGFloat(count - 1) * 36) / CGFloat(count)))
                         }
                     }.padding(.top, 5)
@@ -101,7 +160,7 @@ struct LibraryWorkspaceView: View {
                             Button("试读示例") { Task { await model.addDemo() } }
                                 .buttonStyle(.plain).foregroundStyle(ReaderTheme.accent)
                         }.font(.system(size: 12)).padding(.top, 22)
-                    } else if papers.isEmpty {
+                    } else if listing.entries.isEmpty {
                         HStack {
                             Text(query.isEmpty ? "这个书架还没有论文" : "没有匹配的论文")
                                 .foregroundStyle(ReaderTheme.muted)
@@ -113,29 +172,34 @@ struct LibraryWorkspaceView: View {
             .allowsHitTesting(preview == nil)
             .accessibilityHidden(preview != nil)
             .overlay {
-                if let preview, let paper = model.state.papers.first(where: { $0.id == preview.paperID }) {
-                    ShelfPaperPreview(paper: paper, model: model, covers: covers) {
+                if let preview, let paper = model.state.papers.first(where: { $0.id == preview.target.paperID }) {
+                    ShelfPaperPreview(paper: paper, model: model, flight: preview.flight) {
+                        if self.preview?.flight == preview.flight, preview.flight.awaitingLift {
+                            self.preview?.flight = preview.flight.lifted(at: .now)
+                        }
+                    } dismiss: {
                         dismissPreview()
+                    } landed: {
+                        if self.preview?.flight == preview.flight { self.preview = nil }
                     } open: {
                         self.preview = nil
                         model.select(paper.id)
                     }
                     .id(paper.id)
-                    .transition(.opacity)
+                    .transition(.identity)
                 }
             }
             #if os(macOS)
                 .background {
                     ShelfPreviewKeys(
-                        hovered: { pointer.paperID },
-                        press: { id in
-                            guard preview == nil, arrangement.sourceID == nil else { return false }
-                            showPreview(.held(id))
-                            return true
-                        }, release: releasePreview, dismiss: dismissPreview)
+                        hovered: {
+                            locations.paperID ?? (preview?.flight.returning == true ? preview?.target.paperID : nil)
+                        },
+                        press: { showPreview(.held($0)) }, release: releasePreview, dismiss: dismissPreview)
                 }
             #endif
-        }.onChange(of: query) { _, _ in arrangement.end() }
+        }.coordinateSpace(.named(ShelfCoverFlight.coordinateSpace))
+            .onChange(of: query) { _, _ in arrangement.end() }
             .onChange(of: collection) { _, _ in
                 arrangement.end()
                 preview = nil
@@ -163,9 +227,7 @@ struct LibraryWorkspaceView: View {
             }
     }
 
-    private func bookshelfItem(_ paper: Paper, columns: Int, width: CGFloat) -> some View {
-        let ids = papers.map(\.id)
-        let index = ids.firstIndex(of: paper.id) ?? 0
+    private func bookshelfItem(_ paper: Paper, index: Int, columns: Int, width: CGFloat) -> some View {
         let destination = index + arrangement.offset(for: paper.id)
         // Add-cover occupies the first grid cell but is never a reorder destination.
         let leading = collection != .reading && collection != .finished ? 1 : 0
@@ -175,12 +237,14 @@ struct LibraryWorkspaceView: View {
             width: CGFloat(to % columns - from % columns) * (width + 36),
             height: CGFloat(to / columns - from / columns) * (width / 0.70 + 77))
         return BookshelfItem(
-            model: model, paper: paper, covers: covers, previewed: preview?.paperID == paper.id,
-            showPreview: showPreview, releasePreview: releasePreview,
-            hoverCover: { pointer.update(paper.id, inside: $0) }, lifted: arrangement.sourceID == paper.id,
+            model: model, paper: paper, recordFrame: { locations.frames[paper.id] = $0 },
+            previewed: preview?.target.paperID == paper.id && preview?.flight.awaitingLift == false,
+            showPreview: { showPreview($0) }, releasePreview: releasePreview,
+            hoverCover: { locations.update(paper.id, inside: $0) }, lifted: arrangement.sourceID == paper.id,
             arrangementOffset: offset,
             beginDrag: {
-                arrangement.begin(paper.id, visible: ids, state: model.state, unfinishedFirst: collection == .all)
+                arrangement.begin(
+                    paper.id, visible: listing.ids, state: model.state, unfinishedFirst: collection == .all)
             },
             endDrag: { arrangement.end() },
             acceptsDrop: { arrangement.accepts($0, at: paper.id) },
@@ -190,26 +254,21 @@ struct LibraryWorkspaceView: View {
                 Task { await arrangement.commit(model: model) }
                 return true
             },
-            moveEarlier: orderAction(paper.id, delta: -1),
-            moveLater: orderAction(paper.id, delta: 1)
+            moveEarlier: orderAction(at: index, delta: -1),
+            moveLater: orderAction(at: index, delta: 1)
         )
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: arrangement.preview)
         .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: arrangement.sourceID)
     }
 
-    private func orderAction(_ id: UUID, delta: Int) -> (() -> Void)? {
-        let ids = papers.map(\.id)
-        guard !arrangement.committing, let index = ids.firstIndex(of: id), ids.indices.contains(index + delta) else {
-            return nil
-        }
-        let destination = ids[index + delta]
-        if collection == .all {
-            let finished = Set(LibraryQuery.papers(in: model.state, collection: .finished).map(\.id))
-            guard finished.contains(id) == finished.contains(destination) else { return nil }
-        }
+    private func orderAction(at index: Int, delta: Int) -> (() -> Void)? {
+        let ids = listing.ids
+        let destination = index + delta
+        guard !arrangement.committing, ids.indices.contains(destination) else { return nil }
+        if let boundary = listing.firstFinishedIndex, (index < boundary) != (destination < boundary) { return nil }
         return {
             var reordered = ids
-            reordered.swapAt(index, index + delta)
+            reordered.swapAt(index, destination)
             Task { await model.arrangePapers(original: ids, reordered: reordered, unfinishedFirst: collection == .all) }
         }
     }
@@ -239,7 +298,7 @@ struct LibraryWorkspaceView: View {
             Text(collection.title).font(ReaderTheme.editorial(36))
                 .foregroundStyle(ReaderTheme.ink).accessibilityAddTraits(.isHeader)
             Text(
-                "\(collection == .all && query.isEmpty ? model.state.papers.count : papers.count) 篇"
+                "\(collection == .all && query.isEmpty ? model.state.papers.count : listing.entries.count) 篇"
             ).font(.callout).foregroundStyle(ReaderTheme.muted)
         }
     }

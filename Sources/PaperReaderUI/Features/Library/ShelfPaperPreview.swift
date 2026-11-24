@@ -15,12 +15,17 @@ enum ShelfPreviewTarget: Equatable {
 struct ShelfPaperPreview: View {
     let paper: Paper
     let model: ReaderModel
-    let covers: Namespace.ID
+    let flight: ShelfCoverFlight
+    let lift: () -> Void
     let dismiss: () -> Void
+    let landed: () -> Void
     let open: () -> Void
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var content: PaperPreviewContent?
-    @State private var revealText = false
+    @State private var useLiveCover = false
+    @State private var backdropVisible = false
+    @State private var panelVisible = false
+    @State private var detailsVisible = false
 
     var body: some View {
         GeometryReader { viewport in
@@ -33,37 +38,35 @@ struct ShelfPaperPreview: View {
                 ? min(282, panelWidth * 0.34, max(0, panelHeight - 64) * 0.7)
                 : min(205, panelWidth * 0.55, panelHeight * 0.33)
 
+            let panel = CGRect(
+                x: (size.width - panelWidth) / 2, y: (size.height - panelHeight) / 2,
+                width: panelWidth, height: panelHeight)
+            let coverHeight = coverWidth / 0.7
+            let destination = CGRect(
+                x: wide ? panel.minX + 26 : panel.midX - coverWidth / 2,
+                y: wide ? panel.midY - coverHeight / 2 : panel.minY + 18, width: coverWidth, height: coverHeight)
+
             ZStack {
-                Color.black.opacity(0.22).ignoresSafeArea()
-                    .onTapGesture(perform: dismiss).accessibilityHidden(true)
-                    .transition(.opacity)
-                Group {
-                    if wide {
-                        HStack(spacing: 0) {
-                            cover(width: coverWidth).padding(.horizontal, 26)
-                            Divider().overlay(ReaderTheme.line)
-                            details.padding(.leading, 26).padding(.trailing, 30)
-                        }
-                    } else {
-                        VStack(spacing: 12) {
-                            cover(width: coverWidth).padding(.top, 18)
-                            details.padding(.horizontal, 20)
-                        }
+                Color.black.opacity(backdropVisible ? 0.22 : 0)
+                    .contentShape(Rectangle()).onTapGesture(perform: dismiss).accessibilityHidden(true)
+                previewPanel(wide: wide, size: panel.size, cover: destination.size)
+                    .opacity(panelVisible ? 1 : 0).allowsHitTesting(!flight.returning)
+                let reading = ReadingProgress.resolve(paper: paper, workspace: model.workspace(for: paper.id))
+                if useLiveCover {
+                    BookCoverView(paper: paper, progress: reading)
+                        .frame(width: coverWidth, height: coverHeight)
+                        .position(x: destination.midX, y: destination.midY).allowsHitTesting(false)
+                } else {
+                    ShelfFlyingCover(
+                        paper: paper, reading: reading, flight: flight, destination: destination,
+                        reduceMotion: reduceMotion
+                    ) { rendered in
+                        useLiveCover = !rendered
+                        lift()
                     }
-                }
-                .frame(width: panelWidth, height: panelHeight)
-                .background {
-                    RoundedRectangle(cornerRadius: 16).fill(ReaderTheme.surface)
-                        .shadow(color: .black.opacity(0.16), radius: 22, y: 9)
-                }
-                .overlay { RoundedRectangle(cornerRadius: 16).strokeBorder(ReaderTheme.line).allowsHitTesting(false) }
-                .overlay(alignment: .topTrailing) {
-                    Button(action: dismiss) {
-                        Image(systemName: "xmark").font(.system(size: 12, weight: .semibold))
-                            .frame(width: 30, height: 30).contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain).foregroundStyle(ReaderTheme.muted).padding(6)
-                    .accessibilityLabel("关闭书目预览").help("关闭预览")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .opacity(flight.awaitingLift ? 0 : 1)
+                    .allowsHitTesting(false).accessibilityHidden(true)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -72,20 +75,62 @@ struct ShelfPaperPreview: View {
         .accessibilityLabel("书目预览，" + paper.title)
         .accessibilityAddTraits(.isModal)
         .accessibilityAction(.escape, dismiss)
-        .task(id: paper.id) {
-            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.16).delay(0.1)) { revealText = true }
-            let value = await model.previewContent(for: paper.id)
-            if !Task.isCancelled { content = value }
+        .task(id: flight) {
+            guard !flight.awaitingLift else { return }
+            let opening = !flight.returning
+            let remaining = max(0, flight.endsAt.timeIntervalSinceNow)
+            let timing = { (portion: Double, delay: Double) -> Animation? in
+                reduceMotion || useLiveCover ? nil : .easeInOut(duration: remaining * portion).delay(remaining * delay)
+            }
+            withAnimation(timing(0.8, 0)) { backdropVisible = opening }
+            withAnimation(timing(opening ? 0.65 : 0.7, opening ? 0.17 : 0.06)) { panelVisible = opening }
+            withAnimation(timing(opening ? 0.46 : 0.42, opening ? 0.44 : 0)) { detailsVisible = opening }
+            do {
+                if !reduceMotion && !useLiveCover { try await Task.sleep(for: .seconds(remaining)) }
+                try Task.checkCancellation()
+            } catch { return }
+            if flight.returning {
+                landed()
+            } else if content == nil {
+                // Let the book land before PDF extraction or a long abstract enters the view tree.
+                let value = await model.previewContent(for: paper.id)
+                if !Task.isCancelled { content = value }
+            }
         }
     }
 
-    private func cover(width: CGFloat) -> some View {
-        BookCoverView(paper: paper)
-            .matchedGeometryEffect(id: paper.id, in: covers)
-            .frame(width: width, height: width / 0.7)
-            .shadow(color: .black.opacity(0.16), radius: 10, x: 1, y: 7)
-            .accessibilityHidden(false).accessibilityElement(children: .ignore)
-            .accessibilityLabel(paper.title).accessibilityAddTraits(.isHeader)
+    private func previewPanel(wide: Bool, size: CGSize, cover: CGSize) -> some View {
+        let space = Color.clear.frame(width: cover.width, height: cover.height)
+            .accessibilityElement(children: .ignore).accessibilityLabel(paper.title).accessibilityAddTraits(.isHeader)
+        let text = details.opacity(detailsVisible ? 1 : 0)
+        return Group {
+            if wide {
+                HStack(spacing: 0) {
+                    space.padding(.horizontal, 26)
+                    Divider().overlay(ReaderTheme.line)
+                    text.padding(.leading, 26).padding(.trailing, 30)
+                }
+            } else {
+                VStack(spacing: 12) {
+                    space.padding(.top, 18)
+                    text.padding(.horizontal, 20)
+                }
+            }
+        }
+        .frame(width: size.width, height: size.height)
+        .background {
+            RoundedRectangle(cornerRadius: 16).fill(ReaderTheme.surface)
+                .shadow(color: .black.opacity(0.16), radius: 22, y: 9)
+        }
+        .overlay { RoundedRectangle(cornerRadius: 16).strokeBorder(ReaderTheme.line).allowsHitTesting(false) }
+        .overlay(alignment: .topTrailing) {
+            Button(action: dismiss) {
+                Image(systemName: "xmark").font(.system(size: 12, weight: .semibold))
+                    .frame(width: 30, height: 30).contentShape(Rectangle())
+            }
+            .buttonStyle(.plain).foregroundStyle(ReaderTheme.muted).padding(6)
+            .accessibilityLabel("关闭书目预览").help("关闭预览")
+        }
     }
 
     private var details: some View {
@@ -125,6 +170,5 @@ struct ShelfPaperPreview: View {
         }
         .foregroundStyle(ReaderTheme.ink)
         .padding(.top, 30).padding(.bottom, 20)
-        .opacity(revealText ? 1 : 0)
     }
 }
