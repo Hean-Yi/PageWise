@@ -7,7 +7,10 @@ public struct PDFReadingNoteFragment: Sendable {
     public let rects: [[Double]]
 
     public func highlight(for paperID: UUID) -> Highlight {
-        Highlight(paperID: paperID, pageKey: anchor.key, pageIndex: pageIndex, text: anchor.text, rects: rects)
+        var mark = Highlight(
+            paperID: paperID, pageKey: anchor.key, pageIndex: pageIndex, text: anchor.text, rects: rects)
+        mark.pdfTextStart = anchor.start
+        return mark
     }
 }
 

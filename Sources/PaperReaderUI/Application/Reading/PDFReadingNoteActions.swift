@@ -17,6 +17,7 @@ struct PDFNoteEditorSession: Identifiable {
     var id: UUID { note.id }
     let note: ReadingNote
     let marks: [Highlight]
+    var usesReflowMargin = false
 }
 
 struct PDFInlineNote: Equatable {
@@ -27,25 +28,27 @@ struct PDFInlineNote: Equatable {
 }
 
 extension ReaderModel {
-    /// A report indexes its paragraph notes in the sidebar. Give an existing ordinary note the first hit in the text.
-    var inlinePDFNotes: [PDFInlineNote] {
+    var reflowInlinePDFNotes: [PDFInlineNote] {
         guard let paper = currentEdition else { return [] }
         let version = paper.digest + ":original-0"
         let local = inlineReadingNotes.reversed().filter {
             $0.contentVersion == version && $0.anchors.first?.readingPageIndex != nil
         }
         let ordered = local.filter { $0.dimension == nil } + local.filter { $0.dimension != nil }
+        return ordered.map { PDFInlineNote(id: $0.id, anchors: $0.anchors, color: $0.dimension?.color) }
+    }
+
+    /// PDFKit draws one hit target per range. The margin reader can present each overlapping note.
+    var inlinePDFNotes: [PDFInlineNote] {
         var seen = Set<[NoteAnchor]>()
-        return ordered.compactMap {
-            guard seen.insert($0.anchors).inserted else { return nil }
-            return PDFInlineNote(id: $0.id, anchors: $0.anchors, color: $0.dimension?.color)
-        }
+        return reflowInlinePDFNotes.filter { seen.insert($0.anchors).inserted }
     }
 
     var inlinePDFHighlights: [PDFInlineNote] {
         currentHighlights.compactMap { mark in
-            guard let anchor = mark.pdfReadingAnchor else { return nil }
-            return PDFInlineNote(id: mark.id, anchors: [anchor], color: mark.color, style: mark.style)
+            let anchors = mark.pdfReadingAnchor.map { [$0] } ?? pdfBilingual.verifiedAnchors(for: mark)
+            guard !anchors.isEmpty else { return nil }
+            return PDFInlineNote(id: mark.id, anchors: anchors, color: mark.color, style: mark.style)
         }
     }
 
@@ -101,17 +104,18 @@ extension ReaderModel {
         } catch { return .init() }
     }
 
-    func openPDFHighlightNote(_ mark: Highlight) async {
+    func openPDFHighlightNote(_ mark: Highlight, inReflow: Bool = false) async {
         guard let paper, mark.paperID == paper.id, mode == "original", currentHighlights.contains(mark) else { return }
         if let anchor = mark.pdfReadingAnchor, anchor.pdfTranslationPageIndex != nil {
-            openPDFNote([anchor], in: paper)
+            openPDFNote([anchor], in: paper, inReflow: inReflow)
             return
         }
         do {
             let parts = try await PDFReadingNoteLocator().locatedHighlight(
                 mark, in: root.appendingPathComponent(paper.originalPath))
             guard selectedPaperID == paper.id, mode == "original", currentHighlights.contains(mark) else { return }
-            openPDFNote(parts.map(\.anchor), in: paper)
+            guard !inReflow || pdfBilingual.isOpen else { return }
+            openPDFNote(parts.map(\.anchor), in: paper, inReflow: inReflow)
         } catch {
             if selectedPaperID == paper.id { message = error.localizedDescription }
         }
@@ -128,6 +132,11 @@ extension ReaderModel {
             case .reflow(let pieces): pieces.first?.sentence.pageIndex
             case .translation(let anchors): anchors.first?.pdfTranslationPageIndex
             }
+        }
+
+        var inReflow: Bool {
+            if case .original = self { return false }
+            return true
         }
 
         func fragments(in url: URL, using locator: PDFReadingNoteLocator) async throws -> [PDFReadingNoteFragment] {
@@ -177,7 +186,9 @@ extension ReaderModel {
                     anchors = fragments.map(\.anchor)
                 }
                 if case .note = action {
-                    openPDFNote(anchors, in: paper, marks: fragments.map { $0.highlight(for: paper.id) })
+                    openPDFNote(
+                        anchors, in: paper, inReflow: selection.inReflow,
+                        marks: selection.inReflow ? [] : fragments.map { $0.highlight(for: paper.id) })
                     return
                 }
                 guard case .mark(let color, let style, let removing) = action else { return }
@@ -216,17 +227,30 @@ extension ReaderModel {
         await task.value
     }
 
-    private func openPDFNote(_ anchors: [NoteAnchor], in paper: Paper, marks: [Highlight] = []) {
+    private func openPDFNote(_ anchors: [NoteAnchor], in paper: Paper, inReflow: Bool, marks: [Highlight] = []) {
         guard !anchors.isEmpty else { return }
         if let chosen = inlinePDFNotes.first(where: { $0.anchors == anchors }),
             let existing = currentReadingNotes.first(where: { $0.id == chosen.id })
         {
-            pdfNoteEditor = PDFNoteEditorSession(note: existing, marks: [])
+            pdfNoteEditor = PDFNoteEditorSession(note: existing, marks: [], usesReflowMargin: inReflow)
         } else {
             let note = ReadingNote(
                 paperID: paper.id, contentVersion: paper.digest + ":original-0", anchors: anchors, markdown: "")
-            pdfNoteEditor = PDFNoteEditorSession(note: note, marks: marks)
+            pdfNoteEditor = PDFNoteEditorSession(note: note, marks: marks, usesReflowMargin: inReflow)
         }
+    }
+
+    func openReflowMarginNote(_ id: UUID) {
+        guard pdfBilingual.isOpen, let paper, let note = inlineReadingNotes.first(where: { $0.id == id }),
+            note.contentVersion == paper.digest + ":original-0", note.anchors.first?.readingPageIndex != nil
+        else { return }
+        pdfNoteEditor = PDFNoteEditorSession(note: note, marks: [], usesReflowMargin: true)
+    }
+
+    /// A saved quote stays editable even when its original text cannot be located on this reflow.
+    func useOriginalPDFNoteCard(for id: UUID) {
+        guard pdfNoteEditor?.id == id, pdfNoteEditor?.usesReflowMargin == true else { return }
+        pdfNoteEditor?.usesReflowMargin = false
     }
 
     func closePDFReadingNote() {

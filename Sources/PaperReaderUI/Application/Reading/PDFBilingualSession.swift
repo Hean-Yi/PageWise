@@ -44,6 +44,32 @@ final class PDFBilingualSession {
     }
     private var loadedPages: [Int: LoadedPage] = [:]
     var paragraphPages: [Int: PDFParagraphPage] { loadedPages.mapValues(\.paragraph) }
+    private var historicalInk: [UUID: (mark: Highlight, anchors: [NoteAnchor])] = [:]
+
+    func historicalHighlights(in model: ReaderModel) -> [Highlight] {
+        guard isOpen, paperID == model.selectedPaperID else { return [] }
+        return model.currentHighlights.filter { $0.hasOnlyOriginalPDFGeometry && loadedPages[$0.pageIndex] != nil }
+    }
+
+    func verifiedAnchors(for mark: Highlight) -> [NoteAnchor] {
+        guard let cached = historicalInk[mark.id], cached.mark == mark else { return [] }
+        return cached.anchors
+    }
+
+    func locateHistoricalInk(_ marks: [Highlight], model: ReaderModel) async {
+        guard !Task.isCancelled, isOpen, let paper = model.paper, paper.id == paperID else { return }
+        let ids = Set(marks.map(\.id))
+        for id in historicalInk.keys where !ids.contains(id) { historicalInk.removeValue(forKey: id) }
+        let pending = marks.filter { $0.paperID == paper.id && historicalInk[$0.id]?.mark != $0 }
+        guard !pending.isEmpty else { return }
+        let url = model.root.appendingPathComponent(paper.originalPath)
+        guard let anchors = try? await PDFReadingNoteLocator().historicalInkAnchors(pending, in: url),
+            !Task.isCancelled, isOpen, paperID == paper.id
+        else { return }
+        for mark in pending where loadedPages[mark.pageIndex] != nil {
+            historicalInk[mark.id] = (mark, anchors[mark.id] ?? [])
+        }
+    }
 
     var selectedSourceSentences: [PDFSourceSentence] {
         guard isOpen, !translationSelectedIDs.isEmpty else { return [] }
@@ -216,6 +242,7 @@ final class PDFBilingualSession {
         loadTasks.removeAll()
         pendingTranslations.removeAll()
         loadedPages.removeAll()
+        historicalInk.removeAll()
     }
 
     private func load(_ index: Int, paper: Paper, model: ReaderModel) {

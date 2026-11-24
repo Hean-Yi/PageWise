@@ -10,6 +10,8 @@ extension Highlight {
         result.rects = rects.compactMap(PDFHighlightCoverage.rectangle).flatMap {
             PDFHighlightCoverage.uncovered($0, by: covers)
         }.map { [$0.minX, $0.minY, $0.width, $0.height] }
+        // A clipped mark may cover only a suffix of the quote. Its whole range would overpaint prior ink.
+        if result.rects != rects { result.pdfTextStart = nil }
         return result.rects.isEmpty ? nil : result
     }
 }

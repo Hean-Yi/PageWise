@@ -491,7 +491,7 @@ final class PDFCoordinator: NSObject, @preconcurrency PDFPageOverlayViewProvider
         if let hit = model.inlinePDFNotes.first(where: { note in
             noteAnnotations[note.id]?.contains { $0.page === page && $0.bounds.contains(location) } == true
         }), let note = model.currentReadingNotes.first(where: { $0.id == hit.id }) {
-            model.openReadingNote(note)
+            model.openReadingNote(note, onOriginalPDF: true)
             return true
         }
         let index = document.index(for: page)

@@ -51,6 +51,7 @@ enum HTMLNotesScript {
             closeChoices();
             const e=records.get(editing);if(e){e.emergeAnimation?.cancel();e.entrance=false;if(e.input.value!==e.markdown)store(e);e.card.classList.remove('editing-live');e.input.classList.add('note-hidden');e.footer.classList.add('note-hidden');e.content.classList.remove('note-hidden');e.tabs.classList.add('note-hidden');body(e);flush();}
             if(e?.card.contains(document.activeElement))document.activeElement.blur();
+            if(e)selection.editingChanged?.(e.id,false);
             editing=null;active=null;undock();selection.clear();
             if(e&&!e.markdown.trim()&&!e.persisted){e.editor?.destroy();e.card.remove();records.delete(e.id);}schedule();
           };
@@ -61,7 +62,7 @@ enum HTMLNotesScript {
             if(!edit&&active===id){reverse=backwards;layout.reverse(backwards);return;}
             active=id;e.previewBox=null;reverse=backwards;
             if(edit){
-              e.entrance=editing!==id;e.needsFocus=true;editing=id;e.tabs.classList.remove('note-hidden');e.footer.classList.remove('note-hidden');e.card.classList.add('editing-live');e.input.classList.remove('note-hidden');e.content.classList.add('note-hidden');
+              e.entrance=editing!==id;if(e.entrance)selection.editingChanged?.(id,true);e.needsFocus=true;editing=id;e.tabs.classList.remove('note-hidden');e.footer.classList.remove('note-hidden');e.card.classList.add('editing-live');e.input.classList.remove('note-hidden');e.content.classList.add('note-hidden');
               selection.restore(e.anchors);menu.classList.add('note-docked');e.card.prepend(menu);menu.hidden=false;window.paperAnnotationMenu.refresh();
               if(!e.editor)e.editor=PaperNoteEditor.create(e.input,e.markdown,()=>store(e),finish);
               e.input.value=e.markdown;if(e.html)e.editor.preview(e.markdown,e.html);e.input.focus({preventScroll:true});
@@ -147,13 +148,18 @@ enum HTMLNotesScript {
             b.onkeyup=b.onblur=()=>{delete b.dataset.keyPress;};
             return b;
           };
+          const scrollToAnchor=anchors=>{
+            const first=anchors[0],target=selection.rangesFor(first)[0];
+            const node=document.getElementById('block-'+first.key)||target?.startContainer?.parentElement;
+            node?.scrollIntoView({block:'center',inline:'nearest'});
+          };
           const make=note=>{
             const e={...note,persisted:false};e.card=document.createElement('article');e.card.className='reader-note-card';e.card.hidden=true;e.card.dataset.noteId=e.id;e.card.tabIndex=0;e.card.setAttribute('aria-label',e.dimensionTitle||'阅读笔记');
             const header=document.createElement('header'),title=document.createElement('strong');title.textContent=e.dimensionTitle||'笔记';header.append(title);
             e.choices=choiceTrigger(e);header.append(e.choices);
             e.tabs=document.createElement('span');e.tabs.className='note-hidden';
             e.tabs.textContent='Markdown';header.append(e.tabs);
-            header.append(iconButton('source','定位笔记原文',()=>{document.getElementById('block-'+e.anchors[0].key)?.scrollIntoView({block:'center'});schedule();}));
+            header.append(iconButton('source','定位笔记原文',()=>{scrollToAnchor(e.anchors);schedule();}));
             header.append(iconButton('delete','删除笔记',()=>{const id=e.id;finish();send({kind:'noteDelete',id});e.editor?.destroy();e.card.remove();records.delete(id);showUndo();schedule();}));
             e.input=document.createElement('div');e.input.className='note-editor note-hidden';
             e.input.oninput=event=>{if(event.target===e.input)store(e);};
@@ -174,7 +180,7 @@ enum HTMLNotesScript {
             body(e);layer.append(e.card);records.set(e.id,e);return e;
           };
           const showUndo=()=>{let b=document.getElementById('reader-note-undo');if(!b){b=button('笔记已删除 · 撤销',()=>{send({kind:'noteUndo'});b.remove();});b.id='reader-note-undo';document.body.append(b);}};
-          const bySection=new Map();
+          const bySection=new Map(),sectionKey=a=>selection.sectionKey?.(a)??a.key;
           const show=(e,position,documentTop)=>{
             e.card.hidden=!position;if(!position)return;
             e.card.classList.toggle('compact',position.height<300);e.card.dataset.placement=position.side;
@@ -187,10 +193,10 @@ enum HTMLNotesScript {
           };
           const arrangeSlots=()=>{
             bySection.clear();const occupied=[];
-            const index=new Map([...root.querySelectorAll('section[data-key]')].map((s,i)=>[s.dataset.key,i]));
-            const items=[...records.values()].sort((a,b)=>(index.get(a.anchors[0].key)??Infinity)-(index.get(b.anchors[0].key)??Infinity));
+            const index=new Map([...root.querySelectorAll('[data-key]')].map((s,i)=>[s.dataset.key,i]));
+            const items=[...records.values()].sort((a,b)=>(index.get(sectionKey(a.anchors[0]))??Infinity)-(index.get(sectionKey(b.anchors[0]))??Infinity));
             for(const e of items){
-              for(const key of new Set(e.anchors.map(a=>a.key))){if(!bySection.has(key))bySection.set(key,[]);bySection.get(key).push(e);}
+              for(const key of new Set(e.anchors.map(sectionKey))){if(!bySection.has(key))bySection.set(key,[]);bySection.get(key).push(e);}
               const slot=sidebar?null:layout.place(e.anchors,168,false,occupied,true);
               if(slot)occupied.push(slot);
               e.slot=slot?{...slot,top:slot.top+scrollY}:null;
@@ -266,7 +272,7 @@ enum HTMLNotesScript {
             const existing=[...records.values()].find(e=>same(e.anchors,anchors));
             const e=existing||make({id:crypto.randomUUID().toUpperCase(),anchors,markdown:'',html:''});activate(e.id,true);
           };
-          const hits=(target,x,y,precise=false)=>(bySection.get(target.closest?.('section[data-key]')?.dataset.key)||[]).filter(e=>layout.hit(e.anchors,x,y,precise));
+          const hits=(target,x,y,precise=false)=>(bySection.get(target.closest?.('[data-key]')?.dataset.key)||[]).filter(e=>layout.hit(e.anchors,x,y,precise));
           const setChoices=matches=>{
             const ids=matches.map(e=>e.id);
             for(const [index,e] of matches.entries()){
@@ -371,7 +377,12 @@ enum HTMLNotesScript {
           };
           window.paperNotes={
             summary,
-            begin,editing:()=>!!editing||!!appendixEditor?.editor,preservingSelection:()=>!!editing||!!appendixEditor?.editor,
+            openDraft(note){
+              if(!note.anchors?.some(a=>selection.rangesFor(a).length))return;
+              const e=records.get(note.id)||make(note);
+              if(editing!==e.id)activate(e.id,true);
+            },
+            begin:selection.beginNote??begin,editing:()=>!!editing||!!appendixEditor?.editor,preservingSelection:()=>!!editing||!!appendixEditor?.editor,
             sidebar(open){if(sidebar!==open){sidebar=open;resized();}},
             sync(notes){
               let changed=false;const ids=new Set(notes.map(n=>n.id));
@@ -392,7 +403,15 @@ enum HTMLNotesScript {
             insertPassage(id,source,from,to,markdown){
               if(appendix?.dataset.noteId===id)return appendixEditor.editor?.insertPassage(source,from,to,markdown);
               return editing===id&&records.get(id)?.editor?.insertPassage(source,from,to,markdown);},
-            open(id,edit){const e=records.get(id);if(!e)return;document.getElementById('block-'+e.anchors[0].key)?.scrollIntoView({block:'center'});activate(id,edit);},
+            open(id,edit,reveal=true){const e=records.get(id);if(!e)return false;if(reveal)scrollToAnchor(e.anchors);activate(id,edit);return true;},
+            reset(){
+              if(editing)finish();else selection.clear();
+              closeChoices();cancelCrossing();
+              for(const e of records.values()){e.emergeAnimation?.cancel();e.editor?.destroy();e.card.remove();}
+              records.clear();bySection.clear();active=null;displayed=null;pointer=null;lastPoint=null;
+              document.getElementById('reader-note-undo')?.remove();
+              window.paperNoteLift.clear();layout.invalidate();schedule();
+            },
             finish,layout:schedule
           };
         })();

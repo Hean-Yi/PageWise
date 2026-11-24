@@ -10,6 +10,10 @@ final class HTMLNoteBridge {
     private var sidebar: Bool?
     private var persistence = ""
     private var navigationToken: UUID?
+    private var pdfProjection: [UUID: [NoteAnchor]]?
+    private var synchronizedProjection: [UUID: [NoteAnchor]]?
+    private var openPDFEditorID: UUID?
+    private var stopped = false
     private var tasks: [UUID: Task<Void, Never>] = [:]
     private struct Preview {
         let source: String
@@ -24,36 +28,56 @@ final class HTMLNoteBridge {
     init(model: ReaderModel) { self.model = model }
 
     func stop() {
+        stopped = true
         for task in tasks.values { task.cancel() }
         tasks = [:]
         snapshot = nil
         previewCache = [:]
         sidebar = nil
+        pdfProjection = nil
+        synchronizedProjection = nil
+        openPDFEditorID = nil
         Task { await model.flushReadingNotes() }
     }
 
+    func updatePDF(_ view: WKWebView, sidebarOpen: Bool, projection: [UUID: [NoteAnchor]]) {
+        pdfProjection = projection
+        update(view, sidebarOpen: sidebarOpen)
+    }
+
+    private func record(_ note: ReadingNote) -> [String: Any] {
+        [
+            "id": note.id.uuidString, "markdown": note.markdown,
+            "anchors": (pdfProjection?[note.id] ?? note.anchors).map(Self.anchor),
+            "dimensionTitle": note.dimension?.title ?? "",
+            "html": previewCache[note.id].flatMap { $0.matches(note) ? $0.html : nil } ?? "",
+        ]
+    }
+
     func update(_ view: WKWebView, sidebarOpen: Bool) {
+        guard !stopped else { return }
         if sidebar != sidebarOpen {
             sidebar = sidebarOpen
             call(view, "window.paperNotes?.sidebar(open)", ["open": sidebarOpen])
         }
-        let paragraphNotes = model.displayedHTMLReadingNotes
-        let summary = model.currentDocumentSummary
+        let paragraphNotes: [ReadingNote]
+        if let pdfProjection {
+            paragraphNotes = model.currentReadingNotes.filter { !$0.isDocumentSummary && pdfProjection[$0.id] != nil }
+        } else {
+            paragraphNotes = model.displayedHTMLReadingNotes
+        }
+        let summary = pdfProjection == nil ? model.currentDocumentSummary : nil
         let notes = paragraphNotes + [summary].compactMap { $0 }
-        if snapshot != notes {
+        let projectionChanged = pdfProjection != synchronizedProjection
+        if snapshot != notes || projectionChanged {
             let previous = snapshot
             snapshot = notes
+            synchronizedProjection = pdfProjection
             let ids = Set(notes.map(\.id))
             for id in Array(previewCache.keys) where !ids.contains(id) { previewCache[id] = nil }
-            if previous?.filter({ !$0.isDocumentSummary }) != paragraphNotes {
-                let values: [[String: Any]] = paragraphNotes.map { note in
-                    [
-                        "id": note.id.uuidString, "markdown": note.markdown, "anchors": note.anchors.map(Self.anchor),
-                        "dimensionTitle": note.dimension?.title ?? "",
-                        "html": previewCache[note.id].flatMap { $0.matches(note) ? $0.html : nil } ?? "",
-                    ]
-                }
-                call(view, "window.paperNotes?.sync(notes)", ["notes": values])
+            for id in Array(tasks.keys) where !ids.contains(id) { tasks.removeValue(forKey: id)?.cancel() }
+            if projectionChanged || previous?.filter({ !$0.isDocumentSummary }) != paragraphNotes {
+                call(view, "window.paperNotes?.sync(notes)", ["notes": paragraphNotes.map(record)])
             }
             if previous?.last(where: \.isDocumentSummary) != summary {
                 call(
@@ -98,7 +122,25 @@ final class HTMLNoteBridge {
             persistence = status
             call(view, "window.paperNotes?.saved(status)", ["status": status])
         }
-        if let id = model.requestedReadingNote, navigationToken != model.readingNoteNavigationToken,
+        if let pdfProjection {
+            if let editor = model.pdfNoteEditor, editor.usesReflowMargin, pdfProjection[editor.id] != nil {
+                let navigationRequested =
+                    model.requestedReadingNote == editor.id
+                    && navigationToken != model.readingNoteNavigationToken
+                if openPDFEditorID != editor.id || navigationRequested {
+                    openPDFEditorID = editor.id
+                    if navigationRequested { navigationToken = model.readingNoteNavigationToken }
+                    if paragraphNotes.contains(where: { $0.id == editor.id }) {
+                        call(view, "window.paperNotes?.open(id,true)", ["id": editor.id.uuidString])
+                    } else {
+                        call(view, "window.paperNotes?.openDraft(note)", ["note": record(editor.note)])
+                    }
+                }
+            } else if openPDFEditorID != nil && model.pdfNoteEditor?.usesReflowMargin != true {
+                openPDFEditorID = nil
+                call(view, "window.paperNotes?.finish()", [:])
+            }
+        } else if let id = model.requestedReadingNote, navigationToken != model.readingNoteNavigationToken,
             paragraphNotes.contains(where: { $0.id == id })
         {
             navigationToken = model.readingNoteNavigationToken
@@ -107,8 +149,22 @@ final class HTMLNoteBridge {
     }
 
     func receive(_ value: [String: Any], view: WKWebView) {
-        guard value["paperID"] as? String == model.selectedPaperID?.uuidString else { return }
+        guard !stopped, value["paperID"] as? String == model.selectedPaperID?.uuidString else { return }
         switch value["kind"] as? String {
+        case "noteEdit":
+            guard let pdfProjection, let raw = value["id"] as? String, let id = UUID(uuidString: raw),
+                pdfProjection[id] != nil
+            else { return }
+            if model.pdfNoteEditor?.id != id || model.pdfNoteEditor?.usesReflowMargin != true {
+                model.openReflowMarginNote(id)
+            }
+            if model.pdfNoteEditor?.id == id { openPDFEditorID = id }
+        case "noteClose":
+            guard pdfProjection != nil, let raw = value["id"] as? String, let id = UUID(uuidString: raw),
+                model.pdfNoteEditor?.id == id, model.pdfNoteEditor?.usesReflowMargin == true
+            else { return }
+            openPDFEditorID = nil
+            model.closePDFReadingNote()
         case "notePreviewPassage":
             guard let raw = value["id"] as? String, let id = UUID(uuidString: raw),
                 let destination = value["passage"] as? String, let passage = UUID(uuidString: destination)
@@ -121,7 +177,7 @@ final class HTMLNoteBridge {
             else { return }
             model.pickNotePassage(noteID: id, anchors: anchors, source: markdown, from: from, to: to) {
                 [weak self, weak view] link in
-                guard let self, let view else { return }
+                guard let self, !self.stopped, let view else { return }
                 call(
                     view, "window.paperNotes?.insertPassage(id,source,from,to,link)",
                     ["id": raw, "source": markdown, "from": from, "to": to, "link": link])
@@ -142,11 +198,20 @@ final class HTMLNoteBridge {
                 update(view, sidebarOpen: sidebar ?? true)
             }
         case "noteDelete":
-            if let raw = value["id"] as? String, let id = UUID(uuidString: raw) {
+            if let raw = value["id"] as? String, let id = UUID(uuidString: raw),
+                pdfProjection == nil || pdfProjection?[id] != nil
+            {
                 model.deleteReadingNote(id)
                 update(view, sidebarOpen: sidebar ?? true)
             }
         case "noteUndo":
+            if pdfProjection != nil {
+                guard let id = model.lastDeletedNoteID,
+                    model.state.readingNotes.contains(where: {
+                        $0.id == id && $0.paperID == model.selectedPaperID && !$0.isDocumentSummary
+                    })
+                else { return }
+            }
             model.undoReadingNoteDeletion()
             update(view, sidebarOpen: sidebar ?? true)
         default: break
@@ -160,6 +225,14 @@ final class HTMLNoteBridge {
         ["key": a.key, "target": a.target, "text": a.text, "start": a.start, "end": a.end]
     }
     private func anchors(for id: UUID, in message: [String: Any]) -> [NoteAnchor]? {
+        if pdfProjection != nil {
+            // The page supplies sentence-local coordinates only for display. Edits may arrive while a
+            // page scrolls out of the loaded window. The active, verified session owns its durable anchors.
+            guard let editor = model.pdfNoteEditor, editor.usesReflowMargin, editor.id == id,
+                editor.note.paperID == model.selectedPaperID
+            else { return nil }
+            return editor.note.anchors
+        }
         guard let items = message["anchors"] as? [[String: Any]], items.count <= 10_000 else { return nil }
         if items.isEmpty { return model.currentDocumentSummary?.id == id ? [] : nil }
         var result: [NoteAnchor] = []

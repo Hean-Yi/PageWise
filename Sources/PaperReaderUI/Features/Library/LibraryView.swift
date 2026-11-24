@@ -29,6 +29,9 @@ public struct LibraryView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.colorScheme) private var colorScheme
+    #if os(iOS)
+        @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    #endif
     @ScaledMetric(relativeTo: .subheadline) private var sidebarFontSize: CGFloat = 13
     private let timer = Timer.publish(every: 60, on: .main, in: .common).autoconnect()
 
@@ -377,7 +380,7 @@ public struct LibraryView: View {
                         expandedAnnotations: $expandedNotebookAnnotations)
                 case .reader:
                     ReaderView(
-                        model: model, sidebarOpen: assistantTab != nil,
+                        model: model, sidebarOpen: readerSidebarOpen,
                         explainSelection: {
                             paperQuestion = "请结合全文解释选中内容。"
                             assistantTab = .paper
@@ -391,6 +394,13 @@ public struct LibraryView: View {
         }
         .modifier(
             WorkspaceArrival(destination: page.location(origin: model.readerOrigin), background: ReaderTheme.canvas))
+    }
+
+    private var readerSidebarOpen: Bool {
+        #if os(iOS)
+            if horizontalSizeClass == .compact { return assistantTab != nil }
+        #endif
+        return assistantTab != nil || columns != .detailOnly
     }
 
     private enum WorkspacePage {

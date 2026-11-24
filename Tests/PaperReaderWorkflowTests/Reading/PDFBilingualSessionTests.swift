@@ -2,9 +2,50 @@ import CoreGraphics
 import CoreText
 import Foundation
 import PaperReaderKit
+import PaperReaderTestSupport
 import Testing
 
 @testable import PaperReaderUI
+
+@Test @MainActor func reflowPreservesOnlyVerifiedHistoricalInkForAgentNotes() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let model = try ReaderModel(root: root, credentials: WorkflowCredentials())
+    await model.load()
+    let url = root.appendingPathComponent("source.pdf")
+    try AttentionFixture.write(to: url)
+    let paperID = try #require(await model.importURLs([url]).first)
+    let paper = try #require(model.paper)
+    let fragment = try #require(
+        try await PDFReadingNoteLocator().locate(quote: "Imagine a notebook", pageIndex: 0, in: url).first)
+    var historical = fragment.highlight(for: paperID)
+    #expect(historical.pdfTextStart == fragment.anchor.start)
+    historical.pdfTextStart = nil
+    historical.color = .blue
+    historical.style = .underline
+    var misplaced = historical
+    misplaced.id = UUID()
+    misplaced.rects[0][0] += 30
+    misplaced.color = .red
+    var note = ReadingNote(
+        paperID: paperID, contentVersion: paper.digest + ":original-0", anchors: [fragment.anchor], markdown: "核对原文证据。")
+    note.dimension = .evidence
+    model.state.readingNotes = [note]
+    model.state.highlights = [historical, misplaced]
+    let session = model.pdfBilingual
+    session.open(model)
+    defer { session.close() }
+    try await waitForPageSession { session.paragraphPages[0] != nil }
+    await session.locateHistoricalInk(session.historicalHighlights(in: model), model: model)
+    let expected = PDFInlineNote(id: historical.id, anchors: [fragment.anchor], color: .blue, style: .underline)
+    #expect(model.inlinePDFHighlights == [expected])
+    let paint = PDFSentenceTextCanvas.Coordinator.noteMarks(
+        in: session.paragraphSentences, notes: model.inlinePDFHighlights)
+    #expect(paint.count == 1 && paint[0]["color"] as? String == "blue" && paint[0]["style"] as? String == "underline")
+    #expect(model.state.highlights == [historical, misplaced])
+    model.state.highlights.removeFirst()
+    #expect(model.inlinePDFHighlights.isEmpty && model.reflowInlinePDFNotes.map(\.id) == [note.id])
+}
 
 @Test @MainActor func pdfBilingualLayoutsKeepSavedChoicesAcrossWindowSizes() throws {
     let paragraph = try #require(PDFBilingualLayoutPreference(rawValue: "paragraph"))

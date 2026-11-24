@@ -29,6 +29,8 @@ import WebKit
     var inlineHighlights: [PDFInlineNote] = []
     var onTextSelection: ([PDFReflowTextSelection]) -> Void = { _ in }
     var onSelectionAction: (PDFReflowSelectionAction, [PDFReflowTextSelection]) -> Void = { _, _ in }
+    var noteModel: ReaderModel?
+    var sidebarOpen = true
 
     struct Continuous {
         let paperID: UUID
@@ -54,6 +56,9 @@ import WebKit
         private var displayedHighlights: [PDFInlineNote] = []
         private var ready = false
         private var paragraphWindow = PDFParagraphWindowBridge()
+        private var noteBridge: HTMLNoteBridge?
+        private var notePaperID: UUID?
+        private var projectedNotes: [UUID: [NoteAnchor]] = [:]
 
         init(_ parent: PDFSentenceTextCanvas) { latest = parent }
 
@@ -62,9 +67,16 @@ import WebKit
             config.websiteDataStore = .nonPersistent()
             let controller = config.userContentController
             controller.add(self, contentWorld: .defaultClient, name: "sentence")
+            var script = HTMLImagePreviewScript.source + "\n" + PDFSentenceTextCanvas.script
+            if latest.noteModel != nil {
+                controller.add(self, contentWorld: .defaultClient, name: "reader")
+                script +=
+                    HTMLNativeNoteEditorScript.source + HTMLNoteStyle.source
+                    + HTMLNoteLiftScript.source + HTMLNoteLayoutScript.source + HTMLNotesScript.source
+            }
             controller.addUserScript(
                 WKUserScript(
-                    source: HTMLImagePreviewScript.source + "\n" + PDFSentenceTextCanvas.script,
+                    source: script,
                     injectionTime: .atDocumentEnd,
                     forMainFrameOnly: true, in: .defaultClient))
             let view = WKWebView(frame: .zero, configuration: config)
@@ -78,6 +90,9 @@ import WebKit
             view.navigationDelegate = nil
             view.configuration.userContentController.removeScriptMessageHandler(
                 forName: "sentence", contentWorld: .defaultClient)
+            view.configuration.userContentController.removeScriptMessageHandler(
+                forName: "reader", contentWorld: .defaultClient)
+            noteBridge?.stop()
             view.stopLoading()
         }
 
@@ -90,6 +105,18 @@ import WebKit
             latest = parent
             guard ready else { return }
             let continuous = parent.layout == .paragraph ? parent.continuous : nil
+            let paperID = parent.noteModel?.selectedPaperID
+            let changedPaper = notePaperID != paperID
+            if changedPaper {
+                notePaperID = paperID
+                noteBridge?.stop()
+                noteBridge = parent.noteModel.map { HTMLNoteBridge(model: $0) }
+                projectedNotes = [:]
+                view.callAsyncJavaScript(
+                    "if(document.body.dataset.paperId) window.paperNotes?.reset(); document.body.dataset.paperId = paper",
+                    arguments: ["paper": paperID?.uuidString ?? ""], in: nil, in: .defaultClient, completionHandler: nil
+                )
+            }
             let leftDocument = continuous == nil && paragraphWindow.paperID != nil
             let changed =
                 continuous == nil
@@ -114,27 +141,57 @@ import WebKit
                 renderedSentences = parent.sentences
                 translated = parent.translations
             }
-            if (changed || windowChanged || layoutChanged || displayedNotes != parent.inlineNotes
+            var notes = parent.inlineNotes
+            let editor = parent.noteModel?.pdfNoteEditor
+            if let editor, editor.usesReflowMargin, editor.note.paperID == paperID,
+                !notes.contains(where: { $0.id == editor.id })
+            {
+                notes.append(
+                    PDFInlineNote(id: editor.id, anchors: editor.note.anchors, color: editor.note.dimension?.color))
+            }
+            if (changedPaper || changed || windowChanged || layoutChanged || displayedNotes != notes
                 || displayedHighlights != parent.inlineHighlights)
-                && (!displayedNotes.isEmpty || !parent.inlineNotes.isEmpty
+                && (!displayedNotes.isEmpty || !notes.isEmpty
                     || !displayedHighlights.isEmpty || !parent.inlineHighlights.isEmpty)
             {
-                let sentences = continuous.map { $0.pages.values.flatMap(\.sentences) } ?? parent.sentences
+                let sentences =
+                    continuous.map { $0.pages.sorted { $0.key < $1.key }.flatMap { $0.value.sentences } }
+                    ?? parent.sentences
                 let translations =
                     continuous.map { window in
                         window.pages.values.reduce(into: [String: String]()) {
                             $0.merge($1.translations) { _, new in new }
                         }
                     } ?? parent.translations
-                let marks = Self.noteMarks(in: sentences, notes: parent.inlineNotes, translations: translations)
+                let marks = Self.noteMarks(in: sentences, notes: notes, translations: translations)
                 let highlights = Self.noteMarks(
                     in: sentences, notes: parent.inlineHighlights, translations: translations)
                 view.callAsyncJavaScript(
-                    "window.sentenceReader.markNotes(marks, highlights)",
-                    arguments: ["marks": marks, "highlights": highlights],
+                    "window.sentenceReader.markNotes(marks, highlights, inlineEditor)",
+                    arguments: ["marks": marks, "highlights": highlights, "inlineEditor": noteBridge != nil],
                     in: nil, in: .defaultClient, completionHandler: nil)
-                displayedNotes = parent.inlineNotes
+                if noteBridge != nil {
+                    projectedNotes = Self.cardAnchors(
+                        marks, sentences: sentences, translations: translations, paragraph: paragraph)
+                }
+                displayedNotes = notes
                 displayedHighlights = parent.inlineHighlights
+            }
+            if let noteBridge {
+                noteBridge.updatePDF(view, sidebarOpen: parent.sidebarOpen, projection: projectedNotes)
+                if let editor, editor.usesReflowMargin, editor.note.paperID == paperID,
+                    projectedNotes[editor.id] == nil,
+                    let page = editor.note.anchors.first?.readingPageIndex,
+                    let model = parent.noteModel,
+                    continuous.map({ $0.pages[page] != nil })
+                        ?? (model.pdfBilingual.pageIndex == page && !model.pdfBilingual.isLoading)
+                {
+                    Task { [weak self, weak model] in
+                        guard let self, self.ready, self.notePaperID == paperID, self.projectedNotes[editor.id] == nil
+                        else { return }
+                        model?.useOriginalPDFNoteCard(for: editor.id)
+                    }
+                }
             }
             if changed || windowChanged || layoutChanged || displayedFontSize != parent.fontSize {
                 view.callAsyncJavaScript(
@@ -157,6 +214,36 @@ import WebKit
                     "anchorable": sentence.characterRanges.isEmpty ? "" : "1",
                 ]
             }
+        }
+
+        /// DOM ranges position cards only. All note writes use their verified original PDF anchors.
+        private static func cardAnchors(
+            _ marks: [[String: Any]], sentences: [PDFSourceSentence], translations: [String: String], paragraph: Bool
+        ) -> [UUID: [NoteAnchor]] {
+            let bySentence = Dictionary(grouping: marks) { $0["sentence"] as? String ?? "" }
+            var result: [UUID: [NoteAnchor]] = [:]
+            for sentence in sentences {
+                for mark in bySentence[sentence.id] ?? [] {
+                    guard let raw = mark["note"] as? String, let id = UUID(uuidString: raw),
+                        let ranges = mark["ranges"] as? [[Int]]
+                    else { continue }
+                    let english = mark["language"] as? String == "en"
+                    guard paragraph || !english,
+                        let text = (english ? sentence.text : translations[sentence.id]) as NSString?
+                    else { continue }
+                    for range in ranges where range.count == 2 {
+                        let start = range[0]
+                        let end = range[1]
+                        guard start >= 0, start < end, end <= text.length else { continue }
+                        let part = text.substring(with: NSRange(location: start, length: end - start))
+                        result[id, default: []].append(
+                            NoteAnchor(
+                                key: sentence.id, target: english ? "source" : "translation", text: part, start: start,
+                                end: end))
+                    }
+                }
+            }
+            return result
         }
 
         /// Intersections are computed in the immutable PDF character space. Reflowed text receives ink
@@ -340,6 +427,15 @@ import WebKit
 
         func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
             guard ready, message.frameInfo.isMainFrame, let event = message.body as? [String: Any] else { return }
+            if message.name == "reader" {
+                guard let model = latest.noteModel, model.mode == "original", model.pdfBilingual.isOpen,
+                    let paperID = notePaperID, model.selectedPaperID == paperID,
+                    event["paperID"] as? String == paperID.uuidString,
+                    let view = message.webView
+                else { return }
+                noteBridge?.receive(event, view: view)
+                return
+            }
             if let stamp = event["paper"] as? String {
                 guard let window = latest.continuous, stamp == window.paperID.uuidString,
                     event["revision"] as? Int == window.jumpRevision
@@ -476,15 +572,17 @@ extension PDFSentenceTextCanvas {
         .untranslated .page-body section>p[lang="zh-Hans"]{display:none}
         .page-marker{display:flex;align-items:center;gap:.8em;margin:2.4em 0 1.4em;color:var(--en);font:500 .75em/1.5 -apple-system,sans-serif}
         .page-marker:after{content:"";height:1px;background:currentColor;opacity:.2;flex:1}
-        ::highlight(pdf-reading-notes){background-color:#eacb6d5c;text-decoration:underline #ab7752}
+        :root{--pdf-note-yellow:#eacb6d5c;--pdf-note-red:#f5aaa67d;--pdf-note-blue:#b5d5f884;
+          --pdf-note-green:#b7db9e80;--pdf-note-purple:#cbb7ed80}
+        ::highlight(pdf-reading-notes){background-color:var(--pdf-note-yellow);text-decoration:underline #ab7752}
         \(AnnotationColor.allCases.map { color in
             "::highlight(pdf-\(color.rawValue)-highlight){background-color:\(color.hex);color:#292e2e}" +
             "::highlight(pdf-\(color.rawValue)-underline){text-decoration:underline \(color.hex) 2px}"
         }.joined(separator: "\n"))
-        ::highlight(pdf-notes-red){background-color:#f5aaa67d;text-decoration:underline #d4807a}
-        ::highlight(pdf-notes-blue){background-color:#b5d5f884;text-decoration:underline #7ca3d0}
-        ::highlight(pdf-notes-green){background-color:#b7db9e80;text-decoration:underline #7ca663}
-        ::highlight(pdf-notes-purple){background-color:#cbb7ed80;text-decoration:underline #9880b6}
+        ::highlight(pdf-notes-red){background-color:var(--pdf-note-red);text-decoration:underline #d4807a}
+        ::highlight(pdf-notes-blue){background-color:var(--pdf-note-blue);text-decoration:underline #7ca3d0}
+        ::highlight(pdf-notes-green){background-color:var(--pdf-note-green);text-decoration:underline #7ca663}
+        ::highlight(pdf-notes-purple){background-color:var(--pdf-note-purple);text-decoration:underline #9880b6}
         .sentence-note{display:inline-flex;vertical-align:super;align-items:center;justify-content:center;border:0;
           color:var(--accent,#a55537);background:transparent;font:13px system-ui;cursor:pointer;padding:0 .2em}
         .sentence-note::before{content:'✎'}
@@ -523,7 +621,7 @@ extension PDFSentenceTextCanvas {
         html.reading-range main ::selection{background:transparent;color:inherit}
         main{position:relative;z-index:1}
         #pdf-text-selection{position:absolute;inset:0 auto auto 0;width:0;height:0;pointer-events:none}
-        </style></head><body><main aria-label="本页段落译文"></main></body></html>
+        </style></head><body><main id="reader" aria-label="本页段落译文"></main></body></html>
         """
 
     fileprivate static let script = """
@@ -574,14 +672,17 @@ extension PDFSentenceTextCanvas {
             }
             return pieces;
           }
+          let lifted=[];
           function paintSelection(pieces) {
             document.documentElement.classList.toggle('reading-range',pieces.length>0);
             const pixels=document.createDocumentFragment();
-            for (const piece of pieces) appendTextInk(pixels,piece.range,'rgba(160,125,89,.30)');
+            for (const range of excludingRanges(pieces.map(p=>p.range),lifted)) appendTextInk(pixels,range,'rgba(160,125,89,.30)');
             selectionInk.replaceChildren(pixels);
           }
-          const refreshSelectionInk=()=>{if(selectionInk.childElementCount)paintSelection(selectedPieces());};
+          const refreshSelectionInk=()=>{if(offeredBounds.length)paintSelection(offeredBounds.map(range=>({range})));};
           \(selectionToolsScript)
+          \(HTMLSelectionScript.textFragments)
+          \(noteSelectionScript)
           new ResizeObserver(refreshSelectionInk).observe(main);
           document.fonts?.addEventListener('loadingdone',refreshSelectionInk);
           main.addEventListener('pointerdown', event => {
@@ -590,7 +691,7 @@ extension PDFSentenceTextCanvas {
             else delete main.dataset.selecting;
           });
           document.addEventListener('selectionchange', () => {
-            if (getSelection().isCollapsed && tools.preservingSelection()) return;
+            if (window.paperNotes?.preservingSelection() || (getSelection().isCollapsed && tools.preservingSelection())) return;
             const pieces=selectedPieces();
             paintSelection(pieces);
             const ids = pieces.map(piece => piece.id).filter(Boolean);
@@ -631,7 +732,10 @@ extension PDFSentenceTextCanvas {
               const runs=inlineNoteRanges.get(e.target.closest('.en,.zh'));
               const hit=runs?.find(({range})=>[...range.getClientRects()].some(rect=>
                 rect.left<=e.clientX && e.clientX<=rect.right && rect.top<=e.clientY && e.clientY<=rect.bottom));
-              if (hit) {send(hit.action,hit.id);return;}
+              if (hit) {
+                if (hit.shared) window.paperNotes.open(hit.id,true,false);else send(hit.action,hit.id);
+                return;
+              }
             }
             const source=e.target.closest('[data-original]');
             if (source) {post({action:'original',page:Number(source.dataset.original)});return;}
@@ -669,7 +773,7 @@ extension PDFSentenceTextCanvas {
           }
           function makeGroup(id) {
             const group=document.createElement(paragraphMode ? 'section' : 'p');
-            group.dataset.group=id;
+            group.dataset.group=id;group.dataset.key=id;
             if (paragraphMode) {
               for (const language of ['en','zh-Hans']) {
                 const p=document.createElement('p'); p.lang=language; group.append(p);
@@ -754,7 +858,7 @@ extension PDFSentenceTextCanvas {
                 pair=pair||makePair(row.id);
                 pairs.set(row.id,pair);
               }
-              pair.group=row.paragraph;
+              pair.group=row.paragraph;pair.sectionKey=groupKey;
               pair.anchorable=!!row.anchorable;
               if (pair.en.textContent!==row.en) pair.en.textContent=row.en;
               if (pair.zh.textContent!==row.zh) pair.zh.textContent=row.zh;
@@ -790,13 +894,13 @@ extension PDFSentenceTextCanvas {
           \(continuousScript)
           window.sentenceReader={
             pageWindow,tableCopied,
-            markNotes(marks, highlights=[]) {
+            markNotes(marks, highlights=[], inlineEditor=false) {
               const colors={yellow:'pdf-reading-notes',red:'pdf-notes-red',blue:'pdf-notes-blue',green:'pdf-notes-green',purple:'pdf-notes-purple'};
               const ink=new Map(Object.values(colors).map(name=>[name,[]]));
               for (const color of Object.keys(\(HTMLAnnotationMenuScript.colors))) for (const style of ['highlight','underline']) ink.set('pdf-'+color+'-'+style,[]);
               projectedInk=[];
               inlineNoteRanges=new WeakMap();
-              const lastButton=new Map();
+              const lastButton=new Map(),located=new Set(marks.filter(m=>m.ranges.length).map(m=>m.note));
               for (const button of main.querySelectorAll('[data-reading-note]')) button.remove();
               for (const [index,mark] of [...marks,...highlights].entries()) {
                 const isHighlight=index>=marks.length;
@@ -805,19 +909,28 @@ extension PDFSentenceTextCanvas {
                 for (const [start,end] of mark.ranges) {
                   if (start<0 || end<=start || end>text.length) continue;
                   const range=document.createRange();range.setStart(text,start);range.setEnd(text,end);
-                  const color=mark.color||'yellow',style=mark.style||'highlight';
-                  ink.get(isHighlight ? 'pdf-'+color+'-'+style : colors[color] ?? colors.yellow)?.push(range);
-                  if (isHighlight) projectedInk.push({key:mark.sentence,target:language,range:[start,end],color,style});
                   if (!inlineNoteRanges.has(span)) inlineNoteRanges.set(span,[]);
-                  inlineNoteRanges.get(span).push({id:mark.note,range,action:isHighlight?'openHighlight':'note'});
+                  const hits=inlineNoteRanges.get(span);
+                  if (!isHighlight && inlineEditor) {
+                    // The shared card draws its own note wave. A reading note alone never adds highlight ink.
+                    hits.push({id:mark.note,range,shared:true});
+                    continue;
+                  }
+                  const color=mark.color||'yellow',style=mark.style||'highlight';
+                  const name=isHighlight?'pdf-'+color+'-'+style:colors[color]??colors.yellow;
+                  ink.get(name)?.push(range);
+                  if (isHighlight) projectedInk.push({key:mark.sentence,target:language,range:[start,end],color,style});
+                  hits.push({id:mark.note,range,name,color:isHighlight?highlightColors[color]:'var(--pdf-note-'+color+')',
+                    kind:isHighlight?style:'highlight',fragments:[range],action:isHighlight?'openHighlight':'note'});
                 }
-                if (!isHighlight && paragraphMode) {
+                if (!isHighlight && paragraphMode && (!inlineEditor || !located.has(mark.note))) {
                   const button=document.createElement('button');button.type='button';button.className='sentence-note';
                   button.dataset.readingNote=mark.note;button.setAttribute('aria-label','打开阅读笔记');
                   button.title='打开阅读笔记';(lastButton.get(span) ?? span).after(button);lastButton.set(span,button);
                 }
               }
               if (window.CSS?.highlights) for (const [name,ranges] of ink) CSS.highlights.set(name,new Highlight(...ranges));
+              window.paperNoteLayout?.invalidate();window.paperNotes?.layout();
               tools.refresh();
             },
             render(rows,layout,items) {

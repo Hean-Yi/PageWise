@@ -17,6 +17,34 @@ enum HTMLSelectionScript {
         }
         """#
 
+    static let textFragments = #"""
+          // WebKit fills inter-line gaps for one multiline Highlight range, but DOM rectangles do not.
+          // Give both native paint and the lifted copy the same line fragments, including partial last lines.
+          const lineRanges=range=>{
+            if(range.startContainer!==range.endContainer||range.startContainer.nodeType!==3)return [range];
+            const measured=[...range.getClientRects()].filter(b=>b.width>.01&&b.height>0);if(measured.length<=1)return measured.length?[range]:[];
+            const node=range.startContainer,end=range.endOffset,result=[];
+            const boxAt=offset=>{const r=document.createRange();r.setStart(node,offset);r.setEnd(node,Math.min(end,offset+1));return [...r.getClientRects()].filter(b=>b.width>.01&&b.height>0).at(-1);};
+            let start=range.startOffset;
+            while(start<end){
+              const first=boxAt(start);if(!first){start++;continue;}
+              let low=start+1,high=end;
+              while(low<high){const mid=Math.floor((low+high)/2),box=boxAt(mid);if(box&&box.top>first.top+2)high=mid;else low=mid+1;}
+              const fragment=document.createRange();fragment.setStart(node,start);fragment.setEnd(node,low);result.push(fragment);start=low;
+            }
+            return result;
+          };
+          // Temporary paint exclusions never change the saved anchors or published text.
+          const excludingRanges=(ranges,lifted)=>!lifted.length?ranges:ranges.flatMap(range=>{
+            if(range.startContainer!==range.endContainer)return [range];
+            let spans=[[range.startOffset,range.endOffset]];
+            for(const cut of lifted){if(cut.startContainer!==range.startContainer)continue;
+              spans=spans.flatMap(([a,b])=>cut.endOffset<=a||cut.startOffset>=b?[[a,b]]:[[a,Math.max(a,cut.startOffset)],[Math.min(b,cut.endOffset),b]].filter(([s,e])=>e>s));
+            }
+            return spans.map(([a,b])=>{const r=document.createRange();r.setStart(range.startContainer,a);r.setEnd(range.endContainer,b);return r;});
+          });
+        """#
+
     static let source = #"""
         (() => {
           const root = document.getElementById('reader');
@@ -83,31 +111,8 @@ enum HTMLSelectionScript {
           };
           let parts=[],savedMarks=[],lifted=[];
           const entriesByLayer=new Map();
-          // WebKit fills inter-line gaps for one multiline Highlight range, but DOM rectangles do not.
-          // Give both native paint and the lifted copy the same line fragments, including partial last lines.
-          const lineRanges=range=>{
-            if(range.startContainer!==range.endContainer||range.startContainer.nodeType!==3)return [range];
-            const measured=[...range.getClientRects()].filter(b=>b.width>.01&&b.height>0);if(measured.length<=1)return measured.length?[range]:[];
-            const node=range.startContainer,end=range.endOffset,result=[];
-            const boxAt=offset=>{const r=document.createRange();r.setStart(node,offset);r.setEnd(node,Math.min(end,offset+1));return [...r.getClientRects()].filter(b=>b.width>.01&&b.height>0).at(-1);};
-            let start=range.startOffset;
-            while(start<end){
-              const first=boxAt(start);if(!first){start++;continue;}
-              let low=start+1,high=end;
-              while(low<high){const mid=Math.floor((low+high)/2),box=boxAt(mid);if(box&&box.top>first.top+2)high=mid;else low=mid+1;}
-              const fragment=document.createRange();fragment.setStart(node,start);fragment.setEnd(node,low);result.push(fragment);start=low;
-            }
-            return result;
-          };
-          // Temporary paint exclusions never change the saved anchors or published text.
-          const visibleRanges=ranges=>!lifted.length?ranges:ranges.flatMap(range=>{
-            if(range.startContainer!==range.endContainer)return [range];
-            let spans=[[range.startOffset,range.endOffset]];
-            for(const cut of lifted){if(cut.startContainer!==range.startContainer)continue;
-              spans=spans.flatMap(([a,b])=>cut.endOffset<=a||cut.startOffset>=b?[[a,b]]:[[a,Math.max(a,cut.startOffset)],[Math.min(b,cut.endOffset),b]].filter(([s,e])=>e>s));
-            }
-            return spans.map(([a,b])=>{const r=document.createRange();r.setStart(range.startContainer,a);r.setEnd(range.endContainer,b);return r;});
-          });
+          \#(textFragments)
+          const visibleRanges=ranges=>excludingRanges(ranges,lifted);
           const colors=Object.fromEntries(Object.entries(\#(HTMLAnnotationMenuScript.colors)).map(([name,[,hex]])=>[name,hex]));
           const style=document.createElement('style');
           style.textContent='#reader{position:relative;z-index:1}html.reading-range::selection,html.reading-range body::selection,#reader::selection,#reader ::selection{background:transparent;color:inherit}::highlight(reader-selection){background:transparent;color:inherit}[data-reader-selected]{outline:2px solid #424953!important;outline-offset:2px}[data-reader-saved]{outline:2px solid #c9a331;outline-offset:2px}';

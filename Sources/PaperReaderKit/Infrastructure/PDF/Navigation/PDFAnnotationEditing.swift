@@ -7,6 +7,27 @@ extension PDFReadingNoteLocator {
         guard mark.isOriginalPDFInk, !mark.text.isEmpty else { throw Self.notFound }
         let document = try document(at: url, pageIndex: mark.pageIndex)
         defer { withExtendedLifetime(document) {} }
+        return try Self.locatedHighlight(mark, in: document)
+    }
+
+    /// Reuse one PDF document for the loaded reading window. Ambiguous or outdated rectangles have no text projection.
+    public func historicalInkAnchors(_ marks: [Highlight], in url: URL) throws -> [UUID: [NoteAnchor]] {
+        guard let first = marks.first else { return [:] }
+        let document = try document(at: url, pageIndex: first.pageIndex)
+        defer { withExtendedLifetime(document) {} }
+        var result: [UUID: [NoteAnchor]] = [:]
+        for mark in marks where mark.hasOnlyOriginalPDFGeometry {
+            try Task.checkCancellation()
+            if let fragments = try? Self.locatedHighlight(mark, in: document) {
+                result[mark.id] = fragments.map(\.anchor)
+            }
+        }
+        try Task.checkCancellation()
+        return result
+    }
+
+    private static func locatedHighlight(_ mark: Highlight, in document: PDFDocument) throws -> [PDFReadingNoteFragment]
+    {
         guard let page = document.page(at: mark.pageIndex), let raw = page.string as NSString?,
             raw.length == page.numberOfCharacters
         else { throw Self.notFound }
@@ -84,7 +105,6 @@ extension PDFReadingNoteLocator {
             let parts = try Self.fragments(page: page, pageIndex: index, ranges: cut.rangeView.map(NSRange.init))
             for part in parts {
                 var mark = part.highlight(for: paperID)
-                mark.pdfTextStart = part.anchor.start
                 mark.style = style
                 mark.color = color
                 result.append(mark)

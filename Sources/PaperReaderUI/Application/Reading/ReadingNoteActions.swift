@@ -177,7 +177,7 @@ extension ReaderModel {
         Task { await flushReadingNotes() }
     }
 
-    public func openReadingNote(_ note: ReadingNote) {
+    public func openReadingNote(_ note: ReadingNote, onOriginalPDF: Bool = false) {
         guard note.paperID == selectedPaperID else { return }
         if note.isDocumentSummary {
             guard currentReadingNotes.contains(where: { $0.id == note.id && $0.isDocumentSummary }) else { return }
@@ -192,12 +192,12 @@ extension ReaderModel {
             guard let current = currentEdition, note.contentVersion == current.digest + ":original-0",
                 (0..<current.pageCount).contains(index), currentReadingNotes.contains(where: { $0.id == note.id })
             else { return }
-            if first.pdfPageIndex != nil { pdfBilingual.close() }
             retainedReadingID = nil
             mode = "original"
             navigateToPage(index)
             if first.pdfTranslationPageIndex != nil { pdfBilingual.open(self) }
-            pdfNoteEditor = PDFNoteEditorSession(note: note, marks: [])
+            pdfNoteEditor = PDFNoteEditorSession(
+                note: note, marks: [], usesReflowMargin: pdfBilingual.isOpen && !onOriginalPDF)
             requestedReadingNote = note.id
             readingNoteNavigationToken = UUID()
             return

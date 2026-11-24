@@ -134,6 +134,7 @@ import WebKit
     reader.state.readingNotes.insert(manual, at: 0)
     coordinator.update(view, penEnabled: false, focus: focus)
     #expect(reader.inlinePDFNotes.map(\.id) == [manual.id])
+    #expect(reader.reflowInlinePDFNotes.map(\.id) == [manual.id, paragraph.id])
     #expect(coordinator.openNote(at: point) && reader.pdfNoteEditor?.id == manual.id)
     reader.openReadingNote(summary)
     #expect(reader.pdfNoteEditor == nil && reader.requestedReadingNote == summary.id)
@@ -151,6 +152,7 @@ func pdfDiscussionNoteKeepsTheColorAndInkOfAnOverlappingManualMark(style: Annota
     let locator = PDFReadingNoteLocator()
     let prefix = try #require(try await locator.locate(quote: "Multiple attention", pageIndex: 1, in: url).first)
     var manual = prefix.highlight(for: paperID)
+    manual.pdfTextStart = nil  // Preserve the original, geometry-only PDFKit mark.
     manual.color = .purple
     manual.style = style
     reader.state.highlights = [manual]
@@ -206,6 +208,7 @@ func pdfDiscussionNoteKeepsTheColorAndInkOfAnOverlappingManualMark(style: Annota
     let draft = try #require(reader.pdfNoteEditor)
     #expect(draft.note.anchors.map(\.text) == [word])
     #expect(reader.updateReadingNote(id: draft.id, anchors: draft.note.anchors, markdown: "笔记保留到同一个词"))
+    #expect(reader.currentHighlights.isEmpty)
     reader.closePDFReadingNote()
     await reader.flushReadingNotes()
     await reader.performReflowSelectionAction(.note, selection: [english])

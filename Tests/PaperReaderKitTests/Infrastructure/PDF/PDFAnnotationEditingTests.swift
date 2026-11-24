@@ -15,11 +15,14 @@ import Testing
     let length = try #require(middle.first).anchor.start
     let cut = NSRange(location: length, length: 1)
     let piece = try await locator.selected(ranges: [cut], pageIndex: 0, in: url)
-    let old = try #require(full.first).highlight(for: paper)
+    var old = try #require(full.first).highlight(for: paper)
+    old.pdfTextStart = nil
     var unknown = old
     unknown.id = UUID()
     unknown.text = "text the PDF does not contain"
-    let differentPaper = try #require(full.first).highlight(for: UUID())
+    var differentPaper = old
+    differentPaper.id = UUID()
+    differentPaper.paperID = UUID()
     var translation = old
     translation.id = UUID()
     translation.pdfTranslationTarget = "translation-fixture"

@@ -27,6 +27,7 @@ enum PDFBilingualLayoutPreference: RawRepresentable, Equatable {
 struct PDFBilingualReadingView: View {
     let model: ReaderModel
     let penEnabled: Bool
+    let sidebarOpen: Bool
     let openSettings: () -> Void
 
     @Binding var layout: PDFBilingualLayoutPreference
@@ -45,6 +46,8 @@ struct PDFBilingualReadingView: View {
         GeometryReader { geometry in
             let width = geometry.size.width
             let textLayout = layout.resolved(at: width)
+            let historicalInk =
+                textLayout == .paragraph && !peekingAtOriginal ? session.historicalHighlights(in: model) : []
             let spread = textLayout == .split && session.isOpen && !peekingAtOriginal
             let pdfVisible = !session.isOpen || peekingAtOriginal || spread
             let pdfWidth = spread ? min(width - 268, max(240, width * originalFraction)) : width
@@ -101,11 +104,18 @@ struct PDFBilingualReadingView: View {
             .onChange(of: model.jumpPage) { _, _ in
                 if paragraphVisible && textLayout == .paragraph { session.consumeParagraphJump(model) }
             }
+            .task(id: historicalInk) { await session.locateHistoricalInk(historicalInk, model: model) }
             .onChange(of: model.outlineArrival?.revision) { _, _ in
                 if paragraphVisible && textLayout == .paragraph { session.consumeParagraphJump(model) }
             }
         }
-        .onChange(of: session.isOpen) { _, _ in peekingAtOriginal = false }
+        .onChange(of: session.isOpen) { _, open in
+            peekingAtOriginal = false
+            if !open, model.pdfNoteEditor?.usesReflowMargin == true { model.closePDFReadingNote() }
+        }
+        .onChange(of: model.readingNoteNavigationToken) { _, _ in
+            if model.pdfNoteEditor?.usesReflowMargin == true { peekingAtOriginal = false }
+        }
         .onChange(of: session.selectionRequestRevision) { _, _ in peekingAtOriginal = false }
         .onChange(of: layout) { _, newLayout in
             peekingAtOriginal = false
@@ -166,6 +176,9 @@ struct PDFBilingualReadingView: View {
             }
             if !paragraphs && translations.isEmpty {
                 emptyPage(hasSentences: !sentences.isEmpty, showsPageAction: showsPageAction)
+                    .onChange(of: unlocatedSplitNote, initial: true) { _, id in
+                        if let id { model.useOriginalPDFNoteCard(for: id) }
+                    }
             } else {
                 PDFSentenceTextCanvas(
                     sentences: sentences, translations: translations,
@@ -180,14 +193,14 @@ struct PDFBilingualReadingView: View {
                         }
                         peekingAtOriginal = true
                     }, continuous: paragraphs ? paragraphDocument : nil,
-                    inlineNotes: model.inlinePDFNotes,
+                    inlineNotes: model.reflowInlinePDFNotes,
                     onOpenNote: { id in
                         guard let note = model.currentReadingNotes.first(where: { $0.id == id }) else { return }
-                        model.pdfNoteEditor = PDFNoteEditorSession(note: note, marks: [])
+                        model.openReadingNote(note, onOriginalPDF: true)
                     },
                     onOpenHighlight: { id in
                         guard let mark = model.currentHighlights.first(where: { $0.id == id }) else { return }
-                        Task { await model.openPDFHighlightNote(mark) }
+                        Task { await model.openPDFHighlightNote(mark, inReflow: true) }
                     }, inlineHighlights: model.inlinePDFHighlights,
                     onTextSelection: { session.reflowTextSelection = $0 },
                     onSelectionAction: { action, selection in
@@ -196,11 +209,19 @@ struct PDFBilingualReadingView: View {
                             guard let paperID, model.paper?.id == paperID else { return }
                             await model.performReflowSelectionAction(action, selection: selection)
                         }
-                    })
+                    }, noteModel: model, sidebarOpen: sidebarOpen)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(ReaderTheme.surface)
+    }
+
+    // The untranslated side-by-side pane has no WebKit surface to resolve a saved note.
+    private var unlocatedSplitNote: UUID? {
+        guard !session.isLoading, let editor = model.pdfNoteEditor, editor.usesReflowMargin,
+            editor.note.anchors.first?.readingPageIndex == session.pageIndex
+        else { return nil }
+        return editor.id
     }
 
     private var paragraphDocument: PDFSentenceTextCanvas.Continuous? {

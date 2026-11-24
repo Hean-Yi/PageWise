@@ -78,7 +78,7 @@ struct ReaderView: View {
                     .transition(ReaderMotion.arrival())
             } else if model.showsPDFCanvas, isLocalPDF {
                 PDFBilingualReadingView(
-                    model: model, penEnabled: penEnabled, openSettings: openSettings,
+                    model: model, penEnabled: penEnabled, sidebarOpen: sidebarOpen, openSettings: openSettings,
                     layout: $pdfLayout, peekingAtOriginal: $peekingAtOriginal
                 )
                 .transition(ReaderMotion.arrival())
@@ -107,9 +107,7 @@ struct ReaderView: View {
         .overlay {
             GeometryReader { proxy in
                 ZStack(alignment: .bottomTrailing) {
-                    if model.presentedSummaryID == nil, model.mode == "original", let session = model.pdfNoteEditor,
-                        session.note.paperID == model.selectedPaperID
-                    {
+                    if let session = separatePDFNote {
                         PDFReadingNoteCard(model: model, session: session)
                             .frame(
                                 width: min(350, max(1, proxy.size.width - 24)),
@@ -118,10 +116,17 @@ struct ReaderView: View {
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
-                .animation(ReaderMotion.disclosure(reduceMotion), value: model.pdfNoteEditor != nil)
+                .animation(ReaderMotion.disclosure(reduceMotion), value: separatePDFNote != nil)
             }
-            .allowsHitTesting(model.pdfNoteEditor != nil)
+            .allowsHitTesting(separatePDFNote != nil)
         }
+    }
+
+    private var separatePDFNote: PDFNoteEditorSession? {
+        guard model.presentedSummaryID == nil, model.mode == "original", let session = model.pdfNoteEditor,
+            session.note.paperID == model.selectedPaperID, !session.usesReflowMargin
+        else { return nil }
+        return session
     }
 
     private var isLocalPDF: Bool { model.currentEdition?.usesSourceReflow == false }

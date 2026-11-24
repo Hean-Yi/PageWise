@@ -13,6 +13,10 @@ public struct PDFAnnotationAppearance: Equatable, Sendable {
 }
 
 extension Highlight {
+    public var hasOnlyOriginalPDFGeometry: Bool {
+        isOriginalPDFInk && pdfTextStart == nil && !rects.isEmpty && !text.isEmpty
+    }
+
     var isOriginalPDFInk: Bool {
         pageIndex >= 0 && pageKey == "original-\(pageIndex)" && htmlTarget == nil && textRange == nil
             && contentVersion == nil && pdfTranslationTarget == nil
