@@ -3,7 +3,7 @@ import SwiftUI
 
 struct ReadingCalendarView: View {
     @Bindable var model: ReaderModel
-    @State private var date = Date()
+    @Binding var date: Date
     @State private var showAdd = false
     @State private var minutes = 20.0
     @State private var addPaper: UUID?

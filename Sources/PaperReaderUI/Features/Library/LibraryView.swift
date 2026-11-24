@@ -14,6 +14,8 @@ public struct LibraryView: View {
     @State private var showSettings = false
     @State private var onlineSearch: OnlinePaperSearch
     @State private var selectedShelfID: UUID?
+    @State private var calendarDate = Date()
+    @State private var expandedNotebooks = Set<UUID>()
     @State private var dragTarget = false
     @State private var preferredColumn: NavigationSplitViewColumn = .sidebar
     @State private var toast: String?
@@ -43,7 +45,12 @@ public struct LibraryView: View {
                 case .failure(let error): model.message = error.localizedDescription
                 }
             }
-            .sheet(isPresented: $showSettings) { SettingsView(model: model) }
+            .sheet(isPresented: $showSettings) {
+                SettingsView(model: model) { id in
+                    model.select(id)
+                    preferredColumn = .detail
+                }
+            }
             #if os(macOS)
                 .focusedSceneValue(\.readerSettingsPresentation, $showSettings)
             #endif
@@ -247,9 +254,9 @@ public struct LibraryView: View {
             } else if !model.loaded {
                 ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if model.selectedSection == "calendar" {
-                ReadingCalendarView(model: model).transition(ReaderMotion.arrival(y: 5))
-            } else if model.selectedSection == "memory" {
-                MemoryView(model: model).transition(ReaderMotion.arrival(y: 5))
+                ReadingCalendarView(model: model, date: $calendarDate).transition(ReaderMotion.arrival(y: 5))
+            } else if model.selectedSection == "notebooks" {
+                ReadingNotebooksView(model: model, expandedHistory: $expandedNotebooks).transition(ReaderMotion.arrival(y: 5))
             } else if model.paper != nil {
                 ReaderView(
                     model: model, sidebarOpen: assistantTab != nil,
@@ -309,9 +316,9 @@ public struct LibraryView: View {
                     model.selectedSection = "calendar"
                     preferredColumn = .detail
                 }
-                navigation("研究记忆", icon: "sparkles", selected: model.selectedSection == "memory") {
+                navigation("阅读笔记", icon: "book.pages", selected: model.selectedSection == "notebooks") {
                     model.endReading()
-                    model.selectedSection = "memory"
+                    model.selectedSection = "notebooks"
                     preferredColumn = .detail
                 }
             }

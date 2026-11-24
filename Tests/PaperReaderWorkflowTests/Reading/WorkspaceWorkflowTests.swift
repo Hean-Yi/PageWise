@@ -6,6 +6,27 @@ import Testing
 @testable import PaperReaderKit
 @testable import PaperReaderUI
 
+@Test(arguments: [ReaderOrigin.library, .calendar, .notebooks])
+@MainActor func readerReturnsToItsEntrySectionAfterFollowingAnotherPaper(origin: ReaderOrigin) async throws {
+    let root = workspaceDirectory()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let model = try ReaderModel(root: root)
+    await model.load()
+    let first = workspacePaper()
+    let second = workspacePaper()
+    model.state.papers = [first, second]
+    model.selectedSection = origin.rawValue
+    model.select(first.id)
+    model.select(second.id)
+    #expect(model.readerOrigin == origin && model.selectedSection == "library")
+    model.returnFromReader()
+    #expect(model.selectedSection == origin.rawValue && model.selectedPaperID == nil)
+    model.select(first.id)
+    model.select(nil)
+    #expect(model.selectedSection == "library" && model.readerOrigin == .library)
+    await model.flushReadingPosition()
+}
+
 @Test @MainActor func readingWorkspaceRestoresStablePositionAcrossRestart() async throws {
     let root = workspaceDirectory()
     defer { try? FileManager.default.removeItem(at: root) }
@@ -417,7 +438,7 @@ import Testing
         #expect(model.workspace(for: paper.id).position?.pageKey == key)
     }
     let original = Evidence(id: "S6", title: paper.title, text: "A PDF page", paperID: paper.id, sourcePage: 1)
-    model.selectedSection = "memory"
+    model.selectedSection = "notebooks"
     #expect(model.jump(to: original))
     #expect(model.selectedSection == "library")
     #expect(model.mode == "original" && model.visiblePage == 1)

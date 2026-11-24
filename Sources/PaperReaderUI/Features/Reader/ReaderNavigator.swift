@@ -71,10 +71,10 @@ struct ReaderNavigator: View {
             #if os(iOS)
                 if horizontalSizeClass == .compact {
                     Button {
-                        model.select(nil)
+                        model.returnFromReader()
                         didNavigate()
                     } label: {
-                        Label("书库", systemImage: "arrow.left")
+                        Label(model.readerOrigin.title, systemImage: "arrow.left")
                     }.buttonStyle(.plain).padding(.horizontal, 16).padding(.top, 12)
                 }
             #endif

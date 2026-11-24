@@ -2,11 +2,24 @@ import Foundation
 import Observation
 import PaperReaderKit
 
+enum ReaderOrigin: String {
+    case library, calendar, notebooks
+
+    var title: String {
+        switch self {
+        case .library: "书库"
+        case .calendar: "阅读日历"
+        case .notebooks: "阅读笔记"
+        }
+    }
+}
+
 @MainActor @Observable
 public final class ReaderModel {
     public var state = LibraryState()
     public var selectedPaperID: UUID?
     public var selectedSection = "library"
+    private(set) var readerOrigin = ReaderOrigin.library
     public var mode = "reflow"
     public var message: String?
     public var status = "仅保存在此设备"
@@ -174,6 +187,11 @@ public final class ReaderModel {
     public func select(_ id: UUID?) {
         if let id, pendingImportIDs.contains(id) { return }
         if let id, !state.papers.contains(where: { $0.id == id }) { return }
+        if id == nil {
+            readerOrigin = .library
+        } else if selectedPaperID == nil || selectedSection != "library" {
+            readerOrigin = ReaderOrigin(rawValue: selectedSection) ?? .library
+        }
         Task { await flushReadingNotes() }
         closeDocumentSummary()
         pdfNoteEditor = nil
@@ -209,6 +227,12 @@ public final class ReaderModel {
         selectedSection = "library"
         restoreWorkspace()
         beginReading()
+    }
+
+    func returnFromReader() {
+        let destination = readerOrigin
+        select(nil)
+        selectedSection = destination.rawValue
     }
 
     @discardableResult func save(

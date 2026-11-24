@@ -6,13 +6,21 @@ struct SettingsView: View {
     private enum Category: String, CaseIterable {
         case model = "模型服务"
         case notes = "笔记与存储"
+        case memory = "研究记忆"
 
-        var symbol: String { self == .model ? "slider.horizontal.3" : "folder" }
+        var symbol: String {
+            switch self {
+            case .model: "slider.horizontal.3"
+            case .notes: "folder"
+            case .memory: "brain.head.profile"
+            }
+        }
     }
 
     private enum Field { case model, address, key }
 
     @Bindable var model: ReaderModel
+    private let openMemorySource: (UUID) -> Void
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @FocusState private var focusedField: Field?
@@ -30,8 +38,9 @@ struct SettingsView: View {
     @State private var cleanupWarning: String?
     @State private var testTask: Task<Void, Never>?
 
-    init(model: ReaderModel) {
+    init(model: ReaderModel, openMemorySource: @escaping (UUID) -> Void) {
         self.model = model
+        self.openMemorySource = openMemorySource
         let settings = model.modelSettings
         _draft = State(initialValue: Self.initialDraft(settings))
         _savedSettings = State(initialValue: settings)
@@ -157,7 +166,20 @@ struct SettingsView: View {
                         Text(category.rawValue)
                             .font(ReaderTheme.editorial(32, weight: .medium))
                             .accessibilityAddTraits(.isHeader)
-                        if category == .model { modelForm.disabled(isTesting) } else { notesForm }
+                        switch category {
+                        case .model: modelForm.disabled(isTesting)
+                        case .notes: notesForm
+                        case .memory:
+                            MemoryView(model: model) { paperID in
+                                openMemorySource(paperID)
+                                if hasModelEdits {
+                                    feedback = "已在阅读窗口打开来源论文"
+                                    feedbackIsError = false
+                                } else {
+                                    dismiss()
+                                }
+                            }
+                        }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, compact ? 22 : 32).padding(.top, compact ? 20 : 27).padding(.bottom, 20)
@@ -303,7 +325,7 @@ struct SettingsView: View {
                     }
                 }
                 Spacer(minLength: 0)
-                if category == .notes && !hasModelEdits {
+                if category != .model && !hasModelEdits {
                     Button("完成") { dismiss() }.keyboardShortcut(.defaultAction).buttonStyle(.borderedProminent)
                 } else {
                     Button("取消") { dismiss() }.buttonStyle(.borderless).foregroundStyle(ReaderTheme.muted)

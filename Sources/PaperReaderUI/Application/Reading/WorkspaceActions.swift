@@ -138,6 +138,14 @@ extension ReaderModel {
         scheduleWorkspaceSave()
     }
 
+    func showOriginalReading() {
+        closeDocumentSummary()
+        pdfBilingual.close()
+        guard mode != "original" else { return }
+        changeMode(to: "original")
+        if mode != "original" { readOriginal() }
+    }
+
     public func changeMode(to requestedMode: String) {
         guard ["original", "reflow", "translated"].contains(requestedMode), requestedMode != mode,
             let paper, let current = currentPosition

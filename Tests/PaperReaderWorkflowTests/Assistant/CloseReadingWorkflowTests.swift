@@ -293,6 +293,33 @@ private func closeReadingWorkflowFailuresLeaveNoPartialNotesOrReport(
     #expect(await api.requests == 4)
 }
 
+@Test @MainActor func libraryNotebookReopensAndEditsAHistoricalSummaryThenShowsItsOriginalPDF() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let (reader, id, _) = try await closeReadingLibrary(root: root, api: CloseReadingTransport(.outlineOnly))
+    let first = try await reader.runCloseReading(id, focus: "实验")
+    let next = try await reader.runCloseReading(id, focus: "方法")
+    let persisted = try await reader.store.load()
+    let notebook = try #require(PaperReadingNotebook.notebooks(in: persisted).first { $0.id == id })
+    #expect(notebook.entries.map(\.id) == [next.id, first.id])
+    let historical = try #require(notebook.entries.last?.note)
+    reader.select(nil)
+    reader.selectedSection = "notebooks"
+    reader.select(historical.paperID)
+    reader.openReadingNote(historical)
+    #expect(reader.presentedDocumentSummary?.id == first.readingNoteID)
+    let markdown = historical.markdown + "\n\n核对了 $x^2$。"
+    #expect(reader.updateDocumentSummary(id: historical.id, markdown: markdown))
+    await reader.flushReadingNotes()
+    let edited = try await reader.store.load()
+    #expect(PaperReadingNotebook.notebooks(in: edited).first?.entries.last?.note.markdown == markdown)
+    reader.showOriginalReading()
+    #expect(reader.presentedDocumentSummary == nil && reader.mode == "original" && reader.selectedPaperID == id)
+    reader.returnFromReader()
+    #expect(reader.selectedSection == "notebooks")
+    await reader.flushReadingPosition()
+}
+
 @Test @MainActor func explicitPaperSummarySavesClickableSourcesWithoutMarkingAParagraph() async throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: root) }

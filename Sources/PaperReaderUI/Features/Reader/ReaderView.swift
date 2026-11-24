@@ -108,12 +108,11 @@ struct ReaderView: View {
 
     private func header(width: CGFloat) -> some View {
         HStack(spacing: 12) {
-            Button {
-                model.select(nil)
-            } label: {
-                Label("返回书库", systemImage: "chevron.left")
+            Button(action: model.returnFromReader) {
+                Label("返回\(model.readerOrigin.title)", systemImage: "chevron.left")
             }
-            .labelStyle(.iconOnly).help("返回书库").keyboardShortcut("l", modifiers: [.command, .shift])
+            .labelStyle(.iconOnly).help("返回\(model.readerOrigin.title)")
+            .keyboardShortcut("l", modifiers: [.command, .shift])
             Text(model.paper?.title ?? "").font(ReaderTheme.editorial(18, weight: .medium))
                 .foregroundStyle(ReaderTheme.ink).lineLimit(1).truncationMode(.tail)
             Spacer(minLength: 0)
@@ -149,16 +148,12 @@ struct ReaderView: View {
     }
 
     private func setBilingualReading(_ bilingual: Bool) {
-        model.closeDocumentSummary()
         peekingAtOriginal = false
         if bilingual {
+            model.closeDocumentSummary()
             if !model.openBilingualReading(translatingDocument: pdfLayout == .paragraph) { openSettings() }
         } else {
-            model.pdfBilingual.close()
-            if model.mode != "original" {
-                model.changeMode(to: "original")
-                if model.mode != "original" { model.readOriginal() }
-            }
+            model.showOriginalReading()
         }
     }
 

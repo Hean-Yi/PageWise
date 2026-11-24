@@ -3,42 +3,18 @@ import SwiftUI
 
 struct MemoryView: View {
     @Bindable var model: ReaderModel
+    let openPaper: (UUID) -> Void
     private var memories: [MemoryItem] { model.state.memories.filter { !$0.deleted } }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 28) {
-                HStack(alignment: .firstTextBaseline, spacing: 12) {
-                    Text("研究记忆").font(.system(size: 32, weight: .regular, design: .serif))
-                    Text("\(memories.count)").font(.system(.title3, design: .monospaced))
-                        .foregroundStyle(ReaderTheme.muted)
-                    Spacer()
-                }
-                if memories.isEmpty {
-                    VStack(spacing: 16) {
-                        Image(systemName: "brain.head.profile").font(.system(size: 42, weight: .ultraLight))
-                        Text("从一次讨论开始").font(.headline)
-                        Button {
-                            model.select(model.selectedPaperID ?? model.state.papers.first?.id)
-                        } label: {
-                            Label("去阅读", systemImage: "arrow.up.right")
-                        }
-                        .buttonStyle(.borderless).foregroundStyle(ReaderTheme.accent).font(.caption)
-                    }
-                    .foregroundStyle(ReaderTheme.muted)
-                    .frame(maxWidth: .infinity, minHeight: 320)
-                } else {
-                    LazyVStack(spacing: 16) {
-                        ForEach(memories) { memory in
-                            memoryCard(memory)
-                        }
-                    }
-                }
+        if memories.isEmpty {
+            ContentUnavailableView("暂无研究记忆", systemImage: "brain.head.profile")
+                .frame(maxWidth: .infinity, minHeight: 240)
+        } else {
+            LazyVStack(spacing: 12) {
+                ForEach(memories) { memory in memoryCard(memory) }
             }
-            .padding(28).frame(maxWidth: 860, alignment: .leading)
-            .frame(maxWidth: .infinity, alignment: .center)
         }
-        .background(ReaderTheme.canvas).foregroundStyle(ReaderTheme.ink).tint(ReaderTheme.accent)
     }
 
     private func memoryCard(_ memory: MemoryItem) -> some View {
@@ -55,9 +31,11 @@ struct MemoryView: View {
                 Label(memory.userEdited ? "已编辑" : "自动整理", systemImage: memory.userEdited ? "pencil" : "sparkle")
                     .font(.caption)
                 Spacer()
-                if let source = model.state.chats.first(where: { $0.id == memory.sourceID }) {
+                if let source = model.state.chats.first(where: { $0.id == memory.sourceID }),
+                    model.state.papers.contains(where: { $0.id == source.paperID })
+                {
                     Button {
-                        model.select(source.paperID)
+                        openPaper(source.paperID)
                     } label: {
                         Label("来源", systemImage: "arrow.up.right")
                     }.help("打开来源论文")
