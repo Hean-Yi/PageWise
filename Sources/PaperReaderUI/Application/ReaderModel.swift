@@ -52,6 +52,7 @@ public final class ReaderModel {
     let pdfDocumentTranslation = PDFDocumentTranslationController()
     let pdfTranslations: PDFSentenceTranslationStore
     let previewReader = PaperPreviewReader()
+    @ObservationIgnored var abstractBackfill: Task<Void, Never>?
     let translationValidation: PDFTranslationValidationConfiguration?
     public var visiblePage = 0 {
         didSet {
@@ -163,6 +164,7 @@ public final class ReaderModel {
             }
             if let folder = try? await vault.directory() { vaultName = folder.lastPathComponent }
             loaded = true
+            backfillLibraryAbstracts()
         } catch {
             loadFailure = error.localizedDescription
             message = error.localizedDescription
@@ -214,6 +216,7 @@ public final class ReaderModel {
         shelfChange: ShelfChange? = nil, importShelfID: UUID? = nil,
         orderChange: LibraryOrderChange? = nil, publishingReflow publication: Paper? = nil,
         linkingPublication link: (paperID: UUID, url: String)? = nil,
+        fillingSourceAbstract: PublicationAbstractFill? = nil,
         presentingReflow: (paperID: UUID, jobID: UUID)? = nil, insertingNote: AnchoredNoteInsertion? = nil,
         closeReading: (notes: [AnchoredNoteInsertion], report: ChatTurn)? = nil
     ) async -> Bool {
@@ -236,6 +239,7 @@ public final class ReaderModel {
                 }
                 if let shelfChange { try snapshot.apply(shelfChange) }
                 if let orderChange { try snapshot.apply(orderChange) }
+                fillingSourceAbstract?.apply(to: &snapshot)
                 if let link {
                     guard let index = snapshot.papers.firstIndex(where: { $0.id == link.paperID }) else {
                         throw ReaderError.message("论文已不在书库中。")
@@ -309,6 +313,7 @@ public final class ReaderModel {
                 if !noteMarks.isEmpty { self.state.highlights.append(contentsOf: noteMarks) }
                 if let report { self.state.chats.append(report) }
                 if let importedPaper { self.state.papers.insert(importedPaper, at: 0) }
+                fillingSourceAbstract?.apply(to: &self.state)
                 if let link, let index = self.state.papers.firstIndex(where: { $0.id == link.paperID }) {
                     self.state.papers[index].linkedPublicationURLs =
                         snapshot.papers.first(where: { $0.id == link.paperID })?.linkedPublicationURLs
@@ -351,7 +356,14 @@ public final class ReaderModel {
         let alreadyPresented =
             paper.reflowJob?.id == publication.reflowJob?.id && paper.reflowJob?.hasPresentedContent == true
         paper.reflowJob = publication.reflowJob
-        if paper.onlineSource?.archivePath == nil, let source = publication.onlineSource { paper.onlineSource = source }
+        if paper.onlineSource?.archivePath == nil, var source = publication.onlineSource {
+            if let prior = paper.onlineSource, prior.candidateID == source.candidateID,
+                let text = prior.abstractText, !text.isEmpty
+            {
+                source.abstractText = text
+            }
+            paper.onlineSource = source
+        }
         if alreadyPresented { paper.reflowJob?.hasPresentedContent = true }
         paper.retainedReadings = publication.retainedReadings
         paper.canReflow = publication.canReflow

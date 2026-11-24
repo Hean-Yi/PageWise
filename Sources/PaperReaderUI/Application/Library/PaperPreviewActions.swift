@@ -3,6 +3,23 @@ import NaturalLanguage
 import PaperReaderKit
 
 extension ReaderModel {
+    func prepareImportedAbstract(for id: UUID) async {
+        guard let paper = state.papers.first(where: { $0.id == id }), !Task.isCancelled else { return }
+        // A delayed or unreadable file can be retried on the next load without rolling back the import.
+        try? await previewReader.prepare(paper: paper, root: root)
+    }
+
+    func backfillLibraryAbstracts() {
+        guard !state.papers.isEmpty else { return }
+        abstractBackfill?.cancel()
+        abstractBackfill = Task(priority: .utility) { [papers = state.papers, previewReader, root] in
+            for paper in papers {
+                guard !Task.isCancelled else { return }
+                try? await previewReader.prepare(paper: paper, root: root)
+            }
+        }
+    }
+
     public func previewContent(for paperID: UUID) async -> PaperPreviewContent {
         guard let paper = state.papers.first(where: { $0.id == paperID }), !Task.isCancelled else { return .init() }
         var content =

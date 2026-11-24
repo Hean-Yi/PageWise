@@ -42,9 +42,12 @@ enum ArxivAbstractVersion {
         }
         guard versions.count == 1, let id = versions.first else { throw invalid }
         let title = try head.select("meta[name=citation_title]").attr("content")
+        let abstract = try document.select("blockquote.abstract").first()
+        try abstract?.select(".descriptor").remove()
         let pinned = PaperCandidate(
             id: "https://arxiv.org/abs/" + id, title: title.isEmpty ? candidate.title : title,
-            authors: candidate.authors, year: candidate.year, pdfURL: URL(string: "https://arxiv.org/pdf/" + id)!)
+            authors: candidate.authors, year: candidate.year, pdfURL: URL(string: "https://arxiv.org/pdf/" + id)!,
+            abstract: try abstract?.text())
         guard let verified = ArxivClient.verified(pinned) else { throw invalid }
         return verified
     }

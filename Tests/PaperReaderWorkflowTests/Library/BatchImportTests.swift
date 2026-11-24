@@ -68,6 +68,59 @@ import Testing
     #expect(Set(reopened.state.papers.map(\.id)) == Set(ids))
 }
 
+@MainActor @Test(arguments: [false, true])
+func importStoresThePDFAbstractBeforeFirstPreviewAndReusesItOnDuplicate(downloaded: Bool) async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let reader = try ReaderModel(root: root)
+    await reader.load()
+    let url = try batchFixture(named: "Abstract fixture.pdf", in: root)
+    // This download result has no abstract in its metadata. Both origins must read the PDF during import.
+    let record = PaperCandidate(
+        id: "https://doi.org/10.18653/v1/2025.acl-long.12", title: "Abstract fixture", authors: "", year: "2025",
+        source: .crossref)
+    let id = try #require(
+        await reader.importURLs([url], selectAfterImport: false, metadata: downloaded ? record : nil).first)
+    let stored = try #require(reader.state.papers.first)
+    try FileManager.default.moveItem(
+        at: root.appendingPathComponent(stored.originalPath), to: root.appendingPathComponent("held-aside.pdf"))
+    let reopened = try ReaderModel(root: root)
+    await reopened.load()
+    let preview = await reopened.previewContent(for: id)
+    #expect(preview.abstract?.hasPrefix("Attention is a way") == true)
+    #expect(preview.abstract?.hasSuffix("interpreted carefully.") == true)
+    #expect(await reopened.importURLs([url], selectAfterImport: false, metadata: downloaded ? record : nil) == [id])
+    #expect(await reopened.previewContent(for: id).abstract == preview.abstract)
+    #expect(reopened.state.papers.count == 1 && reopened.selectedPaperID == nil)
+}
+
+@MainActor @Test(arguments: [false, true])
+func repeatedDownloadFillsMissingSameEditionAbstractAndKeepsIt(hasArchive: Bool) async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let reader = try ReaderModel(root: root)
+    await reader.load()
+    let url = try batchFixture(named: "Pinned fixture.pdf", in: root)
+    var record = PaperCandidate(
+        id: "https://arxiv.org/abs/2401.00001v1", title: "Pinned fixture", authors: "", year: "2024",
+        pdfURL: URL(string: "https://arxiv.org/pdf/2401.00001v1"))
+    let tex = Data(#"\documentclass{article}\begin{document}Fixture\end{document}"#.utf8)
+    let first = DownloadedPublication(pdfURL: url, candidate: record, texArchive: hasArchive ? tex : nil)
+    let id = try #require(
+        await reader.importURLs([url], selectAfterImport: false, metadata: record, onlineDownload: first).first)
+    let abstract = "This edition compares two measures of attention."
+    record.abstractText = abstract
+    #expect(await reader.importURLs([url], selectAfterImport: false, metadata: record) == [id])
+    record.abstractText = "Later, conflicting index text."
+    #expect(await reader.importURLs([url], selectAfterImport: false, metadata: record) == [id])
+    let reopened = try ReaderModel(root: root)
+    await reopened.load()
+    let source = try #require(reopened.state.papers.first?.onlineSource)
+    #expect(source.abstractText == abstract)
+    #expect((source.archivePath != nil) == hasArchive)
+    #expect(reopened.state.papers.map(\.id) == [id])
+}
+
 /// Distinct metadata gives each original teaching fixture a distinct digest, without network material.
 @MainActor private func batchFixture(named name: String, in root: URL) throws -> URL {
     let url = root.appendingPathComponent(name)

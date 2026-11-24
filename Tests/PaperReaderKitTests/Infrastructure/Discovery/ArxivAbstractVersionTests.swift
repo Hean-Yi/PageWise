@@ -15,7 +15,10 @@ private func abstractHTML(
     <meta name="citation_arxiv_id" content="\(identifier)">
     <meta name="citation_title" content="Verified fixture title">
     \(permalink.map { #"<meta property="og:url" content="\#($0)">"# } ?? "")
-    </head><body><div class="submission-history">
+    </head><body>
+    <blockquote class="abstract"><span class="descriptor">Abstract:</span>
+    We compare two estimators across independent samples.</blockquote>
+    <div class="submission-history">
     <strong><a href="/abs/2401.00001v1">[v1]</a></strong> Previous submission.
     \(current)
     </div></body></html>
@@ -32,6 +35,7 @@ func abstractPinsAnIdentifiedVersionOfTheRequestedPaper(html: String) throws {
     #expect(pinned.id == "https://arxiv.org/abs/2401.00001v2")
     #expect(pinned.pdfURL?.absoluteString == "https://arxiv.org/pdf/2401.00001v2")
     #expect(pinned.title == "Verified fixture title")
+    #expect(pinned.abstractText == "We compare two estimators across independent samples.")
 }
 
 @Test(arguments: [
@@ -83,6 +87,7 @@ private actor ThrottledPublicationTransport: HTTPTransport {
     let downloaded = try await client.downloadPublication(candidate)
     defer { try? FileManager.default.removeItem(at: downloaded.pdfURL) }
     #expect(downloaded.candidate.id == "https://arxiv.org/abs/2401.00001v2")
+    #expect(downloaded.candidate.abstractText == "We compare two estimators across independent samples.")
     #expect(downloaded.texArchive != nil)
     #expect(await transport.paths == ["/api/query", "/abs/2401.00001", "/src/2401.00001v2", "/pdf/2401.00001v2"])
 }

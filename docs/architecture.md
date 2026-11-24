@@ -95,6 +95,7 @@ Swift Package 自动递归发现每个 target 目录下的 Swift 文件。当前
 | `Infrastructure/TeX` | 有界解包、静态包含/宏展开、语义标记、源码保存和 TeX/HTML 路由 |
 | `Infrastructure/HTML` | HTML 净化、图片本地化、公式处理与最终阅读文件追加 |
 | `Infrastructure/Models` | SSE、结构计划、翻译与有界恢复；不接受模型生成的 HTML/资源地址 |
+| `Infrastructure/Persistence/PaperAbstractStore` | 按原文件哈希和已发布版本保存摘要及译句定位，导入、旧库补齐与预览共用同一提取任务 |
 | `Infrastructure/Persistence/ReadingArtifactCleanup` | 清理未引用的应用制品，保留旧版本 |
 | `UI/Application/Reading/ImportActions` | 导入、哈希去重、补齐线上来源和提交 |
 | `UI/Application/Reading/AIReflowActions` | 保存来源、计划与完整块，协调暂停、恢复和新版本 |

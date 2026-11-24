@@ -7,7 +7,7 @@ import Testing
 @MainActor struct PublisherFileImportTests {
     private let citation = PaperCandidate(
         id: "https://doi.org/10.1234/reader.fixture", title: "Publisher fixture", authors: "", year: "2025",
-        source: .crossref)
+        source: .crossref, abstract: "A different abstract supplied by the selected bibliography entry.")
 
     @Test func selectedFileKeepsBibliographicLinkAndLocalPDFReadingAcrossRestart() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -28,6 +28,7 @@ import Testing
         let paper = try #require(restored.paper)
         #expect(paper.title == citation.title && paper.linkedPublicationURLs == [citation.id])
         #expect(paper.onlineSource == nil && paper.sourceURL == nil && !paper.usesSourceReflow)
+        #expect(await restored.previewContent(for: id).abstract?.hasPrefix("Attention is a way") == true)
         #expect(try Data(contentsOf: root.appendingPathComponent(paper.originalPath)) == bytes)
         #expect(restored.openBilingualReading(translatingDocument: false) && restored.pdfBilingual.isOpen)
         restored.pdfBilingual.close()

@@ -11,6 +11,20 @@ private struct ImportSaveFailure: LocalizedError {
     let errorDescription: String?
 }
 
+struct PublicationAbstractFill {
+    let paperID: UUID
+    let candidateID: String
+    let text: String
+
+    func apply(to state: inout LibraryState) {
+        guard let index = state.papers.firstIndex(where: { $0.id == paperID }),
+            state.papers[index].onlineSource?.candidateID == candidateID,
+            state.papers[index].onlineSource?.abstractText?.isEmpty != false
+        else { return }
+        state.papers[index].onlineSource?.abstractText = text
+    }
+}
+
 extension ReaderModel {
     /// A downloadable result can require a verified source so a user-linked bibliography entry can still gain one.
     public func importedPaperID(
@@ -108,6 +122,17 @@ extension ReaderModel {
         async throws
         -> UUID
     {
+        let id = try await commitPDF(
+            at: url, origin: origin, shelfID: shelfID, moveDuplicateToShelf: moveDuplicateToShelf)
+        importProgress = "整理摘要"
+        await prepareImportedAbstract(for: id)
+        return id
+    }
+
+    private func commitPDF(at url: URL, origin: PDFImportOrigin, shelfID: UUID?, moveDuplicateToShelf: Bool)
+        async throws
+        -> UUID
+    {
         status = "正在保存 \(url.lastPathComponent)…"
         importProgress = "准备导入"
         var imported = try await importer.storeOriginal(at: url)
@@ -119,6 +144,7 @@ extension ReaderModel {
         if let existing = state.papers.first(where: { $0.digest == imported.digest }) {
             var attachment: Paper?
             var link: (paperID: UUID, url: String)?
+            var abstract: PublicationAbstractFill?
             switch origin {
             case .downloaded(let publication) where shouldAttachSource(of: publication, toIdenticalPDF: existing):
                 let attached = try await OnlineSourceStore().attach(publication, to: existing, root: root)
@@ -132,6 +158,13 @@ extension ReaderModel {
                 }
                 latest.warnings = Array(Set(latest.warnings + attached.warnings)).sorted()
                 attachment = latest
+            case .downloaded(let publication)
+            where existing.onlineSource?.candidateID == publication.candidate.id
+                && existing.onlineSource?.abstractText?.isEmpty != false:
+                if let text = publication.candidate.abstractText, !text.isEmpty {
+                    abstract = PublicationAbstractFill(
+                        paperID: existing.id, candidateID: publication.candidate.id, text: text)
+                }
             case .selectedForPublication(let candidate)
             where existing.linkedPublicationURLs?.contains(candidate.id) != true:
                 link = (existing.id, candidate.id)
@@ -140,9 +173,10 @@ extension ReaderModel {
             }
             let move: ShelfChange? =
                 shelfID != nil || moveDuplicateToShelf ? .move(paperID: existing.id, shelfID: shelfID) : nil
-            if move != nil || attachment != nil || link != nil {
+            if move != nil || attachment != nil || link != nil || abstract != nil {
                 let saved = await save(
-                    cancellable: true, shelfChange: move, publishingReflow: attachment, linkingPublication: link)
+                    cancellable: true, shelfChange: move, publishingReflow: attachment, linkingPublication: link,
+                    fillingSourceAbstract: abstract)
                 if !saved, let path = attachment?.onlineSource?.archivePath {
                     try? FileManager.default.removeItem(at: root.appendingPathComponent(path))
                 }

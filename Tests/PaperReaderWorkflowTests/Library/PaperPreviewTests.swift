@@ -37,6 +37,58 @@ import Testing
         #expect(await reader.previewContent(for: id).oneSentence == nil)
     }
 
+    @Test func existingLibraryBackfillsBeforeAnyPreviewAndReusesTheAbstractAfterRestart() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = try LibraryStore(directory: root)
+        let input = root.appendingPathComponent("old-paper.pdf")
+        try DemoPaper.write(to: input)
+        let paper = try await PDFImporter(root: root).storeOriginal(at: input)
+        var library = LibraryState()
+        library.papers = [paper]
+        try await store.save(library)
+
+        let first = try ReaderModel(root: root, credentials: WorkflowCredentials())
+        await first.load()
+        await first.abstractBackfill?.value
+        try FileManager.default.removeItem(at: root.appendingPathComponent(paper.originalPath))
+
+        let reopened = try ReaderModel(root: root, credentials: WorkflowCredentials())
+        await reopened.load()
+        let preview = await reopened.previewContent(for: paper.id)
+        #expect(preview.abstract?.hasPrefix("Attention is a way") == true)
+        #expect(preview.abstract?.hasSuffix("interpreted carefully.") == true)
+        await reopened.abstractBackfill?.value
+    }
+
+    @Test func unlabelledSourceBlocksUseCompleteExistingTranslationsOfTheRegisteredAbstract() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let reader = try ReaderModel(root: root, credentials: WorkflowCredentials())
+        await reader.load()
+        let blocks = [
+            "Estimating errors", "We study errors in long-term forecasts.",
+            "The late forecast reduces variance.", "1 Introduction",
+        ].map { TextBlock(sourcePage: 0, text: $0) }
+        var paper = Paper(
+            title: blocks[0].text, digest: "unlabelled", originalPath: "absent.pdf", pageCount: 1,
+            blocks: blocks, warnings: [], canReflow: true)
+        var source = OnlinePaperSource(candidateID: "https://doi.org/10.1234/test")
+        source.abstractText = "We study errors in long-\nterm forecasts. The late forecast reduces variance."
+        paper.onlineSource = source
+        paper.translations = [blocks[1].id.uuidString: "我们分析长期预测中的误差。"]
+        reader.state.papers = [paper]
+        let original = await reader.previewContent(for: paper.id)
+        #expect(original.isChineseAbstract == false && original.abstract?.contains(blocks[2].text) == true)
+        reader.state.papers[0].translations[blocks[2].id.uuidString] = "较晚的预测降低了方差。"
+        let chinese = await reader.previewContent(for: paper.id)
+        #expect(chinese.abstract == "我们分析长期预测中的误差。\n\n较晚的预测降低了方差。")
+        // A changed published claim cannot inherit this block's translation.
+        reader.state.papers[0].onlineSource?.abstractText =
+            "We study errors in long-term forecasts. The late forecast reduces variance by 1.5%."
+        #expect(await reader.previewContent(for: paper.id).isChineseAbstract == false)
+    }
+
     @Test func sourcePreviewUsesOnlyCompleteTranslatedAbstractAndSupportsInlineLabels() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }

@@ -14,7 +14,7 @@ public struct PaperPreviewContent: Equatable, Sendable {
 }
 
 enum AbstractPassage {
-    struct Part {
+    struct Part: Codable, Sendable {
         var text: String
         var paragraph: String
         var key: String
@@ -26,6 +26,11 @@ enum AbstractPassage {
     private static let end = try! NSRegularExpression(
         pattern:
             #"(?i)^(?:(?:[1-9]\d*(?:\.\d+)*|[ivx]+)[.)]?\s+)?(?:introduction|引言|绪论|前言)\s*[.:：]?$|^(?i:keywords?|key\s+words|index\s+terms|关键词|CCS concepts|ACM reference format)(?:\s*[:：.—–-]|\s*$)|^(?:[1-9]\d*(?:\.\d+)*|[IVX]+)[.)]?\s+\p{Lu}[^!?。？！]{0,90}(?<!\.)$"#
+    )
+
+    private static let frontMatterEnd = try! NSRegularExpression(
+        pattern:
+            #"(?i)^(?:date|correspondence|corresponding author|author legend)\s*[:：]|^(?:fig(?:ure)?\.?|table)\s+\d+[.:：](?:\s|$)"#
     )
 
     static func withoutLabel(_ value: String) -> String? {
@@ -46,7 +51,9 @@ enum AbstractPassage {
     }
 
     static func ends(at value: String) -> Bool {
-        end.firstMatch(in: value, range: NSRange(value.startIndex..., in: value)) != nil
+        let range = NSRange(value.startIndex..., in: value)
+        return end.firstMatch(in: value, range: range) != nil
+            || frontMatterEnd.firstMatch(in: value, range: range) != nil
     }
 
     /// Only consider text following an explicit abstract marker; an unlabelled introduction is not an abstract.
@@ -72,6 +79,36 @@ enum AbstractPassage {
             result.append(part)
         }
         return started ? (result, false) : nil
+    }
+
+    /// Map an independently identified abstract back to whole, consecutive source blocks for translation.
+    static func matching(_ reference: String, in parts: [Part]) -> [Part]? {
+        func comparable(_ text: String) -> String {
+            let lettersJoined = text.precomposedStringWithCompatibilityMapping.lowercased().replacingOccurrences(
+                of: #"(?<=\p{L})[-‐‑]\s*(?=\p{L})"#, with: "", options: .regularExpression)
+            // Keep mathematical signs, percentages and decimal separators when pairing a translation.
+            return lettersJoined.filter { !$0.isWhitespace && $0 != "\u{00ad}" }
+        }
+        let target = comparable(reference)
+        guard target.count >= 32 else { return nil }
+        let candidates = parts.map { part -> (Part, String) in
+            var part = part
+            part.text = withoutLabel(part.text) ?? part.text
+            return (part, comparable(part.text))
+        }
+        for start in candidates.indices {
+            let first = candidates[start].1
+            guard !first.isEmpty, target.hasPrefix(first) else { continue }
+            var matched = ""
+            for end in start..<candidates.endIndex {
+                let fragment = candidates[end].1
+                guard !fragment.isEmpty else { break }
+                matched += fragment
+                if matched == target { return candidates[start...end].map(\.0) }
+                if !target.hasPrefix(matched) { break }
+            }
+        }
+        return nil
     }
 
     static func display(_ parts: [Part], translated: [String: String]) -> PaperPreviewContent? {

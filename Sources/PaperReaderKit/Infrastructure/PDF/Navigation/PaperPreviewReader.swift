@@ -2,78 +2,141 @@ import Foundation
 import SwiftSoup
 
 public actor PaperPreviewReader {
-    private struct PDFAbstract {
-        let parts: [AbstractPassage.Part]
-        let sentences: [PDFSourceSentence]
-    }
-
-    private var recent: [(digest: String, abstract: PDFAbstract)] = []
+    private var libraries: [URL: PaperAbstractStore] = [:]
 
     public init() {}
+
+    /// New imports and old-library backfill prepare the same records that the preview reads.
+    public func prepare(paper: Paper, root: URL) async throws {
+        _ = try await material(for: paper, root: root, translationStore: nil)
+    }
 
     public func read(paper: Paper, root: URL, store: PDFSentenceTranslationStore, settings: ModelSettings) async throws
         -> PaperPreviewContent
     {
-        try Task.checkCancellation()
-        var source = publishedAbstract(in: paper, root: root)
-        if let source, source.isChineseAbstract { return source }
-        // Rebuilding an edition does not invalidate the same PDF's already published abstract.
-        if let prior = paper.retainedReadings?.last {
-            let older = publishedAbstract(in: prior.projecting(paper), root: root)
-            if let older, older.isChineseAbstract { return older }
-            source = source ?? older
-        }
-        let indexed = paper.onlineSource?.abstractText.map { AbstractPassage.withoutLabel($0) ?? $0 }
-        if source == nil, let indexed, !indexed.isEmpty {
-            source = .init(abstract: indexed, isChineseAbstract: AbstractPassage.containsChinese(indexed))
-        }
-
-        let limit = min(3, max(0, paper.pageCount))
-        if let source, !(await store.hasSavedPage(documentHash: paper.digest, among: 0..<limit)) { return source }
-        try Task.checkCancellation()
-        let excerpt: PDFAbstract
-        if let cached = recent.first(where: { $0.digest == paper.digest }) {
-            excerpt = cached.abstract
-        } else {
-            excerpt = try extractPDF(url: root.appendingPathComponent(paper.originalPath), pages: limit)
-            try Task.checkCancellation()
-            recent.append((paper.digest, excerpt))
-            if recent.count > 12 { recent.removeFirst() }
-        }
+        let material = try await material(for: paper, root: root, translationStore: store)
+        if let published = material.published, published.isChineseAbstract { return published }
         var translated: [String: String] = [:]
-        for sentences in Dictionary(grouping: excerpt.sentences, by: \.pageIndex).values {
+        for sentences in Dictionary(grouping: material.pdf?.sentences ?? [], by: \.pageIndex).values {
             try Task.checkCancellation()
-            if let saved = try? await store.cached(documentHash: paper.digest, sentences: sentences, settings: settings)
+            if let values = try? await store.cached(
+                documentHash: paper.digest, sentences: sentences, settings: settings)
             {
-                translated.merge(saved) { first, _ in first }
+                translated.merge(values) { first, _ in first }
             }
         }
         try Task.checkCancellation()
-        let pdf = AbstractPassage.display(excerpt.parts, translated: translated)
+        let pdf = material.pdf.flatMap { AbstractPassage.display($0.parts, translated: translated) }
         if let pdf, pdf.isChineseAbstract { return pdf }
-        return source ?? pdf ?? .init()
+        if let indexed = material.indexed, indexed.isChineseAbstract { return indexed }
+        return material.published ?? material.indexed ?? pdf ?? .init()
     }
 
-    private func publishedAbstract(in paper: Paper, root: URL) -> PaperPreviewContent? {
-        let front = paper.blocks.prefix(80)
-        guard front.contains(where: { AbstractPassage.withoutLabel($0.text) != nil }) else { return nil }
-        let headings =
-            paper.htmlReading.flatMap {
-                try? headingKeys(at: root.appendingPathComponent($0.relativePath))
-            } ?? []
-        let parts = front.map {
-            let key = $0.id.uuidString
-            return AbstractPassage.Part(
-                text: $0.text, paragraph: key, key: key, isSectionHeading: headings.contains(key))
+    private struct Material {
+        let pdf: PDFAbstractRecord?
+        let published: PaperPreviewContent?
+        let indexed: PaperPreviewContent?
+    }
+
+    private func material(for paper: Paper, root: URL, translationStore: PDFSentenceTranslationStore?) async throws
+        -> Material
+    {
+        try Task.checkCancellation()
+        let cache = libraries[root] ?? PaperAbstractStore(root: root)
+        libraries[root] = cache
+        let indexed = paper.onlineSource?.abstractText.flatMap { raw -> PaperPreviewContent? in
+            let text = (AbstractPassage.withoutLabel(raw) ?? raw).trimmingCharacters(in: .whitespacesAndNewlines)
+            return text.isEmpty ? nil : .init(abstract: text, isChineseAbstract: AbstractPassage.containsChinese(text))
         }
-        guard let passage = AbstractPassage.locate(parts) else { return nil }
-        if passage.closed { return AbstractPassage.display(passage.parts, translated: paper.translations) }
-        guard paper.reflowJob?.finished == true, let first = passage.parts.first else { return nil }
-        return AbstractPassage.display([first], translated: paper.translations)
+        var pdf: PDFAbstractRecord?
+        var pdfFailure: (any Error)?
+        if paper.pageCount > 0 {
+            let file = root.appendingPathComponent(paper.originalPath)
+            do {
+                let key = PaperAbstractStore.Source.pdf(digest: paper.digest)
+                let pages = min(3, paper.pageCount)
+                if indexed != nil {
+                    // The verified edition's abstract is already in the library. Only add PDF anchors
+                    // when an existing on-device PDF translation can actually use them.
+                    pdf = try await cache.cached(key)
+                }
+                let needsAnchors =
+                    indexed == nil
+                    ? true : await translationStore?.hasSavedPage(documentHash: paper.digest, among: 0..<pages) == true
+                if pdf == nil && needsAnchors {
+                    pdf = try await cache.record(for: key) { try PDFAbstractExtractor.extract(url: file, pages: pages) }
+                }
+            } catch {
+                try Task.checkCancellation()
+                pdfFailure = error
+            }
+        }
+        let reference =
+            pdf.flatMap { AbstractPassage.display($0.parts, translated: [:])?.abstract } ?? indexed?.abstract
+        var published = try await publishedAbstract(in: paper, root: root, reference: reference, cache: cache)
+        if published?.isChineseAbstract != true, let prior = paper.retainedReadings?.last {
+            let older = try await publishedAbstract(
+                in: prior.projecting(paper), root: root, reference: reference, cache: cache)
+            if older?.isChineseAbstract == true || published == nil { published = older ?? published }
+        }
+        if let pdfFailure, indexed == nil, published == nil { throw pdfFailure }
+        return .init(pdf: pdf, published: published, indexed: indexed)
+    }
+
+    private func publishedAbstract(in paper: Paper, root: URL, reference: String?, cache: PaperAbstractStore)
+        async throws
+        -> PaperPreviewContent?
+    {
+        let front = paper.blocks.prefix(80)
+        guard let first = front.first, let last = front.last else { return nil }
+        // Published blocks are immutable. A newly appended front section or rebuilt edition can reveal an abstract.
+        let revision = [
+            paper.htmlReading?.editionID?.uuidString ?? "", first.id.uuidString, last.id.uuidString,
+            String(front.count),
+            paper.reflowJob?.finished == true ? "finished" : "open", reference ?? "",
+        ].joined(separator: "|")
+        do {
+            let record = try await cache.record(for: .publication(digest: paper.digest, revision: revision)) {
+                let parts = front.map {
+                    AbstractPassage.Part(text: $0.text, paragraph: $0.id.uuidString, key: $0.id.uuidString)
+                }
+                var passage: (parts: [AbstractPassage.Part], closed: Bool)?
+                var headingFailure: (any Error)?
+                if parts.contains(where: { AbstractPassage.withoutLabel($0.text) != nil }) {
+                    var headings: Set<String> = []
+                    if let html = paper.htmlReading {
+                        do { headings = try Self.headingKeys(at: root.appendingPathComponent(html.relativePath)) } catch
+                        { headingFailure = error }
+                    }
+                    let marked = parts.map { part in
+                        var part = part
+                        part.isSectionHeading = headings.contains(part.key)
+                        return part
+                    }
+                    passage = AbstractPassage.locate(marked)
+                    if let passage, passage.closed, !passage.parts.isEmpty {
+                        return .init(parts: passage.parts, sentences: [])
+                    }
+                }
+                if let reference, let match = AbstractPassage.matching(reference, in: parts) {
+                    return .init(parts: match, sentences: [])
+                }
+                if let headingFailure { throw headingFailure }
+                if paper.reflowJob?.finished == true, let first = passage?.parts.first {
+                    return .init(parts: [first], sentences: [])
+                }
+                return .init(parts: [], sentences: [])
+            }
+            return AbstractPassage.display(record.parts, translated: paper.translations)
+        } catch {
+            try Task.checkCancellation()
+            // PDF or verified bibliographic text is still available while an HTML artifact is unavailable.
+            return nil
+        }
     }
 
     /// Published blocks keep their text and translations in the snapshot. Heading tags stay in the immutable HTML.
-    private func headingKeys(at url: URL) throws -> Set<String> {
+    private static func headingKeys(at url: URL) throws -> Set<String> {
         let file = try FileHandle(forReadingFrom: url)
         defer { try? file.close() }
         let prefix = String(decoding: try file.read(upToCount: 128 * 1_024) ?? Data(), as: UTF8.self)
@@ -86,39 +149,5 @@ public actor PaperPreviewReader {
                 }
                 return heading ? try section.attr("data-key") : nil
             })
-    }
-
-    private func extractPDF(url: URL, pages: Int) throws -> PDFAbstract {
-        var sentences: [PDFSourceSentence] = []
-        var found: (parts: [AbstractPassage.Part], closed: Bool)?
-        for page in 0..<pages {
-            try Task.checkCancellation()
-            let extraction = try? PDFSentenceExtractor.extractPage(url: url, pageIndex: page)
-            sentences.append(contentsOf: extraction?.sentences ?? [])
-            let parts = sentences.map {
-                AbstractPassage.Part(text: $0.text, paragraph: $0.readingParagraphID, key: $0.id)
-            }
-            found = AbstractPassage.locate(parts)
-            // A side column can force the sentence extractor to omit genuine prose. Use a
-            // geometrically bounded column only when it can identify the following heading.
-            if found?.closed != true || extraction?.notice != nil,
-                let column = try PDFAbstractColumn.read(url: url, pageIndex: page)
-            {
-                let normalized = column.filter { $0.isLetter || $0.isNumber }
-                let canonical = (found?.parts ?? []).map(\.text).joined().filter { $0.isLetter || $0.isNumber }
-                if normalized != canonical {
-                    return .init(parts: [.init(text: column, paragraph: "column", key: "column")], sentences: [])
-                }
-                found?.closed = true
-            }
-            if found?.closed == true { break }
-        }
-        var selected = found?.parts ?? []
-        // Without a recognizable end heading, keep only the paragraph attached to the label.
-        if found?.closed != true, let first = selected.first {
-            selected = Array(selected.prefix { $0.paragraph == first.paragraph })
-        }
-        let keys = Set(selected.map(\.key))
-        return .init(parts: selected, sentences: sentences.filter { keys.contains($0.id) })
     }
 }
