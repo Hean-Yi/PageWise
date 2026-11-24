@@ -128,6 +128,7 @@ private struct JumpToLatest: ViewModifier {
 
     let target: Target
     let jump: () -> Void
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var hasMoreBelow = false
     @State private var readerScrolled = false
 
@@ -151,20 +152,21 @@ private struct JumpToLatest: ViewModifier {
                 hasMoreBelow = hasMore
             }
             .overlay(alignment: .bottomTrailing) {
-                if hasMoreBelow {
-                    Button {
-                        readerScrolled = false
-                        jump()
-                    } label: {
-                        Image(systemName: "arrow.down")
-                            .font(.callout.weight(.medium))
-                            .frame(width: 34, height: 34).background(ReaderTheme.surface, in: Circle())
-                            .overlay { Circle().strokeBorder(ReaderTheme.line) }
-                    }
-                    .buttonStyle(.plain).foregroundStyle(ReaderTheme.ink)
-                    .help("前往最新消息").accessibilityLabel("前往最新消息")
-                    .padding(.trailing, 15).padding(.bottom, 6)
+                Button {
+                    readerScrolled = false
+                    withAnimation(ReaderMotion.navigation(reduceMotion), jump)
+                } label: {
+                    Image(systemName: "arrow.down")
+                        .font(.callout.weight(.medium))
+                        .frame(width: 34, height: 34).background(ReaderTheme.surface, in: Circle())
+                        .overlay { Circle().strokeBorder(ReaderTheme.line) }
                 }
+                .buttonStyle(.plain).foregroundStyle(ReaderTheme.ink)
+                .help("前往最新消息").accessibilityLabel("前往最新消息")
+                .opacity(hasMoreBelow ? 1 : 0)
+                .animation(ReaderMotion.feedback(reduceMotion), value: hasMoreBelow)
+                .disabled(!hasMoreBelow).allowsHitTesting(hasMoreBelow).accessibilityHidden(!hasMoreBelow)
+                .padding(.trailing, 15).padding(.bottom, 6)
             }
     }
 }

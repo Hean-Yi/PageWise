@@ -8,6 +8,7 @@ struct AssistantToolTile: View {
     var detail: String?
     var metadata: String?
     var accessory: String?
+    var accessoryRotation: Angle = .zero
     var detailLines = 2
     var searchQuery: String?
 
@@ -22,6 +23,7 @@ struct AssistantToolTile: View {
                 }
                 if let accessory {
                     Image(systemName: accessory).font(.caption2.weight(.semibold))
+                        .rotationEffect(accessoryRotation)
                         .foregroundStyle(ReaderTheme.muted).accessibilityHidden(true)
                 }
             }.font(.caption).foregroundStyle(ReaderTheme.accent)
@@ -76,6 +78,7 @@ struct AssistantToolButtonStyle: ButtonStyle {
         let embedded: Bool
         @State private var hovered = false
         @Environment(\.isEnabled) private var enabled
+        @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
         var body: some View {
             let active = hovered && enabled
@@ -86,6 +89,9 @@ struct AssistantToolButtonStyle: ButtonStyle {
                     configuration.label.assistantToolSurface(highlighted: active, pressed: configuration.isPressed)
                 }
             }
+            .opacity(configuration.isPressed ? 0.78 : 1)
+            .animation(ReaderMotion.feedback(reduceMotion), value: active)
+            .animation(ReaderMotion.feedback(reduceMotion), value: configuration.isPressed)
             .onHover { hovered = $0 }
         }
     }

@@ -9,6 +9,7 @@ struct AgentResultCard: View {
     let didNavigate: () -> Void
     let followUp: (AgentCard) -> Void
     @Environment(\.openURL) private var openURL
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var showsExcerpt = false
     @State private var selectedVersion: UUID?
 
@@ -130,9 +131,9 @@ struct AgentResultCard: View {
             .accessibilityHint("在阅读器中打开")
         } else if !card.excerpt.isEmpty {
             Button {
-                showsExcerpt.toggle()
+                withAnimation(ReaderMotion.disclosure(reduceMotion)) { showsExcerpt.toggle() }
             } label: {
-                label(for: card, accessory: showsExcerpt ? "chevron.up" : "chevron.down")
+                label(for: card, accessory: "chevron.down", accessoryRotation: .degrees(showsExcerpt ? 180 : 0))
             }
             .buttonStyle(AssistantToolButtonStyle(embedded: true))
             .accessibilityHint(showsExcerpt ? "收起摘录" : "查看完整摘录")
@@ -145,7 +146,7 @@ struct AgentResultCard: View {
         }
     }
 
-    private func label(for card: AgentCard, accessory: String?) -> some View {
+    private func label(for card: AgentCard, accessory: String?, accessoryRotation: Angle = .zero) -> some View {
         let purpose = purpose(for: card)
         let detail: String?
         if let id = card.readingNoteID, let paperID = card.paperID {
@@ -158,7 +159,7 @@ struct AgentResultCard: View {
         return VStack(alignment: .leading, spacing: 0) {
             AssistantToolTile(
                 tool: purpose.title, systemImage: purpose.icon, title: card.title, detail: detail,
-                metadata: metadata(for: card), accessory: accessory,
+                metadata: metadata(for: card), accessory: accessory, accessoryRotation: accessoryRotation,
                 detailLines: result.purpose == .readingNote ? 1 : 2,
                 searchQuery: card.searchQuery)
             if let reason = result.reason, !reason.isEmpty {

@@ -11,6 +11,7 @@ struct PaperAssistantCitations: View {
     let model: ReaderModel
     let didNavigate: () -> Void
     let revealCard: (String) -> Void
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var expandedExcerpts: Set<String> = []
     @State private var showsRelated = false
     @State private var previews: [String: String] = [:]
@@ -92,22 +93,27 @@ struct PaperAssistantCitations: View {
             Button {
                 if canNavigate, model.jump(to: source) {
                     didNavigate()
-                } else if expanded {
-                    expandedExcerpts.remove(key)
                 } else {
-                    expandedExcerpts.insert(key)
+                    toggleExcerpt(key, expanded: expanded)
                 }
             } label: {
                 HStack(alignment: .firstTextBaseline, spacing: 5) {
                     Text(source.id).monospacedDigit()
                     Text(source.title).foregroundStyle(ReaderTheme.ink).lineLimit(2)
                     Spacer(minLength: 0)
-                    Image(systemName: canNavigate ? "arrow.up.forward" : (expanded ? "chevron.up" : "chevron.down"))
+                    Image(systemName: canNavigate ? "arrow.up.forward" : "chevron.down")
+                        .rotationEffect(.degrees(!canNavigate && expanded ? 180 : 0))
                         .imageScale(.small).accessibilityHidden(true)
                 }.contentShape(Rectangle())
             }
             .buttonStyle(.plain).disabled(!canNavigate && excerpt.isEmpty)
             if expanded { Text(excerpt).textSelection(.enabled) }
+        }
+    }
+
+    private func toggleExcerpt(_ id: String, expanded: Bool) {
+        withAnimation(ReaderMotion.disclosure(reduceMotion)) {
+            if expanded { expandedExcerpts.remove(id) } else { expandedExcerpts.insert(id) }
         }
     }
 
@@ -128,7 +134,8 @@ struct PaperAssistantCitations: View {
             detail: expanded || excerpt.isEmpty
                 ? nil : (source.readingNoteID == nil ? previews[source.id] : ReadingNoteSummary.excerpt(excerpt)),
             metadata: metadata,
-            accessory: key != nil ? "chevron.forward" : (canExpand ? (expanded ? "chevron.up" : "chevron.down") : nil))
+            accessory: key != nil ? "chevron.forward" : (canExpand ? "chevron.down" : nil),
+            accessoryRotation: .degrees(canExpand && expanded ? 180 : 0))
         return Group {
             if key != nil {
                 Button {
@@ -141,7 +148,7 @@ struct PaperAssistantCitations: View {
             } else if canExpand {
                 VStack(alignment: .leading, spacing: 0) {
                     Button {
-                        if expanded { expandedExcerpts.remove(source.id) } else { expandedExcerpts.insert(source.id) }
+                        toggleExcerpt(source.id, expanded: expanded)
                     } label: {
                         tile
                     }

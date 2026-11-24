@@ -28,9 +28,11 @@
             let reading = ReadingProgress.resolve(paper: paper, workspace: PaperWorkspace(status: .reading))
             let waiting = ShelfCoverFlight(onShelf: shelf)
             var reports: [Bool] = []
-            func input(_ flight: ShelfCoverFlight, reduced: Bool = false) -> ShelfFlyingCover {
+            func input(_ flight: ShelfCoverFlight, destination target: CGRect? = nil, reduced: Bool = false)
+                -> ShelfFlyingCover
+            {
                 ShelfFlyingCover(
-                    paper: paper, reading: reading, flight: flight, destination: destination,
+                    paper: paper, reading: reading, flight: flight, destination: target ?? destination,
                     reduceMotion: reduced, ready: { reports.append($0) })
             }
 
@@ -77,6 +79,11 @@
             #expect(book.position == finalCenter && abs(book.transform.m11 - finalScale) < 0.001)
             let sameTextureWhenReduced = texture === book.contents as AnyObject?
             #expect(sameTextureWhenReduced)
+            let compact = CGRect(x: 260, y: 20, width: 175, height: 250)
+            canvas.configure(input(flight, destination: compact, reduced: true), displayScale: 2)
+            let sameTextureAfterResize = texture === book.contents as AnyObject?
+            #expect(sameTextureAfterResize)
+            #expect(book.position == CGPoint(x: compact.midX, y: viewport.height - compact.midY))
             #expect(reports == [true])
         }
     }

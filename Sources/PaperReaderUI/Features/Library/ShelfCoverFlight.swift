@@ -9,6 +9,7 @@ struct ShelfCoverPose: Equatable {
 /// One reversible path for the book, its shadow and the preview's reveal.
 struct ShelfCoverFlight: Equatable {
     static let coordinateSpace = "bookshelf-preview"
+    static let maximumPreviewWidth: CGFloat = 282
     private(set) var awaitingLift = false
     let typesetWidth: CGFloat
     let returning: Bool
@@ -70,7 +71,7 @@ struct ShelfCoverFlight: Equatable {
             tilt: (destination.midX >= source.midX ? 1 : -1) * 1.2 * lift)
     }
 
-    private static func ease(_ progress: CGFloat, from: CGFloat, to: CGFloat) -> CGFloat {
+    static func ease(_ progress: CGFloat, from: CGFloat, to: CGFloat) -> CGFloat {
         let t = min(1, max(0, (progress - from) / (to - from)))
         return t * t * (3 - 2 * t)
     }

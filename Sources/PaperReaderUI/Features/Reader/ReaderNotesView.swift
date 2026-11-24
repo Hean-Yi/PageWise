@@ -56,8 +56,7 @@ struct ReaderNotesView: View {
                             .system(size: 13)
                         ).lineLimit(1)
                     }.frame(maxWidth: .infinity, alignment: .leading).padding(12)
-                        .background(ReaderTheme.canvas, in: RoundedRectangle(cornerRadius: 9))
-                }.buttonStyle(.plain)
+                }.buttonStyle(AssistantToolButtonStyle())
             }
             if model.lastDeletedNoteID != nil {
                 Button("撤销删除笔记", action: model.undoReadingNoteDeletion).font(.system(size: 12))

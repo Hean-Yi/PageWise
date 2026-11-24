@@ -141,7 +141,7 @@ private struct ShelfWorkspaceContent: View {
                     Rectangle().fill(ReaderTheme.line).frame(height: 1).padding(.bottom, 24)
                     if onlineSearch.isExpanded {
                         SearchView(search: onlineSearch, targetName: onlineTargetName)
-                            .transition(reduceMotion ? .opacity : .opacity.combined(with: .move(edge: .top)))
+                            .transition(reduceMotion ? .identity : .opacity.combined(with: .offset(y: -8)))
                             .padding(.bottom, 26)
                     }
                     LazyVGrid(columns: columns, alignment: .leading, spacing: 32) {
@@ -151,9 +151,12 @@ private struct ShelfWorkspaceContent: View {
                         ForEach(listing.entries, id: \.element.id) { index, paper in
                             bookshelfItem(
                                 paper, index: index, columns: count,
-                                width: min(236, (available - CGFloat(count - 1) * 36) / CGFloat(count)))
+                                width: min(236, (available - CGFloat(count - 1) * 36) / CGFloat(count))
+                            )
+                            .transition(reduceMotion ? .identity : ReaderMotion.arrival(y: 5))
                         }
                     }.padding(.top, 5)
+                        .animation(ReaderMotion.disclosure(reduceMotion), value: sort)
                     if model.state.papers.isEmpty && collection == .all {
                         HStack(spacing: 14) {
                             Text("也可以拖入 PDF").foregroundStyle(ReaderTheme.muted)
@@ -168,6 +171,9 @@ private struct ShelfWorkspaceContent: View {
                         }.font(.system(size: 12)).padding(.top, 22)
                     }
                 }.padding(.horizontal, inset).padding(.top, compact ? 24 : 32).padding(.bottom, 44)
+                    .animation(ReaderMotion.disclosure(reduceMotion), value: onlineSearch.isExpanded)
+                    .animation(ReaderMotion.disclosure(reduceMotion), value: selectedShelfID)
+                    .animation(ReaderMotion.navigation(reduceMotion), value: collection)
             }
             .allowsHitTesting(preview == nil)
             .accessibilityHidden(preview != nil)
@@ -217,8 +223,6 @@ private struct ShelfWorkspaceContent: View {
                 preview = nil
                 searchFocused = true
             }
-            .animation(reduceMotion ? nil : .easeInOut(duration: 0.22), value: onlineSearch.isExpanded)
-            .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: selectedShelfID)
             .onChange(of: onlineSearch.isExpanded) { _, expanded in if expanded { searchFocused = false } }
             .onChange(of: model.state.shelves) { _, shelves in
                 if let selectedShelfID, !shelves.contains(where: { $0.id == selectedShelfID }) {
@@ -257,8 +261,8 @@ private struct ShelfWorkspaceContent: View {
             moveEarlier: orderAction(at: index, delta: -1),
             moveLater: orderAction(at: index, delta: 1)
         )
-        .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: arrangement.preview)
-        .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: arrangement.sourceID)
+        .animation(ReaderMotion.disclosure(reduceMotion), value: arrangement.preview)
+        .animation(ReaderMotion.feedback(reduceMotion), value: arrangement.sourceID)
     }
 
     private func orderAction(at index: Int, delta: Int) -> (() -> Void)? {
@@ -296,6 +300,7 @@ private struct ShelfWorkspaceContent: View {
     private var heading: some View {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
             Text(collection.title).font(ReaderTheme.editorial(36))
+                .contentTransition(reduceMotion ? .identity : .opacity)
                 .foregroundStyle(ReaderTheme.ink).accessibilityAddTraits(.isHeader)
             Text(
                 "\(collection == .all && query.isEmpty ? model.state.papers.count : listing.entries.count) 篇"
@@ -326,6 +331,7 @@ private struct ShelfWorkspaceContent: View {
             .overlay {
                 RoundedRectangle(cornerRadius: 10)
                     .strokeBorder(searchFocused ? ReaderTheme.accent : ReaderTheme.line)
+                    .animation(ReaderMotion.feedback(reduceMotion), value: searchFocused)
                     .allowsHitTesting(false)
             }
     }

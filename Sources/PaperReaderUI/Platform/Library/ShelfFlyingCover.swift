@@ -97,8 +97,9 @@ struct ShelfFlyingCover {
         let width = input.flight.typesetWidth
         guard width > 0 else { return }
         if !reportedReady { ready = input.ready }
-        // Keep the source line breaks, with enough pixels for the larger preview.
-        let scale = max(1, displayScale) * max(1, input.destination.width / width)
+        // Keep the original line breaks and enough pixels for every panel width.
+        // A resizing window moves the same layer without re-typesetting the cover at each step.
+        let scale = max(1, displayScale) * max(1, ShelfCoverFlight.maximumPreviewWidth / width)
         let key = Artwork(
             digest: input.paper.digest, title: input.paper.title, pageCount: input.paper.pageCount,
             reading: input.reading, width: width, scale: scale)

@@ -25,6 +25,8 @@ struct WorkspaceAssistantSidebar: View {
     let openSettings: () -> Void
     let saveNote: () -> Void
     let didNavigate: () -> Void
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Namespace private var tabSelection
 
     var body: some View {
         VStack(spacing: 0) {
@@ -36,12 +38,18 @@ struct WorkspaceAssistantSidebar: View {
                         } label: {
                             HStack(spacing: 6) {
                                 Image(systemName: item.icon)
-                                if tab == item { Text(item.rawValue).font(.callout.weight(.medium)) }
+                                if tab == item { Text(item.rawValue).font(.callout.weight(.medium)).lineLimit(1) }
                             }
-                            .frame(minWidth: 36, minHeight: 34)
+                            .frame(minWidth: 36, maxWidth: .infinity, minHeight: 34)
                             .padding(.horizontal, 8)
                             .foregroundStyle(tab == item ? ReaderTheme.accent : ReaderTheme.muted)
-                            .background(tab == item ? ReaderTheme.elevated : .clear, in: Capsule())
+                            .background {
+                                if tab == item {
+                                    Capsule().fill(ReaderTheme.elevated)
+                                        .matchedGeometryEffect(id: "selected-tab", in: tabSelection)
+                                        .transition(.identity)
+                                }
+                            }
                             .contentShape(Capsule())
                         }
                         .buttonStyle(.plain)
@@ -51,43 +59,54 @@ struct WorkspaceAssistantSidebar: View {
                 } else {
                     Label(AssistantTab.library.rawValue, systemImage: AssistantTab.library.icon)
                         .font(.headline).accessibilityAddTraits(.isHeader)
+                    Spacer(minLength: 0)
                 }
-                Spacer(minLength: 0)
-                if model.busyAI && tab != .library { ProgressView().controlSize(.small) }
+                if model.busyAI && isReading {
+                    ProgressView().controlSize(.small).opacity(tab == .library ? 0 : 1)
+                        .accessibilityHidden(tab == .library)
+                }
             }.padding(.horizontal, 14).frame(height: 56)
+                .animation(ReaderMotion.disclosure(reduceMotion), value: tab)
             Divider()
-            switch tab {
-            case .library:
-                LibraryAgentView(
-                    agent: agent, model: model, draft: $agentDraft, openSettings: openSettings, didNavigate: didNavigate
-                )
-            case .notes:
-                ReaderNotesView(
-                    model: model,
-                    summarize: {
-                        if (try? model.modelSettings.normalized()) != nil {
-                            Task { await model.summarize() }
-                        } else {
-                            openSettings()
-                        }
-                    }, saveNote: saveNote, didNavigate: didNavigate)
-            case .paper:
-                PaperAssistantView(
-                    model: model, question: $question, openSettings: openSettings, didNavigate: didNavigate,
-                    relatedPapers: {
-                        guard (try? model.modelSettings.normalized()) != nil else {
-                            openSettings()
-                            return
-                        }
-                        select(.library)
-                        agent.findRelatedToCurrentPaper()
-                    }, canFindRelated: !agent.isRunning && model.paper != nil)
+            ZStack {
+                tabContent.id(tab).transition(.opacity)
             }
+            .animation(ReaderMotion.disclosure(reduceMotion), value: tab)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(ReaderTheme.canvas)
         .overlay(alignment: .leading) { Rectangle().fill(ReaderTheme.line).frame(width: 1) }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("助读侧栏")
+    }
+
+    @ViewBuilder private var tabContent: some View {
+        switch tab {
+        case .library:
+            LibraryAgentView(
+                agent: agent, model: model, draft: $agentDraft, openSettings: openSettings, didNavigate: didNavigate
+            )
+        case .notes:
+            ReaderNotesView(
+                model: model,
+                summarize: {
+                    if (try? model.modelSettings.normalized()) != nil {
+                        Task { await model.summarize() }
+                    } else {
+                        openSettings()
+                    }
+                }, saveNote: saveNote, didNavigate: didNavigate)
+        case .paper:
+            PaperAssistantView(
+                model: model, question: $question, openSettings: openSettings, didNavigate: didNavigate,
+                relatedPapers: {
+                    guard (try? model.modelSettings.normalized()) != nil else {
+                        openSettings()
+                        return
+                    }
+                    select(.library)
+                    agent.findRelatedToCurrentPaper()
+                }, canFindRelated: !agent.isRunning && model.paper != nil)
+        }
     }
 }

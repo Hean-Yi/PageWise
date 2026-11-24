@@ -5,12 +5,14 @@ struct ReaderNavigator: View {
     @Bindable var model: ReaderModel
     let findRequest: Int
     let didNavigate: () -> Void
-    @State private var tab = "outline"
+    @State private var searching = false
     @State private var query = ""
     @State private var expanded: Set<String> = []
     @State private var chosenID: String?
     @State private var initializedOutline = false
     @FocusState private var searchFocused: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.layoutDirection) private var layoutDirection
     #if os(iOS)
         @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     #endif
@@ -77,15 +79,17 @@ struct ReaderNavigator: View {
                 }
             #endif
             HStack {
-                Text(tab == "outline" ? (pageList ? "页码" : "目录") : "文内查找")
+                Text(searching ? "文内查找" : (pageList ? "页码" : "目录"))
                     .font(ReaderTheme.editorial(21)).accessibilityAddTraits(.isHeader)
+                    .contentTransition(.opacity)
                 Spacer()
-                if tab == "outline", !expandable.isEmpty {
+                if !searching, !expandable.isEmpty {
                     let allOpen = expandable.isSubset(of: expanded)
                     Button {
-                        expanded = allOpen ? [] : expandable
+                        withAnimation(ReaderMotion.disclosure(reduceMotion)) { expanded = allOpen ? [] : expandable }
                     } label: {
-                        Image(systemName: allOpen ? "chevron.up.2" : "chevron.down.2")
+                        Image(systemName: "chevron.down.2")
+                            .rotationEffect(.degrees(allOpen ? 180 : 0))
                             .frame(minWidth: 28, minHeight: 32)
                     }
                     .buttonStyle(.borderless).foregroundStyle(ReaderTheme.muted)
@@ -93,33 +97,44 @@ struct ReaderNavigator: View {
                     .accessibilityLabel(allOpen ? "收起全部章节" : "展开全部章节")
                 }
                 Button {
-                    if tab == "outline" {
-                        tab = "search"
-                        searchFocused = true
-                    } else {
-                        tab = "outline"
-                    }
+                    searching.toggle()
+                    if !searching { searchFocused = false }
                 } label: {
                     Label(
-                        tab == "outline" ? "查找正文或译文" : "返回目录",
-                        systemImage: tab == "outline" ? "magnifyingglass" : "list.bullet.indent"
+                        searching ? "返回目录" : "查找正文或译文",
+                        systemImage: searching ? "list.bullet.indent" : "magnifyingglass"
                     ).labelStyle(.iconOnly).frame(minWidth: 32, minHeight: 32)
                 }
                 .buttonStyle(.borderless).foregroundStyle(ReaderTheme.muted)
-                .help(tab == "outline" ? "文内查找（⌘F）" : "返回目录")
+                .help(searching ? "返回目录" : "文内查找（⌘F）")
             }
             .padding(.horizontal, 18).frame(height: 56)
-            if tab == "outline" { outline(groups, items: items, active: active) } else { search }
-            Spacer(minLength: 0)
+            .animation(ReaderMotion.feedback(reduceMotion), value: searching)
+            outline(groups, items: items, active: active)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .allowsHitTesting(!searching)
+                .accessibilityHidden(searching)
+                .overlay {
+                    ZStack {
+                        if searching {
+                            search.background(ReaderTheme.sidebar)
+                                .onAppear { searchFocused = true }
+                                .transition(.opacity)
+                        }
+                    }
+                    .animation(ReaderMotion.disclosure(reduceMotion), value: searching)
+                    .allowsHitTesting(searching)
+                    .accessibilityHidden(!searching)
+                }
         }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading).background(ReaderTheme.sidebar)
             .task(id: model.navigationDocumentID) { await model.loadNavigation() }
             .onChange(of: findRequest) { _, _ in
-                tab = "search"
+                searching = true
                 searchFocused = true
             }
             .onChange(of: model.selectedPaperID) { _, _ in
                 query = ""
-                tab = "outline"
+                searching = false
                 chosenID = nil
                 expanded = []
                 initializedOutline = false
@@ -163,10 +178,15 @@ struct ReaderNavigator: View {
                                     Color.clear.frame(width: 24)
                                 } else {
                                     Button {
-                                        if open { expanded.remove(group.id) } else { expanded.insert(group.id) }
+                                        withAnimation(ReaderMotion.disclosure(reduceMotion)) {
+                                            if open { expanded.remove(group.id) } else { expanded.insert(group.id) }
+                                        }
                                     } label: {
-                                        Image(systemName: open ? "chevron.down" : "chevron.forward")
+                                        Image(systemName: "chevron.forward")
                                             .font(.system(size: 10, weight: .bold))
+                                            .rotationEffect(
+                                                .degrees(open ? (layoutDirection == .rightToLeft ? -90 : 90) : 0)
+                                            )
                                             .foregroundStyle(open ? ReaderTheme.accent : ReaderTheme.muted)
                                             .frame(width: 24, height: 34).contentShape(Rectangle())
                                     }
@@ -190,6 +210,7 @@ struct ReaderNavigator: View {
                                             in: RoundedRectangle(cornerRadius: 7)
                                         )
                                         .id(child.id)
+                                        .transition(.opacity)
                                 }
                             }
                         }

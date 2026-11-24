@@ -12,6 +12,7 @@ struct TopicShelvesView: View {
     @State private var saving = false
     @State private var scrollTargetID: ShelfScrollTarget? = .unclassified
     @FocusState private var nameFocused: Bool
+    @Namespace private var shelfSelection
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -48,13 +49,13 @@ struct TopicShelvesView: View {
             .scrollPosition(id: $scrollTargetID, anchor: .leading)
             if editing {
                 nameEditor
-                    .transition(reduceMotion ? .opacity : .opacity.combined(with: .move(edge: .top)))
+                    .transition(reduceMotion ? .identity : .opacity.combined(with: .offset(y: -6)))
             }
         }
-        .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: editing)
-        .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: selectedShelfID)
+        .animation(ReaderMotion.disclosure(reduceMotion), value: editing)
+        .animation(ReaderMotion.disclosure(reduceMotion), value: selectedShelfID)
         .onChange(of: selectedShelfID, initial: true) { previousID, id in
-            withAnimation(reduceMotion || previousID == id ? nil : .easeInOut(duration: 0.18)) {
+            withAnimation(ReaderMotion.disclosure(reduceMotion || previousID == id)) {
                 // Keep scroll position separate from selection so manual scrolling does not change the shelf.
                 scrollTargetID = id.map(ShelfScrollTarget.shelf) ?? .unclassified
             }
@@ -66,6 +67,7 @@ struct TopicShelvesView: View {
             name: name, icon: icon,
             count: model.state.papers.filter { model.state.shelfID(for: $0.id) == shelfID }.count,
             selected: selectedShelfID == shelfID, dragActive: dragActive,
+            selection: shelfSelection,
             select: { selectedShelfID = shelfID },
             accepts: { id in model.state.papers.contains { $0.id == id } },
             move: { PaperShelfDrag.receive($0, model: model, shelfID: shelfID) })
@@ -139,6 +141,7 @@ private struct TopicShelfItem: View {
     let count: Int
     let selected: Bool
     let dragActive: Bool
+    let selection: Namespace.ID
     let select: () -> Void
     let accepts: (UUID) -> Bool
     let move: ([NSItemProvider]) -> Bool
@@ -162,6 +165,7 @@ private struct TopicShelfItem: View {
             .overlay(alignment: .bottom) {
                 if selected {
                     Capsule().fill(ReaderTheme.accent).frame(width: 22, height: 2)
+                        .matchedGeometryEffect(id: "selectedShelf", in: selection, properties: .position)
                 }
             }
             .overlay {
@@ -184,7 +188,7 @@ private struct TopicShelfItem: View {
         #else
             .onDrop(of: [PaperShelfDrag.typeIdentifier], isTargeted: $targeted, perform: move)
         #endif
-        .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: targeted)
+        .animation(ReaderMotion.feedback(reduceMotion), value: targeted)
         .onChange(of: dragActive) { _, active in if !active { targeted = false } }
         .onChange(of: targeted) { _, value in
             ShelfDragDiagnostics.record(value ? "target-enter" : "target-exit")

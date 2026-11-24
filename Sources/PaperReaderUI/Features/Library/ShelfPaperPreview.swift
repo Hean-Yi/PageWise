@@ -23,9 +23,7 @@ struct ShelfPaperPreview: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var content: PaperPreviewContent?
     @State private var useLiveCover = false
-    @State private var backdropVisible = false
-    @State private var panelVisible = false
-    @State private var detailsVisible = false
+    @State private var revealProgress: CGFloat = 0
 
     var body: some View {
         GeometryReader { viewport in
@@ -35,7 +33,7 @@ struct ShelfPaperPreview: View {
             let panelHeight = min(max(0, size.height - 32), wide ? 506 : 690)
             let coverWidth =
                 wide
-                ? min(282, panelWidth * 0.34, max(0, panelHeight - 64) * 0.7)
+                ? min(ShelfCoverFlight.maximumPreviewWidth, panelWidth * 0.34, max(0, panelHeight - 64) * 0.7)
                 : min(205, panelWidth * 0.55, panelHeight * 0.33)
 
             let panel = CGRect(
@@ -47,15 +45,19 @@ struct ShelfPaperPreview: View {
                 y: wide ? panel.midY - coverHeight / 2 : panel.minY + 18, width: coverWidth, height: coverHeight)
 
             ZStack {
-                Color.black.opacity(backdropVisible ? 0.22 : 0)
+                Color.black.opacity(0.22)
+                    .modifier(PreviewFade(progress: revealProgress, range: 0...0.7))
                     .contentShape(Rectangle()).onTapGesture(perform: dismiss).accessibilityHidden(true)
                 previewPanel(wide: wide, size: panel.size, cover: destination.size)
-                    .opacity(panelVisible ? 1 : 0).allowsHitTesting(!flight.returning)
+                    .modifier(PreviewFade(progress: revealProgress, range: 0.13...0.78))
+                    .allowsHitTesting(!flight.returning)
                 let reading = ReadingProgress.resolve(paper: paper, workspace: model.workspace(for: paper.id))
-                if useLiveCover {
+                if reduceMotion || useLiveCover {
                     BookCoverView(paper: paper, progress: reading)
                         .frame(width: coverWidth, height: coverHeight)
                         .position(x: destination.midX, y: destination.midY).allowsHitTesting(false)
+                        .opacity(flight.awaitingLift ? 0 : 1)
+                        .onAppear { if flight.awaitingLift { lift() } }
                 } else {
                     ShelfFlyingCover(
                         paper: paper, reading: reading, flight: flight, destination: destination,
@@ -75,26 +77,22 @@ struct ShelfPaperPreview: View {
         .accessibilityLabel("书目预览，" + paper.title)
         .accessibilityAddTraits(.isModal)
         .accessibilityAction(.escape, dismiss)
+        .task(id: paper.id) {
+            let value = await model.previewContent(for: paper.id)
+            guard !Task.isCancelled else { return }
+            withAnimation(ReaderMotion.feedback(reduceMotion)) { content = value }
+        }
         .task(id: flight) {
             guard !flight.awaitingLift else { return }
-            let opening = !flight.returning
             let remaining = max(0, flight.endsAt.timeIntervalSinceNow)
-            let timing = { (portion: Double, delay: Double) -> Animation? in
-                reduceMotion || useLiveCover ? nil : .easeInOut(duration: remaining * portion).delay(remaining * delay)
+            let moving = !reduceMotion && !useLiveCover
+            withAnimation(moving ? .linear(duration: remaining) : nil) {
+                revealProgress = flight.returning ? 0 : 1
             }
-            withAnimation(timing(0.8, 0)) { backdropVisible = opening }
-            withAnimation(timing(opening ? 0.65 : 0.7, opening ? 0.17 : 0.06)) { panelVisible = opening }
-            withAnimation(timing(opening ? 0.46 : 0.42, opening ? 0.44 : 0)) { detailsVisible = opening }
-            do {
-                if !reduceMotion && !useLiveCover { try await Task.sleep(for: .seconds(remaining)) }
-                try Task.checkCancellation()
-            } catch { return }
             if flight.returning {
+                if moving { try? await Task.sleep(for: .seconds(remaining)) }
+                guard !Task.isCancelled else { return }
                 landed()
-            } else if content == nil {
-                // Let the book land before PDF extraction or a long abstract enters the view tree.
-                let value = await model.previewContent(for: paper.id)
-                if !Task.isCancelled { content = value }
             }
         }
     }
@@ -102,7 +100,7 @@ struct ShelfPaperPreview: View {
     private func previewPanel(wide: Bool, size: CGSize, cover: CGSize) -> some View {
         let space = Color.clear.frame(width: cover.width, height: cover.height)
             .accessibilityElement(children: .ignore).accessibilityLabel(paper.title).accessibilityAddTraits(.isHeader)
-        let text = details.opacity(detailsVisible ? 1 : 0)
+        let text = details.modifier(PreviewFade(progress: revealProgress, range: 0.37...0.93))
         return Group {
             if wide {
                 HStack(spacing: 0) {
@@ -170,5 +168,20 @@ struct ShelfPaperPreview: View {
         }
         .foregroundStyle(ReaderTheme.ink)
         .padding(.top, 30).padding(.bottom, 20)
+    }
+}
+
+/// The background, panel and text retrace the cover's progress even when Space reverses mid-flight.
+private struct PreviewFade: ViewModifier, Animatable {
+    nonisolated var progress: CGFloat
+    let range: ClosedRange<CGFloat>
+
+    nonisolated var animatableData: CGFloat {
+        get { progress }
+        set { progress = newValue }
+    }
+
+    func body(content: Content) -> some View {
+        content.opacity(Double(ShelfCoverFlight.ease(progress, from: range.lowerBound, to: range.upperBound)))
     }
 }

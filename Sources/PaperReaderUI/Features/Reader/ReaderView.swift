@@ -12,6 +12,7 @@ struct ReaderView: View {
     @State private var showWarnings = false
     @State private var penEnabled = false
     @State private var peekingAtOriginal = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @AppStorage("PDFBilingualDisplayLayout") private var pdfLayout = PDFBilingualLayoutPreference.paragraph
 
     var body: some View {
@@ -22,43 +23,26 @@ struct ReaderView: View {
     }
 
     private func content(width: CGFloat) -> some View {
-        VStack(spacing: 0) {
+        let summary = model.presentedDocumentSummary
+        return VStack(spacing: 0) {
             header(width: width)
             Divider()
-            ZStack {
-                if model.usesHTMLReading {
-                    HTMLCanvas(model: model, sidebarOpen: sidebarOpen)
-                } else if model.showsPDFCanvas, isLocalPDF {
-                    PDFBilingualReadingView(
-                        model: model, penEnabled: penEnabled, openSettings: openSettings,
-                        layout: $pdfLayout, peekingAtOriginal: $peekingAtOriginal)
-                } else if model.showsPDFCanvas {
-                    PDFCanvas(model: model, penEnabled: penEnabled)
-                }
-                if model.showingReflowLoading { ReflowLoadingView(model: model) }
-            }.frame(maxWidth: .infinity, maxHeight: .infinity)
-                .overlay(alignment: .bottomTrailing) {
-                    if model.presentedSummaryID == nil, model.mode == "original", let session = model.pdfNoteEditor,
-                        session.note.paperID == model.selectedPaperID
-                    {
-                        GeometryReader { proxy in
-                            PDFReadingNoteCard(model: model, session: session)
-                                .frame(
-                                    width: min(350, max(1, proxy.size.width - 24)),
-                                    height: min(280, max(1, proxy.size.height - 24))
-                                )
-                                .padding(12).frame(
-                                    maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
-                        }
+            VStack(spacing: 0) {
+                documentCanvas
+                if !model.showingReflowLoading { readingBar(width: width) }
+            }
+            .allowsHitTesting(summary == nil)
+            .accessibilityHidden(summary != nil)
+            .overlay {
+                ZStack {
+                    if let summary {
+                        DocumentSummaryPage(model: model, note: summary)
+                            .id(summary.id).transition(.opacity)
                     }
                 }
-                .accessibilityHidden(model.presentedDocumentSummary != nil)
-                .overlay {
-                    if let summary = model.presentedDocumentSummary {
-                        DocumentSummaryPage(model: model, note: summary).id(summary.id)
-                    }
-                }
-            if !model.showingReflowLoading && model.presentedDocumentSummary == nil { readingBar(width: width) }
+                .animation(ReaderMotion.navigation(reduceMotion), value: summary != nil)
+                .allowsHitTesting(summary != nil)
+            }
         }
         .onChange(of: model.visiblePage) { _, page in
             if !pageFocused { pageInput = "\(page + 1)" }
@@ -76,6 +60,48 @@ struct ReaderView: View {
             model.notePassageSheet = nil
             model.pdfBilingual.close()
             pageInput = "\(model.visiblePage + 1)"
+        }
+    }
+
+    private var documentCanvas: some View {
+        ZStack {
+            if model.usesHTMLReading {
+                HTMLCanvas(model: model, sidebarOpen: sidebarOpen)
+                    .transition(ReaderMotion.arrival())
+            } else if model.showsPDFCanvas, isLocalPDF {
+                PDFBilingualReadingView(
+                    model: model, penEnabled: penEnabled, openSettings: openSettings,
+                    layout: $pdfLayout, peekingAtOriginal: $peekingAtOriginal
+                )
+                .transition(ReaderMotion.arrival())
+            } else if model.showsPDFCanvas {
+                PDFCanvas(model: model, penEnabled: penEnabled).transition(ReaderMotion.arrival())
+            }
+            if model.showingReflowLoading {
+                ReflowLoadingView(model: model).zIndex(1).transition(.opacity)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .animation(ReaderMotion.navigation(reduceMotion), value: model.usesHTMLReading)
+        .animation(ReaderMotion.navigation(reduceMotion), value: model.showingReflowLoading)
+        .background(ReaderTheme.surface)
+        .overlay {
+            GeometryReader { proxy in
+                ZStack(alignment: .bottomTrailing) {
+                    if model.presentedSummaryID == nil, model.mode == "original", let session = model.pdfNoteEditor,
+                        session.note.paperID == model.selectedPaperID
+                    {
+                        PDFReadingNoteCard(model: model, session: session)
+                            .frame(
+                                width: min(350, max(1, proxy.size.width - 24)),
+                                height: min(280, max(1, proxy.size.height - 24))
+                            ).padding(12).transition(.opacity)
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+                .animation(ReaderMotion.disclosure(reduceMotion), value: model.pdfNoteEditor != nil)
+            }
+            .allowsHitTesting(model.pdfNoteEditor != nil)
         }
     }
 

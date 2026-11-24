@@ -5,6 +5,7 @@ struct ReadingMonthGrid: View {
     @Binding var selection: Date
     let entries: [ReadingEntry]
     @State private var displayedMonth = Date()
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     private let calendar = Calendar.current
     private var monthStart: Date { calendar.dateInterval(of: .month, for: displayedMonth)!.start }
     private var leadingDays: Int { (calendar.component(.weekday, from: monthStart) + 5) % 7 }
@@ -15,6 +16,8 @@ struct ReadingMonthGrid: View {
             HStack(spacing: 12) {
                 Text(monthStart.formatted(.dateTime.year().month(.wide).locale(Locale(identifier: "zh_CN"))))
                     .font(.system(size: 15, weight: .semibold))
+                    .contentTransition(.opacity)
+                    .animation(ReaderMotion.feedback(reduceMotion), value: monthStart)
                 Spacer()
                 Button {
                     moveMonth(-1)
@@ -36,22 +39,33 @@ struct ReadingMonthGrid: View {
                 }
                 .accessibilityLabel("下个月")
             }.buttonStyle(.plain).font(.caption).foregroundStyle(ReaderTheme.ink)
-            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 3), count: 7), spacing: 5) {
-                ForEach(["一", "二", "三", "四", "五", "六", "日"], id: \.self) { value in
-                    Text(value).font(.caption2).foregroundStyle(ReaderTheme.muted).frame(height: 20)
-                }
-                ForEach(0..<(leadingDays + dayCount), id: \.self) { index in
-                    if index < leadingDays {
-                        Color.clear.frame(height: 34)
-                    } else {
-                        dayButton(index - leadingDays + 1)
+            VStack(spacing: 5) {
+                LazyVGrid(columns: columns, spacing: 5) {
+                    ForEach(["一", "二", "三", "四", "五", "六", "日"], id: \.self) { value in
+                        Text(value).font(.caption2).foregroundStyle(ReaderTheme.muted).frame(height: 20)
                     }
                 }
+                ZStack {
+                    LazyVGrid(columns: columns, spacing: 5) {
+                        ForEach(0..<42, id: \.self) { index in
+                            if index < leadingDays || index >= leadingDays + dayCount {
+                                Color.clear.frame(height: 34)
+                            } else {
+                                dayButton(index - leadingDays + 1)
+                            }
+                        }
+                    }
+                    .id(monthStart)
+                    .transition(.opacity)
+                }
+                .animation(ReaderMotion.disclosure(reduceMotion), value: monthStart)
             }
         }
         .onAppear { displayedMonth = selection }
         .onChange(of: selection) { _, value in displayedMonth = value }
     }
+
+    private var columns: [GridItem] { Array(repeating: GridItem(.flexible(), spacing: 3), count: 7) }
 
     private func dayButton(_ number: Int) -> some View {
         let date = calendar.date(byAdding: .day, value: number - 1, to: monthStart)!
@@ -68,6 +82,7 @@ struct ReadingMonthGrid: View {
             }.frame(maxWidth: .infinity).frame(height: 34)
                 .foregroundStyle(selected ? .white : today ? ReaderTheme.accent : ReaderTheme.ink)
                 .background(selected ? ReaderTheme.accent : .clear, in: RoundedRectangle(cornerRadius: 7))
+                .animation(ReaderMotion.feedback(reduceMotion), value: selected)
         }.buttonStyle(.plain)
             .accessibilityLabel(date.formatted(.dateTime.year().month().day().locale(Locale(identifier: "zh_CN"))))
             .accessibilityValue(

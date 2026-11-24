@@ -14,6 +14,7 @@ struct SettingsView: View {
 
     @Bindable var model: ReaderModel
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @FocusState private var focusedField: Field?
     @State private var draft: ModelSettings
     @State private var savedSettings: ModelSettings
@@ -128,6 +129,7 @@ struct SettingsView: View {
                     .padding(.horizontal, 12).frame(maxWidth: .infinity, alignment: .leading).frame(minHeight: 37)
                     .foregroundStyle(item == category ? ReaderTheme.ink : ReaderTheme.muted)
                     .background(item == category ? ReaderTheme.elevated : .clear, in: RoundedRectangle(cornerRadius: 8))
+                    .animation(ReaderMotion.feedback(reduceMotion), value: item == category)
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain).disabled(isTesting)
@@ -149,16 +151,21 @@ struct SettingsView: View {
 
     private func detail(compact: Bool) -> some View {
         VStack(spacing: 0) {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 23) {
-                    Text(category.rawValue)
-                        .font(ReaderTheme.editorial(32, weight: .medium))
-                        .accessibilityAddTraits(.isHeader)
-                    if category == .model { modelForm.disabled(isTesting) } else { notesForm }
+            ZStack {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 23) {
+                        Text(category.rawValue)
+                            .font(ReaderTheme.editorial(32, weight: .medium))
+                            .accessibilityAddTraits(.isHeader)
+                        if category == .model { modelForm.disabled(isTesting) } else { notesForm }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, compact ? 22 : 32).padding(.top, compact ? 20 : 27).padding(.bottom, 20)
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, compact ? 22 : 32).padding(.top, compact ? 20 : 27).padding(.bottom, 20)
+                .id(category)
+                .transition(ReaderMotion.arrival(y: 5))
             }
+            .animation(ReaderMotion.disclosure(reduceMotion), value: category)
             Divider()
             footer(compact: compact)
         }

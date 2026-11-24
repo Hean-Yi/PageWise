@@ -25,6 +25,7 @@ struct PDFBilingualReadingView: View {
     @SceneStorage("PDFBilingualOriginalFraction") private var originalFraction = 0.53
     @State private var dragStart: Double?
     @Environment(\.layoutDirection) private var layoutDirection
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var session: PDFBilingualSession { model.pdfBilingual }
 
@@ -37,37 +38,48 @@ struct PDFBilingualReadingView: View {
             let spread = textLayout == .split && session.isOpen && !peekingAtOriginal
             let pdfVisible = !session.isOpen || peekingAtOriginal || spread
             let pdfWidth = spread ? min(width - 268, max(240, width * originalFraction)) : width
-            HStack(spacing: 0) {
+            ZStack(alignment: .leading) {
                 PDFCanvas(model: model, penEnabled: pdfVisible && penEnabled, acceptsSentenceInput: pdfVisible)
-                    .frame(maxWidth: session.isOpen ? .infinity : 820)
+                    .frame(maxWidth: spread ? .infinity : 820)
                     .frame(width: pdfWidth)
-                    .frame(width: pdfVisible ? pdfWidth : 0)
-                    .clipped()
-                    .opacity(pdfVisible ? 1 : 0)
                     .allowsHitTesting(pdfVisible)
                     .accessibilityHidden(!pdfVisible)
-                if session.isOpen && (!peekingAtOriginal || textLayout == .paragraph) {
-                    if spread { splitter(width: width).frame(width: 8) }
-                    pane(textLayout: textLayout)
-                        // Keep the paragraph canvas at its reading width and scroll position during a source peek.
-                        .frame(width: textLayout == .paragraph ? width : nil)
-                        .frame(width: peekingAtOriginal ? 0 : nil)
-                        .clipped()
+                ZStack {
+                    if session.isOpen && (!peekingAtOriginal || textLayout == .paragraph) {
+                        HStack(spacing: 0) {
+                            if spread {
+                                Color.clear.frame(width: pdfWidth).allowsHitTesting(false)
+                                splitter(width: width).frame(width: 8)
+                            }
+                            pane(textLayout: textLayout)
+                        }
+                        // Fade the surface as a unit. PDFKit and WebKit lay out once at their final widths.
+                        .transaction { $0.animation = nil }
                         .opacity(peekingAtOriginal ? 0 : 1)
-                        .allowsHitTesting(!peekingAtOriginal)
-                        .accessibilityHidden(peekingAtOriginal)
+                        .transition(.opacity)
+                    }
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .animation(ReaderMotion.navigation(reduceMotion), value: session.isOpen)
+                .animation(ReaderMotion.navigation(reduceMotion), value: peekingAtOriginal)
+                .allowsHitTesting(session.isOpen && !peekingAtOriginal)
+                .accessibilityHidden(!session.isOpen || peekingAtOriginal)
             }
             .overlay(alignment: .topTrailing) {
-                if session.isOpen && peekingAtOriginal {
-                    Button {
-                        peekingAtOriginal = false
-                    } label: {
-                        Label("返回双语重排", systemImage: "arrow.uturn.backward")
-                            .font(.callout.weight(.medium)).padding(.horizontal, 6).padding(.vertical, 4)
+                ZStack {
+                    if session.isOpen && peekingAtOriginal {
+                        Button {
+                            peekingAtOriginal = false
+                        } label: {
+                            Label("返回双语重排", systemImage: "arrow.uturn.backward")
+                                .font(.callout.weight(.medium)).padding(.horizontal, 6).padding(.vertical, 4)
+                        }
+                        .buttonStyle(.borderedProminent).tint(ReaderTheme.accent).padding(16)
+                        .transition(.opacity)
                     }
-                    .buttonStyle(.borderedProminent).tint(ReaderTheme.accent).padding(16)
                 }
+                .animation(ReaderMotion.feedback(reduceMotion), value: peekingAtOriginal)
+                .allowsHitTesting(session.isOpen && peekingAtOriginal)
             }
             .onChange(of: pdfVisible) { _, visible in
                 if visible, let id = session.focusedID { session.focus(id) }

@@ -4,6 +4,7 @@ import SwiftUI
 struct AgentProcessView: View {
     let turn: AgentTurn
     let isRunning: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var showsThinking = false
     @State private var stepsExpanded: Bool?
     @State private var inspectedCalls: Set<UUID> = []
@@ -14,7 +15,7 @@ struct AgentProcessView: View {
         VStack(alignment: .leading, spacing: 10) {
             if !thoughts.isEmpty {
                 Button {
-                    showsThinking.toggle()
+                    withAnimation(ReaderMotion.disclosure(reduceMotion)) { showsThinking.toggle() }
                 } label: {
                     disclosureLabel("模型思考", icon: "text.bubble", expanded: showsThinking)
                 }
@@ -34,7 +35,7 @@ struct AgentProcessView: View {
             if !turn.activities.isEmpty || !progress.isEmpty {
                 let expanded = stepsExpanded ?? isRunning
                 Button {
-                    stepsExpanded = !expanded
+                    withAnimation(ReaderMotion.disclosure(reduceMotion)) { stepsExpanded = !expanded }
                 } label: {
                     disclosureLabel(summary, icon: "list.bullet.indent", expanded: expanded)
                 }
@@ -67,9 +68,16 @@ struct AgentProcessView: View {
             Image(systemName: icon).frame(width: 15)
             Text(title).fontWeight(.medium).multilineTextAlignment(.leading)
             Spacer(minLength: 4)
-            Image(systemName: expanded ? "chevron.down" : "chevron.forward").font(.caption2)
+            chevron(expanded: expanded)
         }
         .font(.caption).padding(.vertical, 3).contentShape(Rectangle())
+    }
+
+    private func chevron(expanded: Bool) -> some View {
+        Image(systemName: "chevron.right").font(.caption2)
+            .rotationEffect(.degrees(expanded ? 90 : 0))
+            .flipsForRightToLeftLayoutDirection(true)
+            .accessibilityHidden(true)
     }
 
     private var summary: String {
@@ -117,13 +125,15 @@ struct AgentProcessView: View {
         return VStack(alignment: .leading, spacing: 4) {
             if canInspect {
                 Button {
-                    if opened { inspectedCalls.remove(activity.id) } else { inspectedCalls.insert(activity.id) }
+                    withAnimation(ReaderMotion.disclosure(reduceMotion)) {
+                        if opened { inspectedCalls.remove(activity.id) } else { inspectedCalls.insert(activity.id) }
+                    }
                 } label: {
-                    stepLabel(activity, disclosure: opened ? "chevron.down" : "chevron.forward")
+                    stepLabel(activity, expanded: opened)
                 }
                 .buttonStyle(.plain).accessibilityValue(opened ? "已展开" : "已收起")
             } else {
-                stepLabel(activity, disclosure: nil)
+                stepLabel(activity, expanded: nil)
             }
             if let subject = activity.subject, !subject.isEmpty {
                 Text(subject).lineLimit(2).padding(.leading, 17)
@@ -147,7 +157,7 @@ struct AgentProcessView: View {
         }
     }
 
-    private func stepLabel(_ activity: AgentActivity, disclosure: String?) -> some View {
+    private func stepLabel(_ activity: AgentActivity, expanded: Bool?) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 5) {
             if activity.status == .running {
                 ProgressView().controlSize(.mini).frame(width: 12, height: 12)
@@ -170,9 +180,9 @@ struct AgentProcessView: View {
             {
                 Text(activity.isTruncated ? "前 \(count) 项" : "\(count) 项").monospacedDigit()
             }
-            if let disclosure {
+            if let expanded {
                 Spacer(minLength: 0)
-                Image(systemName: disclosure).font(.caption2).accessibilityHidden(true)
+                chevron(expanded: expanded)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())

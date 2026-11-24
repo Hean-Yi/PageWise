@@ -21,6 +21,9 @@ public struct LibraryView: View {
     @State private var columns: NavigationSplitViewVisibility = .all
     @State private var findRequest = 0
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    @Namespace private var sidebarSelection
     private let timer = Timer.publish(every: 60, on: .main, in: .common).autoconnect()
 
     public init(
@@ -83,13 +86,16 @@ public struct LibraryView: View {
 
     private var navigationSurface: some View {
         NavigationSplitView(columnVisibility: $columns, preferredCompactColumn: $preferredColumn) {
-            Group {
+            ZStack {
                 if isReading {
                     ReaderNavigator(model: model, findRequest: findRequest) { preferredColumn = .detail }
+                        .transition(ReaderMotion.arrival())
                 } else {
-                    sidebar
+                    sidebar.transition(ReaderMotion.arrival())
                 }
-            }.navigationSplitViewColumnWidth(min: 210, ideal: 244, max: 320)
+            }
+            .animation(pageAnimation, value: isReading)
+            .navigationSplitViewColumnWidth(min: 210, ideal: 244, max: 320)
         } detail: {
             detailContent
         }
@@ -117,7 +123,7 @@ public struct LibraryView: View {
                     .overlay {
                         Label("添加到书库", systemImage: "arrow.down.doc").font(.title2.weight(.medium)).padding(30)
                             .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
-                    }.padding(12).allowsHitTesting(false)
+                    }.padding(12).allowsHitTesting(false).transition(.opacity)
             }
         }
         .dropDestination(for: URL.self) { urls, _ in
@@ -125,8 +131,8 @@ public struct LibraryView: View {
             guard !pdfs.isEmpty else { return false }
             Task { await model.importURLs(pdfs) }
             return true
-        } isTargeted: {
-            dragTarget = $0
+        } isTargeted: { targeted in
+            withAnimation(ReaderMotion.feedback(reduceMotion)) { dragTarget = targeted }
         }
     }
 
@@ -135,35 +141,45 @@ public struct LibraryView: View {
             let width = proxy.size.width
             let inline = width >= 840
             let sidebarWidth = min(340, max(1, width - 36))
+            let sidebarVisible = assistantTab != nil
             ZStack(alignment: .trailing) {
                 workspaceContent
+                    .transaction(value: sidebarVisible) { $0.animation = nil }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .padding(.trailing, inline && assistantTab != nil ? sidebarWidth : 0)
-                if let assistantTab {
-                    WorkspaceAssistantSidebar(
-                        model: model, agent: agent, isReading: isReading, tab: isReading ? assistantTab : .library,
-                        select: { self.assistantTab = $0 }, question: $paperQuestion, agentDraft: $agentDraft,
-                        openSettings: { showSettings = true }, saveNote: { askSave = true },
-                        didNavigate: {
+                    .padding(.trailing, inline && sidebarVisible ? sidebarWidth : 0)
+                ZStack(alignment: .trailing) {
+                    if let assistantTab {
+                        WorkspaceAssistantSidebar(
+                            model: model, agent: agent, isReading: isReading, tab: isReading ? assistantTab : .library,
+                            select: { self.assistantTab = $0 }, question: $paperQuestion, agentDraft: $agentDraft,
+                            openSettings: { showSettings = true }, saveNote: { askSave = true },
+                            didNavigate: {
+                                if !inline {
+                                    self.assistantTab = nil
+                                } else if assistantTab == .library {
+                                    paperOpenedFromAgent = model.selectedPaperID
+                                }
+                            }
+                        )
+                        .frame(width: sidebarWidth)
+                        .background(alignment: .leading) {
                             if !inline {
-                                self.assistantTab = nil
-                            } else if assistantTab == .library {
-                                paperOpenedFromAgent = model.selectedPaperID
+                                LinearGradient(
+                                    colors: [.clear, .black.opacity(0.09)], startPoint: .leading, endPoint: .trailing
+                                )
+                                .frame(width: 8).offset(x: -8).allowsHitTesting(false).accessibilityHidden(true)
                             }
                         }
-                    )
-                    .frame(width: sidebarWidth)
-                    .background(alignment: .leading) {
-                        if !inline {
-                            LinearGradient(
-                                colors: [.clear, .black.opacity(0.09)], startPoint: .leading, endPoint: .trailing
-                            )
-                            .frame(width: 8).offset(x: -8).allowsHitTesting(false).accessibilityHidden(true)
-                        }
+                        .accessibilityAction(.escape) { self.assistantTab = nil }
+                        .transition(.move(edge: .trailing))
                     }
-                    .accessibilityAction(.escape) { self.assistantTab = nil }
                 }
+                .frame(width: sidebarWidth)
+                .allowsHitTesting(sidebarVisible)
+                .accessibilityHidden(!sidebarVisible)
             }
+            .clipped()
+            .animation(ReaderMotion.disclosure(reduceMotion), value: sidebarVisible)
         }
         .confirmationDialog("将本次讨论整理到笔记？", isPresented: $askSave, titleVisibility: .visible) {
             Button("包含讨论，保存笔记") { Task { await model.saveToObsidian(includeDiscussion: true) } }
@@ -185,7 +201,9 @@ public struct LibraryView: View {
                     assistantTab = assistantTab == nil ? (isReading ? .paper : .library) : nil
                 } label: {
                     Label(
-                        "助读侧栏", systemImage: assistantTab == nil ? "sidebar.right" : "rectangle.righthalf.inset.filled")
+                        "助读侧栏", systemImage: assistantTab == nil ? "sidebar.right" : "rectangle.righthalf.inset.filled"
+                    )
+                    .contentTransition(reduceMotion ? .identity : .symbolEffect(.replace))
                 }
                 .keyboardShortcut("i", modifiers: [.command, .option])
                 .help(assistantTab == nil ? "打开助读侧栏" : "收起助读侧栏")
@@ -195,53 +213,66 @@ public struct LibraryView: View {
             }
         }
         .overlay(alignment: .bottom) {
-            if model.isImporting || (!isReading && !model.translating.isEmpty) {
-                HStack(spacing: 10) {
-                    if model.isImporting, let progress = model.importProgress {
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text(progress).font(.caption).lineLimit(1)
-                            ProgressView().progressViewStyle(.linear)
-                                .accessibilityLabel(progress)
-                        }.frame(width: 250)
-                    } else {
-                        ProgressView().controlSize(.small)
-                        Text(model.status).font(.caption).lineLimit(1)
-                    }
-                }.padding(.horizontal, 18).padding(.vertical, 12)
-                    .background(.regularMaterial, in: Capsule()).padding(18)
-            } else if let toast {
-                Label(toast, systemImage: "checkmark.circle.fill").font(.caption).lineLimit(2)
-                    .padding(.horizontal, 18).padding(.vertical, 12)
-                    .background(.regularMaterial, in: Capsule()).padding(18).allowsHitTesting(false)
+            let busy = model.isImporting || (!isReading && !model.translating.isEmpty)
+            ZStack(alignment: .bottom) {
+                if busy {
+                    HStack(spacing: 10) {
+                        if model.isImporting, let progress = model.importProgress {
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text(progress).font(.caption).lineLimit(1)
+                                ProgressView().progressViewStyle(.linear)
+                                    .accessibilityLabel(progress)
+                            }.frame(width: 250)
+                        } else {
+                            ProgressView().controlSize(.small)
+                            Text(model.status).font(.caption).lineLimit(1)
+                        }
+                    }.padding(.horizontal, 18).padding(.vertical, 12)
+                        .background(.regularMaterial, in: Capsule()).padding(18)
+                } else if let toast {
+                    Label(toast, systemImage: "checkmark.circle.fill").font(.caption).lineLimit(2)
+                        .padding(.horizontal, 18).padding(.vertical, 12)
+                        .background(.regularMaterial, in: Capsule()).padding(18).allowsHitTesting(false)
+                }
             }
+            .animation(ReaderMotion.feedback(reduceMotion), value: busy || toast != nil)
         }
     }
 
     private var workspaceContent: some View {
-        Group {
+        ZStack {
             if let failure = model.loadFailure {
                 ContentUnavailableView(
                     "无法打开书库", systemImage: "externaldrive.badge.exclamationmark", description: Text(failure))
             } else if !model.loaded {
                 ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if model.selectedSection == "calendar" {
-                ReadingCalendarView(model: model)
+                ReadingCalendarView(model: model).transition(ReaderMotion.arrival(y: 5))
             } else if model.selectedSection == "memory" {
-                MemoryView(model: model)
+                MemoryView(model: model).transition(ReaderMotion.arrival(y: 5))
             } else if model.paper != nil {
                 ReaderView(
                     model: model, sidebarOpen: assistantTab != nil,
                     explainSelection: {
                         paperQuestion = "请结合全文解释选中内容。"
                         assistantTab = .paper
-                    }, requestNoteSave: { askSave = true }, openSettings: { showSettings = true })
+                    }, requestNoteSave: { askSave = true }, openSettings: { showSettings = true }
+                )
+                .transition(ReaderMotion.arrival(x: 14))
             } else {
                 LibraryWorkspaceView(
                     model: model, collection: $collection, selectedShelfID: $selectedShelfID,
-                    onlineSearch: onlineSearch, findRequest: findRequest)
+                    onlineSearch: onlineSearch, findRequest: findRequest
+                )
+                .transition(ReaderMotion.arrival(x: -10))
             }
         }
+        .animation(pageAnimation, value: isReading)
+        .animation(pageAnimation, value: model.selectedSection)
     }
+
+    // Compact NavigationSplitView provides its own push and pop.
+    private var pageAnimation: Animation? { ReaderMotion.navigation(reduceMotion || sizeClass == .compact) }
 
     private var isReading: Bool { model.selectedSection == "library" && model.paper != nil }
 
@@ -283,7 +314,10 @@ public struct LibraryView: View {
                     model.selectedSection = "memory"
                     preferredColumn = .detail
                 }
-            }.padding(.horizontal, 10)
+            }
+            .animation(ReaderMotion.disclosure(reduceMotion), value: collection)
+            .animation(ReaderMotion.disclosure(reduceMotion), value: model.selectedSection)
+            .padding(.horizontal, 10)
             if !recentPapers.isEmpty {
                 Text("最近打开").font(.caption.weight(.medium)).foregroundStyle(ReaderTheme.muted)
                     .padding(.horizontal, 23).padding(.top, 28).padding(.bottom, 9)
@@ -345,9 +379,12 @@ public struct LibraryView: View {
                 }
             }.foregroundStyle(ReaderTheme.ink)
                 .padding(.horizontal, 12).frame(minHeight: 38)
-                .background(
-                    selected ? ReaderTheme.accent.opacity(0.095) : .clear, in: RoundedRectangle(cornerRadius: 9)
-                )
+                .background {
+                    if selected {
+                        RoundedRectangle(cornerRadius: 9).fill(ReaderTheme.accent.opacity(0.095))
+                            .matchedGeometryEffect(id: "library-selection", in: sidebarSelection)
+                    }
+                }
                 .contentShape(Rectangle())
         }.buttonStyle(.plain).accessibilityAddTraits(selected ? .isSelected : [])
     }

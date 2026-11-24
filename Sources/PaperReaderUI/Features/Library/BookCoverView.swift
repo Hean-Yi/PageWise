@@ -76,7 +76,7 @@ private struct CoverProgressRing: View {
                 }
             }.padding(lineWidth / 2)
         }
-        .animation(reduceMotion ? nil : .easeInOut(duration: 0.25), value: progress)
+        .animation(ReaderMotion.feedback(reduceMotion), value: progress)
         .allowsHitTesting(false)
     }
 }
@@ -194,10 +194,11 @@ struct BookshelfItem: View {
                     model.toggleFavorite(paper.id)
                 } label: {
                     Image(systemName: workspace.isFavorite ? "star.fill" : "star")
+                        .contentTransition(reduceMotion ? .identity : .symbolEffect(.replace))
                         .foregroundStyle(workspace.isFavorite ? ReaderTheme.accent : ReaderTheme.muted)
                         .frame(width: 30, height: 30).contentShape(Rectangle())
+                        .animation(ReaderMotion.feedback(reduceMotion), value: workspace.isFavorite)
                 }.buttonStyle(.plain).focused($focus, equals: .favorite)
-
                     .help(workspace.isFavorite ? "取消收藏" : "收藏")
                     .accessibilityLabel("\(workspace.isFavorite ? "取消收藏" : "收藏") \(paper.title)")
                 Menu {
@@ -220,7 +221,7 @@ struct BookshelfItem: View {
             hoverCover(false)
             recordFrame(nil)
         }
-        .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: highlighted)
+        .animation(ReaderMotion.feedback(reduceMotion), value: highlighted)
         .contextMenu { actions }
     }
 
@@ -290,7 +291,7 @@ struct AddPaperCover: View {
                     }.aspectRatio(0.70, contentMode: .fit)
                     .contentShape(Rectangle())
             }.buttonStyle(.plain).focused($focused).onHover { hovered = $0 }
-                .animation(reduceMotion ? nil : .easeInOut(duration: 0.24), value: revealed)
+                .animation(ReaderMotion.disclosure(reduceMotion), value: revealed)
                 .help("拖拽 PDF 至此，或点击在线查找").accessibilityLabel("在线查找论文")
                 .accessibilityHint("也可以拖拽 PDF 至此添加")
             Color.clear.frame(height: 30).accessibilityHidden(true)

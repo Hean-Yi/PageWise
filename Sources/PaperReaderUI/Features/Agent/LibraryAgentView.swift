@@ -7,6 +7,7 @@ struct LibraryAgentView: View {
     @Binding var draft: String
     let openSettings: () -> Void
     let didNavigate: () -> Void
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @FocusState private var composerFocused: Bool
     @State private var choicesContentHeight: CGFloat?
 
@@ -57,7 +58,8 @@ struct LibraryAgentView: View {
     }
 
     private func prepareFollowUp(_ card: AgentCard) {
-        guard agent.prepareFollowUp(cardID: card.id) else { return }
+        let prepared = withAnimation(ReaderMotion.disclosure(reduceMotion)) { agent.prepareFollowUp(cardID: card.id) }
+        guard prepared else { return }
         if draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             if card.readingNoteID != nil {
                 draft = "这条阅读笔记和上面的判断有什么联系？"
@@ -89,7 +91,7 @@ struct LibraryAgentView: View {
                     Text(source.title).lineLimit(1)
                     Spacer(minLength: 2)
                     Button {
-                        agent.clearFollowUp()
+                        withAnimation(ReaderMotion.disclosure(reduceMotion)) { agent.clearFollowUp() }
                     } label: {
                         Image(systemName: "xmark.circle.fill")
                     }
@@ -117,16 +119,18 @@ struct LibraryAgentView: View {
                         .help("新对话").accessibilityLabel("新对话")
                 }
                 Spacer(minLength: 6)
-                if agent.isRunning {
-                    Button(action: agent.cancel) { Image(systemName: "stop.fill").font(.system(size: 11)) }
-                        .buttonStyle(AssistantSendButtonStyle()).help("停止生成").accessibilityLabel("停止 Agent")
-                } else {
-                    Button(action: send) { Image(systemName: "arrow.up") }
-                        .buttonStyle(AssistantSendButtonStyle()).disabled(
-                            draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                        )
-                        .help("发送问题").accessibilityLabel("发送给 Agent")
+                Button {
+                    if agent.isRunning { agent.cancel() } else { send() }
+                } label: {
+                    Image(systemName: agent.isRunning ? "stop.fill" : "arrow.up")
+                        .font(agent.isRunning ? .system(size: 11) : .body.weight(.semibold))
+                        .contentTransition(reduceMotion ? .identity : .opacity)
+                        .animation(ReaderMotion.feedback(reduceMotion), value: agent.isRunning)
                 }
+                .buttonStyle(AssistantSendButtonStyle())
+                .disabled(!agent.isRunning && draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .help(agent.isRunning ? "停止生成" : "发送问题")
+                .accessibilityLabel(agent.isRunning ? "停止 Agent" : "发送给 Agent")
             }
         }
         .assistantComposerSurface(emphasized: composerFocused || prompt != nil)
