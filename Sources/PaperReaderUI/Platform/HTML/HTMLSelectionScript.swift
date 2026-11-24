@@ -255,7 +255,8 @@ enum HTMLSelectionScript {
           document.addEventListener('selectionchange',update);
           document.addEventListener('dragstart',event=>{if(event.target.closest?.('#reader img')) event.preventDefault();});
           document.addEventListener('copy',event=>{
-            if(document.activeElement?.closest('.reader-note-card'))return;
+            if(document.activeElement?.closest('.reader-note-card,#reader-document-summary') ||
+              document.getElementById('reader-document-summary')?.contains(getSelection()?.anchorNode))return;
             if(!parts.length || !event.clipboardData) return;
             event.clipboardData.setData('text/plain',copyText());event.preventDefault();
           });

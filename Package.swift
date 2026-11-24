@@ -20,7 +20,10 @@ let package = Package(
             ]),
         .target(
             name: "PaperReaderUI", dependencies: ["PaperReaderKit"],
-            exclude: ["Platform/HTML/NoteEditor/Editor.js"],
+            exclude: [
+                "Platform/HTML/NoteEditor/Editor.js", "Platform/HTML/NoteEditor/SummaryEditor.js",
+                "Platform/HTML/NoteEditor/SummarySelection.js",
+            ],
             resources: [.copy("Platform/HTML/ReaderWarmup.html"), .copy("Platform/HTML/NoteEditor/NoteEditor.bundle")]),
         .executableTarget(name: "ReaderSmoke", dependencies: ["PaperReaderKit", "SwiftSoup"]),
         .target(

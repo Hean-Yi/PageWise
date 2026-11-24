@@ -29,7 +29,6 @@ public final class ReaderModel {
     var notePassageSheet: NotePassageSheet?
     var pdfNoteEditor: PDFNoteEditorSession?
     var presentedSummaryID: UUID?
-    var editingDocumentSummary = false
     public var requestedReadingNote: UUID?
     public var readingNoteNavigationToken = UUID()
     public var lastDeletedNoteID: UUID?

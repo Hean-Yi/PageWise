@@ -228,16 +228,17 @@ enum HTMLNotesScript {
               appendix=document.createElement('article');appendix.id='reader-document-summary';appendix.lang='zh-Hans';
               appendix.dataset.noteId=id;appendix.setAttribute('aria-label','文末总结');
               const head=document.createElement('header'),title=document.createElement('strong');title.textContent='文末总结';
-              const tools=document.createElement('span');tools.hidden=true;
-              const save=button(lastStatus,flush,'保存阅读笔记');
-              tools.append(save,button('引用笔记',()=>{
-                const e=appendixEditor.editor;
+              const tools=document.createElement('span');
+              const retry=button('保存失败，重试',flush,'重试保存阅读笔记');
+              retry.hidden=!lastStatus.startsWith('保存失败');
+              tools.append(retry,button('引用笔记',()=>{
+                const e=appendixEditor.editForCitation();
                 if(e)send({kind:'noteInsertPassage',id,anchors:[],markdown:e.value,from:e.selectionStart,to:e.selectionEnd});
-              },'引用阅读笔记'),button('完成',()=>appendixEditor.finish()));
+              },'引用阅读笔记'));
               head.append(title,tools);
               const prose=document.createElement('div');prose.className='note-prose';appendix.append(head,prose);root.after(appendix);
               appendixEditor=PaperNoteEditor.attachSummary(prose,markdown=>send({kind:'noteChange',id,anchors:[],markdown}),active=>{
-                tools.hidden=!active;if(!active)flush();
+                if(!active)flush();
               });
               PaperNoteEditor.bindPassages(appendix,passage=>send({kind:'notePreviewPassage',id,passage}));
             }
@@ -262,7 +263,7 @@ enum HTMLNotesScript {
             preview(id,source,html){if(appendix?.dataset.noteId===id){appendixEditor.update(source,html);return;}const e=records.get(id);if(!e||e.markdown!==source)return;e.html=html;e.content.style.whiteSpace='normal';body(e);e.editor?.preview(source,html);if(active===id&&!editing)schedule(false);},
             previewError(id){const e=records.get(id);if(e){e.content.textContent=e.markdown;e.status.textContent='预览失败，源码已保留';}},
             saved(status){lastStatus=status;for(const e of records.values())e.status.textContent=status;
-              const summaryStatus=appendix?.querySelector('button[aria-label="保存阅读笔记"]');if(summaryStatus)summaryStatus.textContent=status;},
+              const retry=appendix?.querySelector('button[aria-label="重试保存阅读笔记"]');if(retry)retry.hidden=!status.startsWith('保存失败');},
             insertPassage(id,source,from,to,markdown){
               if(appendix?.dataset.noteId===id)return appendixEditor.editor?.insertPassage(source,from,to,markdown);
               return editing===id&&records.get(id)?.editor?.insertPassage(source,from,to,markdown);},

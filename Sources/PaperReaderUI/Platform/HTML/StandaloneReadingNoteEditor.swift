@@ -6,7 +6,6 @@ import WebKit
 @MainActor struct StandaloneReadingNoteEditor {
     let model: ReaderModel
     let note: ReadingNote
-    var finishRequest = 0
     var citationRequest = 0
     var summaryPDFFontSize: Int?
 
@@ -21,11 +20,9 @@ import WebKit
         private var ready = false
         private var lastRequest = 0
         private var pendingRequest = 0
-        private var lastFinishRequest = 0
 
         init(_ editor: StandaloneReadingNoteEditor) {
             self.editor = editor
-            lastFinishRequest = editor.finishRequest
             lastRequest = editor.citationRequest
             pendingRequest = editor.citationRequest
             source =
@@ -88,19 +85,12 @@ import WebKit
             }
         }
 
-        func finishSummary(_ request: Int, in view: WKWebView) {
-            guard request != lastFinishRequest else { return }
-            lastFinishRequest = request
-            view.callAsyncJavaScript(
-                "window.summaryEditor?.finish()", arguments: [:], in: nil, in: .defaultClient, completionHandler: nil)
-        }
-
         func updateCitationRequest(_ request: Int, in view: WKWebView) {
             pendingRequest = request
             guard ready, request != lastRequest else { return }
             lastRequest = request
             let script = """
-                const e=window.summaryEditor?.editor ?? window.pdfEditor; if (!e) return;
+                const e=window.summaryEditor?.editForCitation() ?? window.pdfEditor; if (!e) return;
                 window.webkit.messageHandlers.pdfNote.postMessage({pick:true,markdown:e.value,from:e.selectionStart,to:e.selectionEnd});
                 """
             view.callAsyncJavaScript(script, arguments: [:], in: nil, in: .defaultClient, completionHandler: nil)
@@ -117,7 +107,6 @@ import WebKit
                 let value = message.body as? [String: Any]
             else { return }
             if note.isDocumentSummary, let editing = value["editing"] as? Bool {
-                editor.model.editingDocumentSummary = editing
                 if !editing { Task { await editor.model.flushReadingNotes() } }
             } else if value["pick"] as? Bool == true, let source = value["markdown"] as? String,
                 let from = value["from"] as? Int, let to = value["to"] as? Int
@@ -140,22 +129,20 @@ import WebKit
                     : editor.model.updateReadingNote(id: note.id, anchors: note.anchors, markdown: text)
                 if saved {
                     source = text
-                    preview()
+                    preview(afterInput: true)
                 }
             } else if value["done"] as? Bool == true {
                 editor.model.closePDFReadingNote()
             }
         }
 
-        private func preview() {
+        private func preview(afterInput: Bool = false) {
             previewTask?.cancel()
             let expected = source
             previewTask = Task { [weak self] in
                 guard let self else { return }
                 do {
-                    if !editor.note.isDocumentSummary || editor.model.editingDocumentSummary {
-                        try await Task.sleep(for: .milliseconds(100))
-                    }
+                    if afterInput { try await Task.sleep(for: .milliseconds(100)) }
                     let ids =
                         editor.model.currentReadingNotes.first { $0.id == editor.note.id }?.citations?.map(\.id)
                         ?? []
@@ -206,7 +193,6 @@ import WebKit
         func makeNSView(context: Context) -> WKWebView { context.coordinator.makeView() }
         func updateNSView(_ view: WKWebView, context: Context) {
             context.coordinator.updateCitationRequest(citationRequest, in: view)
-            context.coordinator.finishSummary(finishRequest, in: view)
         }
         static func dismantleNSView(_ view: WKWebView, coordinator: Coordinator) { coordinator.stop() }
     }
@@ -215,7 +201,6 @@ import WebKit
         func makeUIView(context: Context) -> WKWebView { context.coordinator.makeView() }
         func updateUIView(_ view: WKWebView, context: Context) {
             context.coordinator.updateCitationRequest(citationRequest, in: view)
-            context.coordinator.finishSummary(finishRequest, in: view)
         }
         static func dismantleUIView(_ view: WKWebView, coordinator: Coordinator) { coordinator.stop() }
     }

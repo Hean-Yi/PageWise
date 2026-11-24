@@ -21,15 +21,11 @@ enum DocumentSummaryStyle {
         #reader-document-summary :is(button,a):focus-visible{outline:2px solid var(--note-accent);outline-offset:3px}
         #reader-document-summary .note-prose{cursor:text;min-height:2em}
         #reader-document-summary .note-prose:empty::before{content:'写下阅读笔记…';opacity:.55}
-        #reader-document-summary .note-prose:focus-visible{outline:1px solid var(--note-rule);outline-offset:4px}
-        #reader-document-summary .summary-writing.reader-note-card{position:static;display:block;width:100%;height:auto;
-          max-width:none;max-height:none;border:0;box-shadow:none;border-radius:0;transform:none;overflow:visible;
-          font:inherit;color:inherit;background:transparent}
-        #reader-document-summary .summary-writing .cm-editor{height:auto}
-        #reader-document-summary .summary-writing .cm-scroller{font:inherit;overflow:visible;padding:0}
-        #reader-document-summary .summary-writing .note-md-heading{font-family:system-ui}
-        #reader-document-summary .summary-writing .note-md-h1{font-size:1.8em}
-        #reader-document-summary .summary-writing .note-md-h2{font-size:1.45em}
+        #reader-document-summary .note-prose:focus{outline:0}
+        #reader-document-summary .note-prose:not([contenteditable=true]):focus-visible{
+          outline:1px solid var(--note-rule);outline-offset:4px}
+        #reader-document-summary .note-prose[contenteditable=true]{caret-color:var(--note-accent)}
+        #reader-document-summary .note-prose [data-summary-source]{white-space:pre-wrap;font-family:ui-monospace,monospace}
         #reader-document-summary .note-prose>:first-child{margin-block-start:0}
         #reader-document-summary .note-prose>:last-child{margin-block-end:0}
         #reader-document-summary .note-prose :is(h1,h2,h3,h4,h5,h6){margin:1.5em 0 .55em;font:650 1.15em/1.45 system-ui}

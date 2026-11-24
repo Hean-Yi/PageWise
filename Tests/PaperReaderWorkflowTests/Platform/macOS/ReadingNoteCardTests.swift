@@ -621,9 +621,19 @@
             1. 比较相同预算下的 $x^2$。
             2. 检查控制变量。
 
+            - [x] 已核对数据
+            - [ ] 补查分母
+            - [ ] 确认表格
+
             | 条件 | 得分 |
             | --- | --- |
             | 等预算 | 42 |
+
+            ```python
+            average = hits / attempts
+            ```
+
+            跨行核对。\(String(repeating: "同样的分母与权重才允许我们直接比较总体均值。", count: 8))
 
             复核 A \\* B 和 C &amp; D，记入末项。
             """
@@ -647,7 +657,7 @@
                 web,
                 "return document.querySelectorAll('#reader > section').length===1 && !document.querySelector('.reader-note-card')"
             ) as? Bool == true)
-        web.frame = CGRect(x: 0, y: 0, width: 1100, height: 780)
+        web.frame = CGRect(x: 0, y: 0, width: 700, height: 380)
         let verifyProse = """
             const note=document.querySelector('#reader-document-summary'),prose=note?.querySelector('.note-prose');
             return !!prose?.querySelector('h2') && !!prose.querySelector('blockquote p') && prose.querySelectorAll('ol li').length===2
@@ -681,6 +691,9 @@
                     """, ["size": size ?? 17]) as? Bool == true)
             if size != nil {
                 try await editSummaryByClick(in: view, model: model, note: summary, citation: citation)
+                try await pasteAndUndoInSummary(in: view, model: model) {
+                    standalone.updateCitationRequest(1, in: view)
+                }
             }
             model.closeDocumentSummary()
         }
@@ -704,6 +717,31 @@
     @MainActor private func editSummaryByClick(
         in web: WKWebView, model: ReaderModel, note: ReadingNote, citation: LocalPassageCitation
     ) async throws {
+        _ = try await noteJS(
+            web,
+            """
+            window.measureSummary = () => {
+                const prose=document.querySelector('#reader-document-summary .note-prose');
+                const bounds=r=>[r.x,r.y,r.width,r.height];
+                const layout={scroll:[scrollX,scrollY],column:bounds(prose.getBoundingClientRect())};
+                for (const selector of ['h1','h2','p','strong','a','blockquote','ul','ol','li','input','math','pre','code','table','th','td']) {
+                    layout[selector]=[...prose.querySelectorAll(selector)].map(el=>{
+                        const s=getComputedStyle(el);
+                        return [bounds(el.getBoundingClientRect()),s.fontFamily,s.fontSize,s.fontWeight,s.lineHeight,s.color];
+                    });
+                }
+                const wrapped=[...prose.children].find(el=>el.textContent.startsWith('跨行核对。'));
+                const range=document.createRange();
+                range.selectNodeContents(wrapped);
+                layout.lineBoxes=[...range.getClientRects()].map(bounds);
+                return layout;
+            };
+            window.changedSummaryLayout = previous => {
+                const current=window.measureSummary();
+                return Object.keys(previous).filter(key=>JSON.stringify(previous[key])!==JSON.stringify(current[key]));
+            };
+            """)
+        try #require(try await noteJS(web, "return window.measureSummary().lineBoxes.length > 1") as? Bool == true)
         _ = try await noteJS(web, "document.querySelector('#reader-document-summary a[data-passage]').click()")
         try await noteWait {
             guard case .preview(let source, let target) = model.notePassageSheet else { return false }
@@ -732,6 +770,42 @@
         try await insertAtSummaryCaret(
             in: web, model: model, selector: ":scope > p:last-child", after: "记入末", expected: lastParagraph)
         #expect(model.currentDocumentSummary?.citations?.map(\.id) == [citation.id])
+        // Inspecting a formula's source and leaving it untouched must restore its original typesetting.
+        _ = try await noteJS(
+            web,
+            """
+            const math=document.querySelector('#reader-document-summary math');
+            window.formulaBeforeEditing=math.outerHTML;
+            math.dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true}));
+            """)
+        try await noteWait {
+            (try? await noteJS(
+                web, "return document.querySelector('.note-prose [data-summary-source]')?.textContent")) as? String
+                == "$x^2$"
+        }
+        _ = try await noteJS(
+            web,
+            "document.activeElement.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true}))"
+        )
+        try await noteWait {
+            (try? await noteJS(
+                web,
+                "return document.querySelector('#reader-document-summary math')?.outerHTML===window.formulaBeforeEditing"
+            )) as? Bool == true
+        }
+        #expect(model.currentDocumentSummary?.markdown == lastParagraph)
+        for checked in [true, false] {
+            _ = try await noteJS(web, "document.querySelectorAll('.note-prose li input[type=checkbox]')[1].click()")
+            let expected =
+                checked ? lastParagraph.replacingOccurrences(of: "[ ] 补查分母", with: "[x] 补查分母") : lastParagraph
+            try await noteWait { model.currentDocumentSummary?.markdown == expected }
+            try await noteWait {
+                (try? await noteJS(
+                    web,
+                    "return [...document.querySelectorAll('.note-prose li input[type=checkbox]')].map(e=>e.checked)"
+                )) as? [Bool] == [true, checked, false]
+            }
+        }
     }
 
     @MainActor private func insertAtSummaryCaret(
@@ -748,30 +822,93 @@
             caret.setStart(text,offset);caret.collapse(true);
             getSelection().setBaseAndExtent(text,offset,text,offset);
             const box=caret.getBoundingClientRect();
+            window.layoutBeforeTyping=window.measureSummary();
             target.dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true,detail:1,
                 clientX:box.left,clientY:box.top+box.height/2}));
             """, ["selector": selector, "prefix": prefix])
         try await noteWait {
-            (try? await noteJS(web, "return document.activeElement.matches('#reader-document-summary .cm-content')"))
-                as? Bool == true
+            (try? await noteJS(
+                web,
+                "return document.activeElement.matches('#reader-document-summary .note-prose') && document.activeElement.isContentEditable"
+            )) as? Bool == true
         }
-        _ = try await noteJS(
-            web,
-            """
-            const e=document.activeElement.closest('.note-editor').noteEditor;
-            e.view.dispatch(e.view.state.replaceSelection('单位'));
-            """)
+        let differences = try await noteJS(web, "return window.changedSummaryLayout(window.layoutBeforeTyping)")
+        #expect(try #require(differences as? [String]).isEmpty)
+        try #require(try await noteJS(web, "return document.execCommand('insertText',false,'单位')") as? Bool == true)
         try await noteWait { model.currentDocumentSummary?.markdown == expected }
         _ = try await noteJS(
             web,
             """
+            window.layoutBeforeFinish=window.measureSummary();
             document.activeElement.dispatchEvent(new KeyboardEvent('keydown',{
                 key:'Escape',code:'Escape',bubbles:true,cancelable:true}));
             """)
         try await noteWait {
             (try? await noteJS(
-                web, "return !!document.querySelector('#reader-document-summary .note-prose:not([hidden]) p strong')"))
+                web,
+                "const p=document.querySelector('#reader-document-summary .note-prose'); return !p.isContentEditable && !!p.querySelector('strong')"
+            ))
                 as? Bool == true
+        }
+        let finishChanges = try await noteJS(web, "return window.changedSummaryLayout(window.layoutBeforeFinish)")
+        #expect(try #require(finishChanges as? [String]).isEmpty)
+    }
+
+    @MainActor private func pasteAndUndoInSummary(
+        in web: WKWebView, model: ReaderModel, openPicker: () -> Void
+    ) async throws {
+        let original = try #require(model.currentDocumentSummary?.markdown)
+        let selected = (original as NSString).range(of: "复核", options: .backwards)
+        _ = try await noteJS(
+            web,
+            """
+            const p=document.querySelector('.note-prose > p:last-child'), text=p.firstChild;
+            getSelection().setBaseAndExtent(text,0,text,2);
+            """)
+        openPicker()
+        try await noteWait {
+            if case .picker = model.notePassageSheet { return true }
+            return false
+        }
+        guard case .picker(let draft) = model.notePassageSheet else { return }
+        #expect(draft.markdown == original)
+        #expect(draft.range == selected)
+        model.notePassageSheet = nil
+
+        let pasted = "\n\n## 新的复核问题"
+        _ = try await noteJS(
+            web,
+            """
+            const note=document.querySelector('.note-prose'), text=note.lastElementChild.lastChild;
+            getSelection().setBaseAndExtent(text,text.length,text,text.length);
+            const clipboard=new DataTransfer();
+            clipboard.setData('text/plain',markdown);
+            note.dispatchEvent(new ClipboardEvent('paste',{clipboardData:clipboard,bubbles:true,cancelable:true}));
+            """, ["markdown": pasted])
+        try await noteWait { model.currentDocumentSummary?.markdown == original + pasted }
+        try await noteWait {
+            (try? await noteJS(web, "return document.querySelector('.note-prose > h2:last-child')?.textContent"))
+                as? String == "新的复核问题"
+        }
+        let staleInsertion = try await noteJS(
+            web,
+            "return window.summaryEditor.editor.insertPassage(original,from,to,'过期引用')",
+            ["original": original, "from": draft.range.location, "to": NSMaxRange(draft.range)])
+        #expect(staleInsertion as? Bool == false)
+        _ = try await noteJS(
+            web,
+            """
+            document.activeElement.dispatchEvent(new KeyboardEvent('keydown',{
+                key:'z',code:'KeyZ',metaKey:true,bubbles:true,cancelable:true}));
+            """)
+        try await noteWait { model.currentDocumentSummary?.markdown == original }
+        try await noteWait {
+            (try? await noteJS(
+                web,
+                """
+                const note=document.querySelector('.note-prose');
+                return !note.querySelector('h2:last-child') && !!note.querySelector('table td') && !!note.querySelector('math');
+                """)) as? Bool == true
         }
     }
 

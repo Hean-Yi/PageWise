@@ -173,7 +173,6 @@ extension ReaderModel {
     func closeDocumentSummary() {
         guard let id = presentedSummaryID else { return }
         presentedSummaryID = nil
-        editingDocumentSummary = false
         if requestedReadingNote == id { requestedReadingNote = nil }
         Task { await flushReadingNotes() }
     }
@@ -185,7 +184,6 @@ extension ReaderModel {
             pdfNoteEditor = nil
             presentedSummaryID = note.id
             requestedReadingNote = note.id
-            editingDocumentSummary = false
             return
         }
         guard let first = note.anchors.first else { return }
