@@ -121,6 +121,8 @@ Swift Package 自动递归发现每个 target 目录下的 Swift 文件。当前
 
 书库快照 v10 按已保存精读报告的笔记 ID 识别旧的全文总结，保留 Markdown 和引用，并把其位置迁到文末。文末页属于阅读器，原始 PDF 与已发布 HTML 的页码、段落和批注坐标沿用原有版本。
 
+快照 v11 的 `TrashedPaper` 将论文本身、书架归属和相关用户记录从活动集合移入归档，PDF 和已发布页面沿用原路径。快照迁移为旧书库补空归档。恢复与删除共用串行保存入口，原书架已移除时恢复至未分类，重新导入相同文件时按摘要恢复原 ID。`ReaderModel` 协调选中项和进行中的任务。助理使用相同的书架、导入和归档操作，删除卡在用户点击时重新核对目标。
+
 `Application/Reading/PaperReadingNotebook` 通过精读报告的论文 ID 和文末笔记 ID 关联当前有效的 `ReadingNote`。书库按论文分组展示，历史各次保留自己的报告时间和关注点，打开时读取原笔记。独立保存的文末笔记按创建时间列入同一索引。设置中的研究记忆复用 `Features/Memory/MemoryView`，继续通过 `ReaderModel` 编辑和删除。
 
 `Domain/Reading/ReadingMetrics` 按所选日的起止时间截取 `ReadingEntry`，分别计算每篇论文和全日的时间并集。`Features/Calendar` 展示聚合结果，明细通过原记录 ID 修正，数据库继续逐条保存阅读活动。
