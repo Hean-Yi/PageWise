@@ -27,6 +27,30 @@ import Testing
     #expect(state.papers[0].originalPath == paper.originalPath)
 }
 
+@Test func batchShelfMoveValidatesEveryPaperBeforeChangingMembership() throws {
+    var state = LibraryState()
+    state.papers = (1...3).map {
+        Paper(
+            title: "Paper \($0)", digest: String($0), originalPath: "\($0).pdf", pageCount: 1,
+            blocks: [], warnings: [], canReflow: false)
+    }
+    let shelf = try Shelf(name: "Methods")
+    try state.apply(.create(shelf))
+    let ids = state.papers.map(\.id)
+    #expect(throws: (any Error).self) { try state.apply(.movePapers([ids[0], UUID()], shelfID: shelf.id)) }
+    #expect(state.paperShelfIDs.isEmpty)
+    try state.apply(.movePapers(ids, shelfID: shelf.id))
+    #expect(ids.allSatisfy { state.shelfID(for: $0) == shelf.id })
+    try state.apply(.movePapers([ids[1], ids[2]], shelfID: nil))
+    #expect(state.paperShelfIDs == [ids[0].uuidString: shelf.id])
+    #expect(throws: (any Error).self) {
+        try state.apply(.deleteIfUnchanged(shelf.id, name: shelf.name, members: Set(ids)))
+    }
+    #expect(state.shelves == [shelf])
+    try state.apply(.deleteIfUnchanged(shelf.id, name: shelf.name, members: [ids[0]]))
+    #expect(state.shelves.isEmpty && state.papers.count == 3)
+}
+
 @Test func versionTwoMigratesAllExistingFieldsAndShelvesRestart() async throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: root) }

@@ -20,7 +20,15 @@ extension ReaderModel {
         await save(shelfChange: .delete(id))
     }
 
+    @discardableResult func deleteShelf(_ id: UUID, expectedName: String, members: Set<UUID>) async -> Bool {
+        await save(cancellable: true, shelfChange: .deleteIfUnchanged(id, name: expectedName, members: members))
+    }
+
     @discardableResult public func movePaper(_ paperID: UUID, to shelfID: UUID?) async -> Bool {
-        await save(shelfChange: .move(paperID: paperID, shelfID: shelfID))
+        await movePapers([paperID], to: shelfID)
+    }
+
+    @discardableResult public func movePapers(_ paperIDs: [UUID], to shelfID: UUID?) async -> Bool {
+        await save(cancellable: true, shelfChange: .movePapers(paperIDs, shelfID: shelfID))
     }
 }

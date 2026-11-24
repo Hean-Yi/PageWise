@@ -24,7 +24,9 @@ public enum ShelfChange: Sendable {
     case create(Shelf)
     case rename(UUID, String)
     case delete(UUID)
+    case deleteIfUnchanged(UUID, name: String, members: Set<UUID>)
     case move(paperID: UUID, shelfID: UUID?)
+    case movePapers([UUID], shelfID: UUID?)
 }
 
 extension LibraryState {
@@ -46,11 +48,19 @@ extension LibraryState {
             guard shelves.contains(where: { $0.id == id }) else { throw ReaderError.message("书架不存在。") }
             shelves.removeAll { $0.id == id }
             paperShelfIDs = paperShelfIDs.filter { $0.value != id }
+        case .deleteIfUnchanged(let id, let name, let members):
+            guard shelves.contains(where: { $0.id == id && $0.name == name }),
+                Set(papers.filter { shelfID(for: $0.id) == id }.map(\.id)) == members
+            else { throw ReaderError.message("书架内容已变化，请重新核对后移除。") }
+            return try apply(.delete(id))
         case .move(let paperID, let shelfID):
-            guard papers.contains(where: { $0.id == paperID }),
+            return try apply(.movePapers([paperID], shelfID: shelfID))
+        case .movePapers(let paperIDs, let shelfID):
+            let ids = Set(paperIDs)
+            guard !ids.isEmpty, ids.isSubset(of: Set(papers.map(\.id))),
                 shelfID == nil || shelves.contains(where: { $0.id == shelfID })
             else { throw ReaderError.message("论文或书架不存在，未移动。") }
-            paperShelfIDs[paperID.uuidString] = shelfID
+            for id in ids { paperShelfIDs[id.uuidString] = shelfID }
         }
         try validateShelves()
     }
