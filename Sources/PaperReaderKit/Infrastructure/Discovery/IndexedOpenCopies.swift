@@ -13,11 +13,13 @@ actor IndexedOpenCopies {
         struct Location: Decodable {
             let isOpen: Bool?
             let pdfURL: String?
+            let landingPage: String?
             let doi: String?
             let version: String?
             enum CodingKeys: String, CodingKey {
                 case isOpen = "is_oa"
                 case pdfURL = "pdf_url"
+                case landingPage = "landing_page_url"
                 case doi, version
             }
         }
@@ -131,13 +133,14 @@ actor IndexedOpenCopies {
             guard let doi = work.doi.flatMap(PaperCandidate.queryDOI), doi == candidate.doi else {
                 throw URLError(.cannotParseResponse)
             }
+            let publisherPDF = Self.plosPrintablePDF(doi: doi, locations: work.locations)
             // Submitted preprints retain their own search card and version-specific import route.
             return ["publishedVersion", "acceptedVersion"].flatMap { version in
                 work.locations.compactMap { item -> IndexedOpenCopy? in
-                    guard item.isOpen == true, item.version == version, let raw = item.pdfURL,
-                        let url = URL(string: raw)
-                    else { return nil }
+                    guard item.isOpen == true, item.version == version else { return nil }
                     if let locationDOI = item.doi, PaperCandidate.queryDOI(locationDOI) != doi { return nil }
+                    let publisherCopy = version == "publishedVersion" && item.doi != nil ? publisherPDF : nil
+                    guard let url = item.pdfURL.flatMap(URL.init(string:)) ?? publisherCopy else { return nil }
                     let edition = version == "publishedVersion" ? "出版版" : "作者接收稿"
                     return IndexedOpenCopy(
                         candidateID: candidate.id, url: url, notice: "OpenAlex 收录的" + edition + " PDF。")
@@ -156,5 +159,20 @@ actor IndexedOpenCopies {
             guard let raw = work.openAccessPdf?.url, !raw.isEmpty, let url = URL(string: raw) else { return [] }
             return [.init(candidateID: candidate.id, url: url, notice: "Semantic Scholar 收录的开放全文，版本以 PDF 为准。")]
         }
+    }
+
+    private static func plosPrintablePDF(doi: String, locations: [OpenAlexWork.Location]) -> URL? {
+        guard doi.hasPrefix("10.1371/journal.") else { return nil }
+        for item in locations {
+            guard let landing = item.landingPage, var url = URLComponents(string: landing),
+                url.scheme == "https", url.host == "journals.plos.org",
+                url.path.range(of: #"^/plos[a-z]+/article$"#, options: .regularExpression) != nil,
+                url.queryItems == [URLQueryItem(name: "id", value: doi)]
+            else { continue }
+            url.path += "/file"
+            url.queryItems?.append(.init(name: "type", value: "printable"))
+            return url.url
+        }
+        return nil
     }
 }

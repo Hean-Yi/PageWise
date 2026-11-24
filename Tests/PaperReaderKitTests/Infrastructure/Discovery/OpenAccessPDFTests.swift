@@ -158,6 +158,51 @@ private actor IndexedCopyTransport: HTTPTransport {
     #expect(await transport.requests.compactMap(\.host) == hosts)
 }
 
+@Test(arguments: ["published", "closed", "differentDOI", "foreignHost", "accepted"])
+func plosPrintableCopyRequiresOpenPublisherEditionAndMatchingArticle(
+    condition: String
+) async throws {
+    let doi = "10.1371/journal.pone.0000308"
+    let landingDOI = condition == "differentDOI" ? doi + "9" : doi
+    let host = condition == "foreignHost" ? "journals.plos.org.example.com" : "journals.plos.org"
+    let version = condition == "accepted" ? "acceptedVersion" : "publishedVersion"
+    let paper = publisherRecord(doi: doi)
+    let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".pdf")
+    defer { try? FileManager.default.removeItem(at: file) }
+    try DemoPaper.write(to: file)
+    let transport = IndexedCopyTransport(
+        openAlex: #"""
+            {"doi":"https://doi.org/\#(doi)","locations":[
+              {"version":"\#(version)","is_oa":\#(condition != "closed"),"doi":"\#(doi)","pdf_url":null},
+              {"landing_page_url":"https://\#(host)/plosone/article?id=\#(landingDOI)"}]}
+            """#,
+        scholar: #"{"externalIds":{"DOI":"\#(doi)"}}"#, pdf: try Data(contentsOf: file))
+    let index = IndexedOpenCopies(transport: transport)
+    if condition == "published" {
+        let result = try await index.download(paper)
+        defer { try? FileManager.default.removeItem(at: result.pdfURL) }
+        #expect(
+            result.candidate.pdfURL?.absoluteString == "https://journals.plos.org/plosone/article/file?id=" + doi
+                + "&type=printable")
+        #expect(result.candidate.doi == doi && result.sourceNotice?.contains("出版版") == true)
+    } else {
+        await #expect(throws: (any Error).self) { try await index.download(paper) }
+        #expect(await transport.requests.allSatisfy { $0.host?.hasPrefix("api.") == true })
+    }
+}
+
+@Test func pubMedCentralDirectoryPDFNeedsExactIndexedArticlePath() {
+    let candidate = publisherRecord(doi: "10.1234/example")
+    for path in ["articles/PMC1234/pdf/", "articles/not-an-id/pdf/", "articles/PMC1234/pdf/?other=45"] {
+        let url = URL(string: "https://pmc.ncbi.nlm.nih.gov/" + path)!
+        var record = candidate
+        record.pdfURL = url
+        #expect(!record.canDownload)
+        record.indexedCopy = .init(candidateID: record.id, url: url, notice: "")
+        #expect(record.canDownload == (path == "articles/PMC1234/pdf/"))
+    }
+}
+
 @Test(arguments: [false, true]) func closedOrMismatchedIndexNeverDownloadsOrMisreportsACompleteSearch(mismatch: Bool)
     async throws
 {

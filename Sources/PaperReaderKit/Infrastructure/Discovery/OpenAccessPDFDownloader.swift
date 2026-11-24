@@ -47,9 +47,14 @@ public struct OpenAccessPDFDownloader: Sendable {
             else { return nil }
         case "proceedings.mlr.press", "jmlr.org", "www.jmlr.org", "papers.neurips.cc", "proceedings.neurips.cc",
             "openaccess.thecvf.com", "aclanthology.org", "link.springer.com", "www.nature.com", "mdpi-res.com",
-            "biorxiv.org", "www.biorxiv.org", "medrxiv.org", "www.medrxiv.org", "pmc.ncbi.nlm.nih.gov",
-            "pdfs.semanticscholar.org":
+            "biorxiv.org", "www.biorxiv.org", "medrxiv.org", "www.medrxiv.org", "pdfs.semanticscholar.org":
             guard url.path.lowercased().hasSuffix(".pdf") else { return nil }
+        case "pmc.ncbi.nlm.nih.gov":
+            if !path.hasSuffix(".pdf") {
+                guard indexed, url.query == nil,
+                    url.path.range(of: #"^/articles/PMC[1-9][0-9]*/pdf/?$"#, options: .regularExpression) != nil
+                else { return nil }
+            }
         case "dl.acm.org", "journals.sagepub.com", "onlinelibrary.wiley.com", "www.tandfonline.com", "www.science.org",
             "journals.aps.org", "pubs.acs.org":
             guard path.contains("/pdf/") || path.contains("/pdfdirect/") else { return nil }
