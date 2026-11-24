@@ -1,5 +1,7 @@
 #if os(macOS)
     import AppKit
+    import PaperReaderKit
+    import SwiftUI
     import Testing
 
     @testable import PaperReaderUI
@@ -8,6 +10,80 @@
         var pointer = CGPoint(x: 50, y: 40)
         override var mouseLocationOutsideOfEventStream: NSPoint { pointer }
         override var isKeyWindow: Bool { true }
+    }
+
+    @MainActor @Observable private final class ShelfChoice {
+        var id: UUID?
+    }
+
+    @Test(arguments: [true, false])
+    @MainActor func spaceOverANewlySelectedTopicFindsTheCoverWithoutMovingTheMouse(editingSearch: Bool) async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let model = try ReaderModel(root: root, credentials: WorkflowCredentials())
+        await model.load()
+        let shelf = try #require(await model.createShelf(name: "Methods"))
+        let file = root.appendingPathComponent("sample.pdf")
+        try DemoPaper.write(to: file)
+        let paper = try #require(await model.importURLs([file], selectAfterImport: false, shelfID: shelf).first)
+        let window = PointedWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 1150, height: 720), styleMask: [.titled, .resizable],
+            backing: .buffered, defer: false)
+        let choice = ShelfChoice()
+        let shelfBinding = Binding<UUID?>(get: { choice.id }, set: { choice.id = $0 })
+        window.contentView = NSHostingView(
+            rootView: LibraryWorkspaceView(
+                model: model, collection: .constant(.all), selectedShelfID: shelfBinding,
+                onlineSearch: OnlinePaperSearch(reader: model), findRequest: 0))
+        defer { window.contentView = nil }
+        let host = try #require(window.contentView)
+        func children(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(children) }
+        let deadline = ContinuousClock.now + .seconds(4)
+        var targets = [ShelfDropTargetView]()
+        repeat {
+            host.layoutSubtreeIfNeeded()
+            targets = children(host).compactMap { $0 as? ShelfDropTargetView }
+            if targets.count == 2 { break }
+            try await Task.sleep(for: .milliseconds(10))
+        } while ContinuousClock.now < deadline
+        try #require(targets.count == 2)
+        let target = try #require(
+            targets.max { $0.convert($0.bounds, to: nil).midX < $1.convert($1.bounds, to: nil).midX })
+        if editingSearch {
+            let search = try #require(children(host).compactMap { $0 as? NSTextField }.first { $0.isEditable })
+            try #require(window.makeFirstResponder(search))
+            try #require((window.firstResponder as? NSText)?.isEditable == true)
+        }
+        func click(_ type: NSEvent.EventType) throws -> NSEvent {
+            try #require(
+                NSEvent.mouseEvent(
+                    with: type, location: target.convert(.zero, to: nil), modifierFlags: [],
+                    timestamp: 0, windowNumber: window.windowNumber, context: nil, eventNumber: 1, clickCount: 1,
+                    pressure: 0))
+        }
+        target.mouseDown(with: try click(.leftMouseDown))
+        target.mouseUp(with: try click(.leftMouseUp))
+        var cover: PaperDragSourceView?
+        repeat {
+            host.layoutSubtreeIfNeeded()
+            cover = children(host).compactMap { $0 as? PaperDragSourceView }.first { $0.paperID == paper }
+            if cover != nil { break }
+            try await Task.sleep(for: .milliseconds(10))
+        } while ContinuousClock.now < deadline
+        let visibleCover = try #require(cover)
+        let frame = visibleCover.convert(visibleCover.bounds, to: nil)
+        window.pointer = CGPoint(x: frame.midX, y: frame.midY)
+        let monitor = try #require(children(host).compactMap { $0 as? ShelfPreviewKeys.Monitor }.first)
+        func space(_ type: NSEvent.EventType) throws -> NSEvent {
+            try #require(
+                NSEvent.keyEvent(
+                    with: type, location: .zero, modifierFlags: [], timestamp: 0,
+                    windowNumber: window.windowNumber, context: nil, characters: " ", charactersIgnoringModifiers: " ",
+                    isARepeat: false, keyCode: 49))
+        }
+        // Deliberately send no mouse-entered/moved event after switching the grid.
+        #expect(try monitor.handle(space(.keyDown)))
+        #expect(try monitor.handle(space(.keyUp)))
     }
 
     @Test @MainActor func holdingSpaceOverACoverReleasesTheSamePreviewAndPreservesTextInput() throws {

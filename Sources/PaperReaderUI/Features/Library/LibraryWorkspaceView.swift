@@ -85,7 +85,9 @@ private struct ShelfWorkspaceContent: View {
     @State private var locations = ShelfCoverLocations()
 
     @discardableResult private func showPreview(_ target: ShelfPreviewTarget) -> Bool {
-        guard arrangement.sourceID == nil, let frame = locations.frames[target.paperID], !frame.isEmpty else {
+        guard arrangement.sourceID == nil, listing.ids.contains(target.paperID),
+            let frame = locations.frames[target.paperID], !frame.isEmpty
+        else {
             return false
         }
         if let preview {
@@ -198,8 +200,10 @@ private struct ShelfWorkspaceContent: View {
             #if os(macOS)
                 .background {
                     ShelfPreviewKeys(
-                        hovered: {
-                            locations.paperID ?? (preview?.flight.returning == true ? preview?.target.paperID : nil)
+                        selectedShelfID: selectedShelfID,
+                        hovered: { point in
+                            listing.ids.first { locations.frames[$0]?.contains(point) == true } ?? locations.paperID
+                                ?? (preview?.flight.returning == true ? preview?.target.paperID : nil)
                         },
                         press: { showPreview(.held($0)) }, release: releasePreview, dismiss: dismissPreview)
                 }
