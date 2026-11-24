@@ -150,86 +150,97 @@ struct ReaderNavigator: View {
     private func outline(_ groups: [Chapter], items: [PaperNavigationItem], active: PaperNavigationItem?) -> some View {
         let current = groups.first { group in group.id == active?.id || group.children.contains { $0.id == active?.id }
         }
+        let summary = model.currentDocumentSummary
+        let summarySelected = summary != nil && summary?.id == model.presentedSummaryID
+        let chapterTarget = current.flatMap { expanded.contains($0.id) ? nil : $0.id } ?? active?.id
+        let selectedTarget = summarySelected ? summary?.id.uuidString : chapterTarget
         return ScrollViewReader { scroll in
             ScrollView {
-                if model.navigationLoading && items.isEmpty {
-                    ProgressView().controlSize(.small).padding()
-                } else if items.isEmpty {
-                    Image(systemName: "list.bullet.rectangle").foregroundStyle(ReaderTheme.muted)
-                        .padding().accessibilityLabel("尚无章节标题")
-                } else if groups.isEmpty {
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 40), spacing: 6)], spacing: 6) {
-                        ForEach(items) { item in
-                            Button {
-                                navigate(item)
-                            } label: {
-                                Text("\(item.sourcePage + 1)").monospacedDigit()
-                                    .frame(maxWidth: .infinity, minHeight: 36)
-                                    .background { rowBackground(selected: active?.id == item.id) }
-                                    .contentShape(Rectangle())
+                VStack(alignment: .leading, spacing: 0) {
+                    if model.navigationLoading && items.isEmpty {
+                        ProgressView().controlSize(.small).padding()
+                    } else if items.isEmpty {
+                        Image(systemName: "list.bullet.rectangle").foregroundStyle(ReaderTheme.muted)
+                            .padding().accessibilityLabel("尚无章节标题")
+                    } else if groups.isEmpty {
+                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 40), spacing: 6)], spacing: 6) {
+                            ForEach(items) { item in
+                                Button {
+                                    navigate(item)
+                                } label: {
+                                    Text("\(item.sourcePage + 1)").monospacedDigit()
+                                        .frame(maxWidth: .infinity, minHeight: 36)
+                                        .sidebarSelectionTarget(selectedTarget == item.id)
+                                        .contentShape(Rectangle())
+                                }
+                                .buttonStyle(.plain).id(item.id).help(item.title).accessibilityLabel(item.title)
+                                .accessibilityAddTraits(active?.id == item.id ? .isSelected : [])
                             }
-                            .buttonStyle(.plain).id(item.id).help(item.title).accessibilityLabel(item.title)
-                            .accessibilityAddTraits(active?.id == item.id ? .isSelected : [])
-                        }
-                    }.padding(.horizontal, 12)
-                } else {
-                    LazyVStack(alignment: .leading, spacing: 3) {
-                        ForEach(groups) { group in
-                            let open = expanded.contains(group.id)
-                            let selected = active?.id == group.id || (!open && current?.id == group.id)
-                            HStack(spacing: 0) {
-                                if group.children.isEmpty {
-                                    Color.clear.frame(width: 24)
-                                } else {
-                                    Button {
-                                        withAnimation(ReaderMotion.disclosure(reduceMotion)) {
-                                            if open { expanded.remove(group.id) } else { expanded.insert(group.id) }
+                        }.padding(.horizontal, 12)
+                    } else {
+                        LazyVStack(alignment: .leading, spacing: 3) {
+                            ForEach(groups) { group in
+                                let open = expanded.contains(group.id)
+                                let selected = selectedTarget == group.id
+                                HStack(spacing: 0) {
+                                    if group.children.isEmpty {
+                                        Color.clear.frame(width: 24)
+                                    } else {
+                                        Button {
+                                            withAnimation(ReaderMotion.disclosure(reduceMotion)) {
+                                                if open { expanded.remove(group.id) } else { expanded.insert(group.id) }
+                                            }
+                                        } label: {
+                                            Image(systemName: "chevron.forward").readerSymbolInk()
+                                                .font(.system(size: 10, weight: .bold))
+                                                .rotationEffect(
+                                                    .degrees(open ? (layoutDirection == .rightToLeft ? -90 : 90) : 0)
+                                                )
+                                                .foregroundStyle(open ? ReaderTheme.accent : ReaderTheme.muted)
+                                                .frame(width: 24, height: 34).contentShape(Rectangle())
                                         }
-                                    } label: {
-                                        Image(systemName: "chevron.forward").readerSymbolInk()
-                                            .font(.system(size: 10, weight: .bold))
-                                            .rotationEffect(
-                                                .degrees(open ? (layoutDirection == .rightToLeft ? -90 : 90) : 0)
-                                            )
-                                            .foregroundStyle(open ? ReaderTheme.accent : ReaderTheme.muted)
-                                            .frame(width: 24, height: 34).contentShape(Rectangle())
+                                        .readerIconButtonStyle(.plain)
+                                        .accessibilityLabel((open ? "收起 " : "展开 ") + group.heading.title)
                                     }
-                                    .readerIconButtonStyle(.plain)
-                                    .accessibilityLabel((open ? "收起 " : "展开 ") + group.heading.title)
+                                    chapterLink(group.heading, selected: selected)
                                 }
-                                chapterLink(group.heading, selected: selected)
-                            }
-                            .background { rowBackground(selected: selected) }
-                            .id(group.id)
-                            if open {
-                                ForEach(group.children) { child in
-                                    chapterLink(child, selected: child.id == active?.id)
-                                        .padding(.leading, 11)
-                                        .overlay(alignment: .leading) {
-                                            Rectangle().fill(ReaderTheme.line).frame(width: 1)
-                                        }
-                                        .padding(.leading, 26)
-                                        .background { rowBackground(selected: child.id == active?.id) }
-                                        .id(child.id)
-                                        .transition(.opacity)
+                                .sidebarSelectionTarget(selected)
+                                .id(group.id)
+                                if open {
+                                    ForEach(group.children) { child in
+                                        chapterLink(child, selected: selectedTarget == child.id)
+                                            .padding(.leading, 11)
+                                            .overlay(alignment: .leading) {
+                                                Rectangle().fill(ReaderTheme.line).frame(width: 1)
+                                            }
+                                            .padding(.leading, 26)
+                                            .sidebarSelectionTarget(selectedTarget == child.id)
+                                            .id(child.id)
+                                            .transition(.opacity)
+                                    }
                                 }
                             }
-                        }
-                    }.padding(.horizontal, 8).padding(.bottom, 12)
+                        }.padding(.horizontal, 8).padding(.bottom, 12)
+                    }
+                    if let summary {
+                        Divider().padding(.horizontal, 16).padding(.vertical, 5)
+                        Button {
+                            model.openReadingNote(summary)
+                            didNavigate()
+                        } label: {
+                            DocumentSummaryLinkLabel(inOutline: true, selected: summarySelected)
+                        }.readerIconButtonStyle(.plain)
+                            .sidebarSelectionTarget(summarySelected)
+                            .accessibilityAddTraits(summarySelected ? .isSelected : [])
+                            .id(summary.id.uuidString).padding(.horizontal, 8)
+                    }
                 }
-                if let summary = model.currentDocumentSummary {
-                    Divider().padding(.horizontal, 16)
-                    Button {
-                        model.openReadingNote(summary)
-                        didNavigate()
-                    } label: {
-                        Label("文末总结", readerIcon: .notebook)
-                            .frame(maxWidth: .infinity, alignment: .leading).padding(12).contentShape(Rectangle())
-                    }.readerIconButtonStyle(.plain)
-                        .background { rowBackground(selected: model.presentedSummaryID == summary.id) }
-                        .accessibilityAddTraits(model.presentedSummaryID == summary.id ? .isSelected : [])
-                        .padding(.horizontal, 8)
-                }
+                .sidebarSelectionIndicator(
+                    for: selectedTarget, in: RoundedRectangle(cornerRadius: 8), reduceMotion: reduceMotion)
+            }
+            .onChange(of: model.presentedSummaryID) { _, _ in
+                guard let selectedTarget else { return }
+                withAnimation(ReaderMotion.disclosure(reduceMotion)) { scroll.scrollTo(selectedTarget) }
             }
             .onChange(of: groups.first?.id, initial: true) { _, first in
                 if first != nil, !initializedOutline {
@@ -239,23 +250,11 @@ struct ReaderNavigator: View {
                 }
             }
             .onChange(of: OutlinePosition(index: visibleIndex, request: model.outlineArrival?.revision)) { old, new in
-                guard let active else { return }
-                let target = current.flatMap { expanded.contains($0.id) ? nil : $0.id } ?? active.id
+                guard let target = chapterTarget else { return }
                 let tapped = new.request != nil && old.request != new.request
                 withAnimation(ReaderMotion.disclosure(reduceMotion || !tapped)) { scroll.scrollTo(target) }
             }
         }
-    }
-
-    private func rowBackground(selected: Bool) -> some View {
-        ZStack {
-            if selected {
-                Color.clear.readerGlassSurface(in: RoundedRectangle(cornerRadius: 7), fallback: ReaderTheme.elevated)
-                    .transition(.opacity)
-            }
-        }
-        .animation(ReaderMotion.feedback(reduceMotion), value: selected)
-        .allowsHitTesting(false).accessibilityHidden(true)
     }
 
     private func chapterLink(_ item: PaperNavigationItem, selected: Bool) -> some View {

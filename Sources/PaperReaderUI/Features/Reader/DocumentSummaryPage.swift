@@ -68,3 +68,29 @@ struct DocumentSummaryPage: View {
         .readerGlassSurface(in: Capsule(), fallback: ReaderTheme.elevated)
     }
 }
+
+/// The outline and the reading bar lead to the same notebook page.
+struct DocumentSummaryLinkLabel: View {
+    var inOutline = false
+    var selected = false
+    @Environment(\.readerIconInteraction) private var interaction
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        let active = interaction != .idle
+        HStack(spacing: 7) {
+            ReaderIcon(.notebook, size: inOutline ? 16 : 14)
+            Text("文末总结")
+            if inOutline { Spacer(minLength: 0) }
+        }
+        .foregroundStyle(active || selected ? ReaderTheme.accent : ReaderTheme.ink)
+        .padding(.horizontal, inOutline ? 12 : 6).padding(.vertical, inOutline ? 10 : 5)
+        .background {
+            RoundedRectangle(cornerRadius: 7)
+                .fill(ReaderTheme.accent.opacity(interaction == .pressed ? 0.15 : 0.08))
+                .opacity(active ? 1 : 0)
+        }
+        .animation(ReaderMotion.feedback(reduceMotion), value: interaction)
+        .contentShape(Rectangle())
+    }
+}

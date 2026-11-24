@@ -50,7 +50,7 @@ extension ReaderIcon.Glyph {
         case .calendar:
             InkMotion(12, 5, hover: .init(scaleY: 1.5), press: .init(y: 0.45, scaleY: 0.55))
         case .notebook:
-            InkMotion(7, 12, hover: .init(x: -0.25, degrees: -3, scaleX: 1.38), press: .init(scaleX: 0.52))
+            InkMotion(7, 12, hover: .init(x: 0.5, degrees: -6, scaleX: 1.3), press: .init(scaleX: 0.65))
         case .paper:
             InkMotion(6.9, 7.8, hover: .init(scaleX: 1.37), press: .init(y: 0.9, scaleX: 0.78, scaleY: 0.82))
         case .source:
@@ -75,6 +75,30 @@ extension ReaderIcon.Glyph {
         case .add:
             InkMotion(12, 12, hover: .init(degrees: -6, scaleY: 1.19), press: .init(scaleY: 0.64))
         }
+    }
+}
+
+/// The flyleaf pivots around the notebook's binding within its original icon slot.
+struct NotebookLeaf: Shape {
+    var progress: CGFloat
+    var animatableData: CGFloat {
+        get { progress }
+        set { progress = newValue }
+    }
+
+    func path(in rect: CGRect) -> Path {
+        guard progress > 0 else { return Path() }
+        let lift = progress * 5
+        let edge = 7 - progress * 6.4
+        var page = Path()
+        page.addLines([
+            CGPoint(x: 7, y: 7.3), CGPoint(x: edge, y: 7.3 - lift),
+            CGPoint(x: edge, y: 21.5 - lift), CGPoint(x: 7, y: 21.5),
+        ])
+        page.closeSubpath()
+        return page.applying(
+            CGAffineTransform(translationX: rect.minX, y: rect.minY)
+                .scaledBy(x: rect.width / 24, y: rect.height / 24))
     }
 }
 

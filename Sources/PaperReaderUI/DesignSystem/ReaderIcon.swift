@@ -38,6 +38,12 @@ struct ReaderIcon: View {
                 }
                 outline.stroke(sidebarLineStyle, style: outlineStroke(weight: 1.7))
             }
+            if glyph == .notebook {
+                let turn: CGFloat = state == .hovered ? 1 : state == .pressed ? 0.42 : 0
+                NotebookLeaf(progress: turn).fill(ReaderTheme.surface)
+                NotebookLeaf(progress: turn).stroke(plateStyle, style: outlineStroke(weight: 1.35))
+                    .opacity(turn > 0 ? 1 : 0)
+            }
         }
         .frame(width: size, height: size)
         .animation(
