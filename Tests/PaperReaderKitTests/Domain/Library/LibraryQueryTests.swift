@@ -39,6 +39,28 @@ import Testing
     #expect(LibraryQuery.papers(in: state, sort: .title).map(\.id) == [first.id, second.id, third.id])
 }
 
+@Test func librarySearchCandidatesIncludeMatchingTitlesOnEveryShelfAndInUnfiledPapers() throws {
+    let papers = ["Memory Atlas", "Memory Atlas", "Atlas of Memory", "Memory Methods"].enumerated().map {
+        queryPaper($0.element, added: TimeInterval($0.offset))
+    }
+    let methods = try Shelf(name: "Methods")
+    let systems = try Shelf(name: "Systems")
+    var state = LibraryState()
+    state.papers = papers
+    try state.apply(.create(methods))
+    try state.apply(.create(systems))
+    try state.apply(.move(paperID: papers[0].id, shelfID: methods.id))
+    try state.apply(.move(paperID: papers[1].id, shelfID: systems.id))
+    state.workspace[papers[0].id.uuidString] = PaperWorkspace(isFavorite: true)
+    state.workspace[papers[1].id.uuidString] = PaperWorkspace(status: .finished)
+
+    let hits = LibraryQuery.searchCandidates(in: state, query: "  atlas  MEMORY ").map(\.id)
+    #expect(Set(hits) == Set(papers.prefix(3).map(\.id)))
+    #expect(hits.count == 3)
+    #expect(LibraryQuery.searchCandidates(in: state, query: " \n\t").isEmpty)
+    #expect(LibraryQuery.searchCandidates(in: state, query: "vision").isEmpty)
+}
+
 @Test(arguments: LibrarySort.allCases)
 func allLibrarySortsKeepUnfinishedFirstAndPreserveOrderWithinEachGroup(sort: LibrarySort) throws {
     let entries: [(String, TimeInterval, TimeInterval?, PaperReadingStatus, String?)] = [

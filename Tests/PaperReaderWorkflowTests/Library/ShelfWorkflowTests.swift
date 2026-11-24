@@ -4,6 +4,32 @@ import Testing
 @testable import PaperReaderKit
 @testable import PaperReaderUI
 
+@Test func revealingASearchResultResolvesItsCurrentShelfAndIgnoresDeletedPapers() throws {
+    let paper = Paper(
+        title: "Shared title", digest: "fixture", originalPath: "fixture.pdf", pageCount: 1, blocks: [],
+        warnings: [], canReflow: false)
+    let first = try Shelf(name: "First")
+    let second = try Shelf(name: "Second")
+    var state = LibraryState()
+    state.papers = [paper]
+    try state.apply(.create(first))
+    try state.apply(.create(second))
+    try state.apply(.move(paperID: paper.id, shelfID: first.id))
+    let candidate = try #require(LibraryQuery.searchCandidates(in: state, query: "shared").first)
+
+    try state.apply(.move(paperID: candidate.id, shelfID: second.id))
+    let moved = try #require(ShelfSearchReveal(paperID: candidate.id, in: state))
+    #expect(moved.paperID == candidate.id && moved.shelfID == second.id)
+    let repeated = try #require(ShelfSearchReveal(paperID: candidate.id, in: state))
+    #expect(repeated.id != moved.id)
+
+    try state.apply(.delete(second.id))
+    let unfiled = try #require(ShelfSearchReveal(paperID: candidate.id, in: state))
+    #expect(unfiled.paperID == candidate.id && unfiled.shelfID == nil)
+    try state.removePaper(candidate.id)
+    #expect(ShelfSearchReveal(paperID: candidate.id, in: state) == nil)
+}
+
 @MainActor @Test func shelfChangesCommitBeforePublicationAndFailurePreservesState() async throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: root) }

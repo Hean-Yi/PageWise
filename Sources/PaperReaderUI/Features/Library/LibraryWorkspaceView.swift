@@ -11,6 +11,18 @@ import SwiftUI
     }
 }
 
+struct ShelfSearchReveal: Identifiable {
+    let id = UUID()
+    let paperID: UUID
+    let shelfID: UUID?
+
+    init?(paperID: UUID, in state: LibraryState) {
+        guard state.papers.contains(where: { $0.id == paperID }) else { return nil }
+        self.paperID = paperID
+        shelfID = state.shelfID(for: paperID)
+    }
+}
+
 struct LibraryWorkspaceView: View {
     @Bindable var model: ReaderModel
     @Binding var collection: LibraryCollection
@@ -18,13 +30,12 @@ struct LibraryWorkspaceView: View {
     @Bindable var onlineSearch: OnlinePaperSearch
     let findRequest: Int
     let openSample: () -> Void
-    @State private var query = ""
 
     var body: some View {
         ShelfWorkspaceContent(
             model: model, collection: $collection, selectedShelfID: $selectedShelfID, onlineSearch: onlineSearch,
-            findRequest: findRequest, openSample: openSample, query: $query,
-            listing: ShelfListing(state: model.state, collection: collection, query: query, shelfID: selectedShelfID))
+            findRequest: findRequest, openSample: openSample,
+            listing: ShelfListing(state: model.state, collection: collection, shelfID: selectedShelfID))
     }
 }
 
@@ -36,10 +47,9 @@ private struct ShelfListing {
     let firstFinishedIndex: Int?
     let recent: Paper?
 
-    init(state: LibraryState, collection: LibraryCollection, query: String, shelfID: UUID?) {
-        let sorted = LibraryQuery.papers(in: state, collection: collection, query: query, sort: state.preferredSort)
-        let scoped = collection == .all && (shelfID != nil || query.isEmpty)
-        let visible = scoped ? sorted.filter { state.shelfID(for: $0.id) == shelfID } : sorted
+    init(state: LibraryState, collection: LibraryCollection, shelfID: UUID?) {
+        let sorted = LibraryQuery.papers(in: state, collection: collection, sort: state.preferredSort)
+        let visible = collection == .all ? sorted.filter { state.shelfID(for: $0.id) == shelfID } : sorted
         entries = Array(visible.enumerated())
         ids = visible.map(\.id)
         firstFinishedIndex =
@@ -47,7 +57,7 @@ private struct ShelfListing {
             ? visible.firstIndex {
                 LibraryCollection.finished.includes(state.workspace[$0.id.uuidString] ?? PaperWorkspace(), for: $0)
             } : nil
-        if collection == .all, shelfID == nil, query.isEmpty {
+        if collection == .all, shelfID == nil {
             if state.preferredSort == .recent {
                 recent = sorted.first {
                     guard let workspace = state.workspace[$0.id.uuidString], workspace.position != nil else {
@@ -73,12 +83,16 @@ private struct ShelfWorkspaceContent: View {
     @Bindable var onlineSearch: OnlinePaperSearch
     let findRequest: Int
     let openSample: () -> Void
-    @Binding var query: String
     let listing: ShelfListing
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var arrangement = CoverArrangement()
     private var sort: LibrarySort { model.state.preferredSort }
-    @FocusState private var searchFocused: Bool
+    @State private var searchReveal: ShelfSearchReveal?
+    @State private var dismissSearchRequest = 0
+    private enum ScrollTarget: Hashable {
+        case header
+        case paper(UUID)
+    }
     private struct Preview {
         var target: ShelfPreviewTarget
         var flight: ShelfCoverFlight
@@ -117,6 +131,32 @@ private struct ShelfWorkspaceContent: View {
     }
 
     var body: some View {
+        ScrollViewReader { scroll in
+            workspace
+                .librarySearchSuggestions(
+                    state: model.state, findRequest: findRequest, dismissRequest: dismissSearchRequest
+                ) { paperID in
+                    guard let target = ShelfSearchReveal(paperID: paperID, in: model.state) else { return }
+                    collection = .all
+                    selectedShelfID = target.shelfID
+                    searchReveal = target
+                }
+                .task(id: searchReveal?.id) {
+                    guard let target = searchReveal else { return }
+                    withAnimation(ReaderMotion.navigation(reduceMotion)) {
+                        scroll.scrollTo(ScrollTarget.paper(target.paperID))
+                    }
+                    try? await Task.sleep(for: .seconds(2))
+                    if searchReveal?.id == target.id { searchReveal = nil }
+                }
+                .onChange(of: findRequest) { _, _ in
+                    preview = nil
+                    scroll.scrollTo(ScrollTarget.header, anchor: .top)
+                }
+        }
+    }
+
+    private var workspace: some View {
         GeometryReader { geometry in
             let compact = geometry.size.width < 650
             let inset: CGFloat = compact ? 22 : 42
@@ -126,7 +166,7 @@ private struct ShelfWorkspaceContent: View {
                 repeating: GridItem(.flexible(minimum: 150, maximum: 236), spacing: 36, alignment: .top), count: count)
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
-                    header(compact: compact).padding(.bottom, compact ? 22 : 30)
+                    header(compact: compact).padding(.bottom, compact ? 22 : 30).id(ScrollTarget.header)
                     if let recent = listing.recent {
                         continueReading(recent).padding(.bottom, 22)
                     }
@@ -135,10 +175,7 @@ private struct ShelfWorkspaceContent: View {
                             model: model, selectedShelfID: $selectedShelfID, dragActive: arrangement.sourceID != nil
                         ) { sortMenu }
                     } else {
-                        HStack(spacing: 12) {
-                            if !query.isEmpty {
-                                Text("搜索结果").font(.callout).foregroundStyle(ReaderTheme.muted)
-                            }
+                        HStack {
                             Spacer(minLength: 0)
                             sortMenu
                         }.frame(height: 44)
@@ -159,6 +196,7 @@ private struct ShelfWorkspaceContent: View {
                                 paper, index: index, columns: count,
                                 width: min(236, (available - CGFloat(count - 1) * 36) / CGFloat(count))
                             )
+                            .id(ScrollTarget.paper(paper.id))
                             .transition(reduceMotion ? .identity : ReaderMotion.arrival(y: 5))
                         }
                     }.padding(.top, 5)
@@ -171,11 +209,8 @@ private struct ShelfWorkspaceContent: View {
                                 .buttonStyle(.plain).foregroundStyle(ReaderTheme.accent)
                         }.font(.system(size: 12)).padding(.top, 22)
                     } else if listing.entries.isEmpty {
-                        HStack {
-                            Text(query.isEmpty ? "这个书架还没有论文" : "没有匹配的论文")
-                                .foregroundStyle(ReaderTheme.muted)
-                            if !query.isEmpty { Button("清除搜索") { query = "" }.buttonStyle(.plain) }
-                        }.font(.system(size: 12)).padding(.top, 22)
+                        Text("这个书架还没有论文").foregroundStyle(ReaderTheme.muted)
+                            .font(.system(size: 12)).padding(.top, 22)
                     }
                 }.padding(.horizontal, inset).padding(.top, compact ? 24 : 32).padding(.bottom, 44)
                     .animation(ReaderMotion.disclosure(reduceMotion), value: onlineSearch.isExpanded)
@@ -214,12 +249,13 @@ private struct ShelfWorkspaceContent: View {
                 }
             #endif
         }.coordinateSpace(.named(ShelfCoverFlight.coordinateSpace))
-            .onChange(of: query) { _, _ in arrangement.end() }
             .onChange(of: collection) { _, _ in
+                dismissSearchRequest += 1
                 arrangement.end()
                 preview = nil
             }
             .onChange(of: selectedShelfID) { _, _ in
+                dismissSearchRequest += 1
                 arrangement.end()
                 preview = nil
             }
@@ -232,11 +268,7 @@ private struct ShelfWorkspaceContent: View {
                 arrangement.end()
                 preview = nil
             }
-            .onChange(of: findRequest) { _, _ in
-                preview = nil
-                searchFocused = true
-            }
-            .onChange(of: onlineSearch.isExpanded) { _, expanded in if expanded { searchFocused = false } }
+            .onChange(of: onlineSearch.isExpanded) { _, expanded in if expanded { dismissSearchRequest += 1 } }
             .onChange(of: model.state.shelves, initial: true) { _, shelves in
                 if let selectedShelfID, !shelves.contains(where: { $0.id == selectedShelfID }) {
                     self.selectedShelfID = nil
@@ -255,6 +287,7 @@ private struct ShelfWorkspaceContent: View {
             height: CGFloat(to / columns - from / columns) * (width / 0.70 + 77))
         return BookshelfItem(
             model: model, paper: paper, recordFrame: { locations.frames[paper.id] = $0 },
+            searchLocated: searchReveal?.paperID == paper.id,
             previewed: preview?.target.paperID == paper.id && preview?.flight.awaitingLift == false,
             showPreview: { showPreview($0) }, releasePreview: releasePreview,
             hoverCover: { locations.update(paper.id, inside: $0) }, lifted: arrangement.sourceID == paper.id,
@@ -299,13 +332,13 @@ private struct ShelfWorkspaceContent: View {
         if compact {
             VStack(alignment: .leading, spacing: 20) {
                 heading
-                searchField
+                LibrarySearchField()
             }
         } else {
             HStack(alignment: .center) {
                 heading
                 Spacer(minLength: 24)
-                searchField.frame(width: 250)
+                LibrarySearchField().frame(width: 250)
             }
         }
     }
@@ -316,37 +349,9 @@ private struct ShelfWorkspaceContent: View {
                 .contentTransition(reduceMotion ? .identity : .opacity)
                 .foregroundStyle(ReaderTheme.ink).accessibilityAddTraits(.isHeader)
             Text(
-                "\(collection == .all && query.isEmpty ? model.state.papers.count : listing.entries.count) 篇"
+                "\(collection == .all ? model.state.papers.count : listing.entries.count) 篇"
             ).font(.callout).foregroundStyle(ReaderTheme.muted)
         }
-    }
-
-    private var searchField: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "magnifyingglass").foregroundStyle(ReaderTheme.muted)
-            TextField("搜索书库", text: $query).textFieldStyle(.plain).focused($searchFocused)
-                .accessibilityLabel("搜索书库")
-            if !query.isEmpty {
-                Button {
-                    query = ""
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                }
-                .buttonStyle(.plain).foregroundStyle(ReaderTheme.muted)
-                .help("清除搜索").accessibilityLabel("清除搜索")
-            } else {
-                #if os(macOS)
-                    Text("⌘ F").font(.system(size: 10)).foregroundStyle(ReaderTheme.muted)
-                #endif
-            }
-        }.font(.callout).padding(.horizontal, 12).frame(minHeight: 36)
-            .background(ReaderTheme.surface, in: RoundedRectangle(cornerRadius: 10))
-            .overlay {
-                RoundedRectangle(cornerRadius: 10)
-                    .strokeBorder(searchFocused ? ReaderTheme.accent : ReaderTheme.line)
-                    .animation(ReaderMotion.feedback(reduceMotion), value: searchFocused)
-                    .allowsHitTesting(false)
-            }
     }
 
     private func continueReading(_ paper: Paper) -> some View {

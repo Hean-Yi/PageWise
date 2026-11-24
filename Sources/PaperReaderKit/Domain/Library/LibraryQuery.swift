@@ -43,10 +43,23 @@ public enum LibrarySort: String, CaseIterable, Identifiable, Codable, Sendable {
 }
 
 public enum LibraryQuery {
+    public static func searchCandidates(in state: LibraryState, query: String) -> [Paper] {
+        let terms = query.split(whereSeparator: \.isWhitespace)
+        guard !terms.isEmpty else { return [] }
+        return state.papers.filter { matches($0.title, terms: terms) }.sorted {
+            let order = $0.title.localizedStandardCompare($1.title)
+            return order == .orderedSame ? $0.id.uuidString < $1.id.uuidString : order == .orderedAscending
+        }
+    }
+
+    private static func matches(_ title: String, terms: [Substring]) -> Bool {
+        terms.allSatisfy { title.localizedStandardContains($0) }
+    }
+
     public static func papers(
         in state: LibraryState, collection: LibraryCollection = .all, query: String = "", sort: LibrarySort = .recent
     ) -> [Paper] {
-        let terms = query.split(whereSeparator: \.isWhitespace).map(String.init)
+        let terms = query.split(whereSeparator: \.isWhitespace)
         let finishedIDs = Set(
             state.papers.filter {
                 collection == .all
@@ -57,7 +70,7 @@ public enum LibraryQuery {
         return state.papers.filter { paper in
             let preferences = state.workspace[paper.id.uuidString] ?? PaperWorkspace()
             return collection.includes(preferences, for: paper)
-                && terms.allSatisfy { paper.title.localizedStandardContains($0) }
+                && matches(paper.title, terms: terms)
         }.sorted { lhs, rhs in
             let leftFinished = finishedIDs.contains(lhs.id)
             let rightFinished = finishedIDs.contains(rhs.id)

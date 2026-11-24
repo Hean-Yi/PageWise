@@ -105,6 +105,7 @@ struct BookshelfItem: View {
     @Bindable var model: ReaderModel
     let paper: Paper
     let recordFrame: (CGRect?) -> Void
+    var searchLocated = false
     let previewed: Bool
     let showPreview: (ShelfPreviewTarget) -> Void
     let releasePreview: () -> Bool
@@ -138,6 +139,14 @@ struct BookshelfItem: View {
         let progress = self.progress
         VStack(alignment: .leading, spacing: 15) {
             BookCoverView(paper: paper, progress: progress)
+                .overlay {
+                    RoundedRectangle(cornerRadius: 6)
+                        .strokeBorder(ReaderTheme.accent, lineWidth: 2)
+                        .padding(-4)
+                        .opacity(searchLocated ? 1 : 0)
+                        .allowsHitTesting(false)
+                        .animation(ReaderMotion.feedback(reduceMotion), value: searchLocated)
+                }
                 .onGeometryChange(for: CGRect.self) { geometry in
                     geometry.frame(in: .named(ShelfCoverFlight.coordinateSpace))
                 } action: { frame in
