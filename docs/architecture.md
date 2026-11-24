@@ -123,6 +123,8 @@ Swift Package 自动递归发现每个 target 目录下的 Swift 文件。当前
 
 快照 v12 从活动集合永久移除论文及其用户记录。v11 试用快照中的暂存论文在迁移时并回活动集合。`ReaderModel` 协调串行保存、后台任务停止及应用私有文件清理。手动删除与助理结果卡共用窗口级确认，在执行前重新核对目标。
 
+快照 v13 为一次划线产生的多个片段记录同一操作 ID。PDF 提取器同时提供原页字符范围和重排句内的 UTF-16 范围，供选择和绘制复用。迁移仅按已有记录为可识别的旧笔记留下线索，打开对应原页时再核对片段文字和间隔。页边显示使用核验后的范围，编辑和引用沿用保存时的原始锚点。
+
 `Application/Reading/PaperReadingNotebook` 通过精读报告的论文 ID 和文末笔记 ID 关联当前有效的 `ReadingNote`。书库按论文分组展示，历史各次保留自己的报告时间和关注点，打开时读取原笔记。独立保存的文末笔记按创建时间列入同一索引。设置中的研究记忆复用 `Features/Memory/MemoryView`，继续通过 `ReaderModel` 编辑和删除。
 
 `Domain/Reading/ReadingMetrics` 按所选日的起止时间截取 `ReadingEntry`，分别计算每篇论文和全日的时间并集。`Features/Calendar` 展示聚合结果，明细通过原记录 ID 修正，数据库继续逐条保存阅读活动。

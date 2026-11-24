@@ -25,11 +25,11 @@ import Testing
     #expect(migrated.papers.map(\.id) == [paper.id] && migrated.manualPaperIDs == [paper.id])
     #expect(migrated.chats.map(\.id) == [turn.id] && migrated.readingNotes == [note])
     let current = try #require(JSONSerialization.jsonObject(with: encode.encode(migrated)) as? [String: Any])
-    #expect(current["trashedPapers"] == nil && migrated.version == 12)
+    #expect(current["trashedPapers"] == nil && migrated.version == LibraryState.currentVersion)
     legacy["version"] = 10
     legacy["trashedPapers"] = nil
     let v10 = try JSONDecoder().decode(LibraryState.self, from: JSONSerialization.data(withJSONObject: legacy))
-    #expect(v10.papers.isEmpty && v10.version == 12)
+    #expect(v10.papers.isEmpty && v10.version == LibraryState.currentVersion)
 }
 
 @Test func permanentDeletionRecoveryUnlinksOnlyCommittedManagedFilesAndProtectsExternalSymlinks() async throws {

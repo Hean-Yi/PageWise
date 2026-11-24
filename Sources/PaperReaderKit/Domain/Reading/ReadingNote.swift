@@ -24,6 +24,9 @@ public struct ReadingNote: Identifiable, Codable, Sendable, Equatable {
     public var paperID: UUID
     public var contentVersion: String
     public var anchors: [NoteAnchor]
+    /// A pre-v13 editor sometimes saved just one fragment of a multi-fragment mark.
+    /// Display can recover its sibling ranges after checking the PDF. The stored anchors remain authoritative.
+    public var legacyStrokeMemberID: UUID?
     public var citations: [LocalPassageCitation]?
     public var markdown: String
     public var dimension: CloseReadingDimension?

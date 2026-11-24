@@ -245,7 +245,7 @@ func pdfDiscussionNoteKeepsTheColorAndInkOfAnOverlappingManualMark(style: Annota
         .mark(color: .purple, style: .underline, removing: false), selection: [translated])
     let chineseMark = try #require(reader.currentHighlights.first { $0.pdfTranslationTarget != nil })
     #expect(chineseMark.text == part && chineseMark.rects.isEmpty && chineseMark.style == .underline)
-    await reader.openPDFHighlightNote(chineseMark)
+    await reader.openPDFHighlightNote(chineseMark)?.value
     #expect(reader.pdfNoteEditor?.id == chineseDraft.id)
     await reader.performReflowSelectionAction(
         .mark(color: .purple, style: .underline, removing: true), selection: [translated])
@@ -263,4 +263,33 @@ func pdfDiscussionNoteKeepsTheColorAndInkOfAnOverlappingManualMark(style: Annota
     #expect(reader.pdfNoteEditor == nil)
     session.close()
     #expect(!reader.hasPDFNoteSelection)
+}
+
+@Test @MainActor func nativePDFInkOpensTheExistingNoteAfterAdjacentRunsWereCoalesced() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let model = try ReaderModel(root: root, credentials: WorkflowCredentials())
+    await model.load()
+    let url = try DemoPaper.fileURL()
+    _ = try #require(await model.importURLs([url]).first)
+    let quote = "We build a small example"
+    let whole = try #require(
+        try await PDFReadingNoteLocator().locate(quote: quote, pageIndex: 0, in: url).first?.anchor)
+    let split = 3
+    let runs = [
+        NSRange(location: whole.start, length: split),
+        NSRange(location: whole.start + split, length: whole.end - whole.start - split),
+    ]
+    model.captureSelection(text: quote, rects: [], page: 0, ranges: runs)
+    await model.performPDFSelectionAction(.note)
+    let draft = try #require(model.pdfNoteEditor)
+    #expect(draft.note.anchors.count == 2)
+    #expect(model.updateReadingNote(id: draft.id, anchors: draft.note.anchors, markdown: "记在完整选区上。"))
+    model.closePDFReadingNote()
+    await model.performPDFSelectionAction(.mark(color: .blue, style: .underline, removing: false))
+    let merged = try #require(model.currentHighlights.first)
+    #expect(model.currentHighlights.count == 1 && merged.text == quote)
+    await model.openPDFHighlightNote(merged)?.value
+    #expect(model.pdfNoteEditor?.id == draft.id)
+    #expect(model.pdfNoteEditor?.note.anchors == draft.note.anchors)
 }

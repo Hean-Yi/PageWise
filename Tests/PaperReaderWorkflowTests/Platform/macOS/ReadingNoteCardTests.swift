@@ -942,6 +942,69 @@
         }
     }
 
+    @Test @MainActor func sourceReflowMarkOpensOneNoteAcrossPublishedBlocks() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let model = try ReaderModel(root: root)
+        await model.load()
+        let blocks = ["Study A, repeated twice.", "Study B — repeated twice."].map {
+            TextBlock(sourcePage: 0, text: $0)
+        }
+        var paper = Paper(
+            title: "Inline fixture", digest: "fixture", originalPath: "unused.pdf", pageCount: 1,
+            blocks: blocks, warnings: [], canReflow: true)
+        paper.htmlReading = try await HTMLReadingStore().append(
+            blocks.map { BilingualBlock(block: $0, translation: "译文。") }, to: nil, paper: paper, root: root)
+        paper.translatedBlockCount = blocks.count
+        model.state.papers = [paper]
+        model.select(paper.id)
+        let parts = zip(model.pageKeys, blocks).map {
+            HTMLTextSelection(pageKey: $0.0, text: $0.1.text, start: 0, end: $0.1.text.utf16.count)
+        }
+        model.captureHTMLSelection(parts)
+        model.performHTMLAnnotation(["color": "blue", "style": "underline", "legacy": []])
+        try #require(
+            model.currentHighlights.count == 2 && Set(model.currentHighlights.compactMap(\.strokeID)).count == 1)
+        let coordinator = HTMLCoordinator(model: model)
+        let web = coordinator.makeView()
+        defer { coordinator.stop(web) }
+        web.frame = CGRect(x: 0, y: 0, width: 800, height: 640)
+        coordinator.update(web)
+        try await noteWait {
+            (try? await noteJS(web, "return window.paperSelection?.projectedMarks().length===2")) as? Bool == true
+        }
+        func click(_ key: String) async throws {
+            _ = try await noteJS(
+                web,
+                """
+                const p=document.getElementById('block-'+key).querySelector('p');
+                const r=document.createRange();r.setStart(p.firstChild,1);r.setEnd(p.firstChild,2);
+                const b=r.getClientRects()[0],pos={bubbles:true,clientX:b.left+1,clientY:b.top+1};
+                p.dispatchEvent(new PointerEvent('pointerdown',pos));p.dispatchEvent(new MouseEvent('click',{...pos,detail:1}));
+                """, ["key": key])
+        }
+        try await click(parts[1].pageKey)
+        try await noteWait {
+            (try? await noteJS(web, "return !!document.querySelector('.editing-live .note-editor')")) as? Bool == true
+        }
+        _ = try await noteJS(
+            web,
+            "const e=document.querySelector('.editing-live .note-editor');e.value='跨段笔记';e.dispatchEvent(new Event('input',{bubbles:true}));"
+        )
+        try await noteWait { model.currentReadingNotes.first?.markdown == "跨段笔记" }
+        let saved = try #require(model.currentReadingNotes.first)
+        #expect(saved.anchors.map(\.text) == blocks.map(\.text))
+        _ = try await noteJS(web, "paperNotes.finish()")
+        coordinator.update(web)
+        try await click(parts[0].pageKey)
+        try await noteWait {
+            (try? await noteJS(
+                web,
+                "return document.querySelector('.editing-live')?.dataset.noteId===id && document.querySelector('.editing-live .note-editor')?.value==='跨段笔记'",
+                ["id": saved.id.uuidString])) as? Bool == true
+        }
+    }
+
     @MainActor private func noteJS(_ web: WKWebView, _ source: String, _ arguments: [String: Any] = [:]) async throws
         -> Any?
     {

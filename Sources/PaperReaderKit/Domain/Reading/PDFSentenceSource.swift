@@ -10,13 +10,15 @@ public struct PDFSourceSentence: Codable, Hashable, Identifiable, Sendable {
     /// The original extraction group is part of the on-device translation cache signature.
     public let paragraphID: String
     public let characterRanges: [NSRange]
+    /// UTF-16 ranges in the reflowed sentence, paired with the immutable PDF ranges. Old snapshots lack this map.
+    public let renderedRanges: [NSRange]?
     private let refinedParagraphID: String?
 
     public var readingParagraphID: String { refinedParagraphID ?? paragraphID }
 
     public init(
         id: String, text: String, pageIndex: Int, rects: [[Double]], paragraphID: String,
-        characterRanges: [NSRange] = [], readingParagraphID: String? = nil
+        characterRanges: [NSRange] = [], renderedRanges: [NSRange]? = nil, readingParagraphID: String? = nil
     ) {
         self.id = id
         self.text = text
@@ -24,6 +26,7 @@ public struct PDFSourceSentence: Codable, Hashable, Identifiable, Sendable {
         self.rects = rects
         self.paragraphID = paragraphID
         self.characterRanges = characterRanges
+        self.renderedRanges = renderedRanges
         self.refinedParagraphID = readingParagraphID == paragraphID ? nil : readingParagraphID
     }
 }

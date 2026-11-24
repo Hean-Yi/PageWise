@@ -200,7 +200,7 @@ struct PDFBilingualReadingView: View {
                     },
                     onOpenHighlight: { id in
                         guard let mark = model.currentHighlights.first(where: { $0.id == id }) else { return }
-                        Task { await model.openPDFHighlightNote(mark, inReflow: true) }
+                        model.openPDFHighlightNote(mark, inReflow: true)
                     }, inlineHighlights: model.inlinePDFHighlights,
                     onTextSelection: { session.reflowTextSelection = $0 },
                     onSelectionAction: { action, selection in

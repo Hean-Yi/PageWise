@@ -2,6 +2,8 @@ import Foundation
 
 public struct Highlight: Identifiable, Codable, Sendable, Equatable {
     public var id = UUID()
+    /// Fragments from a single pen or palette operation share an identity across sentences and pages.
+    public var strokeID: UUID?
     public var paperID: UUID
     public var pageKey: String
     public var pageIndex: Int

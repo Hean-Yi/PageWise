@@ -11,19 +11,48 @@ extension PDFReadingNoteLocator {
     }
 
     /// Reuse one PDF document for the loaded reading window. Ambiguous or outdated rectangles have no text projection.
-    public func historicalInkAnchors(_ marks: [Highlight], in url: URL) throws -> [UUID: [NoteAnchor]] {
-        guard let first = marks.first else { return [:] }
+    public func historicalInk(_ marks: [Highlight], in url: URL) throws -> (
+        anchors: [UUID: [NoteAnchor]], strokes: [UUID: [NoteAnchor]]
+    ) {
+        let geometry = marks.filter(\.hasOnlyOriginalPDFGeometry)
+        let batches = LegacyPDFStroke.batches(in: marks)
+        guard let first = geometry.first ?? batches.first?.first else { return ([:], [:]) }
         let document = try document(at: url, pageIndex: first.pageIndex)
         defer { withExtendedLifetime(document) {} }
         var result: [UUID: [NoteAnchor]] = [:]
-        for mark in marks where mark.hasOnlyOriginalPDFGeometry {
+        for mark in geometry {
             try Task.checkCancellation()
             if let fragments = try? Self.locatedHighlight(mark, in: document) {
                 result[mark.id] = fragments.map(\.anchor)
             }
         }
-        try Task.checkCancellation()
-        return result
+        var strokes: [UUID: [NoteAnchor]] = [:]
+        for batch in batches {
+            try Task.checkCancellation()
+            guard let page = document.page(at: batch[0].pageIndex), let raw = page.string as NSString?,
+                raw.length == page.numberOfCharacters
+            else { continue }
+            let anchors = batch.compactMap(\.pdfReadingAnchor)
+            guard anchors.count == batch.count,
+                anchors.allSatisfy({
+                    $0.start >= 0 && $0.end <= raw.length && $0.end > $0.start
+                        && raw.substring(with: NSRange(location: $0.start, length: $0.end - $0.start)) == $0.text
+                }),
+                zip(anchors, anchors.dropFirst()).allSatisfy({ before, after in
+                    raw.substring(with: NSRange(location: before.end, length: after.start - before.end))
+                        .allSatisfy(\.isWhitespace)
+                })
+            else { continue }
+            for mark in batch { strokes[mark.id] = anchors }
+        }
+        return (result, strokes)
+    }
+
+    public func anchors(forStroke marks: [Highlight], in url: URL) throws -> [NoteAnchor] {
+        guard let first = marks.first else { throw Self.notFound }
+        let document = try document(at: url, pageIndex: first.pageIndex)
+        defer { withExtendedLifetime(document) {} }
+        return try marks.flatMap { try Self.locatedHighlight($0, in: document).map(\.anchor) }
     }
 
     private static func locatedHighlight(_ mark: Highlight, in document: PDFDocument) throws -> [PDFReadingNoteFragment]
@@ -99,12 +128,14 @@ extension PDFReadingNoteLocator {
             }
         }
         guard !removing else { return result }
+        let strokeID = UUID()
         for index in cuts.keys.sorted() {
             try Task.checkCancellation()
             guard let page = document.page(at: index), let cut = cuts[index] else { throw Self.notFound }
             let parts = try Self.fragments(page: page, pageIndex: index, ranges: cut.rangeView.map(NSRange.init))
             for part in parts {
                 var mark = part.highlight(for: paperID)
+                mark.strokeID = strokeID
                 mark.style = style
                 mark.color = color
                 result.append(mark)

@@ -284,22 +284,29 @@ enum HTMLNotesScript {
           };
           document.addEventListener('pointerdown',event=>{
             if(choiceOwner&&!choices.contains(event.target)&&!choiceOwner.choices.contains(event.target))closeChoices();
-            pointer={x:event.clientX,y:event.clientY};
+            pointer={x:event.clientX,y:event.clientY,note:active};
             if(appendixEditor?.editor && !appendix.contains(event.target))appendixEditor.finish();
             if(event.target.closest('.reader-note-card,#annotation-menu'))return;
             if(editing)finish();
           },true);
           root.addEventListener('click',event=>{
             if(!pointer||Math.hypot(event.clientX-pointer.x,event.clientY-pointer.y)>4||!getSelection().isCollapsed)return;
-            const matches=hits(event.target,event.clientX,event.clientY,true);setChoices(matches);
-            if(matches.length){event.preventDefault();event.stopImmediatePropagation();activate(matches[0].id,true);return;}
-            for(const mark of selection.projectedMarks()){
+            // Input may arrive after a note sync and before its queued layout frame.
+            if(restingDirty){restingDirty=false;arrangeSlots();}
+            let matches=hits(event.target,event.clientX,event.clientY,true);
+            if(!matches.length)matches=hits(event.target,event.clientX,event.clientY);
+            setChoices(matches);
+            if(matches.length){event.preventDefault();event.stopImmediatePropagation();activate((matches.find(e=>e.id===pointer.note)||matches[0]).id,true);return;}
+            const marks=selection.projectedMarks();
+            for(const mark of marks){
               const parts=normalize(mark.parts.map(p=>({...p,key:mark.key})));
               const hit=parts.find(p=>layout.hit([p],event.clientX,event.clientY,true));if(!hit)continue;
               // Clicking a legacy bilingual mark edits only the language actually clicked.
-              const anchors=parts.filter(p=>p.target===hit.target);
+              const stroke=mark.stroke?marks.filter(m=>m.stroke===mark.stroke):[mark];
+              const anchors=stroke.flatMap(m=>normalize(m.parts.map(p=>({...p,key:m.key})))
+                .filter(p=>m.target || p.target===hit.target));
               event.preventDefault();event.stopImmediatePropagation();
-              const e=make({id:crypto.randomUUID().toUpperCase(),anchors,markdown:'',html:''});activate(e.id,true);return;
+              const e=[...records.values()].find(item=>same(item.anchors,anchors))||make({id:crypto.randomUUID().toUpperCase(),anchors,markdown:'',html:''});activate(e.id,true);return;
             }
           },true);
           let pendingCrossing=null,crossingTimer=null,lastPoint=null,scrollCheck=false;
@@ -388,8 +395,8 @@ enum HTMLNotesScript {
               let changed=false;const ids=new Set(notes.map(n=>n.id));
               for(const [id,e] of records)if(e.persisted&&!ids.has(id)&&editing!==id){e.editor?.destroy();e.card.remove();records.delete(id);changed=true;}
               for(const note of notes){let e=records.get(note.id);if(!e){e=make(note);changed=true;}e.persisted=true;
-                if(editing===e.id)continue;
                 if(e.anchors!==note.anchors&&!same(e.anchors,note.anchors)){e.anchors=note.anchors;changed=true;}
+                if(editing===e.id)continue;
                 const markdownChanged=e.markdown!==note.markdown;
                 if(markdownChanged||note.html&&note.html!==e.html){
                   e.markdown=note.markdown;e.html=note.html||'';body(e);changed=true;

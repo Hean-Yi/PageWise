@@ -500,7 +500,7 @@ final class PDFCoordinator: NSObject, @preconcurrency PDFPageOverlayViewProvider
                 mark.rects.contains { Self.rectangle($0)?.contains(location) == true }
             })
         else { return false }
-        Task { await model.openPDFHighlightNote(mark) }
+        model.openPDFHighlightNote(mark)
         return true
     }
 

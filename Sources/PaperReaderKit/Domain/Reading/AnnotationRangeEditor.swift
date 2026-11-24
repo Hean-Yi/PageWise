@@ -7,6 +7,7 @@ public enum AnnotationRangeEditor {
         removing: Bool = false
     ) -> [Highlight] {
         var result = existing
+        let strokeID = UUID()
         for selection in selections {
             guard let cut = selection.textRange, cut.count == 2, cut[0] >= 0, cut[0] < cut[1],
                 let target = selection.htmlTarget ?? selection.pdfTranslationTarget
@@ -36,6 +37,7 @@ public enum AnnotationRangeEditor {
             }
             if !removing {
                 var mark = selection
+                mark.strokeID = strokeID
                 mark.color = color
                 mark.style = style
                 result.append(mark)

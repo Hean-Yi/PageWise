@@ -1,7 +1,7 @@
 import Foundation
 
 public struct LibraryState: Codable, Sendable {
-    public static let currentVersion = 12
+    public static let currentVersion = 13
     public var version = currentVersion
     public var papers: [Paper] = []
     public var readingNotes: [ReadingNote] = []
@@ -82,6 +82,7 @@ public struct LibraryState: Codable, Sendable {
             }
         }
         if storedVersion == 11 { try migrateVersion11(from: decoder) }
+        if storedVersion < 13 { recordLegacyStrokeMembers() }
         try validateOrdering()
         try validateShelves()
         version = Self.currentVersion

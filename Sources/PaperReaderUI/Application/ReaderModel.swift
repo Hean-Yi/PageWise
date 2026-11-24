@@ -28,7 +28,10 @@ public final class ReaderModel {
     public var selectionHTMLRange: [Int]?
     var notePassageSheet: NotePassageSheet?
     @ObservationIgnored var pdfInkEdit: Task<Void, Never>?
-    var pdfNoteEditor: PDFNoteEditorSession?
+    @ObservationIgnored var pendingPDFNoteRequest: UUID?
+    var pdfNoteEditor: PDFNoteEditorSession? {
+        didSet { pendingPDFNoteRequest = nil }
+    }
     var presentedSummaryID: UUID?
     public var requestedReadingNote: UUID?
     public var readingNoteNavigationToken = UUID()

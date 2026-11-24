@@ -130,7 +130,7 @@ public actor PDFReadingNoteLocator {
         let text = sentence.text as NSString
         var offset = 0
         var ranges: [NSRange] = []
-        for part in sentence.characterRanges {
+        for (index, part) in sentence.characterRanges.enumerated() {
             guard part.location >= 0, part.location <= raw.length, part.length > 0,
                 part.length <= raw.length - part.location
             else { throw notFound }
@@ -141,8 +141,19 @@ public actor PDFReadingNoteLocator {
                 length > 0 && offset + length <= text.length
                     && text.substring(with: NSRange(location: offset, length: length)) == original.substring(to: length)
             }
-            if !matches(), offset < text.length, text.character(at: offset) == 32 { offset += 1 }
-            if !matches(), shortened { length -= 1 }
+            if let mapped = sentence.renderedRanges {
+                guard mapped.count == sentence.characterRanges.count else { throw notFound }
+                let run = mapped[index]
+                guard run.location >= offset, run.location <= text.length, run.length > 0,
+                    run.length <= text.length - run.location,
+                    run.length == part.length || shortened && run.length == part.length - 1
+                else { throw notFound }
+                length = run.length
+                offset = run.location
+            } else {
+                if !matches(), offset < text.length, text.character(at: offset) == 32 { offset += 1 }
+                if !matches(), shortened { length -= 1 }
+            }
             guard matches() else { throw notFound }
             let covered = NSIntersectionRange(match, NSRange(location: offset, length: length))
             if covered.length > 0 {

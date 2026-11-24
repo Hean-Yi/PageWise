@@ -785,6 +785,7 @@ public enum PDFSentenceExtractor {
             }
             var bounds = [Int: CGRect]()
             var original = [NSRange]()
+            var rendered = [NSRange]()
             var readingAnchor: Int?
             for span in spans {
                 let intersection = NSIntersectionRange(span.normalized, sentence)
@@ -806,6 +807,8 @@ public enum PDFSentenceExtractor {
                     return nil
                 }
                 original.append(range)
+                rendered.append(
+                    NSRange(location: intersection.location - sentence.location, length: intersection.length))
                 bounds[span.line] = (bounds[span.line] ?? .null).union(box)
             }
             guard let first = original.first, let readingAnchor, !bounds.isEmpty else { return nil }
@@ -822,7 +825,7 @@ public enum PDFSentenceExtractor {
             if !complete { originalOnly.insert(id) }
             return PDFSourceSentence(
                 id: id, text: value, pageIndex: pageIndex,
-                rects: rects, paragraphID: paragraph, characterRanges: original,
+                rects: rects, paragraphID: paragraph, characterRanges: original, renderedRanges: rendered,
                 readingParagraphID: "p\(pageIndex)-b\(readingAnchor)")
         }
     }

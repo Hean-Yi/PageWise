@@ -44,30 +44,57 @@ final class PDFBilingualSession {
     }
     private var loadedPages: [Int: LoadedPage] = [:]
     var paragraphPages: [Int: PDFParagraphPage] { loadedPages.mapValues(\.paragraph) }
-    private var historicalInk: [UUID: (mark: Highlight, anchors: [NoteAnchor])] = [:]
+    private struct HistoricalInkPage {
+        let marks: [Highlight]
+        let geometry: [UUID: (mark: Highlight, anchors: [NoteAnchor])]
+        let strokes: [UUID: [NoteAnchor]]
+    }
+
+    private var historicalPages: [Int: HistoricalInkPage] = [:]
 
     func historicalHighlights(in model: ReaderModel) -> [Highlight] {
         guard isOpen, paperID == model.selectedPaperID else { return [] }
-        return model.currentHighlights.filter { $0.hasOnlyOriginalPDFGeometry && loadedPages[$0.pageIndex] != nil }
+        let pages = Set(
+            model.inlineReadingNotes.compactMap { note in
+                note.legacyStrokeMemberID == nil ? nil : note.anchors.first?.pdfPageIndex
+            })
+        return model.currentHighlights.filter { mark in
+            loadedPages[mark.pageIndex] != nil
+                && (mark.hasOnlyOriginalPDFGeometry || pages.contains(mark.pageIndex) && mark.isHistoricalPDFInk)
+        }
     }
 
     func verifiedAnchors(for mark: Highlight) -> [NoteAnchor] {
-        guard let cached = historicalInk[mark.id], cached.mark == mark else { return [] }
+        guard let cached = historicalPages[mark.pageIndex]?.geometry[mark.id], cached.mark == mark else { return [] }
         return cached.anchors
+    }
+
+    func verifiedStroke(containing id: UUID, page: Int, marks: [Highlight]) -> [NoteAnchor]? {
+        guard let cached = historicalPages[page], let anchors = cached.strokes[id], cached.marks == marks else {
+            return nil
+        }
+        return anchors
     }
 
     func locateHistoricalInk(_ marks: [Highlight], model: ReaderModel) async {
         guard !Task.isCancelled, isOpen, let paper = model.paper, paper.id == paperID else { return }
-        let ids = Set(marks.map(\.id))
-        for id in historicalInk.keys where !ids.contains(id) { historicalInk.removeValue(forKey: id) }
-        let pending = marks.filter { $0.paperID == paper.id && historicalInk[$0.id]?.mark != $0 }
+        let byPage = Dictionary(grouping: marks, by: \.pageIndex)
+        historicalPages = historicalPages.filter { byPage[$0.key] != nil }
+        let pending = byPage.filter { historicalPages[$0.key]?.marks != $0.value }
         guard !pending.isEmpty else { return }
         let url = model.root.appendingPathComponent(paper.originalPath)
-        guard let anchors = try? await PDFReadingNoteLocator().historicalInkAnchors(pending, in: url),
+        guard let projection = try? await PDFReadingNoteLocator().historicalInk(pending.values.flatMap { $0 }, in: url),
             !Task.isCancelled, isOpen, paperID == paper.id
         else { return }
-        for mark in pending where loadedPages[mark.pageIndex] != nil {
-            historicalInk[mark.id] = (mark, anchors[mark.id] ?? [])
+        let current = Dictionary(grouping: historicalHighlights(in: model), by: \.pageIndex)
+        for (page, batch) in pending where current[page] == batch {
+            var geometry: [UUID: (mark: Highlight, anchors: [NoteAnchor])] = [:]
+            var strokes: [UUID: [NoteAnchor]] = [:]
+            for mark in batch {
+                if let anchors = projection.anchors[mark.id] { geometry[mark.id] = (mark, anchors) }
+                strokes[mark.id] = projection.strokes[mark.id]
+            }
+            historicalPages[page] = HistoricalInkPage(marks: batch, geometry: geometry, strokes: strokes)
         }
     }
 
@@ -242,7 +269,7 @@ final class PDFBilingualSession {
         loadTasks.removeAll()
         pendingTranslations.removeAll()
         loadedPages.removeAll()
-        historicalInk.removeAll()
+        historicalPages.removeAll()
     }
 
     private func load(_ index: Int, paper: Paper, model: ReaderModel) {

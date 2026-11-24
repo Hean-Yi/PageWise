@@ -19,6 +19,33 @@ extension NoteAnchor {
 }
 
 extension Highlight {
+    /// An old translation stroke has no shared ID. A saved note can establish its scope by its
+    /// exact translated passage, including the translation digest and sentence-local UTF-16 offset.
+    public func legacyPDFTranslationNote(in notes: [ReadingNote], contentVersion version: String) -> ReadingNote? {
+        guard strokeID == nil, contentVersion == version, let piece = pdfReadingAnchor,
+            piece.pdfTranslationPageIndex != nil
+        else { return nil }
+        var match: ReadingNote?
+        for note in notes
+        where note.paperID == paperID && note.contentVersion == version && note.deletedAt == nil
+            && !note.isDocumentSummary
+        {
+            guard note.anchors.allSatisfy({ $0.pdfTranslationPageIndex != nil }),
+                note.anchors.contains(where: { anchor in
+                    guard anchor.key == piece.key, anchor.target == piece.target,
+                        anchor.start >= 0, anchor.start <= piece.start, piece.end <= anchor.end,
+                        anchor.end - anchor.start == anchor.text.utf16.count
+                    else { return false }
+                    let range = NSRange(location: piece.start - anchor.start, length: piece.end - piece.start)
+                    return (anchor.text as NSString).substring(with: range) == piece.text
+                })
+            else { continue }
+            guard match == nil else { return nil }
+            match = note
+        }
+        return match
+    }
+
     public var pdfReadingAnchor: NoteAnchor? {
         guard pageKey == "original-\(pageIndex)", pageIndex >= 0, !text.isEmpty else { return nil }
         if let target = pdfTranslationTarget, let range = textRange, range.count == 2,

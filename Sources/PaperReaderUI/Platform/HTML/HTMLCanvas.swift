@@ -179,7 +179,8 @@ final class HTMLCoordinator: NSObject, WKNavigationDelegate, WKScriptMessageHand
             highlightSnapshot = marks
             let values: [[String: Any]] = marks.map {
                 [
-                    "id": $0.id.uuidString, "key": $0.pageKey, "text": $0.text, "range": $0.textRange ?? [],
+                    "id": $0.id.uuidString, "stroke": ($0.strokeID ?? $0.id).uuidString,
+                    "key": $0.pageKey, "text": $0.text, "range": $0.textRange ?? [],
                     "color": ($0.color ?? .yellow).rawValue, "style": ($0.style ?? .highlight).rawValue,
                     "sourceOnly": $0.linksTranslation == true, "target": $0.htmlTarget ?? "",
                 ]

@@ -290,6 +290,24 @@ import WebKit
                             let piece = (anchor.text as NSString).substring(
                                 with:
                                     NSRange(location: overlap.location - source.location, length: overlap.length))
+                            if let mapped = sentence.renderedRanges {
+                                guard mapped.count == sentence.characterRanges.count else { continue }
+                                let field = mapped[runIndex]
+                                guard field.location >= 0, field.location <= english.length, field.length > 0,
+                                    field.length <= english.length - field.location, field.length <= run.length
+                                else { continue }
+                                let visible = NSIntersectionRange(
+                                    overlap, NSRange(location: run.location, length: field.length))
+                                guard visible.length > 0 else { continue }
+                                let start = field.location + visible.location - run.location
+                                if english.substring(with: NSRange(location: start, length: visible.length))
+                                    == (piece as NSString).substring(to: visible.length)
+                                {
+                                    hits[sentence.id, default: []].append([start, start + visible.length])
+                                }
+                                continue
+                            }
+                            // Old snapshots did not record the exact rendered positions.
                             // Each earlier line boundary can remove one hyphen or insert one space.
                             // Verify all feasible offsets. If two positions fit, leave just the note button.
                             let offset = sourceOffset + overlap.location - run.location
