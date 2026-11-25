@@ -32,7 +32,9 @@ public actor ResearchBriefIndex {
     public init(store: LibraryStore) { self.store = store }
 
     /// Always starts from an actual committed revision, including after a crash or a missed timer.
-    public func maintain(audit: Bool = false, warming notes: ReadingNoteMemoryIndex? = nil) async throws {
+    public func maintain(
+        audit: Bool = false, warming notes: ReadingNoteMemoryIndex? = nil, memories: ResearchMemory? = nil
+    ) async throws {
         if audit { opened = false }
         try await open()
         guard let (state, revision) = await store.committedResearchState() else { return }
@@ -41,6 +43,7 @@ public actor ResearchBriefIndex {
             _ = try await notes.search(
                 query: "", state: state, pending: [], excluding: nil, paperID: nil, limit: 0, includeArchived: false)
         }
+        try await memories?.prepare(state)
         let catalog = try resolve(BriefInputs(state, excluding: []))
         guard catalog != published else { return }
         let data = try JSONEncoder().encode(catalog)
@@ -56,7 +59,7 @@ public actor ResearchBriefIndex {
 
     public func brief(
         matching query: String?, limit: Int, state: LibraryState, excluding pending: Set<UUID>,
-        noteHits: [Evidence]
+        noteHits: [Evidence], noteHitsQuery: String? = nil
     ) async throws -> ResearchBrief {
         try await open()
         let basis = BriefInputs(state, excluding: pending)
@@ -79,6 +82,7 @@ public actor ResearchBriefIndex {
                     let note = ChatSourceVersions.recalledNote(stored, in: state, excluding: pending),
                     !hit.text.isEmpty, ReadingNoteMemoryIndex.searchableBody(note.markdown).contains(hit.text),
                     let excerpt = Self.excerpt(hit.text, matching: broad ? nil : terms)
+                        ?? (noteHitsQuery == query ? String(hit.text.prefix(180)) : nil)
                 else { continue }
                 hitByPaper[note.paperID] = (note, excerpt, rank)
             }

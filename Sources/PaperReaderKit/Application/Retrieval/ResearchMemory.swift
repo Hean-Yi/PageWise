@@ -49,7 +49,13 @@ public struct ResearchOverview: Equatable, Sendable, Encodable {
 public actor ResearchMemory {
     private var indexedTerms: [UUID: (text: String, words: Set<String>)] = [:]
 
-    public init() {}
+    private let semantic: SemanticPassageIndex
+    private let usesVectors: Bool
+
+    public init(encoder: (any SemanticTextEncoder)? = nil, cacheURL: URL? = nil, minimumScore: Float? = nil) {
+        semantic = SemanticPassageIndex(encoder: encoder, cacheURL: cacheURL, minimumScore: minimumScore)
+        usesVectors = encoder != nil
+    }
 
     public static func permitsAutomaticWrite(for message: String) -> Bool {
         let denied =
@@ -78,20 +84,25 @@ public actor ResearchMemory {
     }
 
     public func relevant(to query: String, paperID: UUID? = nil, state: LibraryState, excluding pending: Set<UUID> = [])
-        throws -> [MemoryItem]
+        async throws -> [MemoryItem]
     {
+        let hasModel = usesVectors ? await semantic.isAvailable() : false
         try Task.checkCancellation()
-        let active = state.memories.filter { !$0.deleted && !$0.text.isEmpty }
+        let active = state.memories.filter { !$0.deleted && !$0.text.isEmpty && !$0.isResponsePreference }
         let live = Set(active.map(\.id))
         for id in indexedTerms.keys where !live.contains(id) { indexedTerms[id] = nil }
         let words = Retriever.tokens(String(query.prefix(1_000))).subtracting(Self.stopWords)
         let broad = paperID == nil && query == "*"
         guard !words.isEmpty || broad else { return [] }
         let origins = ResearchMemoryOrigins(state: state, excluding: pending)
+        var passages: [SemanticPassage] = []
         var matches: [(item: MemoryItem, score: Int)] = []
         for memory in active {
             try Task.checkCancellation()
             guard let origin = origins.resolve(memory) else { continue }
+            if hasModel {
+                passages.append(Self.passage(memory))
+            }
             if broad {
                 matches.append((memory, memory.userEdited ? 1 : 0))
                 continue
@@ -112,11 +123,34 @@ public actor ResearchMemory {
                     overlap * 4 + (memory.userEdited ? 2 : 0) + (paperID.map { origin == .paper($0) } == true ? 1 : 0)
                 ))
         }
-        return matches.sorted {
+        let lexical = matches.sorted {
             if $0.score != $1.score { return $0.score > $1.score }
             if $0.item.createdAt != $1.item.createdAt { return $0.item.createdAt > $1.item.createdAt }
             return $0.item.id.uuidString < $1.item.id.uuidString
-        }.prefix(5).map(\.item)
+        }.map(\.item)
+        guard hasModel && !broad else { return Array(lexical.prefix(5)) }
+        let found = try await semantic.matches(
+            query, passages: passages, allowed: Set(passages.map(\.sourceID)), limit: 12)
+        let ordered = SemanticPassageIndex.fused(
+            lexical: Array(lexical.prefix(12)).map(\.id), semantic: found.map(\.passage.sourceID))
+        let byID = Dictionary(uniqueKeysWithValues: active.map { ($0.id, $0) })
+        return ordered.prefix(5).compactMap { byID[$0] }
+    }
+
+    public func prepare(_ state: LibraryState) async throws {
+        guard usesVectors, await semantic.isAvailable() else { return }
+        let origins = ResearchMemoryOrigins(state: state, excluding: [])
+        let passages = state.memories.filter {
+            !$0.deleted && !$0.text.isEmpty && !$0.isResponsePreference && origins.resolve($0) != nil
+        }.map(Self.passage)
+        try await semantic.prepare(passages)
+    }
+
+    private static func passage(_ memory: MemoryItem) -> SemanticPassage {
+        let text =
+            memory.text.hasPrefix(MemoryItem.automaticPrefix)
+            ? String(memory.text.dropFirst(MemoryItem.automaticPrefix.count)) : memory.text
+        return SemanticPassage(sourceID: memory.id, text: text)
     }
 
     private static let stopWords: Set<String> = [

@@ -4,6 +4,7 @@ import PaperReaderKit
 @MainActor final class ResearchBriefMaintenance {
     let index: ResearchBriefIndex
     private let notes: ReadingNoteMemoryIndex
+    private let memories: ResearchMemory?
     private var loaded = false
     private var active = true
     private var requested = false
@@ -13,9 +14,10 @@ import PaperReaderKit
     var verification: (briefID: UUID, revision: UInt64, pending: Set<UUID>, valid: Bool)?
     private(set) var worker: Task<Void, Never>?
 
-    init(store: LibraryStore, notes: ReadingNoteMemoryIndex) {
+    init(store: LibraryStore, notes: ReadingNoteMemoryIndex, memories: ResearchMemory? = nil) {
         index = ResearchBriefIndex(store: store)
         self.notes = notes
+        self.memories = memories
     }
 
     func sourcesChanged(now: Date = .now) {
@@ -54,7 +56,7 @@ import PaperReaderKit
                 self.auditing = false
                 do {
                     try Task.checkCancellation()
-                    try await self.index.maintain(audit: audit, warming: self.notes)
+                    try await self.index.maintain(audit: audit, warming: self.notes, memories: self.memories)
                     self.retry = false
                 } catch { self.retry = true }
             }
@@ -80,7 +82,7 @@ extension ReaderModel {
             hits = []
         }
         let brief = try await researchBriefMaintenance.index.brief(
-            matching: term, limit: limit, state: snapshot, excluding: pending, noteHits: hits)
+            matching: term, limit: limit, state: snapshot, excluding: pending, noteHits: hits, noteHitsQuery: term)
         if revision == stateRevision, pending == pendingImportIDs {
             researchBriefMaintenance.verification = (brief.id, revision, pending, true)
         }

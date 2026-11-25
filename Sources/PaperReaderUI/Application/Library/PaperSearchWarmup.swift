@@ -6,7 +6,7 @@ import PaperReaderKit
 final class PaperSearchWarmup {
     let index: LibraryAgentSearchIndex
 
-    init(root: URL) { index = LibraryAgentSearchIndex(root: root) }
+    init(root: URL) { index = LibraryAgentSearchIndex(root: root, encoder: DeviceSemanticEncoder.shared) }
     private var pending: [UUID: Paper] = [:]
     private var activeID: UUID?
     private(set) var worker: Task<Void, Never>?
@@ -36,7 +36,10 @@ final class PaperSearchWarmup {
             }
             if !Task.isCancelled {
                 self?.activeID = nil
+                try? await index.warmVectors()
+                guard !Task.isCancelled else { return }
                 self?.worker = nil
+                self?.start()
             }
         }
     }

@@ -64,7 +64,32 @@ private struct IndexedPaper {
             && pages == paper.readingPages
     }
 
-    func hit(for id: UUID, terms: Set<String>) throws -> AgentSearchHit? {
+    func hit(for id: UUID, terms: Set<String>, identifier: String?) throws -> AgentSearchHit? {
+        if let identifier {
+            let inTitle = !SearchTermMatches.ranges(in: title, query: identifier).isEmpty
+            // Restrict literal checks to token posting candidates. A similarly named block
+            // from the same paper is not enough to claim a match for a specific identifier.
+            let positions = terms.compactMap { body.postings[$0] }.min { $0.count < $1.count } ?? []
+            var found: AgentPassageIndex.Passage?
+            var excerpt = ""
+            for position in positions {
+                try Task.checkCancellation()
+                let passage = body.passages[position]
+                if let match = SearchTermMatches.ranges(in: passage.text, query: identifier).first {
+                    let start =
+                        passage.text.index(match.lowerBound, offsetBy: -200, limitedBy: passage.text.startIndex)
+                        ?? passage.text.startIndex
+                    found = passage
+                    excerpt = String(passage.text[start...].prefix(1400))
+                    break
+                }
+            }
+            guard inTitle || found != nil else { return nil }
+            return AgentSearchHit(
+                paperID: id, title: title, blockID: found?.blockID,
+                sourcePage: found?.sourcePage.map { $0 + 1 }, excerpt: excerpt,
+                score: (inTitle ? 5 : 0) + (found == nil ? 0 : 1))
+        }
         let titleScore = terms.filter { foldedTitle.contains($0) }.count * 5
         var scores: [Int: Int] = [:]
         for term in terms {
@@ -92,7 +117,38 @@ public actor LibraryAgentSearchIndex {
 
     private let root: URL?
 
-    public init(root: URL? = nil) { self.root = root }
+    private let semantic: SemanticPassageIndex
+    private var passages: [SemanticPassage]?
+    private var generation: UInt64 = 0
+
+    public init(root: URL? = nil, encoder: (any SemanticTextEncoder)? = nil) {
+        self.root = root
+        semantic = SemanticPassageIndex(
+            encoder: encoder, cacheURL: root?.appendingPathComponent("DerivedIndexes/papers.sqlite"))
+    }
+
+    private func corpus() -> [SemanticPassage] {
+        if let passages { return passages }
+        var result = [SemanticPassage]()
+        for id in entries.keys.sorted(by: { $0.uuidString < $1.uuidString }) {
+            guard let entry = entries[id] else { continue }
+            for (offset, passage) in entry.body.passages.enumerated() {
+                result.append(SemanticPassage(sourceID: id, chunk: offset, text: passage.text))
+            }
+        }
+        passages = result
+        return result
+    }
+
+    public func warmVectors() async throws {
+        guard await semantic.isAvailable() else { return }
+        try await semantic.prepare(corpus())
+    }
+
+    private func changed() {
+        passages = nil
+        generation &+= 1
+    }
 
     /// Idle prewarming may race with a newer user query. It can only fill a missing entry.
     public func prepareIfAbsent(_ paper: Paper) throws {
@@ -101,9 +157,14 @@ public actor LibraryAgentSearchIndex {
         let entry = try IndexedPaper(paper, root: root)
         try Task.checkCancellation()
         entries[paper.id] = entry
+        changed()
     }
 
-    public func discard(_ id: UUID) { entries[id] = nil }
+    public func discard(_ id: UUID) async {
+        entries[id] = nil
+        changed()
+        await semantic.removeSources([id])
+    }
 
     var indexedPaperIDs: Set<UUID> { Set(entries.keys) }
 
@@ -111,40 +172,74 @@ public actor LibraryAgentSearchIndex {
     public func refresh(_ papers: [Paper]) throws {
         try Task.checkCancellation()
         let live = Set(papers.map(\.id))
-        for id in entries.keys where !live.contains(id) { entries[id] = nil }
+        for id in entries.keys where !live.contains(id) {
+            entries[id] = nil
+            changed()
+        }
         for paper in papers {
             try Task.checkCancellation()
-            if entries[paper.id]?.matches(paper) != true { entries[paper.id] = try IndexedPaper(paper, root: root) }
+            if entries[paper.id]?.matches(paper) != true {
+                entries[paper.id] = try IndexedPaper(paper, root: root)
+                changed()
+            }
         }
     }
 
-    public func search(_ query: String, papers: [Paper], limit: Int = 8) throws -> [AgentSearchHit] {
-        let terms = LibraryAgentSearch.terms(query)
+    public func search(_ query: String, papers: [Paper], limit: Int = 8) async throws -> [AgentSearchHit] {
+        let terms = LibraryAgentSearch.terms(PaperCandidate.queryDOI(query) ?? query)
         guard !terms.isEmpty, limit > 0 else { return [] }
         try refresh(papers)
-        return try LibraryAgentSearch.rank(terms, in: entries, limit: limit)
+        let bounded = min(limit, 64)
+        let key = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        let identifier = SearchTermMatches.isIdentifierQuery(key) ? key : nil
+        let lexical = try LibraryAgentSearch.rank(terms, in: entries, limit: bounded * 2, identifier: identifier)
+        let revision = generation
+        guard identifier == nil, await semantic.isAvailable() else {
+            guard revision == generation else { throw CancellationError() }
+            return Array(lexical.prefix(bounded))
+        }
+        guard revision == generation else { throw CancellationError() }
+        let hits = try await semantic.matches(query, passages: corpus(), allowed: Set(entries.keys), limit: bounded * 2)
+        guard revision == generation else { throw CancellationError() }
+        var byID = Dictionary(uniqueKeysWithValues: lexical.map { ($0.paperID, $0) })
+        for hit in hits {
+            let key = hit.passage
+            guard let entry = entries[key.sourceID], entry.body.passages.indices.contains(key.chunk) else { continue }
+            let passage = entry.body.passages[key.chunk]
+            if let old = byID[key.sourceID], old.blockID != nil || old.sourcePage != nil { continue }
+            byID[key.sourceID] = AgentSearchHit(
+                paperID: key.sourceID, title: entry.title, blockID: passage.blockID,
+                sourcePage: passage.sourcePage.map { $0 + 1 }, excerpt: String(passage.text.prefix(1400)),
+                score: byID[key.sourceID]?.score ?? 1)
+        }
+        return SemanticPassageIndex.fused(lexical: lexical.map(\.paperID), semantic: hits.map(\.passage.sourceID))
+            .prefix(bounded).compactMap { byID[$0] }
     }
 }
 
 public enum LibraryAgentSearch {
     /// One-off lookup retained for callers without a library session.
     public static func search(_ query: String, papers: [Paper], limit: Int = 8) -> [AgentSearchHit] {
-        let terms = terms(query)
+        let terms = terms(PaperCandidate.queryDOI(query) ?? query)
         guard !terms.isEmpty, limit > 0 else { return [] }
         var entries: [UUID: IndexedPaper] = [:]
         do {
             for paper in papers { entries[paper.id] = try IndexedPaper(paper) }
-            return try rank(terms, in: entries, limit: limit)
+            let key = query.trimmingCharacters(in: .whitespacesAndNewlines)
+            return try rank(
+                terms, in: entries, limit: limit, identifier: SearchTermMatches.isIdentifierQuery(key) ? key : nil)
         } catch { return [] }
     }
 
-    fileprivate static func rank(_ terms: Set<String>, in entries: [UUID: IndexedPaper], limit: Int) throws
+    fileprivate static func rank(
+        _ terms: Set<String>, in entries: [UUID: IndexedPaper], limit: Int, identifier: String?
+    ) throws
         -> [AgentSearchHit]
     {
         var hits: [AgentSearchHit] = []
         for (id, entry) in entries {
             try Task.checkCancellation()
-            if let hit = try entry.hit(for: id, terms: terms) { hits.append(hit) }
+            if let hit = try entry.hit(for: id, terms: terms, identifier: identifier) { hits.append(hit) }
         }
         hits.sort {
             if $0.score != $1.score { return $0.score > $1.score }

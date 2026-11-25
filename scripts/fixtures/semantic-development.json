@@ -1,0 +1,31 @@
+{
+  "documents": [
+    "A fixed total token allowance makes the training comparisons cost matched.",
+    "The confidence interval widened after the authors used the patient rather than the image as the sampling unit.",
+    "The reported micro average is dominated by the most frequent label.",
+    "Shuffling the target labels destroyed predictive performance, supporting the negative control.",
+    "Nearly identical records occur in both training and evaluation, which can inflate held-out accuracy.",
+    "The calibration curve reveals systematic overconfidence on difficult samples.",
+    "合并重复下载时以文件内容摘要核对两个版本的身份。",
+    "移除检索器的消融使准确率下降，说明外部资料有贡献。",
+    "索引分片依据访问权限，个人手记不会泄漏到其他用户。",
+    "排队任务遇到限流会按照服务端建议推迟重试。",
+    "改变随机初始化后结果方差很大，单次最高得分不稳定。",
+    "图片的分辨率被降低，以减少推理时的显存峰值。"
+  ],
+  "queries": [
+    ["训练用了同样多的词元吗",0], ["为何按病人抽样会改变不确定性",1],
+    ["类别失衡会怎样影响汇总分数",2], ["打乱答案对照组的表现",3],
+    ["测试数据是不是与训练材料重复",4], ["哪些样本的预测概率过于乐观",5],
+    ["How are multiple copies of the identical PDF recognized?",6],
+    ["Does the ablation with the document search component removed hurt?",7],
+    ["How is private knowledge kept isolated between accounts?",8],
+    ["How does the system handle throttled requests before retrying?",9],
+    ["Sensitivity of performance to the choice of random seed",10],
+    ["Does resizing visual inputs reduce GPU memory?",11],
+    ["北宋时期有哪些主要词派",null], ["怎么修理自行车的链条",null],
+    ["What fuel powers lunar landers?",null], ["哪种花适合阳台种植",null],
+    ["How does the banana plant reproduce?",null], ["怎样计算流体通过管道的速度",null],
+    ["Pros and cons of renting a grand piano",null], ["Whose painting won the museum award?",null]
+  ]
+}

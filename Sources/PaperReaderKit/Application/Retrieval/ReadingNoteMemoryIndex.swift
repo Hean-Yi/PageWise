@@ -19,26 +19,36 @@ public actor ReadingNoteMemoryIndex {
 
     private var entries: [UUID: Entry] = [:]
     private var postings: [String: Set<UUID>] = [:]
+    private var cachedCorpus: (excluding: Set<UUID>, passages: [SemanticPassage])?
 
-    public init() {}
+    private let semantic: SemanticPassageIndex
+    private let usesVectors: Bool
+
+    public init(encoder: (any SemanticTextEncoder)? = nil, cacheURL: URL? = nil, minimumScore: Float? = nil) {
+        semantic = SemanticPassageIndex(encoder: encoder, cacheURL: cacheURL, minimumScore: minimumScore)
+        usesVectors = encoder != nil
+    }
 
     public func search(
         query: String, state: LibraryState, pending: Set<UUID>, excluding: UUID?, paperID: UUID?, limit: Int,
-        includeArchived: Bool
-    ) throws -> [Evidence] {
-        let unavailable = includeArchived ? [] : ChatSourceVersions.withdrawnNoteIDs(in: state, excluding: pending)
+        includeArchived: Bool, mode: RetrievalMode = .hybrid
+    ) async throws -> [Evidence] {
+        let withdrawn = ChatSourceVersions.withdrawnNoteIDs(in: state, excluding: pending)
+        let unavailable: Set<UUID> = includeArchived ? [] : withdrawn
         let titles = Dictionary(
             state.papers.lazy.filter { !pending.contains($0.id) }.map { ($0.id, $0.title) },
             uniquingKeysWith: { first, _ in first })
-        return try search(
+        return try await search(
             query: query, notes: state.readingNotes, paperTitles: titles, excluding: excluding, paperID: paperID,
-            limit: limit, unavailable: unavailable)
+            limit: limit, unavailable: unavailable, mode: mode, withdrawn: withdrawn)
     }
 
     public func search(
         query: String, notes: [ReadingNote], paperTitles: [UUID: String], excluding: UUID? = nil,
-        paperID: UUID? = nil, limit: Int = 6, unavailable: Set<UUID> = []
-    ) throws -> [Evidence] {
+        paperID: UUID? = nil, limit: Int = 6, unavailable: Set<UUID> = [], mode: RetrievalMode = .hybrid,
+        withdrawn: Set<UUID> = []
+    ) async throws -> [Evidence] {
+        let hasModel = usesVectors && mode != .lexical ? await semantic.isAvailable() : false
         let active = notes.filter { $0.deletedAt == nil && paperTitles[$0.paperID] != nil }
         let liveIDs = Set(active.map(\.id))
         for id in Set(entries.keys).subtracting(liveIDs) { remove(id) }
@@ -51,6 +61,7 @@ public actor ReadingNoteMemoryIndex {
                 continue
             }
             remove(note.id)
+            cachedCorpus = nil
             let chunks = Self.chunks(from: Self.searchableBody(note.markdown))
             let titleTerms = Self.terms(in: title)
             let terms = chunks.reduce(into: titleTerms) { $0.formUnion($1.terms) }
@@ -60,7 +71,28 @@ public actor ReadingNoteMemoryIndex {
             for term in terms { postings[term, default: []].insert(note.id) }
         }
         try Task.checkCancellation()
-        guard limit > 0 else { return [] }
+        let semanticPassages: [SemanticPassage]
+        if hasModel {
+            let excluded = unavailable.union(withdrawn)
+            if let cachedCorpus, cachedCorpus.excluding == excluded {
+                semanticPassages = cachedCorpus.passages
+            } else {
+                semanticPassages = active.filter { !excluded.contains($0.id) }.flatMap { note in
+                    (entries[note.id]?.chunks ?? []).enumerated().map { position, chunk in
+                        SemanticPassage(sourceID: note.id, chunk: position, text: chunk.text)
+                    }
+                }
+                cachedCorpus = (excluded, semanticPassages)
+            }
+        } else {
+            semanticPassages = []
+        }
+        guard limit > 0 else {
+            if hasModel { try await semantic.prepare(semanticPassages) }
+            return []
+        }
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        let identifier = mode != .semantic && SearchTermMatches.isIdentifierQuery(trimmed)
         let terms = Self.terms(in: String(query.prefix(4_000)))
         let browsing = query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         var weights: [String: Double] = [:]
@@ -93,16 +125,64 @@ public actor ReadingNoteMemoryIndex {
                     bodyScore = score
                 }
             }
+            if identifier {
+                if let exact = entry.chunks.first(where: {
+                    !SearchTermMatches.ranges(in: $0.text, query: trimmed).isEmpty
+                }) {
+                    best = exact
+                } else if SearchTermMatches.ranges(in: entry.title, query: trimmed).isEmpty {
+                    continue
+                }
+            }
             let hit = Evidence(
                 id: note.id.uuidString, title: entry.title, text: best.text,
                 paperID: note.paperID, sourcePage: note.anchors.first?.readingPageIndex, readingNoteID: note.id)
             results.append((hit, bodyScore + 0.55 * weight(entry.titleTerms), note.modifiedAt))
         }
-        return results.sorted {
+        let lexical = results.sorted {
             if $0.score != $1.score { return $0.score > $1.score }
             if $0.modified != $1.modified { return $0.modified > $1.modified }
             return $0.evidence.id < $1.evidence.id
-        }.prefix(min(limit, 64)).map(\.evidence)
+        }.prefix(64).map(\.evidence)
+        guard !browsing, !identifier, mode != .lexical, hasModel else {
+            return mode == .semantic && !browsing ? [] : Array(lexical.prefix(limit))
+        }
+        let eligible = active.filter {
+            !unavailable.contains($0.id) && $0.paperID != excluding && (paperID == nil || $0.paperID == paperID)
+        }
+        let byID = Dictionary(uniqueKeysWithValues: eligible.map { ($0.id, $0) })
+        let matches = try await semantic.matches(query, passages: semanticPassages, allowed: Set(byID.keys), limit: 64)
+        let semanticIDs = matches.map(\.passage.sourceID)
+        // In a full question, a single shared word is weak corroboration. Preserve full
+        // reciprocal-rank weight for short lookups and multiple matching terms.
+        var lexicalSupport: [UUID: Double] = [:]
+        if !semanticIDs.isEmpty && mode == .hybrid && terms.count > 2 {
+            for hit in lexical {
+                guard let id = hit.readingNoteID, let entry = entries[id] else { continue }
+                if terms.intersection(entry.terms).count == 1 {
+                    lexicalSupport[id] = 1 / Double(terms.count)
+                }
+            }
+        }
+        let ordered =
+            mode == .semantic
+            ? semanticIDs
+            : SemanticPassageIndex.fused(
+                lexical: lexical.compactMap(\.readingNoteID), semantic: semanticIDs, lexicalSupport: lexicalSupport)
+        var evidence = Dictionary(
+            uniqueKeysWithValues: lexical.compactMap { hit in hit.readingNoteID.map { ($0, hit) } })
+        for match in matches {
+            let p = match.passage
+            guard let note = byID[p.sourceID], let title = paperTitles[note.paperID] else { continue }
+            // Preserve an exact match in the source text. A title-only hit can use a better semantic excerpt.
+            if mode != .semantic, let hit = evidence[p.sourceID], !Self.terms(in: hit.text).isDisjoint(with: terms) {
+                continue
+            }
+            evidence[p.sourceID] = Evidence(
+                id: p.sourceID.uuidString, title: title, text: p.text, paperID: note.paperID,
+                sourcePage: note.anchors.first?.readingPageIndex, readingNoteID: p.sourceID)
+        }
+        return ordered.prefix(min(limit, 64)).compactMap { evidence[$0] }
     }
 
     // Generated labels can contain excerpts of other notes. Indexing those labels would
@@ -119,6 +199,7 @@ public actor ReadingNoteMemoryIndex {
 
     private func remove(_ id: UUID) {
         guard let entry = entries.removeValue(forKey: id) else { return }
+        cachedCorpus = nil
         for term in entry.terms {
             postings[term]?.remove(id)
             if postings[term]?.isEmpty == true { postings[term] = nil }
@@ -129,7 +210,8 @@ public actor ReadingNoteMemoryIndex {
         "a", "an", "are", "as", "and", "the", "of", "at", "to", "on", "in", "for", "with", "is", "or", "was", "were",
         "it",
         "that", "this", "paper", "papers", "note", "notes", "my", "find", "about", "using",
-        "的", "了", "和", "在", "是", "我", "这", "中", "有", "对", "一个", "论文", "笔记", "查找", "精读", "引用",
+        "what", "which", "how", "who", "does", "do", "did",
+        "的", "了", "和", "在", "是", "会", "吗", "呢", "怎么", "如何", "我", "这", "中", "有", "对", "一个", "论文", "笔记", "查找", "精读", "引用",
     ]
 
     private static func terms(in text: String) -> Set<String> {

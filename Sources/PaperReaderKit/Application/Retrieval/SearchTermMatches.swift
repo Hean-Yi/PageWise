@@ -3,9 +3,24 @@ import Foundation
 public enum SearchTermMatches {
     // Keep identifiers, hyphenated terms, initials and language names such as C++ intact.
     private static let keywords = try! NSRegularExpression(
-        pattern: #"[\p{L}\p{N}][\p{L}\p{M}\p{N}]*(?:[\p{Pd}\u2212'’./][\p{L}\p{N}][\p{L}\p{M}\p{N}]*)*(?:\+\+|#)?"#)
+        pattern: #"[\p{L}\p{N}][\p{L}\p{M}\p{N}]*(?:[\p{Pd}\u2212'’._/][\p{L}\p{N}][\p{L}\p{M}\p{N}]*)*(?:\+\+|#)?"#)
     private static let locale = Locale(identifier: "en_US_POSIX")
     private static let options: String.CompareOptions = [.caseInsensitive, .diacriticInsensitive, .widthInsensitive]
+
+    /// A standalone acronym, accession or DOI requests the named item. Similar vectors for
+    /// different identifiers cannot establish an exact reference.
+    public static func isIdentifierQuery(_ text: String) -> Bool {
+        guard (2...160).contains(text.utf8.count), text.allSatisfy({ $0.isASCII && !$0.isWhitespace }) else {
+            return false
+        }
+        if text.hasPrefix("10.") || text.lowercased().hasPrefix("doi:") || text.contains("doi.org/") {
+            return PaperCandidate.queryDOI(text) != nil
+        }
+        if PaperCandidate.arxivIdentifier(text) != nil { return true }
+        guard text.contains(where: \.isLetter) else { return false }
+        let acronym = (3...16).contains(text.count) && text.uppercased() == text
+        return acronym || (text.contains(where: \.isNumber) && text.contains(where: { "-_./".contains($0) }))
+    }
 
     public static func ranges(in text: String, query: String?) -> [Range<String.Index>] {
         guard let query, !query.isEmpty, !text.isEmpty else { return [] }
