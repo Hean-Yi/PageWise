@@ -23,11 +23,14 @@ extension ReaderModel {
         guard let paperID = selectedPaperID else { return }
         Task { [weak self] in
             guard let self else { return }
-            guard let inserted = try? await store.recordPaperEngagement(engagement, paperID: paperID),
-                inserted
-            else { return }
-            researchBriefMaintenance.sourcesChanged()
-            memorySleep.sourcesChanged()
+            let inserted = (try? await store.recordPaperEngagement(engagement, paperID: paperID)) ?? false
+            if engagement != .opened {
+                await ensurePaperMemory(paperID: paperID)
+            }
+            if inserted {
+                researchBriefMaintenance.sourcesChanged()
+                memorySleep.sourcesChanged()
+            }
         }
     }
     public func endReading() {

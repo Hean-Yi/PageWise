@@ -5,6 +5,7 @@ public struct MemoryItem: Identifiable, Codable, Sendable, Equatable {
     public enum LibrarySource: Codable, Sendable, Equatable {
         case reader(quote: String)
         case note(paperID: UUID, modifiedAt: Date)
+        case paper(paperID: UUID)
     }
 
     public private(set) var preference: ReaderPreference?
@@ -32,6 +33,15 @@ public struct MemoryItem: Identifiable, Codable, Sendable, Equatable {
     private var forgottenFingerprint: String?
 
     static let automaticPrefix = "AI 整理（待核实）："
+    public static let paperObservationPrefix = "AI 阅读记录："
+
+    /// A reading observation is grounded in the paper itself, not in a chat turn.
+    public init(paperID: UUID, statement: String) {
+        self.init(text: Self.paperObservationPrefix + statement, sourceID: paperID)
+        librarySource = .paper(paperID: paperID)
+        // Reading observations need the same tombstone behavior as automatic questions.
+        originalFingerprint = Self.fingerprint(statement)
+    }
 
     public init(text: String, sourceID: UUID) {
         self.text = text

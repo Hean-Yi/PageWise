@@ -44,7 +44,7 @@ private actor AgentWireTransport: HTTPTransport {
             "ask_user", "create_reading_note", "close_read_paper", "search_reading_notes", "recommend_related",
             "list_library", "create_shelf", "rename_shelf", "move_papers", "prepare_local_import",
             "prepare_delete_shelf", "prepare_delete_paper", "research_overview", "propose_research_question",
-            "remember_preference",
+            "remember_preference", "propose_memory", "revise_memory", "forget_memory",
         ])
     let presentation = try #require(definitions.first { $0["name"] as? String == "present_results" })
     let parameters = try #require(presentation["parameters"] as? [String: Any])
@@ -202,6 +202,29 @@ func agentRejectsIncompleteOrInconsistentResponse(_ body: String) async throws {
 ])
 func agentArgumentsRejectUnknownExtraAndInvalidTypes(_ tool: String, _ json: String) {
     #expect(throws: (any Error).self) { try AgentToolArguments.parse(name: tool, json: json, limits: .init()) }
+}
+
+@Test func memoryMutationArgumentsAreBoundedAndTyped() throws {
+    let memoryID = UUID()
+    #expect(
+        try AgentToolArguments.parse(
+            name: "propose_memory",
+            json: #"{"statement":"Compare matched compute.","quote":"compare matched compute"}"#,
+            limits: .init())
+            == .proposeMemory(statement: "Compare matched compute.", noteResult: nil, quote: "compare matched compute"))
+    #expect(
+        try AgentToolArguments.parse(
+            name: "revise_memory",
+            json: #"{"memory_id":"\#(memoryID)","statement":"Use matched compute."}"#, limits: .init())
+            == .reviseMemory(memoryID: memoryID, statement: "Use matched compute."))
+    #expect(
+        try AgentToolArguments.parse(
+            name: "forget_memory", json: #"{"memory_id":"\#(memoryID)"}"#, limits: .init())
+            == .forgetMemory(memoryID: memoryID))
+    #expect(throws: (any Error).self) {
+        try AgentToolArguments.parse(
+            name: "forget_memory", json: #"{"memory_id":"\#(memoryID)","quote":"extra"}"#, limits: .init())
+    }
 }
 
 @Test func researchOverviewArgumentsAcceptOneOptionalScope() throws {

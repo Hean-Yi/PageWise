@@ -20,6 +20,26 @@ public struct ReadingNote: Identifiable, Codable, Sendable, Equatable {
     public enum Placement: String, Codable, Sendable {
         case documentEnd
     }
+    public struct Revision: Identifiable, Codable, Sendable, Equatable {
+        public enum Author: String, Codable, Sendable {
+            case reader
+            case ai
+        }
+        public var id = UUID()
+        public var markdown: String
+        public var modifiedAt: Date
+        public var author: Author
+        public var backgroundSources: ChatSourceVersions?
+        public init(
+            markdown: String, modifiedAt: Date, author: Author,
+            backgroundSources: ChatSourceVersions? = nil
+        ) {
+            self.markdown = markdown
+            self.modifiedAt = modifiedAt
+            self.author = author
+            self.backgroundSources = backgroundSources
+        }
+    }
     public var id: UUID
     public var paperID: UUID
     public var contentVersion: String
@@ -39,6 +59,8 @@ public struct ReadingNote: Identifiable, Codable, Sendable, Equatable {
     public var modifiedAt: Date
     /// Soft deletion supports undo without discarding the user's source text.
     public var deletedAt: Date?
+    /// Previous versions, newest last. Nil on notes that have never been revised by the agent.
+    public var revisions: [Revision]?
     public init(id: UUID = UUID(), paperID: UUID, contentVersion: String, anchors: [NoteAnchor], markdown: String) {
         self.id = id
         self.paperID = paperID
@@ -47,5 +69,25 @@ public struct ReadingNote: Identifiable, Codable, Sendable, Equatable {
         self.markdown = markdown
         createdAt = Date()
         modifiedAt = createdAt
+    }
+
+    /// A silent note-maintenance pass appends a version instead of discarding the reader's text.
+    /// The newest version becomes current; older versions remain available for inspection.
+    @discardableResult
+    public mutating func applyAIRevision(
+        _ replacement: String, at date: Date = Date(), sources: ChatSourceVersions? = nil
+    ) -> Bool {
+        guard deletedAt == nil, replacement != markdown else { return false }
+        var history = revisions ?? []
+        history.append(
+            Revision(
+                markdown: markdown, modifiedAt: modifiedAt,
+                author: backgroundSources == nil ? .reader : .ai, backgroundSources: backgroundSources))
+        if history.count > 20 { history.removeFirst(history.count - 20) }
+        revisions = history
+        markdown = replacement
+        modifiedAt = date
+        backgroundSources = sources
+        return true
     }
 }

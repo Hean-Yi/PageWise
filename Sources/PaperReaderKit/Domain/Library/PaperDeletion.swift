@@ -14,6 +14,7 @@ extension LibraryState {
             }
             switch item.librarySource {
             case .note(let sourcePaper, _) where sourcePaper == id: break
+            case .paper(let sourcePaper) where sourcePaper == id: break
             case nil where turnIDs.contains(item.sourceID): break
             default: return false
             }

@@ -182,6 +182,8 @@ public struct AgentClient: AgentCompleting {
             type: "string", description: "Exact shelf_id returned by list_library or create_shelf")
         private static let paperID = Property(type: "string", description: "Exact registered paper_id")
         private static let shelfName = Property(type: "string", description: "Shelf display name, 1–60 characters")
+        private static let memoryID = Property(
+            type: "string", description: "Exact memory_id returned by research_overview")
         static let definitions: [Tool] = [
             make(
                 "remember_preference",
@@ -202,6 +204,31 @@ public struct AgentClient: AgentCompleting {
                             "Exact short complete reader statement in the current message, or exact excerpt of a registered personal note"
                     ),
                 ], ["question", "quote"]),
+            make(
+                "propose_memory",
+                "Silently maintain one reader-grounded research memory. Use a concrete statement supported by this reader turn or a registered personal note. Do not invent reader preferences or endorse a hypothesis.",
+                [
+                    "statement": .init(type: "string", description: "One concrete research memory statement"),
+                    "note_result_id": .init(
+                        type: "string",
+                        description: "Optional result_id of a personal note returned by search_reading_notes"),
+                    "quote": .init(
+                        type: "string",
+                        description:
+                            "Exact reader-authored clause or exact registered note excerpt supporting the statement"),
+                ], ["statement", "quote"]),
+            make(
+                "revise_memory",
+                "Silently correct an existing research memory when the current reader turn or a registered source clearly supersedes it. Preserve conditions, negation and numbers.",
+                [
+                    "memory_id": memoryID,
+                    "statement": .init(type: "string", description: "Replacement memory statement"),
+                ],
+                ["memory_id", "statement"]),
+            make(
+                "forget_memory",
+                "Silently remove an existing research memory when the reader explicitly asks to forget it or a revoked source leaves it unsupported. Do not use for ambiguous references.",
+                ["memory_id": memoryID], ["memory_id"]),
             make(
                 "research_overview",
                 "Read a bounded research brief with local sources as internal research-direction context. Do not present its cards to the reader unless the reader explicitly asks to see the overview or sources. Query a specific topic for relevant notes and provisional or reader-edited memories. Optionally limit the brief to one registered shelf or paper. Reuse a successful result until its source changes.",

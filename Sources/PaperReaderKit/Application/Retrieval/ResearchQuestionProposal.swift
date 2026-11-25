@@ -14,14 +14,18 @@ public struct ResearchMemoryOrigins {
     public init(state: LibraryState, excluding pending: Set<UUID> = [], for items: [MemoryItem]? = nil) {
         var chatSources = Set<UUID>()
         var noteSources = Set<UUID>()
+        var paperSources = Set<UUID>()
         for item in items ?? state.memories where !item.deleted {
             switch item.librarySource {
             case nil: chatSources.insert(item.sourceID)
             case .note: noteSources.insert(item.sourceID)
+            case .paper(let paperID): paperSources.insert(paperID)
             case .reader: break
             }
         }
-        papers = chatSources.isEmpty && noteSources.isEmpty ? [] : Set(state.papers.map(\.id)).subtracting(pending)
+        papers =
+            chatSources.isEmpty && noteSources.isEmpty && paperSources.isEmpty
+            ? [] : Set(state.papers.map(\.id)).subtracting(pending)
         chats =
             chatSources.isEmpty
             ? [:]
@@ -51,6 +55,8 @@ public struct ResearchMemoryOrigins {
                 note.modifiedAt == modifiedAt, note.deletedAt == nil, note.backgroundSources == nil
             else { return nil }
             return .paper(paperID)
+        case .paper(let paperID):
+            return papers.contains(paperID) ? .paper(paperID) : nil
         case nil:
             guard let paperID = chats[item.sourceID], papers.contains(paperID) else { return nil }
             return .paper(paperID)

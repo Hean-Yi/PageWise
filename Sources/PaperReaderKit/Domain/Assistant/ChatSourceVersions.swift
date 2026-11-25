@@ -153,6 +153,8 @@ public struct ChatSourceVersions: Codable, Sendable, Equatable {
         case .note(let paperID, let modifiedAt):
             content +=
                 "|note|" + paperID.uuidString + "|" + String(modifiedAt.timeIntervalSinceReferenceDate.bitPattern)
+        case .paper(let paperID):
+            content += "|paper|" + paperID.uuidString
         case nil: break
         }
         return Data(SHA256.hash(data: Data(content.utf8))).base64EncodedString()

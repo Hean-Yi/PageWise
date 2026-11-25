@@ -56,6 +56,7 @@ public final class ReaderModel {
     @ObservationIgnored var reflowPresenting: Set<UUID> = []
     let researchMemory: ResearchMemory
     let memorySleep: MemorySleepSession
+    let noteReview: NoteReviewSession
     let researchBriefMaintenance: ResearchBriefMaintenance
     public var assistantDraft: ChatTurn?
     public var busyAI = false
@@ -144,6 +145,7 @@ public final class ReaderModel {
         self.paperSearchWarmup = PaperSearchWarmup(root: location)
         store = try LibraryStore(directory: location)
         memorySleep = MemorySleepSession(store: store, root: location)
+        noteReview = NoteReviewSession(root: location)
         let indexDirectory = location.appendingPathComponent("DerivedIndexes", isDirectory: true)
         readingNoteIndex = ReadingNoteMemoryIndex(
             encoder: DeviceSemanticEncoder.shared, cacheURL: indexDirectory.appendingPathComponent("notes.sqlite"))

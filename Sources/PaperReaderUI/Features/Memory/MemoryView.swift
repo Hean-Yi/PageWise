@@ -48,6 +48,19 @@ struct MemoryView: View {
             Toggle("空闲时自动维护记忆", isOn: $sleep.enabled)
             Text("使用当前模型服务，发送本批记忆并计入 API 用量。")
                 .font(.caption).foregroundStyle(ReaderTheme.muted)
+            @Bindable var noteReview = model.noteReview
+            Toggle("空闲时整理笔记", isOn: $noteReview.enabled)
+            Picker("整理间隔", selection: $noteReview.interval) {
+                Text("30 分钟").tag(TimeInterval(1_800))
+                Text("1 小时").tag(TimeInterval(3_600))
+                Text("3 小时").tag(TimeInterval(10_800))
+                Text("6 小时").tag(TimeInterval(21_600))
+                Text("12 小时").tag(TimeInterval(43_200))
+                Text("一天").tag(TimeInterval(86_400))
+            }
+            .pickerStyle(.menu)
+            Text("只有新增笔记或阅读状态变化时才调用模型；更新会追加为新修订，保留原笔记。")
+                .font(.caption).foregroundStyle(ReaderTheme.muted)
             if let message = sleep.message {
                 Text(verbatim: message).font(.caption).foregroundStyle(ReaderTheme.muted)
             }
@@ -101,6 +114,12 @@ struct MemoryView: View {
                     }
                 } else if case .note = memory.librarySource {
                     Text("来源笔记已变更")
+                } else if case .paper(let paperID) = memory.librarySource {
+                    Button {
+                        openPaper(paperID)
+                    } label: {
+                        Label("来源论文", readerIcon: .source, size: 15)
+                    }.help("打开来源论文")
                 } else if memory.librarySource == nil,
                     let source = model.state.chats.first(where: { $0.id == memory.sourceID }),
                     model.state.papers.contains(where: { $0.id == source.paperID })

@@ -22,6 +22,9 @@ public enum AgentToolArguments: Sendable, Equatable {
     case rememberPreference(quote: String)
     case researchOverview(query: String?, scope: ResearchBrief.Scope)
     case proposeResearchQuestion(question: String, noteResult: UUID?, quote: String)
+    case proposeMemory(statement: String, noteResult: UUID?, quote: String)
+    case reviseMemory(memoryID: UUID, statement: String)
+    case forgetMemory(memoryID: UUID)
     case searchLibrary(String)
     case searchReadingNotes(String)
     case searchOnline(String, limit: Int? = nil, scope: PaperSearchScope = .all)
@@ -91,6 +94,19 @@ public enum AgentToolArguments: Sendable, Equatable {
                 question: try string("question", max: 800),
                 noteResult: values["note_result_id"] == nil ? nil : try uuid("note_result_id"),
                 quote: try string("quote", max: 960))
+        case "propose_memory":
+            try keys(["statement", "note_result_id", "quote"], required: ["statement", "quote"])
+            return .proposeMemory(
+                statement: try string("statement", max: 800),
+                noteResult: values["note_result_id"] == nil ? nil : try uuid("note_result_id"),
+                quote: try string("quote", max: 960))
+        case "revise_memory":
+            try keys(["memory_id", "statement"], required: ["memory_id", "statement"])
+            return .reviseMemory(
+                memoryID: try uuid("memory_id"), statement: try string("statement", max: 800))
+        case "forget_memory":
+            try keys(["memory_id"], required: ["memory_id"])
+            return .forgetMemory(memoryID: try uuid("memory_id"))
         case "list_library":
             try keys(["scope", "shelf_id", "offset"], required: ["scope"])
             guard let scope = AgentLibraryScope(rawValue: try string("scope", max: 16)),

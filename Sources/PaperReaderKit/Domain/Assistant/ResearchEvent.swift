@@ -235,6 +235,8 @@ enum ResearchEventBuilder {
         switch memory.librarySource {
         case .note(let paperID, _):
             return paperID
+        case .paper(let paperID):
+            return paperID
         case .reader:
             return nil
         case nil:
