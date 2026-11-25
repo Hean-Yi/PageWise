@@ -9,8 +9,8 @@
 | SwiftSoup / WebKit | 静态 HTML 解析与本地连续阅读 |
 | JavaScriptCore / KaTeX | 受支持 LaTeX 编译为 MathML |
 | ImageIO / CoreGraphics | 源码图件本地解码，含独立 PDF 图片 |
-| SQLite | 书库按记录事务保存，旧快照在打开时迁移；代次校验保护多个应用实例的写入 |
-| 词项索引、Core ML 与 Accelerate | 分开检索原文、阅读笔记和研究记忆。可选的 multilingual-e5-small 在设备上编码中英文，SQLite 保存可重建的向量，查询按书库范围和来源修订筛选。 |
+| SQLite | 书库按记录事务保存，旧快照在打开时迁移；代次校验保护多个应用实例的写入。研究来源事件、事件水位和整理租约也在同一数据库内原子提交。 |
+| 词项索引、Core ML 与 Accelerate | 分开检索原文、阅读笔记和研究记忆。可选的 multilingual-e5-small 在设备上编码中英文，SQLite 保存可重建的向量，查询按书库范围和来源修订筛选。来源事件只触发增量核对，热保存不会重建索引。 |
 | URLSession | 多源在线检索、限量流式下载、模型 SSE 与工具调用 |
 | Keychain | 设备独立凭据 |
 | PencilKit | iPad 原版 PDF 与历史固定页笔迹 |
