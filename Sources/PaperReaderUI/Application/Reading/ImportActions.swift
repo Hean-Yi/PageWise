@@ -147,11 +147,11 @@ extension ReaderModel {
     ) async throws -> UUID {
         status = "正在保存 \(url.lastPathComponent)…"
         importProgress = "准备导入"
-        var imported = try await importer.storeOriginal(at: url)
+        let pending = try await importer.prepareOriginal(at: url)
+        var imported = pending.paper
         importProgress = "提交书库"
-        let importedDirectory = root.appendingPathComponent(imported.originalPath).deletingLastPathComponent()
         var retained = false
-        defer { if !retained { try? FileManager.default.removeItem(at: importedDirectory) } }
+        defer { if !retained { pending.discard() } }
         try Task.checkCancellation()
         guard !wasPaperDeleted(since: requestedAt, digest: imported.digest, publicationID: origin.candidate?.id) else {
             throw ReaderError.message("导入期间这篇论文已被删除。")
@@ -235,6 +235,7 @@ extension ReaderModel {
                 cancellable: true, adding: imported, requestedAt: requestedAt, publicationID: origin.candidate?.id,
                 importShelfID: shelfID))
         retained = true
+        pending.commit()
         status = "已加入书库"
         return id
     }

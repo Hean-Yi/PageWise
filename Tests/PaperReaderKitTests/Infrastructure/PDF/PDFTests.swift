@@ -59,3 +59,27 @@ import Testing
     await #expect(throws: (any Error).self) { try await PDFImporter(root: root).storeOriginal(at: input) }
     #expect(!FileManager.default.fileExists(atPath: root.appendingPathComponent("Papers").path))
 }
+
+@Test func recoveryRemovesOnlyAbandonedImportsAndPreservesCommittedAndActiveOriginals() async throws {
+    let manager = FileManager.default
+    let root = manager.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? manager.removeItem(at: root) }
+    let importer = PDFImporter(root: root)
+    let input = try DemoPaper.fileURL()
+    let orphan = try await importer.prepareOriginal(at: input).paper
+    let committed = try await importer.prepareOriginal(at: input).paper
+    let active = try await importer.prepareOriginal(at: input)
+    let unmanaged = try await importer.storeOriginal(at: input)
+    func exists(_ paper: Paper) -> Bool {
+        manager.fileExists(atPath: root.appendingPathComponent(paper.originalPath).path)
+    }
+    try ReadingArtifactCleanup.removeUncommittedFiles(in: root, papers: [committed])
+    #expect(!exists(orphan))
+    #expect(exists(committed) && exists(unmanaged) && exists(active.paper))
+    let directory = root.appendingPathComponent(committed.originalPath).deletingLastPathComponent()
+    #expect(!manager.fileExists(atPath: PendingPDFImport.marker(in: directory, id: committed.id).path))
+    active.discard()
+    #expect(!exists(active.paper))
+    try ReadingArtifactCleanup.removeUncommittedFiles(in: root, papers: [committed])
+    #expect(exists(committed) && exists(unmanaged))
+}

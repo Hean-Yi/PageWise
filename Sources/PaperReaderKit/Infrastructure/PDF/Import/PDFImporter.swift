@@ -5,8 +5,15 @@ import PDFKit
 public actor PDFImporter {
     private let root: URL
     public init(root: URL) { self.root = root }
-    /// Import performs no structure conversion, OCR, resource downloads or model requests.
+    /// Standalone original without a pending library transaction (e.g. the local renderer).
     public func storeOriginal(at url: URL) throws -> Paper {
+        let pending = try prepareOriginal(at: url)
+        pending.commit()
+        return pending.paper
+    }
+
+    /// Import performs no structure conversion, OCR, resource downloads or model requests.
+    public func prepareOriginal(at url: URL) throws -> PendingPDFImport {
         let scoped = url.startAccessingSecurityScopedResource()
         defer { if scoped { url.stopAccessingSecurityScopedResource() } }
         try Task.checkCancellation()
@@ -17,10 +24,12 @@ public actor PDFImporter {
         else { throw ReaderError.message("无法读取 PDF，请先确认文件完整且已解锁。") }
         let id = UUID()
         let directory = root.appendingPathComponent("Papers", isDirectory: true)
-        let staging = directory.appendingPathComponent(".import-\(UUID().uuidString)", isDirectory: true)
+        let staging = directory.appendingPathComponent(".import-\(id.uuidString)", isDirectory: true)
         let destination = directory.appendingPathComponent(id.uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: staging) }
+        guard let lock = try ImportDirectoryLock(staging) else { throw ReaderError.message("导入目录正在使用中。") }
+        try Data().write(to: PendingPDFImport.marker(in: staging, id: id), options: .withoutOverwriting)
         try data.write(to: staging.appendingPathComponent("original.pdf"), options: .withoutOverwriting)
         try Task.checkCancellation()
         try FileManager.default.moveItem(at: staging, to: destination)
@@ -31,6 +40,6 @@ public actor PDFImporter {
             digest: SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined(),
             originalPath: "Papers/\(id.uuidString)/original.pdf", pageCount: document.pageCount,
             blocks: [], warnings: [], canReflow: false)
-        return paper
+        return PendingPDFImport(paper: paper, directory: destination, lock: lock)
     }
 }

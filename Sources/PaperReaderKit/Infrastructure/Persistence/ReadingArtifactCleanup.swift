@@ -6,14 +6,34 @@ public enum ReadingArtifactCleanup {
         let manager = FileManager.default
         let papersDirectory = root.appendingPathComponent("Papers", isDirectory: true)
         if manager.fileExists(atPath: papersDirectory.path) {
+            guard try papersDirectory.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink != true else {
+                throw ReaderError.message("论文目录是符号链接，已跳过文件清理。")
+            }
+            let referenced = Set(papers.map(\.id)).union(
+                papers.compactMap { paper -> UUID? in
+                    let path = paper.originalPath.split(separator: "/")
+                    guard path.count >= 3, path[0] == "Papers" else { return nil }
+                    return UUID(uuidString: String(path[1]))
+                })
             for url in try manager.contentsOfDirectory(
-                at: papersDirectory, includingPropertiesForKeys: [.isSymbolicLinkKey])
+                at: papersDirectory, includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey])
             {
-                if url.lastPathComponent.hasPrefix(".import-"),
-                    UUID(uuidString: String(url.lastPathComponent.dropFirst(8))) != nil,
-                    try url.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink != true
-                {
-                    try manager.removeItem(at: url)
+                let name = url.lastPathComponent
+                let staging = name.hasPrefix(".import-")
+                guard let id = UUID(uuidString: staging ? String(name.dropFirst(8)) : name) else { continue }
+                let marker = PendingPDFImport.marker(in: url, id: id)
+                guard staging || manager.fileExists(atPath: marker.path) else { continue }
+                let values = try url.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+                guard values.isDirectory == true, values.isSymbolicLink != true, let lock = try ImportDirectoryLock(url)
+                else { continue }
+                try withExtendedLifetime(lock) {
+                    if staging {
+                        try manager.removeItem(at: url)
+                    } else if manager.fileExists(atPath: marker.path) {
+                        let values = try marker.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
+                        guard values.isRegularFile == true, values.isSymbolicLink != true else { return }
+                        try manager.removeItem(at: referenced.contains(id) ? marker : url)
+                    }
                 }
             }
         }
