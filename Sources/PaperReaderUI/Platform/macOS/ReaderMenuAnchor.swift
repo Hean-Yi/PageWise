@@ -55,6 +55,11 @@
         func makeCoordinator() -> Coordinator { Coordinator() }
         func makeNSView(context: Context) -> Anchor { Anchor() }
 
+        // A non-interactive NSView has no intrinsic size. Match the actual trigger even inside fixedSize buttons.
+        func sizeThatFits(_ proposal: ProposedViewSize, nsView: Anchor, context: Context) -> CGSize? {
+            proposal.replacingUnspecifiedDimensions(by: .zero)
+        }
+
         func updateNSView(_ anchor: Anchor, context: Context) {
             let coordinator = context.coordinator
             guard open != coordinator.requested else { return }
@@ -68,7 +73,16 @@
                     coordinator.popover?.performClose(nil)
                     return
                 }
-                guard let anchor, anchor.window != nil, coordinator.popover == nil else { return }
+                guard let anchor, let window = anchor.window else {
+                    open = false
+                    return
+                }
+                guard coordinator.popover == nil else { return }
+                let visible = anchor.bounds.intersection(anchor.visibleRect)
+                guard !visible.isEmpty else {
+                    open = false
+                    return
+                }
                 let popup = makePopover()
                 coordinator.popover = popup
                 coordinator.didClose = { if open { open = false } }
@@ -79,8 +93,16 @@
                 let host = NSHostingController(rootView: panel)
                 host.preferredContentSize = host.view.fittingSize
                 popup.contentViewController = host
-                let target = point.map { CGRect(origin: $0, size: CGSize(width: 1, height: 1)) } ?? anchor.bounds
-                popup.show(relativeTo: target, of: anchor, preferredEdge: .maxY)
+                let target = point.map {
+                    CGRect(origin: $0, size: CGSize(width: 1, height: 1)).intersection(visible)
+                }
+                let attachment = target.flatMap { $0.isEmpty ? nil : $0 } ?? visible
+                let trigger = anchor.convert(attachment, to: nil)
+                let viewport = window.contentLayoutRect
+                let below = trigger.minY - viewport.minY
+                let above = viewport.maxY - trigger.maxY
+                let edge: NSRectEdge = below >= host.preferredContentSize.height + 14 || below >= above ? .maxY : .minY
+                popup.show(relativeTo: attachment, of: anchor, preferredEdge: edge)
             }
         }
 

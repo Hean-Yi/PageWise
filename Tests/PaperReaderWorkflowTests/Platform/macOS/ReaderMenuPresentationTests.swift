@@ -7,10 +7,14 @@
     /// Exercise the real representable and menu button without ordering an AppKit popover onto the user's screen.
     @MainActor private final class RecordedMenuPopover: NSPopover {
         var anchors: [NSView] = []
+        var rectangles: [NSRect] = []
+        var edges: [NSRectEdge] = []
         var closes = 0
 
         override func show(relativeTo positioningRect: NSRect, of positioningView: NSView, preferredEdge: NSRectEdge) {
             anchors.append(positioningView)
+            rectangles.append(positioningRect)
+            edges.append(preferredEdge)
         }
 
         override func performClose(_ sender: Any?) {
@@ -101,6 +105,83 @@
         try await render("已关闭")
         #expect(actions == ["第二次"])
         #expect(first.closes == 1 && second.closes == 1 && opened.count == 2)
+        #expect(!window.isVisible)
+    }
+
+    @Test @MainActor func coverOptionsUseTheVisibleButtonOrClickPointAndFitTheirRows() async throws {
+        let buttonSize = NSSize(width: 30, height: 30)
+        let requestedPoint = CGPoint(x: 6, y: 22)
+        let items: [ReaderMenuItem] = [
+            .submenu("移动到书架", icon: .library, items: [.action("未分类") {}]),
+            .submenu("阅读状态", icon: .read, items: [.action("已读") {}]),
+            .divider, .action("删除论文…", icon: .delete, destructive: true) {},
+        ]
+        for clickPoint in [nil, requestedPoint] {
+            var open = false
+            let recorded = RecordedMenuPopover()
+            func representable() -> ReaderMenuAnchor {
+                var anchor = ReaderMenuAnchor(
+                    open: Binding(get: { open }, set: { open = $0 }),
+                    title: "论文选项", items: { items }, width: 174, point: clickPoint)
+                anchor.makePopover = { recorded }
+                return anchor
+            }
+            func source() -> some View {
+                Color.clear.frame(width: buttonSize.width, height: buttonSize.height)
+                    .background { representable() }
+                    .frame(width: 210, height: 320, alignment: clickPoint == nil ? .topTrailing : .bottomTrailing)
+            }
+            let window = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 210, height: 320), styleMask: .borderless, backing: .buffered,
+                defer: false)
+            let host = NSHostingView(rootView: source())
+            window.contentView = host
+            defer { window.contentView = nil }
+            host.layoutSubtreeIfNeeded()
+            open = true
+            host.rootView = source()
+            let deadline = ContinuousClock.now + .seconds(2)
+            while recorded.anchors.isEmpty && ContinuousClock.now < deadline {
+                host.layoutSubtreeIfNeeded()
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            let trigger = try #require(recorded.anchors.first)
+            #expect(trigger.bounds.size == buttonSize)
+            let expected = clickPoint.map { CGRect(origin: $0, size: .init(width: 1, height: 1)) } ?? trigger.bounds
+            #expect(recorded.rectangles == [expected])
+            #expect(recorded.edges == [clickPoint == nil ? .maxY : .minY])
+            let panel = try #require(recorded.contentViewController)
+            #expect(panel.preferredContentSize.width == 174)
+            #expect((90...125).contains(panel.preferredContentSize.height))
+            #expect(!window.isVisible)
+        }
+    }
+
+    @Test @MainActor func longShelfPickerScrollsItsLastDestinationIntoReach() async throws {
+        let items = (0..<40).map { index in ReaderMenuItem.action("书架 \(index)") {} }
+        let panel = ReaderMenuPanel(title: "移动到书架", items: items, width: 174, dismiss: {})
+        let host = NSHostingView(rootView: panel)
+        let size = host.fittingSize
+        #expect(size.width == 174 && (320...380).contains(size.height))
+        let window = NSWindow(
+            contentRect: CGRect(origin: .zero, size: size),
+            styleMask: .borderless, backing: .buffered, defer: false)
+        window.contentView = host
+        defer { window.contentView = nil }
+        func scrollView(in view: NSView) -> NSScrollView? {
+            view as? NSScrollView ?? view.subviews.lazy.compactMap { scrollView(in: $0) }.first
+        }
+        let deadline = ContinuousClock.now + .seconds(2)
+        while scrollView(in: host) == nil, ContinuousClock.now < deadline {
+            host.layoutSubtreeIfNeeded()
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let scroll = try #require(scrollView(in: host))
+        let rows = try #require(scroll.documentView)
+        #expect(rows.bounds.height > scroll.documentVisibleRect.height)
+        scroll.contentView.scroll(to: CGPoint(x: 0, y: rows.bounds.height - scroll.documentVisibleRect.height))
+        scroll.reflectScrolledClipView(scroll.contentView)
+        #expect(scroll.documentVisibleRect.maxY >= rows.bounds.maxY - 1)
         #expect(!window.isVisible)
     }
 #endif

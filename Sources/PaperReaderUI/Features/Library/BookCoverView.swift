@@ -122,13 +122,14 @@ struct BookshelfItem: View {
     var moveEarlier: (() -> Void)?
     var moveLater: (() -> Void)?
     @State private var hovered = false
+    @State private var menuOpen = false
     @FocusState private var focus: Control?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private enum Control: Hashable { case cover, preview, favorite, menu }
     private var workspace: PaperWorkspace { model.workspace(for: paper.id) }
     private var progress: ReadingProgress { .resolve(paper: paper, workspace: workspace) }
-    private var highlighted: Bool { hovered || focus != nil }
+    private var highlighted: Bool { hovered || focus != nil || menuOpen }
     private var showsActions: Bool {
         #if os(iOS)
             true
@@ -204,6 +205,7 @@ struct BookshelfItem: View {
                     requestPaperDeletion?(PaperDeletionRequest(paper, model: model))
                 }
                 .help("\(paper.title) · \(progress.label) · 按住空格预览")
+                .readerContextMenu(paper.title + "的选项", items: contextActions, width: 184)
             HStack(spacing: 7) {
                 Button {
                     showPreview(.pinned(paper.id))
@@ -223,13 +225,15 @@ struct BookshelfItem: View {
                 }.readerIconButtonStyle(.plain).focused($focus, equals: .favorite)
                     .help(workspace.isFavorite ? "取消收藏" : "收藏")
                     .accessibilityLabel("\(workspace.isFavorite ? "取消收藏" : "收藏") \(paper.title)")
-                ReaderPopupMenu(paper.title + "的选项", items: actions) {
+                ReaderPopupMenu(paper.title + "的选项", items: actions, width: 174, isPresented: $menuOpen) {
                     Image(systemName: "ellipsis").readerSymbolInk().font(.system(size: 16, weight: .semibold))
                         .readerIconTarget(macOS: 30)
                 }.fixedSize()
                     .foregroundStyle(ReaderTheme.muted).focused($focus, equals: .menu)
                     .help("论文选项")
+                    .accessibilityIdentifier("paper-options-" + paper.id.uuidString)
             }.frame(minHeight: 30).opacity(showsActions && !lifted ? 1 : 0)
+                .allowsHitTesting(showsActions && !lifted)
                 .offset(arrangementOffset)
         }
         .contentShape(Rectangle())
@@ -242,7 +246,15 @@ struct BookshelfItem: View {
             recordFrame(nil)
         }
         .animation(ReaderMotion.feedback(reduceMotion), value: highlighted)
-        .readerContextMenu(paper.title + "的选项", items: actions)
+    }
+
+    private var contextActions: [ReaderMenuItem] {
+        [
+            .action("预览论文", icon: .source) { showPreview(.pinned(paper.id)) },
+            .action("打开论文", icon: .paper) { model.select(paper.id) },
+            .action(workspace.isFavorite ? "取消收藏" : "收藏", icon: .favorite) { model.toggleFavorite(paper.id) },
+            .divider,
+        ] + actions
     }
 
     private var actions: [ReaderMenuItem] {
@@ -252,21 +264,18 @@ struct BookshelfItem: View {
                 model.setReadingStatus(value, for: paper.id)
             }
         }
-        return [
-            .action("预览论文", icon: .source) { showPreview(.pinned(paper.id)) },
-            .action("打开论文", icon: .paper) { model.select(paper.id) },
-            .action(workspace.isFavorite ? "取消收藏" : "收藏", icon: .favorite) { model.toggleFavorite(paper.id) },
-            .divider,
-            .submenu("移动到书架", items: shelfDestinations),
-            .action("向前移动", enabled: moveEarlier != nil) { moveEarlier?() },
-            .action("向后移动", enabled: moveLater != nil) { moveLater?() },
-            .section("阅读状态"),
-        ] + statuses + [
-            .divider,
+        var items: [ReaderMenuItem] = [
+            .submenu("移动到书架", icon: .library, items: shelfDestinations),
+            .submenu("阅读状态", icon: .read, items: statuses),
+        ]
+        if let moveEarlier { items.append(.action("向前移动") { moveEarlier() }) }
+        if let moveLater { items.append(.action("向后移动") { moveLater() }) }
+        items.append(.divider)
+        items.append(
             .action("删除论文…", icon: .delete, enabled: requestPaperDeletion != nil, destructive: true) {
                 requestPaperDeletion?(PaperDeletionRequest(paper, model: model))
-            },
-        ]
+            })
+        return items
     }
 
     private var shelfDestinations: [ReaderMenuItem] {

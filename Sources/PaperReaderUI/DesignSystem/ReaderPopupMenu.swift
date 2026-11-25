@@ -5,14 +5,14 @@ enum ReaderMenuItem {
     case action(
         _ title: String, icon: ReaderIcon.Glyph? = nil, selected: Bool = false, enabled: Bool = true,
         destructive: Bool = false, run: @MainActor () -> Void)
-    case submenu(_ title: String, items: [ReaderMenuItem])
+    case submenu(_ title: String, icon: ReaderIcon.Glyph? = nil, items: [ReaderMenuItem])
     case section(String)
     case divider
 
     var selectable: Bool {
         switch self {
         case .action(_, _, _, let enabled, _, _): enabled
-        case .submenu(_, let children): !children.isEmpty
+        case .submenu(_, _, let children): !children.isEmpty
         default: false
         }
     }
@@ -40,27 +40,30 @@ struct ReaderPopupMenu<Label: View>: View {
     let items: () -> [ReaderMenuItem]
     let width: CGFloat
     @ViewBuilder let label: () -> Label
+    let isPresented: Binding<Bool>?
     @State private var open = false
 
     init(
         _ title: String, items: @autoclosure @escaping () -> [ReaderMenuItem], width: CGFloat = 208,
-        @ViewBuilder label: @escaping () -> Label
+        isPresented: Binding<Bool>? = nil, @ViewBuilder label: @escaping () -> Label
     ) {
         self.title = title
         self.items = items
         self.width = width
         self.label = label
+        self.isPresented = isPresented
     }
 
     var body: some View {
+        let presented = isPresented ?? $open
         Button {
-            open.toggle()
+            presented.wrappedValue.toggle()
         } label: {
             label().contentShape(Rectangle())
         }
         .readerIconButtonStyle(.plain)
         .accessibilityLabel(Text(title))
-        .readerMenuPresentation(open: $open, title: title, items: items, width: width)
+        .readerMenuPresentation(open: presented, title: title, items: items, width: width)
     }
 }
 
@@ -94,18 +97,24 @@ struct ReaderMenuPanel: View {
     let title: String
     let items: [ReaderMenuItem]
     let width: CGFloat
+    var returnToParent: (() -> Void)? = nil
     let dismiss: () -> Void
     @State private var path: [Int] = []
     @State private var hovered: Int?
     @FocusState private var focus: Int?
-    @ScaledMetric(relativeTo: .body) private var rowHeight: CGFloat = 32
+    #if os(macOS)
+        @State private var flyout: Int?
+        @ScaledMetric(relativeTo: .body) private var rowHeight: CGFloat = 32
+    #else
+        @ScaledMetric(relativeTo: .body) private var rowHeight: CGFloat = 44
+    #endif
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var page: (title: String, items: [ReaderMenuItem]) {
         var result = (title, items)
         for index in path {
             guard result.1.indices.contains(index),
-                case .submenu(let name, let children) = result.1[index]
+                case .submenu(let name, _, let children) = result.1[index]
             else { break }
             result = (name, children)
         }
@@ -144,11 +153,15 @@ struct ReaderMenuPanel: View {
         .onAppear { focus = initialFocus(page.items) }
         .onKeyPress(keys: [.downArrow, .upArrow, .leftArrow, .rightArrow, .return, .space, .escape]) { key in
             switch key.key {
-            case .escape: dismiss()
+            case .escape: (returnToParent ?? dismiss)()
             case .return, .space:
                 guard let focus, page.items.indices.contains(focus) else { return .ignored }
                 activate(page.items[focus], index: focus)
             case .leftArrow:
+                if let returnToParent {
+                    returnToParent()
+                    return .handled
+                }
                 guard !path.isEmpty else { return .ignored }
                 back()
             case .rightArrow:
@@ -161,10 +174,25 @@ struct ReaderMenuPanel: View {
                 let position = focus.flatMap { indices.firstIndex(of: $0) }
                 let next = key.key == .downArrow ? (position ?? -1) + 1 : (position ?? indices.count) - 1
                 hovered = nil
+                #if os(macOS)
+                    flyout = nil
+                #endif
                 focus = indices[(next + indices.count) % indices.count]
             }
             return .handled
         }
+        #if os(macOS)
+            .task(id: hovered) {
+                guard let index = hovered, page.items.indices.contains(index) else { return }
+                let destination: Int?
+                if case .submenu = page.items[index] { destination = index } else { destination = nil }
+                guard destination != flyout else { return }
+                // A short dwell lets the pointer cross neighbouring rows on its way into the flyout.
+                do { try await Task.sleep(for: .milliseconds(200)) } catch { return }
+                guard hovered == index else { return }
+                flyout = destination
+            }
+        #endif
     }
 
     private func rows(_ entries: [ReaderMenuItem]) -> some View {
@@ -178,8 +206,29 @@ struct ReaderMenuPanel: View {
                         .accessibilityAddTraits(.isHeader)
                 case .action(let name, let icon, _, _, let destructive, _):
                     row(name, icon: icon, index: index, entry: entries[index], destructive: destructive)
-                case .submenu(let name, _):
-                    row(name, index: index, entry: entries[index], disclosure: true)
+                case .submenu(let name, let icon, let children):
+                    row(name, icon: icon, index: index, entry: entries[index], disclosure: true)
+                        #if os(macOS)
+                            .popover(
+                                isPresented: Binding(
+                                    get: { flyout == index },
+                                    set: { if !$0 && flyout == index { flyout = nil } }),
+                                attachmentAnchor: .rect(.bounds), arrowEdge: .trailing
+                            ) {
+                                ReaderMenuPanel(
+                                    title: name, items: children, width: width,
+                                    returnToParent: {
+                                        flyout = nil
+                                        focus = index
+                                    },
+                                    dismiss: {
+                                        flyout = nil
+                                        dismiss()
+                                    }
+                                )
+                                .onHover { if $0 { hovered = nil } }
+                            }
+                        #endif
                 }
             }
         }
@@ -194,7 +243,11 @@ struct ReaderMenuPanel: View {
         _ name: String, icon: ReaderIcon.Glyph? = nil, index: Int, entry: ReaderMenuItem,
         destructive: Bool = false, disclosure: Bool = false
     ) -> some View {
-        let active = (hovered ?? focus) == index
+        #if os(macOS)
+            let active = (hovered ?? flyout ?? focus) == index
+        #else
+            let active = (hovered ?? focus) == index
+        #endif
         return Button(role: destructive ? .destructive : nil) {
             activate(entry, index: index)
         } label: {
@@ -235,10 +288,14 @@ struct ReaderMenuPanel: View {
         case .action(_, _, _, _, _, let run):
             dismiss()
             run()
-        case .submenu(_, let children):
-            withAnimation(ReaderMotion.feedback(reduceMotion)) { path.append(index) }
-            hovered = nil
-            focus = initialFocus(children)
+        case .submenu(_, _, let children):
+            #if os(macOS)
+                flyout = index
+            #else
+                withAnimation(ReaderMotion.feedback(reduceMotion)) { path.append(index) }
+                hovered = nil
+                focus = initialFocus(children)
+            #endif
         default: break
         }
     }

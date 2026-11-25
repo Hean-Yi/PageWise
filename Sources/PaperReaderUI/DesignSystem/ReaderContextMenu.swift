@@ -1,14 +1,17 @@
 import SwiftUI
 
 extension View {
-    func readerContextMenu(_ title: String, items: @autoclosure @escaping () -> [ReaderMenuItem]) -> some View {
-        modifier(ReaderContextMenu(title: title, items: items))
+    func readerContextMenu(_ title: String, items: @autoclosure @escaping () -> [ReaderMenuItem], width: CGFloat = 218)
+        -> some View
+    {
+        modifier(ReaderContextMenu(title: title, items: items, width: width))
     }
 }
 
 private struct ReaderContextMenu: ViewModifier {
     let title: String
     let items: () -> [ReaderMenuItem]
+    let width: CGFloat
     @State private var point: CGPoint?
     @State private var open = false
 
@@ -24,7 +27,7 @@ private struct ReaderContextMenu: ViewModifier {
                 point = nil
                 open = true
             }
-            .readerMenuPresentation(open: $open, title: title, items: items, width: 218, point: point)
+            .readerMenuPresentation(open: $open, title: title, items: items, width: width, point: point)
     }
 
     private func present(at location: CGPoint) {
