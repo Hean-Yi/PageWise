@@ -71,6 +71,8 @@ import Testing
             pageCount: 80, blocks: blocks, warnings: [], canReflow: false)
     }
     #expect(try await store.save(state).researchSourcesChanged)
+    let eventCounts = try await store.researchEventCounts()
+    let researchGeneration = try await store.researchGeneration()
     let maintenance = ResearchBriefMaintenance(store: store, notes: ReadingNoteMemoryIndex())
     let start = Date()
     maintenance.sourcesChanged(now: start)
@@ -91,6 +93,8 @@ import Testing
         "research brief: 48 papers / 3840 blocks / 24 mixed workspace-translation commits and minute ticks: \(measured.duration(to: .now)), zero scheduled workers"
     )
     #expect(try await store.readResearchCheckpoint() == original)
+    #expect(try await store.researchEventCounts().total == eventCounts.total)
+    #expect(try await store.researchGeneration() == researchGeneration)
     state.papers[0].title = "Updated title"
     #expect(try await store.save(state).researchSourcesChanged)
 }

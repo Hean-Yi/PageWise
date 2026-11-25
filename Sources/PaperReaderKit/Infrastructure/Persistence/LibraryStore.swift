@@ -12,7 +12,7 @@ public actor LibraryStore {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         try Self.database(at: databaseURL) { db in
             let version = try Self.integer(db, "PRAGMA user_version")
-            guard (0...2).contains(version) else { throw ReaderError.message("书库来自更新版本，请升级应用。") }
+            guard (0...3).contains(version) else { throw ReaderError.message("书库来自更新版本，请升级应用。") }
             try Self.execute(db, "PRAGMA journal_mode=WAL")
             if version == 0 {
                 try Self.transaction(db) {
@@ -46,6 +46,15 @@ public actor LibraryStore {
                     )
                     try Self.execute(db, "INSERT OR IGNORE INTO library_generation VALUES(1,0)")
                     try Self.execute(db, "PRAGMA user_version=2")
+                }
+                if try Self.integer(db, "PRAGMA user_version") == 2 {
+                    try Self.ensureResearchSchema(db)
+                    try Self.execute(db, "PRAGMA user_version=3")
+                }
+                if try Self.integer(db, "PRAGMA user_version") >= 3 {
+                    // Keep the append-only log and its checkpoints explicit even if an interrupted
+                    // migration left only part of the table set behind.
+                    try Self.ensureResearchSchema(db)
                 }
                 let data: Data? = try LibraryRecords.statement(db, "SELECT payload FROM library WHERE id=1") { stmt in
                     let result = sqlite3_step(stmt)
@@ -150,7 +159,17 @@ public actor LibraryStore {
                 try Self.execute(db, "UPDATE library_generation SET revision=revision+1 WHERE id=1")
                 let shelfChanged =
                     state.shelves != previous.state.shelves || state.paperShelfIDs != previous.state.paperShelfIDs
-                return (previous.revision + 1, recordsChanged || shelfChanged)
+                let sourcesChanged = recordsChanged || shelfChanged
+                if sourcesChanged {
+                    // The generation advances even when every event key was already seen. This is
+                    // what lets a record return to an earlier wording without leaving the derived
+                    // index stuck at the wording it had in between.
+                    try Self.execute(db, "UPDATE research_generation SET revision=revision+1 WHERE id=1")
+                    let events = ResearchEventBuilder.events(
+                        from: previous.state, to: state, occurredAt: Date())
+                    try Self.appendResearchEvents(events, libraryRevision: previous.revision + 1, db: db)
+                }
+                return (previous.revision + 1, sourcesChanged)
             }
         }
         baseline = (state, revision)
@@ -193,9 +212,258 @@ public actor LibraryStore {
 
     func committedResearchState() -> (LibraryState, Int64)? { baseline }
 
+    /// A bounded batch keeps one idle pass responsive. Remaining rows stay pending and the same
+    /// source generation is retried; publishing is idempotent.
+    func researchMaintenanceSnapshot(
+        pendingLimit: Int = 256
+    ) throws -> ResearchMaintenanceSnapshot? {
+        guard let baseline else { return nil }
+        return try Self.database(at: databaseURL) { db in
+            let researchRevision = try Self.integer(db, "SELECT revision FROM research_generation WHERE id=1")
+            let pending = try Self.readPendingResearchEvents(db, limit: pendingLimit)
+            return ResearchMaintenanceSnapshot(
+                state: baseline.state, libraryRevision: baseline.revision,
+                researchRevision: researchRevision, pendingEvents: pending,
+                indexState: try Self.readResearchIndexState(db))
+        }
+    }
+
+    func pendingResearchEvents(limit: Int = 256) throws -> [StoredResearchEvent] {
+        guard limit > 0 else { return [] }
+        return try Self.database(at: databaseURL) { db in
+            try Self.readPendingResearchEvents(db, limit: limit)
+        }
+    }
+
+    func researchEventCounts() throws -> (total: Int, pending: Int) {
+        try Self.database(at: databaseURL) { db in
+            let total = try Self.integer(db, "SELECT count(*) FROM research_events")
+            let pending = try Self.integer(
+                db, "SELECT count(*) FROM research_events WHERE processed_research_revision IS NULL")
+            return (Int(total), Int(pending))
+        }
+    }
+
+    func researchGeneration() throws -> Int64 {
+        try Self.database(at: databaseURL) { db in
+            try Self.integer(db, "SELECT revision FROM research_generation WHERE id=1")
+        }
+    }
+
+    /// A single local worker owns index maintenance for a bounded interval. The lease is stored in
+    /// SQLite so two app windows or a restarted process cannot publish overlapping work.
+    func acquireResearchLease(owner: UUID, now: Date = Date(), duration: TimeInterval = 120) throws -> Bool {
+        guard duration > 0 else { return false }
+        let expires = now.addingTimeInterval(duration).timeIntervalSinceReferenceDate
+        return try Self.database(at: databaseURL) { db in
+            try Self.transaction(db) {
+                let current: (owner: String, expires: Double)? =
+                    try LibraryRecords.statement(
+                        db, "SELECT owner,expires_at FROM research_maintenance_lease WHERE id=1"
+                    ) { stmt in
+                        guard sqlite3_step(stmt) == SQLITE_ROW else { return nil }
+                        guard let owner = sqlite3_column_text(stmt, 0) else {
+                            throw LibraryRecords.writeFailure
+                        }
+                        return (String(cString: owner), sqlite3_column_double(stmt, 1))
+                    }
+                if let current, current.expires > now.timeIntervalSinceReferenceDate { return false }
+                try LibraryRecords.statement(
+                    db,
+                    "INSERT OR REPLACE INTO research_maintenance_lease(id,owner,expires_at) VALUES(1,?,?)"
+                ) { stmt in
+                    try Self.bindResearchText(owner.uuidString, to: 1, in: stmt)
+                    sqlite3_bind_double(stmt, 2, expires)
+                    guard sqlite3_step(stmt) == SQLITE_DONE else { throw LibraryRecords.writeFailure }
+                }
+                return true
+            }
+        }
+    }
+
+    func releaseResearchLease(owner: UUID) throws {
+        try Self.database(at: databaseURL) { db in
+            try LibraryRecords.statement(
+                db, "DELETE FROM research_maintenance_lease WHERE id=1 AND owner=?"
+            ) { stmt in
+                try Self.bindResearchText(owner.uuidString, to: 1, in: stmt)
+                guard sqlite3_step(stmt) == SQLITE_DONE else { throw LibraryRecords.writeFailure }
+            }
+        }
+    }
+
+    /// Publish the derived brief checkpoint and its watermark atomically. A worker that observed
+    /// an older source generation or an older checkpoint cannot advance the watermark or mark
+    /// newer events as processed.
+    func publishResearchIndex(
+        _ data: Data, previousPayload: Data?, libraryRevision: Int64, researchRevision: Int64,
+        lastEventSequence: Int64, auditedAt: Date?
+    ) throws -> Bool {
+        guard data.count <= 32 * 1024 * 1024 else { return false }
+        return try Self.database(at: databaseURL) { db in
+            try Self.transaction(db) {
+                guard try Self.integer(db, "SELECT revision FROM library_generation WHERE id=1") == libraryRevision,
+                    try Self.integer(db, "SELECT revision FROM research_generation WHERE id=1") == researchRevision
+                else { return false }
+                if let previousPayload, try Self.checkpoint(db, .brief) != previousPayload { return false }
+                try Self.execute(
+                    db,
+                    "CREATE TABLE IF NOT EXISTS research_brief(id INTEGER PRIMARY KEY CHECK(id=1), payload BLOB NOT NULL)"
+                )
+                try Self.writeCheckpoint(data, db, .brief)
+                let prior = try Self.readResearchIndexState(db)
+                let watermark = max(lastEventSequence, prior?.lastEventSequence ?? 0)
+                let state = ResearchIndexState(
+                    lastResearchRevision: researchRevision, lastEventSequence: watermark,
+                    lastAuditAt: auditedAt ?? prior?.lastAuditAt, format: 1)
+                let payload = try JSONEncoder().encode(state)
+                try Self.execute(
+                    db,
+                    "CREATE TABLE IF NOT EXISTS research_index_state(id INTEGER PRIMARY KEY CHECK(id=1), payload BLOB NOT NULL)"
+                )
+                try Self.writeCheckpoint(payload, db, .index)
+                if watermark > 0 {
+                    try LibraryRecords.statement(
+                        db,
+                        "UPDATE research_events SET processed_research_revision=? WHERE sequence<=? AND processed_research_revision IS NULL"
+                    ) { stmt in
+                        sqlite3_bind_int64(stmt, 1, researchRevision)
+                        sqlite3_bind_int64(stmt, 2, watermark)
+                        guard sqlite3_step(stmt) == SQLITE_DONE else { throw LibraryRecords.writeFailure }
+                    }
+                }
+                return true
+            }
+        }
+    }
+
     enum ResearchTable: String {
         case brief = "research_brief"
         case sleep = "memory_sleep"
+        case index = "research_index_state"
+    }
+
+    private static func ensureResearchSchema(_ db: OpaquePointer) throws {
+        try execute(
+            db,
+            """
+            CREATE TABLE IF NOT EXISTS research_events (
+                sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_key TEXT NOT NULL UNIQUE,
+                kind TEXT NOT NULL,
+                record_id TEXT NOT NULL,
+                paper_id TEXT,
+                shelf_id TEXT,
+                record_revision TEXT NOT NULL,
+                occurred_at REAL NOT NULL,
+                library_revision INTEGER NOT NULL,
+                processed_research_revision INTEGER
+            )
+            """)
+        try execute(
+            db,
+            "CREATE INDEX IF NOT EXISTS research_events_pending ON research_events(processed_research_revision,sequence)"
+        )
+        try execute(
+            db,
+            "CREATE TABLE IF NOT EXISTS research_generation(id INTEGER PRIMARY KEY CHECK(id=1), revision INTEGER NOT NULL)"
+        )
+        try execute(db, "INSERT OR IGNORE INTO research_generation VALUES(1,0)")
+        try execute(
+            db,
+            "CREATE TABLE IF NOT EXISTS research_index_state(id INTEGER PRIMARY KEY CHECK(id=1), payload BLOB NOT NULL)"
+        )
+        try execute(
+            db,
+            """
+            CREATE TABLE IF NOT EXISTS research_maintenance_lease(
+                id INTEGER PRIMARY KEY CHECK(id=1), owner TEXT NOT NULL, expires_at REAL NOT NULL
+            )
+            """)
+    }
+
+    private static func appendResearchEvents(
+        _ events: [ResearchEvent], libraryRevision: Int64, db: OpaquePointer
+    ) throws {
+        guard !events.isEmpty else { return }
+        for event in events {
+            try LibraryRecords.statement(
+                db,
+                """
+                INSERT OR IGNORE INTO research_events(
+                    event_key,kind,record_id,paper_id,shelf_id,record_revision,occurred_at,library_revision
+                ) VALUES(?,?,?,?,?,?,?,?)
+                """
+            ) { stmt in
+                try Self.bindResearchText(event.key, to: 1, in: stmt)
+                try Self.bindResearchText(event.kind.rawValue, to: 2, in: stmt)
+                try Self.bindResearchText(event.recordID.uuidString, to: 3, in: stmt)
+                try Self.bindResearchOptional(event.paperID?.uuidString, to: 4, in: stmt)
+                try Self.bindResearchOptional(event.shelfID?.uuidString, to: 5, in: stmt)
+                try Self.bindResearchText(event.recordRevision, to: 6, in: stmt)
+                sqlite3_bind_double(stmt, 7, event.occurredAt.timeIntervalSinceReferenceDate)
+                sqlite3_bind_int64(stmt, 8, libraryRevision)
+                guard sqlite3_step(stmt) == SQLITE_DONE else { throw LibraryRecords.writeFailure }
+            }
+        }
+    }
+
+    private static func readPendingResearchEvents(_ db: OpaquePointer, limit: Int) throws -> [StoredResearchEvent] {
+        try LibraryRecords.statement(
+            db,
+            """
+            SELECT sequence,kind,record_id,paper_id,shelf_id,record_revision,occurred_at
+            FROM research_events WHERE processed_research_revision IS NULL
+            ORDER BY sequence LIMIT ?
+            """
+        ) { stmt in
+            sqlite3_bind_int64(stmt, 1, Int64(limit))
+            var result: [StoredResearchEvent] = []
+            while true {
+                let status = sqlite3_step(stmt)
+                if status == SQLITE_DONE { return result }
+                guard status == SQLITE_ROW, let kindText = sqlite3_column_text(stmt, 1),
+                    let kind = ResearchEvent.Kind(rawValue: String(cString: kindText)),
+                    let recordText = sqlite3_column_text(stmt, 2),
+                    let recordRevision = sqlite3_column_text(stmt, 5)
+                else { throw LibraryRecords.writeFailure }
+                let paperID = sqlite3_column_text(stmt, 3).flatMap { UUID(uuidString: String(cString: $0)) }
+                let shelfID = sqlite3_column_text(stmt, 4).flatMap { UUID(uuidString: String(cString: $0)) }
+                let event = ResearchEvent(
+                    kind: kind, recordID: try Self.researchUUID(recordText), paperID: paperID, shelfID: shelfID,
+                    recordRevision: String(cString: recordRevision),
+                    occurredAt: Date(timeIntervalSinceReferenceDate: sqlite3_column_double(stmt, 6)))
+                result.append(StoredResearchEvent(sequence: sqlite3_column_int64(stmt, 0), event: event))
+            }
+        }
+    }
+
+    private static func readResearchIndexState(_ db: OpaquePointer) throws -> ResearchIndexState? {
+        guard let data = try checkpoint(db, .index) else { return nil }
+        return try? JSONDecoder().decode(ResearchIndexState.self, from: data)
+    }
+
+    private static func researchUUID(_ text: UnsafePointer<UInt8>) throws -> UUID {
+        guard let id = UUID(uuidString: String(cString: text)) else { throw LibraryRecords.writeFailure }
+        return id
+    }
+
+    private static var researchTransient: sqlite3_destructor_type {
+        unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+    }
+
+    private static func bindResearchText(_ text: String, to column: Int32, in stmt: OpaquePointer) throws {
+        guard sqlite3_bind_text(stmt, column, text, -1, researchTransient) == SQLITE_OK else {
+            throw LibraryRecords.writeFailure
+        }
+    }
+
+    private static func bindResearchOptional(_ text: String?, to column: Int32, in stmt: OpaquePointer) throws {
+        if let text {
+            try bindResearchText(text, to: column, in: stmt)
+        } else {
+            sqlite3_bind_null(stmt, column)
+        }
     }
 
     private static func hasResearchCheckpoint(_ db: OpaquePointer, _ table: ResearchTable) throws -> Bool {

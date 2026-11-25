@@ -56,7 +56,20 @@ import PaperReaderKit
                 self.auditing = false
                 do {
                     try Task.checkCancellation()
-                    try await self.index.maintain(audit: audit, warming: self.notes, memories: self.memories)
+                    let completed = try await self.index.maintain(
+                        audit: audit, warming: self.notes, memories: self.memories)
+                    if !completed {
+                        // Another window owns the lease. Keep the request pending and retry
+                        // after the short interval instead of waiting for the next six-hour audit.
+                        self.requested = true
+                        do {
+                            try await Task.sleep(for: .milliseconds(500))
+                        } catch {
+                            self.retry = true
+                            break
+                        }
+                        continue
+                    }
                     self.retry = false
                 } catch { self.retry = true }
             }

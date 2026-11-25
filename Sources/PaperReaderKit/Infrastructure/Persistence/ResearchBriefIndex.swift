@@ -26,34 +26,67 @@ public actor ResearchBriefIndex {
     private var inputs: BriefInputs?
     private var current: Catalog?
     private var published: Catalog?
+    private var publishedPayload: Data?
     private var opened = false
     private var publishedRevision: Int64 = -1
 
     public init(store: LibraryStore) { self.store = store }
 
-    /// Always starts from an actual committed revision, including after a crash or a missed timer.
+    /// Incremental entry point. The event log identifies changed sources, while the source
+    /// generation catches revisions that changed back to an earlier wording. A bounded lease
+    /// keeps two windows from rebuilding and publishing the same index concurrently.
+    @discardableResult
     public func maintain(
         audit: Bool = false, warming notes: ReadingNoteMemoryIndex? = nil, memories: ResearchMemory? = nil
+    ) async throws -> Bool {
+        let owner = UUID()
+        guard try await store.acquireResearchLease(owner: owner) else { return false }
+        do {
+            try await maintainHoldingLease(audit: audit, warming: notes, memories: memories)
+            try await store.releaseResearchLease(owner: owner)
+            return true
+        } catch {
+            try? await store.releaseResearchLease(owner: owner)
+            throw error
+        }
+    }
+
+    private func maintainHoldingLease(
+        audit: Bool, warming notes: ReadingNoteMemoryIndex?, memories: ResearchMemory?
     ) async throws {
         if audit { opened = false }
         try await open()
-        guard let (state, revision) = await store.committedResearchState() else { return }
+        guard let snapshot = try await store.researchMaintenanceSnapshot() else { return }
+        let needsAudit = audit || snapshot.indexState == nil || published == nil
+        let generationChanged = snapshot.indexState?.lastResearchRevision != snapshot.researchRevision
+        guard needsAudit || generationChanged || !snapshot.pendingEvents.isEmpty else { return }
         if let notes {
             // The existing note actor reconciles tokens and postings before applying its result limit.
             _ = try await notes.search(
-                query: "", state: state, pending: [], excluding: nil, paperID: nil, limit: 0, includeArchived: false)
+                query: "", state: snapshot.state, pending: [], excluding: nil, paperID: nil, limit: 0,
+                includeArchived: false)
         }
-        try await memories?.prepare(state)
-        let catalog = try resolve(BriefInputs(state, excluding: []))
-        guard catalog != published else { return }
-        let data = try JSONEncoder().encode(catalog)
+        try await memories?.prepare(snapshot.state)
+        let catalog = try resolve(BriefInputs(snapshot.state, excluding: []))
+        let data: Data
+        if catalog == published, let payload = publishedPayload {
+            data = payload
+        } else {
+            data = try JSONEncoder().encode(catalog)
+        }
+        let lastSequence = snapshot.pendingEvents.last?.sequence ?? snapshot.indexState?.lastEventSequence ?? 0
         try Task.checkCancellation()
-        guard try await store.publishResearchCheckpoint(data, revision: revision) else {
+        guard
+            try await store.publishResearchIndex(
+                data, previousPayload: publishedPayload, libraryRevision: snapshot.libraryRevision,
+                researchRevision: snapshot.researchRevision, lastEventSequence: lastSequence, auditedAt: Date())
+        else {
             throw ReaderError.message("研究简报尚未写入，将在下一次维护时重试。")
         }
-        if revision >= publishedRevision {
+        if snapshot.libraryRevision >= publishedRevision {
             published = catalog
-            publishedRevision = revision
+            publishedPayload = data
+            publishedRevision = snapshot.libraryRevision
         }
     }
 
@@ -170,10 +203,12 @@ public actor ResearchBriefIndex {
         guard !opened else { return }
         opened = true
         published = nil
+        publishedPayload = nil
         if let data, let saved = try? JSONDecoder().decode(Catalog.self, from: data), saved.format == 1 {
             // Reconcile all memberships with live sources before using a cache, including after restoration.
             titles = saved.terms
             published = saved
+            publishedPayload = data
         }
     }
 
