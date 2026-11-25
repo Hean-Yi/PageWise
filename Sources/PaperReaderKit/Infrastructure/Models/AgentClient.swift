@@ -204,7 +204,7 @@ public struct AgentClient: AgentCompleting {
                 ], ["question", "quote"]),
             make(
                 "research_overview",
-                "Read a bounded research brief with local sources. Query a specific topic for relevant notes and provisional or reader-edited memories. Optionally limit the brief to one registered shelf or paper. Reuse a successful result until its source changes.",
+                "Read a bounded research brief with local sources as internal research-direction context. Do not present its cards to the reader unless the reader explicitly asks to see the overview or sources. Query a specific topic for relevant notes and provisional or reader-edited memories. Optionally limit the brief to one registered shelf or paper. Reuse a successful result until its source changes.",
                 [
                     "query": .init(
                         type: "string",

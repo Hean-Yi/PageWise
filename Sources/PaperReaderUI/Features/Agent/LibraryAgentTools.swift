@@ -606,19 +606,6 @@ extension LibraryAgent {
         let topics: [ResearchBrief.Topic]
         let memories: [RecalledMemory]
         let connections: [EffectiveResearchMemory.Entry]
-        let sources: [SourceReference]
-    }
-
-    private struct SourceReference: Encodable {
-        let resultID: UUID
-        let paperID: UUID?
-        let readingNoteID: UUID?
-
-        enum CodingKeys: String, CodingKey {
-            case resultID = "result_id"
-            case paperID = "paper_id"
-            case readingNoteID = "reading_note_id"
-        }
     }
 
     private func researchOverview(
@@ -696,44 +683,15 @@ extension LibraryAgent {
         let overview = ResearchOverview(state: overviewState, excluding: reader.pendingImportIDs)
         let encoder = JSONEncoder()
         var topics = brief.topics
-        var registered: [AgentSourceTarget: AgentCard] = [:]
-        for source in topics.flatMap(\.sources) {
-            var card = AgentCard(kind: source.noteID == nil ? .localPaper : .evidence, title: source.title)
-            card.paperID = source.paperID
-            if let noteID = source.noteID {
-                guard
-                    let note = reader.referencedReadingNote(id: noteID, paperID: source.paperID, includeArchived: false)
-                else { continue }
-                card.readingNoteID = noteID
-                card.noteModifiedAt = note.modifiedAt
-                card.excerpt = source.excerpt ?? ""
-                card.subtitle = "阅读笔记"
-            }
-            registered[AgentSourceTarget(card)] = card
-        }
-        func cardsForTopics() -> [AgentCard] {
-            var seen: Set<UUID> = []
-            return topics.flatMap(\.sources).compactMap { source in
-                let key = source.noteID.map(AgentSourceTarget.readingNote) ?? .paper(source.paperID, nil)
-                guard let card = registered[key], seen.insert(card.id).inserted else { return nil }
-                return card
-            }
-        }
-        var cards = cardsForTopics()
         func payload() throws -> Data {
             try encoder.encode(
-                MemoryOverview(
-                    overview: overview, topics: topics, memories: records, connections: entries,
-                    sources: cards.map {
-                        SourceReference(resultID: $0.id, paperID: $0.paperID, readingNoteID: $0.readingNoteID)
-                    }))
+                MemoryOverview(overview: overview, topics: topics, memories: records, connections: entries))
         }
         var bytes = try payload()
         var shortened = false
         while bytes.count > limits.maxToolResultBytes {
             if !topics.isEmpty {
                 topics.removeLast()
-                cards = cardsForTopics()
             } else if !records.isEmpty {
                 records.removeLast()
             } else if !entries.isEmpty {
@@ -752,11 +710,10 @@ extension LibraryAgent {
             remember(recalled)
             paperRegistry.formUnion(records.compactMap(\.paperID))
         }
-        paperRegistry.formUnion(cards.compactMap(\.paperID))
         lastResearchBrief = brief
-        onSubject(query == nil ? "书架、笔记与讨论" : "长期研究记忆")
+        onSubject(query == nil ? "研究方向锚点" : "长期研究记忆")
         return AgentToolOutcome(
-            content: String(decoding: bytes, as: UTF8.self), cards: cards,
+            content: String(decoding: bytes, as: UTF8.self), cards: [],
             truncated: shortened || overview.shelfCount > overview.topics.count, message: nil)
     }
 }

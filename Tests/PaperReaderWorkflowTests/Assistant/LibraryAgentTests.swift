@@ -2098,7 +2098,7 @@ private func libraryPayload(_ messages: [AgentMessage], _ call: String) throws -
     #expect(reader.state.memories.isEmpty)
 }
 
-@Test @MainActor func researchOverviewPresentsCurrentCrossPaperNoteSourcesAndRevokesChangedExcerpts() async throws {
+@Test @MainActor func researchOverviewKeepsSourcesInternalAndDoesNotPublishCards() async throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: root) }
     let reader = try await makeAgentReader(root)
@@ -2125,11 +2125,10 @@ private func libraryPayload(_ messages: [AgentMessage], _ call: String) throws -
             let payload = try #require(messages.last?.content)
             #expect(payload.contains("matching_note_passages") && payload.contains("localNote"))
             let object = try #require(try JSONSerialization.jsonObject(with: Data(payload.utf8)) as? [String: Any])
-            let sources = try #require(object["sources"] as? [[String: String]])
-            let ids = sources.compactMap { $0["reading_note_id"] == nil ? nil : $0["result_id"] }
-            #expect(ids.count == 2)
-            return try present(ids, id: "show")
-        case 4: return .init(role: "assistant", content: "已核对。")
+            let topics = try #require(object["topics"] as? [[String: Any]])
+            let sources = topics.flatMap { $0["sources"] as? [[String: String]] ?? [] }
+            #expect(Set(sources.compactMap { $0["noteID"] }).count == 2)
+            return .init(role: "assistant", content: "已核对。")
         default:
             #expect(!messages.contains { $0.content?.contains("校准对照仍待复查。") == true })
             return .init(role: "assistant", content: "已更新。")
@@ -2139,15 +2138,14 @@ private func libraryPayload(_ messages: [AgentMessage], _ call: String) throws -
     agent.send("我有没有在不同论文里讨论相同的问题？")
     try await eventually { !agent.isRunning }
     let turn = try #require(agent.turns.last)
-    #expect(turn.error == nil && turn.presentedResults.count == 2)
-    let id = try #require(turn.presentedResults.first?.id)
-    #expect(agent.open(cardID: id))
-    let noteID = try #require(reader.requestedReadingNote)
+    #expect(turn.error == nil && turn.presentedResults.isEmpty)
+    let noteID = try #require(reader.state.readingNotes.first?.id)
     let index = try #require(reader.state.readingNotes.firstIndex { $0.id == noteID })
     reader.state.readingNotes[index].modifiedAt = reader.state.readingNotes[index].modifiedAt.addingTimeInterval(1)
     agent.send("请再看看。")
     try await eventually { !agent.isRunning }
-    #expect(await client.requests.count == 5)
+    let second = try #require(agent.turns.last)
+    #expect(second.error == nil && second.presentedResults.isEmpty)
 }
 
 @Test @MainActor func researchQuestionReceiptUsesOnlyOneSourceAndReadOnlyRecapCannotCreateAnotherQuestion() async throws
