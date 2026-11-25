@@ -86,6 +86,7 @@ extension ReaderModel {
     public func startAIReflow(regenerate: Bool = false) {
         guard loaded, let selected = currentEdition, !translating.contains(selected.id) else { return }
         let id = selected.id
+        recordPaperEngagement(.translated)
         let deletion = lastPaperDeletion[id]
         guard selected.usesSourceReflow else {
             message = "本地论文可在「双语重排」中阅读 PDF 段落对照。"

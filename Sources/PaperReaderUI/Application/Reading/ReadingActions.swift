@@ -14,6 +14,21 @@ extension ReaderModel {
         readingPaper = id
         readingStart = Date()
         lastInteraction = Date()
+        recordPaperEngagement(.opened)
+    }
+
+    /// Reading and translation are evidence that the reader engaged with a paper. Record a
+    /// deduplicated observation and let idle maintenance decide whether it becomes memory.
+    func recordPaperEngagement(_ engagement: ResearchEngagement) {
+        guard let paperID = selectedPaperID else { return }
+        Task { [weak self] in
+            guard let self else { return }
+            guard let inserted = try? await store.recordPaperEngagement(engagement, paperID: paperID),
+                inserted
+            else { return }
+            researchBriefMaintenance.sourcesChanged()
+            memorySleep.sourcesChanged()
+        }
     }
     public func endReading() {
         updateReadingPosition()

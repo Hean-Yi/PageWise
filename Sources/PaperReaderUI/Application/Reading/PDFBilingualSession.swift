@@ -325,6 +325,7 @@ final class PDFBilingualSession {
         guard matches(model), !isLoading, !isTranslating, !sources.isEmpty else { return }
         selectionSource = nil
         selectionTranslation = nil
+        model.recordPaperEngagement(.translated)
         translate(sources, model: model, selection: false)
     }
 

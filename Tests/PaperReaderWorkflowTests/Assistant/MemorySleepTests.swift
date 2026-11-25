@@ -185,9 +185,9 @@ private func sleepSource(_ statement: String) throws -> MemoryItem {
         warnings: [], canReflow: false)
     let shelfA = try Shelf(name: "Shelf A")
     let shelfB = try Shelf(name: "Shelf B")
-    var noteA = ReadingNote(
+    let noteA = ReadingNote(
         paperID: paperA.id, contentVersion: "v", anchors: [], markdown: "Scope observation alpha.")
-    var noteB = ReadingNote(
+    let noteB = ReadingNote(
         paperID: paperB.id, contentVersion: "v", anchors: [], markdown: "Scope observation beta.")
     let itemA = try ResearchQuestionProposal(
         question: "Does scope alpha matter?", quote: "Scope observation alpha.",

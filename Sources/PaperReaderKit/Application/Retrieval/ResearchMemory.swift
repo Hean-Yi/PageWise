@@ -7,6 +7,8 @@ public struct ResearchOverview: Equatable, Sendable, Encodable {
         public var papers = 0
         public var papersWithNotes = 0
         public var papersWithDiscussions = 0
+        public var papersRead = 0
+        public var lastReadAt: Date?
     }
 
     public let paperCount: Int
@@ -17,6 +19,9 @@ public struct ResearchOverview: Equatable, Sendable, Encodable {
     public init(state: LibraryState, excluding pending: Set<UUID> = []) {
         let noted = Set(state.readingNotes.lazy.filter { $0.deletedAt == nil }.map(\.paperID))
         let discussed = Set(state.chats.lazy.filter { $0.closeReadingVersion == nil }.map(\.paperID))
+        let readAt = Dictionary(grouping: state.reading, by: \.paperID).compactMapValues {
+            $0.map(\.end).max()
+        }
         var groups = Dictionary(uniqueKeysWithValues: state.shelves.map { ($0.id, Topic(shelf: $0.name)) })
         var total = 0
         var unfiled = 0
@@ -26,6 +31,11 @@ public struct ResearchOverview: Equatable, Sendable, Encodable {
                 groups[id]?.papers += 1
                 if noted.contains(paper.id) { groups[id]?.papersWithNotes += 1 }
                 if discussed.contains(paper.id) { groups[id]?.papersWithDiscussions += 1 }
+                if let lastRead = readAt[paper.id] {
+                    let previousRead = groups[id]?.lastReadAt
+                    groups[id]?.papersRead += 1
+                    groups[id]?.lastReadAt = max(previousRead ?? lastRead, lastRead)
+                }
             } else {
                 unfiled += 1
             }
@@ -40,6 +50,7 @@ public struct ResearchOverview: Equatable, Sendable, Encodable {
                 if $0.papersWithDiscussions != $1.papersWithDiscussions {
                     return $0.papersWithDiscussions > $1.papersWithDiscussions
                 }
+                if $0.papersRead != $1.papersRead { return $0.papersRead > $1.papersRead }
                 if $0.papers != $1.papers { return $0.papers > $1.papers }
                 return $0.shelf < $1.shelf
             }.prefix(12))

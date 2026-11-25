@@ -228,6 +228,49 @@ public actor LibraryStore {
         }
     }
 
+    /// Reading, translation and note authoring are observations, not edits to the library. A
+    /// per-paper/day key keeps a long reading session from flooding the event log.
+    @discardableResult
+    public func recordPaperEngagement(_ engagement: ResearchEngagement, paperID: UUID, at date: Date = Date()) throws
+        -> Bool
+    {
+        guard let previous = baseline, previous.state.papers.contains(where: { $0.id == paperID }) else {
+            return false
+        }
+        let day = Calendar(identifier: .gregorian).startOfDay(for: date)
+        let dayKey = String(Int(day.timeIntervalSince1970))
+        let revision = engagement.rawValue + "-" + dayKey
+        return try Self.database(at: databaseURL) { db in
+            try Self.transaction(db) {
+                let inserted: Bool = try LibraryRecords.statement(
+                    db,
+                    """
+                    INSERT OR IGNORE INTO research_events(
+                        event_key,kind,record_id,paper_id,shelf_id,record_revision,occurred_at,library_revision
+                    ) VALUES(?,?,?,?,?,?,?,?)
+                    """
+                ) { stmt in
+                    try Self.bindResearchText(
+                        "paperEngaged|\(paperID.uuidString)|\(revision)", to: 1, in: stmt)
+                    try Self.bindResearchText(ResearchEvent.Kind.paperEngaged.rawValue, to: 2, in: stmt)
+                    try Self.bindResearchText(paperID.uuidString, to: 3, in: stmt)
+                    try Self.bindResearchText(paperID.uuidString, to: 4, in: stmt)
+                    try Self.bindResearchOptional(
+                        previous.state.paperShelfIDs[paperID.uuidString]?.uuidString, to: 5, in: stmt)
+                    try Self.bindResearchText(revision, to: 6, in: stmt)
+                    sqlite3_bind_double(stmt, 7, date.timeIntervalSinceReferenceDate)
+                    sqlite3_bind_int64(stmt, 8, previous.revision)
+                    guard sqlite3_step(stmt) == SQLITE_DONE else { throw LibraryRecords.writeFailure }
+                    return sqlite3_changes(db) > 0
+                }
+                if inserted {
+                    try Self.execute(db, "UPDATE research_generation SET revision=revision+1 WHERE id=1")
+                }
+                return inserted
+            }
+        }
+    }
+
     func researchIndexState() throws -> ResearchIndexState? {
         try Self.database(at: databaseURL) { db in try Self.readResearchIndexState(db) }
     }

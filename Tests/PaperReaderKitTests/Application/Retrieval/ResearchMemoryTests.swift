@@ -124,3 +124,24 @@ import Testing
     #expect(ResearchMemory.candidate("只关注吞吐量", turn: later, state: restored) == nil)
     #expect(ResearchMemory.candidate("普通观察", turn: later, state: restored) != nil)
 }
+
+@Test func researchOverviewCountsReadingActivityWithoutDoubleCountingAPaper() throws {
+    let paper = Paper(
+        title: "Reading activity", digest: "d", originalPath: "unused.pdf", pageCount: 1, blocks: [],
+        warnings: [], canReflow: false)
+    let shelf = try Shelf(name: "Read")
+    var state = LibraryState()
+    state.papers = [paper]
+    state.shelves = [shelf]
+    state.paperShelfIDs[paper.id.uuidString] = shelf.id
+    let first = Date(timeIntervalSinceReferenceDate: 100)
+    let second = Date(timeIntervalSinceReferenceDate: 200)
+    state.reading = [
+        ReadingEntry(paperID: paper.id, start: first, end: first.addingTimeInterval(30)),
+        ReadingEntry(paperID: paper.id, start: second, end: second.addingTimeInterval(60)),
+    ]
+    let overview = ResearchOverview(state: state)
+    let topic = try #require(overview.topics.first { $0.shelf == "Read" })
+    #expect(topic.papersRead == 1)
+    #expect(topic.lastReadAt == second.addingTimeInterval(60))
+}

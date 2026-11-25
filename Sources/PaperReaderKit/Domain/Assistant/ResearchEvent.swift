@@ -8,6 +8,7 @@ public struct ResearchEvent: Equatable, Sendable {
         case paperImported
         case paperChanged
         case paperRemoved
+        case paperEngaged
         case noteChanged
         case noteRemoved
         case discussionChanged
@@ -40,6 +41,12 @@ public struct ResearchEvent: Equatable, Sendable {
     /// The same record revision may be retried after a failed import or an interrupted save.
     /// The library generation, not this key, orders changes that return to an earlier revision.
     public var key: String { "\(kind.rawValue)|\(recordID.uuidString)|\(recordRevision)" }
+}
+
+public enum ResearchEngagement: String, Sendable {
+    case opened
+    case translated
+    case noted
 }
 
 public struct StoredResearchEvent: Equatable, Sendable {

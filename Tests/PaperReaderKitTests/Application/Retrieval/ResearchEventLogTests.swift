@@ -229,3 +229,23 @@ private func withEventDatabase(_ root: URL, _ body: (OpaquePointer) throws -> Vo
     defer { sqlite3_close(db) }
     try body(db)
 }
+
+@Test func readingAndTranslationObservationsAreDeduplicatedPerPaperAndDay() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let store = try LibraryStore(directory: root)
+    var state = try await store.load()
+    let paper = eventPaper("Observed source")
+    state.papers = [paper]
+    try await store.save(state)
+    let initialGeneration = try await store.researchGeneration()
+    let date = Date(timeIntervalSinceReferenceDate: 800_000_000)
+    #expect(try await store.recordPaperEngagement(.translated, paperID: paper.id, at: date))
+    #expect(!(try await store.recordPaperEngagement(.translated, paperID: paper.id, at: date)))
+    #expect(try await store.recordPaperEngagement(.opened, paperID: paper.id, at: date))
+    #expect(!(try await store.recordPaperEngagement(.translated, paperID: UUID(), at: date)))
+    #expect(try await store.researchGeneration() == initialGeneration + 2)
+    let events = try await store.pendingResearchEvents()
+    #expect(events.filter { $0.event.kind == .paperEngaged }.count == 2)
+    #expect(events.filter { $0.event.kind == .paperEngaged }.allSatisfy { $0.event.paperID == paper.id })
+}
