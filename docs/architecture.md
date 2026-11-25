@@ -56,6 +56,8 @@ DesignSystem -> SwiftUI
 
 SQLite 格式 v2 的 `LibraryStore` 在一次事务内将旧版整库 JSON 转为记录表。论文、笔记、标注、对话、记忆、阅读事件、书签以及每篇的阅读状态独立保存，各有序集合单独保存 ID 顺序。书架归属、手动排序与目录设置由 `LibraryStore.Catalog` 保存。新增持久化字段时，需明确归入目录或 `LibraryRecords` 并验证旧库升级。应用保存队列在前次写入后取最新内存状态，数据库仅编码变更记录。另一实例已提交更新时，版本检查会阻止陈旧快照覆盖。整篇重排发布仍以单篇论文为写入单位。
 
+研究记忆使用同一书库的持久化与变更校验。`ResearchMemory` 管理与提问相关的个人关注，`ReadingNoteMemoryIndex` 返回可核对的笔记片段，`ResearchBriefIndex` 在设备端整理题名与跨论文证据。`ChatSourceVersions` 记录新回答和派生笔记所用的背景。书库 Agent 通过工具读取这些投影，写入研究问题时仍由应用检查来源、修订和去重。
+
 上述内部依赖是工程约定，并非已经由独立 target 强制隔离。新增代码应沿此方向组织；发现跨层依赖时优先拆清职责，再考虑是否需要新的编译边界。
 
 ## 新文件放在哪里
@@ -127,6 +129,6 @@ Swift Package 自动递归发现每个 target 目录下的 Swift 文件。当前
 
 快照 v13 为一次划线产生的多个片段记录同一操作 ID。PDF 提取器同时提供原页字符范围和重排句内的 UTF-16 范围，供选择和绘制复用。迁移仅按已有记录为可识别的旧笔记留下线索，打开对应原页时再核对片段文字和间隔。页边显示使用核验后的范围，编辑和引用沿用保存时的原始锚点。
 
-`Application/Reading/PaperReadingNotebook` 通过精读报告的论文 ID 和文末笔记 ID 关联当前有效的 `ReadingNote`。书库按论文分组展示，历史各次保留自己的报告时间和关注点，打开时读取原笔记。独立保存的文末笔记按创建时间列入同一索引。设置中的研究记忆复用 `Features/Memory/MemoryView`，继续通过 `ReaderModel` 编辑和删除。
+`Application/Reading/PaperReadingNotebook` 通过精读报告的论文 ID 和文末笔记 ID 关联当前有效的 `ReadingNote`。书库按论文分组展示，历史各次保留自己的报告时间和关注点，打开时读取原笔记。独立保存的文末笔记按创建时间列入同一索引。设置中的研究记忆复用 `Features/Memory/MemoryView`，继续通过 `ReaderModel` 编辑和删除。现有研究资料、Agent 工具、记忆的更正与删除，以及周期整理的后续设计见[研究记忆设计](agent-memory.md)。
 
 `Domain/Reading/ReadingMetrics` 按所选日的起止时间截取 `ReadingEntry`，分别计算每篇论文和全日的时间并集。`Features/Calendar` 展示聚合结果，明细通过原记录 ID 修正，数据库继续逐条保存阅读活动。

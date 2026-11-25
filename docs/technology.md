@@ -9,11 +9,12 @@
 | SwiftSoup / WebKit | 静态 HTML 解析与本地连续阅读 |
 | JavaScriptCore / KaTeX | 受支持 LaTeX 编译为 MathML |
 | ImageIO / CoreGraphics | 源码图件本地解码，含独立 PDF 图片 |
-| SQLite | 版本化本地快照与事务保存 |
-| URLSession | arXiv 下载与模型 SSE / 工具调用 |
+| SQLite | 书库按记录事务保存，旧快照在打开时迁移；代次校验保护多个应用实例的写入 |
+| 本地词项索引 | 分别检索论文原文和阅读笔记，按论文、笔记和来源版本核对返回的证据 |
+| URLSession | 多源在线检索、限量流式下载、模型 SSE 与工具调用 |
 | Keychain | 设备独立凭据 |
 | PencilKit | iPad 原版 PDF 与历史固定页笔迹 |
 
-TeX 采用有界静态解析，不执行下载包。源码双语重排只接受 TeX 或同版本 HTML；没有 PDF 正文转换/OCR 依赖。图片、翻译、文件发布和业务/UI 协调分别组织，见 [工程结构](architecture.md)。
+在线论文采用有界静态解析处理 TeX 或同版本 HTML。本地导入的 PDF 使用独立的设备端段落提取与图表裁片流程。图片、翻译、文件发布和界面协调的代码位置见[工程结构](architecture.md)。科研助手的记忆来源、撤回与查询方式见[研究记忆](agent-memory.md)。
 
 CloudKit 自动同步、HTML 手写、向量检索尚未接入。默认测试使用本地素材和假服务；真实模型和真机性能另行验收。
