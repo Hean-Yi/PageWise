@@ -2,7 +2,23 @@ import PaperReaderKit
 import SwiftUI
 
 enum QuickStartStep: Int, CaseIterable {
-    case importPaper, discovery, shelves, modelSettings, bilingual, annotation, assistant, notebook
+    case importPaper, discovery, shelves, modelSettings, bilingual, annotation, assistant, export, notebook, calendar,
+        research
+
+    var usesSample: Bool {
+        switch self {
+        case .bilingual, .annotation, .assistant, .export: true
+        default: false
+        }
+    }
+
+    var chapter: String {
+        switch self {
+        case .importPaper, .discovery, .shelves, .modelSettings: "建立书架"
+        case .bilingual, .annotation, .assistant, .export: "读一篇论文"
+        case .notebook, .calendar, .research: "回顾研究"
+        }
+    }
 
     var title: String {
         switch self {
@@ -12,8 +28,11 @@ enum QuickStartStep: Int, CaseIterable {
         case .modelSettings: "连接模型服务"
         case .bilingual: "切换到双语阅读"
         case .annotation: "在原句旁记下想法"
-        case .assistant: "打开论文助读"
+        case .assistant: "请助读一起核对论证"
+        case .export: "把笔记带到 Obsidian"
         case .notebook: "回看阅读笔记"
+        case .calendar: "回到读过的那一天"
+        case .research: "问书库助理一个研究问题"
         }
     }
 
@@ -34,11 +53,17 @@ enum QuickStartStep: Int, CaseIterable {
         case .bilingual:
             "点「双语重排」开始翻译。本地 PDF 优先翻译当前页，向下滚动即可对照阅读。点「原版」回看原始排版。"
         case .annotation:
-            "在原版选中一句话，点底部的「添加笔记」。写好的批注可从「笔记」侧栏定位到原句，也可导出到 Obsidian。"
+            "拖选示例中一句值得追问的话，点「添加笔记」。正文支持 Markdown 和公式；用链接按钮可以引用其他论文里的本地笔记。"
         case .assistant:
-            "点「AI 精读」生成分色批注和文末总结。也可直接向「论文助读」提问，点回答里的引用核对原文。"
+            "点「AI 精读」看分色批注和文末笔记。也可以问「哪组对照最关键？」点引用核对原句，或让助读把讨论记在原文旁。"
+        case .export:
+            "在「笔记」里点「整理到 Obsidian」，选择自己的库。文末笔记、批注和出处会写入同一份 Markdown，保留你在 Obsidian 手写的部分。"
         case .notebook:
-            "点「阅读笔记」重读精读总结，再点「原文」回到论文。想找某天读过的文章，可打开旁边的「阅读日历」。"
+            "按论文查看文末笔记。点正文即可修改，展开历史可看以前的精读，点「原文」回到论文。"
+        case .calendar:
+            "选择一天查看读过的论文。同一篇当天多次打开会合并，展开可以核对阅读记录。"
+        case .research:
+            "试着问「我在哪几篇笔记里追问过同一个问题？」助理可查本地笔记、回顾研究线索，也能在线找论文或按主题整理书架。研究记忆可在设置中更正。"
         }
     }
 }
@@ -179,7 +204,7 @@ struct QuickStartOverlay: View {
     private func cardContent(hasTarget: Bool) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .firstTextBaseline) {
-                Text("快速上手").font(.caption.weight(.medium)).foregroundStyle(ReaderTheme.accent)
+                Text("快速上手 · " + step.chapter).font(.caption.weight(.medium)).foregroundStyle(ReaderTheme.accent)
                 Spacer()
                 Text("\(step.rawValue + 1) / \(QuickStartStep.allCases.count)")
                     .font(.caption.monospacedDigit()).foregroundStyle(ReaderTheme.muted)
@@ -204,7 +229,7 @@ struct QuickStartOverlay: View {
                     Button("上一步", action: onBack).buttonStyle(.plain)
                         .keyboardShortcut(.leftArrow, modifiers: [.command, .option])
                 }
-                Button(nextTitle ?? (step == .notebook ? "完成" : "下一步"), action: onNext)
+                Button(nextTitle ?? (step == QuickStartStep.allCases.last ? "完成" : "下一步"), action: onNext)
                     .buttonStyle(.borderedProminent).tint(ReaderTheme.accent)
                     .keyboardShortcut(.rightArrow, modifiers: [.command, .option])
             }

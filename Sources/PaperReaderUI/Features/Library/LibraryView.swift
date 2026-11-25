@@ -188,14 +188,13 @@ public struct LibraryView: View {
 
     private func navigateGuide(to step: QuickStartStep) async {
         columns = .all
-        switch step {
-        case .importPaper, .discovery, .shelves, .modelSettings, .notebook:
+        if !step.usesSample {
             if model.selectedPaperID != nil { model.select(nil) }
             model.selectedSection = "library"
             collection = .all
-            assistantTab = nil
-            preferredColumn = step == .discovery || step == .shelves ? .detail : .sidebar
-        case .bilingual, .annotation, .assistant:
+            assistantTab = step == .research ? .library : nil
+            preferredColumn = [.discovery, .shelves, .research].contains(step) ? .detail : .sidebar
+        } else {
             if guide.sampleID == nil || model.selectedPaperID != guide.sampleID || !isReading {
                 let sampleID = await model.openBundledSample()
                 guard !Task.isCancelled, guide.step == step else { return }
@@ -206,7 +205,11 @@ public struct LibraryView: View {
                 guide.sampleID = sampleID
             }
             preferredColumn = .detail
-            assistantTab = step == .assistant ? .paper : nil
+            switch step {
+            case .assistant: assistantTab = .paper
+            case .export: assistantTab = .notes
+            default: assistantTab = nil
+            }
             if step == .annotation { model.showOriginalReading() }
         }
     }
@@ -475,12 +478,11 @@ public struct LibraryView: View {
                     model.endReading()
                     model.selectedSection = "calendar"
                     preferredColumn = .detail
-                }.environment(\.calendarIconTurns, calendarIconTurns)
+                }.environment(\.calendarIconTurns, calendarIconTurns).quickStartTarget(.calendar)
                 navigation("阅读笔记", icon: .notebook, selected: model.selectedSection == "notebooks") {
                     model.endReading()
                     model.selectedSection = "notebooks"
                     preferredColumn = .detail
-                    if guide.step == .notebook { finishGuide() }
                 }.quickStartTarget(.notebook)
             }
             .sidebarSelectionIndicator(
@@ -580,13 +582,9 @@ struct QuickStartNavigation {
 
     mutating func request(_ next: QuickStartStep, closeReadingActive: Bool) {
         // Leaving the reader cancels its close-reading task. Keep it mounted until its notes finish saving.
-        switch next {
-        case .importPaper, .discovery, .shelves, .modelSettings, .notebook:
-            if closeReadingActive {
-                deferred = next
-                return
-            }
-        default: break
+        if closeReadingActive && !next.usesSample {
+            deferred = next
+            return
         }
         deferred = nil
         step = next

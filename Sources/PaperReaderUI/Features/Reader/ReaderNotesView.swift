@@ -21,7 +21,7 @@ struct ReaderNotesView: View {
             Divider()
             if let paperID = model.selectedPaperID {
                 ObsidianExportButton(model: model, paperID: paperID, offersDiscussion: true)
-                    .font(.callout.weight(.medium)).padding(12)
+                    .font(.callout.weight(.medium)).padding(12).quickStartTarget(.export)
             }
         }
     }

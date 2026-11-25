@@ -45,3 +45,15 @@ import Testing
     reader.showOriginalReading()
     #expect(!reader.pdfBilingual.isOpen && reader.visiblePage == 1 && reader.selectedPaperID == id)
 }
+
+@Test func guideCanVisitExportDuringCloseReadingAndWaitsBeforeResearchReview() {
+    var guide = QuickStartNavigation(step: .assistant)
+    guide.request(.export, closeReadingActive: true)
+    #expect(guide.step == .export && guide.deferred == nil)
+    for next in [QuickStartStep.notebook, .calendar, .research] {
+        guide.request(next, closeReadingActive: true)
+        #expect(guide.step == .export && guide.deferred == next)
+    }
+    guide.resumeDeferredNavigation()
+    #expect(guide.step == QuickStartStep.allCases.last && guide.deferred == nil)
+}
