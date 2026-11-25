@@ -61,7 +61,7 @@ new or changed records + prior edition
 
 | 目的 | 实际工具名 | 权限与结果 |
 | --- | --- | --- |
-| 回顾研究与资料 | `research_overview`、`search_reading_notes`、`search_library`、`read_paper` | 概览、读者观点、论文原文分别查询。读取原页须先登记论文。 |
+| 回顾研究与资料 | `research_overview`、`search_reading_notes`、`search_library`、`read_paper` | 概览、读者观点、论文原文分别查询；概览可限定一个书架或单篇论文。读取原页须先登记论文。 |
 | 发现论文与交付结果 | `search_online`、`recommend_related`、`present_results`、`prepare_import`、`open_paper` | 下载与跳转生成可点击卡片。搜索失败和零结果分别报告。 |
 | 精读与讨论 | `close_read_paper`、`create_reading_note`、`ask_user` | 精读、写笔记由本轮委托触发，引用须通过本地定位。 |
 | 记录回答习惯 | `remember_preference` | 保存读者当轮明确表达的长期习惯及作用范围。一次性要求只影响本轮。 |
