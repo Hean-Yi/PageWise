@@ -99,7 +99,7 @@ public actor HTMLReadingStore {
         }
         let path = prefix + "document-\(UUID().uuidString).html"
         let destination = root.appendingPathComponent(path)
-        try Data(Self.document(content: content, title: paper.title, paperID: paper.id).utf8).write(
+        try Data(Self.document(content: content, title: paper.displayTitle, paperID: paper.id).utf8).write(
             to: destination, options: .withoutOverwriting)
         created.append(destination)
         try Task.checkCancellation()

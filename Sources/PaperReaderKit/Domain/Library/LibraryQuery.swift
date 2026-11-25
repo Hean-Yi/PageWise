@@ -65,26 +65,39 @@ public enum LibraryQuery {
     }
 
     public static func searchCandidates(in state: LibraryState, query: String) -> [Paper] {
-        let terms = query.split(whereSeparator: \.isWhitespace)
-        guard !terms.isEmpty else { return [] }
-        return state.papers.filter { matches($0.title, terms: terms) }.sorted {
-            let order = $0.title.localizedStandardCompare($1.title)
+        let search = TitleSearch(query)
+        guard !search.raw.isEmpty else { return [] }
+        return state.papers.filter(search.matches).sorted {
+            let order = $0.displayTitle.localizedStandardCompare($1.displayTitle)
             return order == .orderedSame ? $0.id.uuidString < $1.id.uuidString : order == .orderedAscending
         }
     }
 
-    private static func matches(_ title: String, terms: [Substring]) -> Bool {
-        terms.allSatisfy { title.localizedStandardContains($0) }
+    private struct TitleSearch {
+        let raw: [Substring]
+        let display: [Substring]
+
+        init(_ query: String) {
+            raw = query.split(whereSeparator: \.isWhitespace)
+            display = PaperTitle.display(query).split(whereSeparator: \.isWhitespace)
+        }
+
+        func matches(_ paper: Paper) -> Bool {
+            if raw.allSatisfy({ paper.title.localizedStandardContains($0) }) { return true }
+            let title = paper.displayTitle
+            guard title != paper.title || raw != display else { return false }
+            return display.allSatisfy { title.localizedStandardContains($0) }
+        }
     }
 
     public static func papers(
         in state: LibraryState, collection: LibraryCollection = .all, query: String = "", sort: LibrarySort = .recent
     ) -> [Paper] {
-        let terms = query.split(whereSeparator: \.isWhitespace)
+        let search = TitleSearch(query)
         let visible = state.papers.filter { paper in
             (collection == .all
                 || collection.includes(state.workspace[paper.id.uuidString] ?? PaperWorkspace(), for: paper))
-                && matches(paper.title, terms: terms)
+                && search.matches(paper)
         }
         return sorted(visible, in: state, sort: sort, unfinishedFirst: collection == .all)
     }
@@ -117,7 +130,7 @@ public enum LibraryQuery {
                 let b = state.workspace[rhs.id.uuidString]?.lastOpenedAt ?? .distantPast
                 if a != b { return a > b }
             case .title:
-                let order = lhs.title.localizedStandardCompare(rhs.title)
+                let order = lhs.displayTitle.localizedStandardCompare(rhs.displayTitle)
                 if order != .orderedSame { return order == .orderedAscending }
             case .manual:
                 let a = ranks[lhs.id] ?? Int.max

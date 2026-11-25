@@ -45,7 +45,8 @@ public struct PaperReadingNotebook: Identifiable, Sendable {
         }
         let ordered = (reports + standalone).sorted { $0.date > $1.date }
         let grouped = Dictionary(grouping: ordered, by: \.note.paperID)
-        let titles = Dictionary(library.papers.map { ($0.id, $0.title) }, uniquingKeysWith: { first, _ in first })
+        let titles = Dictionary(
+            library.papers.map { ($0.id, $0.displayTitle) }, uniquingKeysWith: { first, _ in first })
         var seen = Set<UUID>()
         return ordered.compactMap { entry in
             let id = entry.note.paperID

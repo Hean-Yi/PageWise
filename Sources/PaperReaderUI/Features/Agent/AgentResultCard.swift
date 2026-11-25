@@ -115,7 +115,7 @@ struct AgentResultCard: View {
                         Label("追问", readerIcon: .discussion, size: 14)
                     }
                     .readerIconButtonStyle(.borderless).foregroundStyle(ReaderTheme.muted)
-                    .help("基于这项结果追问").accessibilityLabel("基于《\(card.title)》追问")
+                    .help("基于这项结果追问").accessibilityLabel("基于《\(card.displayTitle)》追问")
                     .disabled(agent.isRunning)
                 }
             }
@@ -144,7 +144,7 @@ struct AgentResultCard: View {
             } label: {
                 label(for: card, accessory: "chevron.forward")
             }
-            .readerIconButtonStyle(AssistantToolButtonStyle(embedded: true)).help(card.title)
+            .readerIconButtonStyle(AssistantToolButtonStyle(embedded: true)).help(card.displayTitle)
             .accessibilityHint("在阅读器中打开")
         } else if !card.excerpt.isEmpty {
             Button {
@@ -175,7 +175,7 @@ struct AgentResultCard: View {
         }
         return VStack(alignment: .leading, spacing: 0) {
             AssistantToolTile(
-                tool: purpose.title, icon: purpose.icon, title: card.title, detail: detail,
+                tool: purpose.title, icon: purpose.icon, title: card.displayTitle, detail: detail,
                 metadata: metadata(for: card), accessory: accessory, accessoryRotation: accessoryRotation,
                 detailLines: result.purpose == .readingNote ? 1 : 2,
                 searchQuery: card.searchQuery)
@@ -209,7 +209,7 @@ struct AgentResultCard: View {
             Button(role: .destructive) {
                 switch removal {
                 case .paper:
-                    requestPaperDeletion?(PaperDeletionRequest(title: card.title) { await confirmRemoval(card) })
+                    requestPaperDeletion?(PaperDeletionRequest(title: card.displayTitle) { await confirmRemoval(card) })
                 case .shelf:
                     Task { await confirmRemoval(card) }
                 }
@@ -221,7 +221,7 @@ struct AgentResultCard: View {
                 }
             }
             .readerIconButtonStyle(.bordered)
-            .accessibilityLabel("\(title)：\(card.title)")
+            .accessibilityLabel("\(title)：\(card.displayTitle)")
         }
     }
 
@@ -279,7 +279,8 @@ struct AgentResultCard: View {
             } label: {
                 ReaderActionSymbol("stop.circle")
             }
-            .readerIconButtonStyle(.borderless).help(cancelTitle).accessibilityLabel("\(cancelTitle) \(card.title)")
+            .readerIconButtonStyle(.borderless).help(cancelTitle).accessibilityLabel(
+                "\(cancelTitle) \(card.displayTitle)")
         case .imported:
             Button {
                 open(card)
@@ -287,7 +288,7 @@ struct AgentResultCard: View {
                 Label("在书库打开", readerIcon: .library)
             }
             .readerIconButtonStyle(.bordered).disabled(!agent.canOpen(card))
-            .accessibilityHint(card.title)
+            .accessibilityHint(card.displayTitle)
         case .unprepared, .ready, .failed, .cancelled:
             let cardID = card.id
             if card.canAttemptDownload {
@@ -298,7 +299,7 @@ struct AgentResultCard: View {
                     ReaderDownloadLabel(title: title)
                 }
                 .readerIconButtonStyle(.borderedProminent).tint(ReaderTheme.accent).disabled(!card.canImport)
-                .help("下载并添加到书库").accessibilityHint(card.title)
+                .help("下载并添加到书库").accessibilityHint(card.displayTitle)
             } else {
                 fileImportAction(for: card)
             }
@@ -310,6 +311,6 @@ struct AgentResultCard: View {
             importFile: { agent.importPublisherPDF($0, cardID: card.id) },
             onFailure: { agent.publisherFileSelectionFailed($0, cardID: card.id) }
         )
-        .id(card.id).accessibilityHint(card.title)
+        .id(card.id).accessibilityHint(card.displayTitle)
     }
 }

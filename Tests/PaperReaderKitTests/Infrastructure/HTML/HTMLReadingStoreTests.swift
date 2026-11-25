@@ -21,7 +21,7 @@ import Testing
     let first = block("First original")
     let second = block("Second original")
     var paper = Paper(
-        title: "Local HTML", digest: "fixture", originalPath: "original.pdf", pageCount: 1,
+        title: "Local $β$ & HTML", digest: "fixture", originalPath: "original.pdf", pageCount: 1,
         blocks: [first, second], warnings: [], canReflow: true)
     let store = HTMLReadingStore()
     let initial = try await store.append(
@@ -39,6 +39,7 @@ import Testing
     #expect(!append.contains("First original"))
     #expect(append.contains("Second original"))
     let finalHTML = try String(contentsOf: root.appendingPathComponent(next.relativePath), encoding: .utf8)
+    #expect(try SwiftSoup.parse(finalHTML).title() == "Local β & HTML")
     // A freshly appended section and a reopened section must have identical text-node coordinates.
     func domText(_ node: Node) -> String {
         if let text = node as? TextNode { return text.getWholeText() }

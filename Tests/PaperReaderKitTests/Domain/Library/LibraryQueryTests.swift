@@ -24,6 +24,18 @@ import Testing
     #expect(LibraryQuery.papers(in: state, query: "  ").count == 3)
 }
 
+@Test(arguments: ["β-OPSD", "$β$-OPSD", #"$\beta$-OPSD"#])
+func libraryFindsStoredMathTitlesFromTheirDisplayedNameOrSourceNotation(query: String) {
+    let paper = queryPaper(#"A $\beta$-OPSD Example"#, added: 1)
+    var state = LibraryState()
+    state.papers = [paper, queryPaper("Unrelated OPSD Example", added: 2)]
+    #expect(LibraryQuery.searchCandidates(in: state, query: query).map(\.id) == [paper.id])
+    #expect(LibraryQuery.papers(in: state, query: query).map(\.id) == [paper.id])
+    let displayed = paper.displayTitle
+    let matches = SearchTermMatches.ranges(in: displayed, query: PaperTitle.display(query))
+    #expect(matches.map { String(displayed[$0]) } == ["β-OPSD"])
+}
+
 @Test func recentLibrarySortUsesActualOpensWithDeterministicFallback() {
     let first = queryPaper("Alpha", added: 1)
     let second = queryPaper("Beta", added: 2)

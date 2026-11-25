@@ -12,7 +12,7 @@ struct PaperDeletionRequest: Sendable {
 
     init(_ paper: Paper, model: ReaderModel) {
         let id = paper.id
-        self.init(title: paper.title) { _ = await model.deletePaper(id) }
+        self.init(title: paper.displayTitle) { _ = await model.deletePaper(id) }
     }
 }
 

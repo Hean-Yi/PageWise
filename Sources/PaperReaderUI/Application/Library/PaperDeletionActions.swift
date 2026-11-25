@@ -12,7 +12,7 @@ extension ReaderModel {
             if wasReading, selectedPaperID == id { beginReading() }
             return false
         }
-        status = "已删除《\(paper.title)》"
+        status = "已删除《\(paper.displayTitle)》"
         return true
     }
 

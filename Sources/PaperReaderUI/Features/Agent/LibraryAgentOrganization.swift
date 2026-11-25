@@ -49,13 +49,13 @@ extension LibraryAgent {
             var card = AgentCard(kind: .localPaper, title: paper.title)
             card.removal = .paper(id)
             card.removalGeneration = reader.lastPaperDeletion[id]
-            onSubject(card.title)
+            onSubject(card.displayTitle)
             return receipt(["status": "awaiting_confirmation"], message: "请核对下方论文，点击「删除论文」并在弹窗确认后永久删除。", card: card)
         case .prepareDeleteShelf(let id):
             let shelf = try registeredShelf(id)
             var card = AgentCard(kind: .localPaper, title: shelf.name)
             card.removal = .shelf(id, members: members(of: id))
-            onSubject(card.title)
+            onSubject(card.displayTitle)
             return receipt(["status": "awaiting_confirmation"], message: "请核对下方书架，确认后其中的论文会回到未分类。", card: card)
         case .prepareLocalImport(let target):
             let name = try target.map { try registeredShelf($0).name } ?? "未分类论文"
@@ -106,7 +106,7 @@ extension LibraryAgent {
         switch card.removal {
         case .paper(let id):
             saved = await reader.deletePaper(id)
-            text = "已永久删除《\(card.title)》。"
+            text = "已永久删除《\(card.displayTitle)》。"
         case .shelf(let id, let members):
             saved = await reader.deleteShelf(id, expectedName: card.title, members: members)
             text = "已移除书架「\(card.title)」，其中论文已归入未分类。"

@@ -90,7 +90,7 @@ struct LibraryAgentView: View {
             if let source = agent.followUpCard {
                 HStack(spacing: 6) {
                     Image(systemName: "text.quote").foregroundStyle(ReaderTheme.accent).accessibilityHidden(true)
-                    Text(source.title).lineLimit(1)
+                    Text(source.displayTitle).lineLimit(1)
                     Spacer(minLength: 2)
                     Button {
                         withAnimation(ReaderMotion.disclosure(reduceMotion)) { agent.clearFollowUp() }

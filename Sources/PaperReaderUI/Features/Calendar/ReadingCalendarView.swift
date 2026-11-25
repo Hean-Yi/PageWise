@@ -65,11 +65,11 @@ struct ReadingCalendarView: View {
             NavigationStack {
                 Form {
                     LabeledContent("论文") {
-                        let title = model.state.papers.first { $0.id == addPaper }?.title ?? "选择论文"
+                        let title = model.state.papers.first { $0.id == addPaper }?.displayTitle ?? "选择论文"
                         ReaderPopupMenu(
                             "论文，" + title,
                             items: model.state.papers.map { paper in
-                                .action(paper.title, selected: paper.id == addPaper) { addPaper = paper.id }
+                                .action(paper.displayTitle, selected: paper.id == addPaper) { addPaper = paper.id }
                             },
                             width: 310
                         ) {
@@ -128,7 +128,7 @@ struct ReadingCalendarView: View {
     }
 
     private func timelineRow(_ paper: ReadingMetrics.PaperActivity) -> some View {
-        let title = model.state.papers.first { $0.id == paper.id }?.title ?? "论文"
+        let title = model.state.papers.first { $0.id == paper.id }?.displayTitle ?? "论文"
         return VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Text(title).font(.body.weight(.medium)).lineLimit(2)

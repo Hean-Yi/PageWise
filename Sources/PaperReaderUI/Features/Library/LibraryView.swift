@@ -502,7 +502,7 @@ public struct LibraryView: View {
                                 HStack(alignment: .top, spacing: 9) {
                                     ReaderIcon(.paper, size: 16).foregroundStyle(ReaderTheme.muted)
                                         .frame(width: 18).padding(.top, 1)
-                                    Text(paper.title).foregroundStyle(ReaderTheme.ink).lineLimit(2)
+                                    Text(paper.displayTitle).foregroundStyle(ReaderTheme.ink).lineLimit(2)
                                         .multilineTextAlignment(.leading)
                                     Spacer(minLength: 0)
                                 }.font(.callout).padding(.horizontal, 12).padding(.vertical, 8)

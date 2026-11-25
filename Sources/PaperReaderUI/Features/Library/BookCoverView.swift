@@ -16,7 +16,7 @@ struct BookCoverView: View {
                 VStack(alignment: .leading, spacing: 0) {
                     Rectangle().fill(palette.ink.opacity(0.65)).frame(width: 32 * scale, height: 1.5 * scale)
                         .padding(.bottom, 35 * scale)
-                    Text(paper.title)
+                    Text(paper.displayTitle)
                         .font(ReaderTheme.editorial(28 * scale, weight: .medium))
                         .tracking(-0.6 * scale).lineSpacing(2 * scale)
                         .lineLimit(8).minimumScaleFactor(0.62)
@@ -160,6 +160,7 @@ struct BookshelfItem: View {
 
     var body: some View {
         let progress = self.progress
+        let title = paper.displayTitle
         VStack(alignment: .leading, spacing: 15) {
             placedCover(progress)
                 .opacity(previewed ? 0 : 1)
@@ -196,7 +197,7 @@ struct BookshelfItem: View {
                     return .handled
                 }
                 .accessibilityElement(children: .ignore)
-                .accessibilityLabel("打开论文：\(paper.title)")
+                .accessibilityLabel("打开论文：\(title)")
                 .accessibilityValue(progress.label)
                 .accessibilityAddTraits(.isButton)
                 .accessibilityAction { model.select(paper.id) }
@@ -204,8 +205,8 @@ struct BookshelfItem: View {
                 .accessibilityAction(named: "删除论文") {
                     requestPaperDeletion?(PaperDeletionRequest(paper, model: model))
                 }
-                .help("\(paper.title) · \(progress.label) · 按住空格预览")
-                .readerContextMenu(paper.title + "的选项", items: contextActions, width: 184)
+                .help("\(title) · \(progress.label) · 按住空格预览")
+                .readerContextMenu(title + "的选项", items: contextActions, width: 184)
             HStack(spacing: 7) {
                 HStack(spacing: 7) {
                     Button {
@@ -215,7 +216,7 @@ struct BookshelfItem: View {
                     }
                     .readerIconButtonStyle(.plain).focused($focus, equals: .preview)
                     .foregroundStyle(ReaderTheme.muted).help("预览论文（按住空格）")
-                    .accessibilityLabel("预览论文：\(paper.title)")
+                    .accessibilityLabel("预览论文：\(title)")
                     Spacer(minLength: 0)
                     Button {
                         model.toggleFavorite(paper.id)
@@ -225,11 +226,11 @@ struct BookshelfItem: View {
                             .readerIconTarget(macOS: 30)
                     }.readerIconButtonStyle(.plain).focused($focus, equals: .favorite)
                         .help(workspace.isFavorite ? "取消收藏" : "收藏")
-                        .accessibilityLabel("\(workspace.isFavorite ? "取消收藏" : "收藏") \(paper.title)")
+                        .accessibilityLabel("\(workspace.isFavorite ? "取消收藏" : "收藏") \(title)")
                 }
                 .opacity(showsActions ? 1 : 0)
                 .allowsHitTesting(showsActions)
-                ReaderPopupMenu(paper.title + "的选项", items: actions, width: 174, isPresented: $menuOpen) {
+                ReaderPopupMenu(title + "的选项", items: actions, width: 174, isPresented: $menuOpen) {
                     ReaderActionGlyph(mark: .more, size: 17)
                         .readerIconTarget(macOS: 30)
                 }.fixedSize()

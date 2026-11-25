@@ -148,7 +148,7 @@ struct AgentProcessView: View {
                     ForEach(records) { card in
                         let content =
                             ["read_paper", "search_reading_notes"].contains(activity.toolName) && !card.excerpt.isEmpty
-                            ? card.excerpt : card.title
+                            ? card.excerpt : card.displayTitle
                         SearchMatchText(content, query: card.searchQuery)
                             .lineLimit(2).help(content).agentCopyMenu(content)
                     }

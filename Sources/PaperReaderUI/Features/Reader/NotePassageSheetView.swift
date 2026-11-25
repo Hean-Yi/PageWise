@@ -93,7 +93,7 @@ private struct NotePassagePicker: View {
                                 } label: {
                                     HStack(spacing: 10) {
                                         VStack(alignment: .leading, spacing: 4) {
-                                            Text(verbatim: choice.title).font(.caption).foregroundStyle(
+                                            Text(verbatim: choice.displayTitle).font(.caption).foregroundStyle(
                                                 ReaderTheme.muted
                                             ).lineLimit(1)
                                             Text(verbatim: choice.text).font(.callout).lineLimit(3)
@@ -142,7 +142,7 @@ private struct NotePassagePreviewView: View {
             if let error {
                 Text(error).font(.callout).foregroundStyle(ReaderTheme.muted)
             } else if let preview {
-                Text(preview.title).font(.headline)
+                Text(PaperTitle.display(preview.title)).font(.headline)
                 Text(preview.location).font(.caption).foregroundStyle(ReaderTheme.muted)
                 ScrollView {
                     if let markdown = preview.noteMarkdown {

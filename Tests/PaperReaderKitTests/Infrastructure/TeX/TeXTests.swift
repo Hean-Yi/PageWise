@@ -1,4 +1,5 @@
 import Foundation
+import SwiftSoup
 import Testing
 import zlib
 
@@ -257,6 +258,25 @@ private actor SourceFallbackDiscovery: PaperDiscovery {
     #expect(html.components(separatedBy: "<li>").count == 3)
     #expect(html.contains("[1]") && html.contains("[2]"))
     #expect(references.richContent?.requiresTranslation == false)
+}
+
+@Test func texPaperTitlePublishesInlineBetaAsProtectedMathML() async throws {
+    let source = #"""
+        \documentclass{article}
+        \title{$\beta$-OPSD Fixture}
+        \begin{document}
+        \maketitle
+        An original paragraph.
+        \end{document}
+        """#
+    let blocks = try await TeXPaperParser().parse(Data(source.utf8))
+    let title = try #require(blocks.first?.richContent)
+    #expect(title.html.contains("<h1") && title.html.contains("-OPSD Fixture"))
+    #expect(title.translationInput == "[[MATH_1]]-OPSD Fixture")
+    let markup = try #require(title.mathematics["[[MATH_1]]"])
+    let math = try #require(try SwiftSoup.parseBodyFragment(markup).select("math").first())
+    #expect(try math.select("mi").text() == "β")
+    #expect(try math.attr("display") != "block")
 }
 
 @Test func texAuthorYearReferencesResolveFromPublishedLabels() async throws {

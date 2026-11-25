@@ -6,6 +6,10 @@ public struct AgentCard: Identifiable, Sendable {
     public var id = UUID()
     public var kind: Kind
     public var title: String
+    public var displayTitle: String {
+        if case .shelf = removal { return title }
+        return localImportDestination == nil ? PaperTitle.display(title) : title
+    }
     /// Query that produced this result, scoped to this card's occurrence in the conversation.
     public var searchQuery: String?
     public var subtitle = ""

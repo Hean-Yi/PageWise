@@ -372,7 +372,7 @@ private struct ShelfWorkspaceContent: View {
                             Text(positionLabel(position, in: paper)).font(.caption).foregroundStyle(ReaderTheme.muted)
                         }
                     }
-                    Text(paper.title).font(ReaderTheme.editorial(20, weight: .medium))
+                    Text(paper.displayTitle).font(ReaderTheme.editorial(20, weight: .medium))
                         .foregroundStyle(ReaderTheme.ink).lineLimit(2).multilineTextAlignment(.leading)
                 }
                 Spacer(minLength: 0)
@@ -383,7 +383,7 @@ private struct ShelfWorkspaceContent: View {
                 .background(ReaderTheme.surface, in: RoundedRectangle(cornerRadius: 12))
                 .overlay { RoundedRectangle(cornerRadius: 12).strokeBorder(ReaderTheme.line) }
                 .contentShape(RoundedRectangle(cornerRadius: 12))
-        }.readerIconButtonStyle(.plain).accessibilityLabel("继续阅读 \(paper.title)")
+        }.readerIconButtonStyle(.plain).accessibilityLabel("继续阅读 \(paper.displayTitle)")
     }
 
     private func positionLabel(_ position: ReaderPosition, in paper: Paper) -> String {

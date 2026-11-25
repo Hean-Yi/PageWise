@@ -249,6 +249,12 @@ final class HTMLCoordinator: NSObject, WKNavigationDelegate, WKScriptMessageHand
         else { return }
         ready = true
         webView.isHidden = false
+        // Older editions stored the source title in <head>. Correct its spoken label in memory.
+        if let title = model.paper?.displayTitle, title != model.paper?.title {
+            webView.callAsyncJavaScript(
+                "document.title = title", arguments: ["title": title],
+                in: nil, in: .defaultClient, completionHandler: nil)
+        }
         if keys.indices.contains(model.visiblePage) {
             webView.callAsyncJavaScript(
                 "window.paperReader.jump(key)", arguments: ["key": keys[model.visiblePage]],

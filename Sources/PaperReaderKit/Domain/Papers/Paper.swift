@@ -3,6 +3,7 @@ import Foundation
 public struct Paper: Identifiable, Codable, Sendable {
     public var id: UUID
     public var title: String
+    public var displayTitle: String { PaperTitle.display(title) }
     public var sourceURL: String?
     public var onlineSource: OnlinePaperSource?
     /// Bibliographic pages the reader associated with this file. They do not establish its edition.

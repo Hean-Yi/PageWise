@@ -140,7 +140,7 @@ struct ReaderView: View {
                 "返回\(model.readerOrigin.title)"
             )
             .keyboardShortcut("l", modifiers: [.command, .shift])
-            Text(model.paper?.title ?? "").font(ReaderTheme.editorial(18, weight: .medium))
+            Text(model.paper?.displayTitle ?? "").font(ReaderTheme.editorial(18, weight: .medium))
                 .foregroundStyle(ReaderTheme.ink).lineLimit(1).truncationMode(.tail)
             Spacer(minLength: 0)
             ReaderModePicker(

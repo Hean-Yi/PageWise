@@ -110,7 +110,7 @@ public final class LibraryAgent {
         }
         var turn = AgentTurn(question: question)
         turn.referencedCardID = cardID
-        turn.referencedCardTitle = reference?.title
+        turn.referencedCardTitle = reference?.displayTitle
         if let clarificationID { updateTurn(clarificationID) { $0.clarification?.reply = question } }
         turns.append(turn)
         followUpCardID = nil

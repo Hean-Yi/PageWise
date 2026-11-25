@@ -3,6 +3,7 @@ import Foundation
 public struct Evidence: Identifiable, Codable, Sendable {
     public var id: String
     public var title: String
+    public var displayTitle: String { paperID == nil ? title : PaperTitle.display(title) }
     public var text: String
     public var paperID: UUID?
     public var blockID: UUID?

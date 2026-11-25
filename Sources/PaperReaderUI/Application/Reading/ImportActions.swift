@@ -214,7 +214,7 @@ extension ReaderModel {
                 }
             } else {
                 let shelf = state.shelfID(for: existing.id).flatMap { id in state.shelves.first { $0.id == id }?.name }
-                throw ReaderError.message("「\(shelf ?? "未分类论文")」已有同名论文《\(existing.title)》，已跳过这份不同的 PDF。")
+                throw ReaderError.message("「\(shelf ?? "未分类论文")」已有同名论文《\(existing.displayTitle)》，已跳过这份不同的 PDF。")
             }
         }
         switch origin {

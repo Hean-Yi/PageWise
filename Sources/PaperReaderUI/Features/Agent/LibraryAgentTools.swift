@@ -70,7 +70,7 @@ extension LibraryAgent {
             guard let request = noteRequest, CloseReadingIntent.isRequested(request.instruction),
                 request.openedPaper == reader.selectedPaperID, request.target == nil || request.target == paper.id
             else { throw ReaderError.message("需要读者明确要求精读这篇本地论文。") }
-            onSubject(paper.title)
+            onSubject(paper.displayTitle)
             let report = try await reader.runCloseReading(paper.id, focus: request.instruction)
             let ids = [report.readingNoteID].compactMap { $0 } + (report.closeReadingNoteIDs ?? [])
             let cards = ids.compactMap { id -> AgentCard? in
@@ -108,7 +108,7 @@ extension LibraryAgent {
                 request.target == nil || request.target == paperID
             else { throw ReaderError.message("一条阅读笔记只能标在本轮目标论文上。") }
             let scope = try request.scope ?? reader.discussionNoteScope(for: paperID)
-            onSubject(evidence.title)
+            onSubject(evidence.displayTitle)
             let links = try references.map { reference -> NoteLinkRequest in
                 guard let registered = card(reference.passage.resultID), registered.kind == .evidence,
                     registered.readingNoteID != nil,
@@ -205,7 +205,7 @@ extension LibraryAgent {
             return outcome
         case .readPaper(let id, let page):
             let paper = try registeredPaper(id, page: page)
-            onSubject("\(paper.title) · 第 \(page) 页")
+            onSubject("\(paper.displayTitle) · 第 \(page) 页")
             let blocks = paper.blocks.filter { $0.sourcePage == page - 1 }
             var passages: [(id: UUID?, text: String)] = blocks.map { ($0.id, $0.text) }
             if passages.isEmpty {
@@ -253,18 +253,19 @@ extension LibraryAgent {
             return try onlineResults(report.candidates, query: query, limit: limit, notice: report.notice)
         case .recommendRelated(let requestedCount):
             guard let seed = recommendationSeed else { throw ReaderError.message("请打开一篇论文，或从推荐卡片追问。") }
-            onSubject(seed.title)
+            let title = PaperTitle.display(seed.title)
+            onSubject(title)
             let limit = min(requestedCount ?? limits.maxResults, 20)
             guard limit > 0 else { return try result([], truncated: true) }
             let found = try await discovery.related(title: seed.title, sourceID: seed.sourceID, limit: limit + 1)
             try check(epoch)
             return try onlineResults(
                 found, limit: limit,
-                notice: found.isEmpty ? "Semantic Scholar 未返回《\(String(seed.title.prefix(300)))》的推荐。" : nil)
+                notice: found.isEmpty ? "Semantic Scholar 未返回《\(String(title.prefix(300)))》的推荐。" : nil)
         case .prepareImport(let id):
             guard let candidate = candidates[id] else { throw ReaderError.message("候选ID不属于本次会话，请先在线检索。") }
             guard candidate.canAttemptDownload else { throw ReaderError.message("请在结果卡查看来源页，取得 PDF 后在同一卡片选择文件导入。") }
-            onSubject(candidate.title)
+            onSubject(candidate.displayTitle)
             var card = candidateCard(candidate, id: id)
             if let reference = turns.last?.referencedCardID.flatMap({ self.card($0) }), reference.candidateID == id {
                 card.searchQuery = reference.searchQuery
@@ -285,7 +286,7 @@ extension LibraryAgent {
                 message: message)
         case .openPaper(let id, let page):
             let paper = try registeredPaper(id, page: page)
-            onSubject(page.map { "\(paper.title) · 第 \($0) 页" } ?? paper.title)
+            onSubject(page.map { "\(paper.displayTitle) · 第 \($0) 页" } ?? paper.displayTitle)
             var card = AgentCard(kind: .navigation, title: paper.title)
             card.paperID = paper.id
             card.sourcePage = page

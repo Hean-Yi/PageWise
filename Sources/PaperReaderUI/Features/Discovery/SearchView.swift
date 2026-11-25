@@ -109,15 +109,6 @@ struct SearchView: View {
     }
 }
 
-extension PaperCandidate {
-    var searchResultTitle: String {
-        guard title.contains("$") else { return title }
-        // Show a literal single-letter math symbol directly. Keep TeX expressions and currency intact.
-        return title.replacingOccurrences(
-            of: #"(?<![\\$])\$(\p{L}\p{M}*)\$(?![\p{Nd}$])"#, with: "$1", options: .regularExpression)
-    }
-}
-
 private struct OnlineCandidateCard: View {
     let search: OnlinePaperSearch
     let candidate: PaperCandidate
@@ -134,7 +125,7 @@ private struct OnlineCandidateCard: View {
         let imported = search.importedPaperID(for: item) != nil
         VStack(alignment: .leading, spacing: 6) {
             versionInfo(item, versions: versions)
-            let title = SearchMatchText(item.searchResultTitle, query: search.resultQuery)
+            let title = SearchMatchText(item.displayTitle, query: search.resultQuery.map(PaperTitle.display))
                 .font(ReaderTheme.editorial(19, weight: .medium))
                 .fixedSize(horizontal: false, vertical: true)
             if let url = item.landingURL {

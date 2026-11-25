@@ -30,6 +30,7 @@ public enum PaperSearchScope: String, Sendable, CaseIterable {
 public struct PaperCandidate: Identifiable, Sendable {
     public var id: String
     public var title: String
+    public var displayTitle: String { PaperTitle.display(title) }
     public var authors: String
     public var year: String
     public var pdfURL: URL?

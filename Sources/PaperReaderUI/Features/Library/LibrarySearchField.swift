@@ -203,11 +203,12 @@ private struct LibrarySearchSuggestions: ViewModifier {
 
     private func row(_ paper: Paper, selected: Bool) -> some View {
         let shelf = state.shelfID(for: paper.id).flatMap { id in state.shelves.first { $0.id == id }?.name } ?? "未分类论文"
+        let title = paper.displayTitle
         return Button {
             choose(paper.id)
         } label: {
             VStack(alignment: .leading, spacing: 3) {
-                SearchMatchText(paper.title, matches: titleMatches(in: paper.title))
+                SearchMatchText(title, matches: titleMatches(in: title))
                     .font(.callout.weight(.medium)).foregroundStyle(ReaderTheme.ink)
                     .lineLimit(2).multilineTextAlignment(.leading)
                 Label {
@@ -228,14 +229,14 @@ private struct LibrarySearchSuggestions: ViewModifier {
                 keyboardScrollTarget = nil
             }
         }
-        .accessibilityLabel("\(paper.title)，\(shelf)").accessibilityHint("在书架定位")
+        .accessibilityLabel("\(title)，\(shelf)").accessibilityHint("在书架定位")
         .accessibilityAddTraits(selected ? .isSelected : [])
         .accessibilityIdentifier("library-search-result-\(paper.id)")
     }
 
     private func titleMatches(in title: String) -> [Range<String.Index>] {
         var ranges: [Range<String.Index>] = []
-        for term in Set(query.split(whereSeparator: \.isWhitespace)) {
+        for term in Set(PaperTitle.display(query).split(whereSeparator: \.isWhitespace)) {
             var remainder = title[...]
             while let range = remainder.localizedStandardRange(of: term), !range.isEmpty {
                 ranges.append(range)

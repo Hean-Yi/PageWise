@@ -100,7 +100,7 @@ struct PaperAssistantCitations: View {
             } label: {
                 HStack(alignment: .firstTextBaseline, spacing: 5) {
                     Text(source.id).monospacedDigit()
-                    Text(source.title).foregroundStyle(ReaderTheme.ink).lineLimit(2)
+                    Text(source.displayTitle).foregroundStyle(ReaderTheme.ink).lineLimit(2)
                     Spacer(minLength: 0)
                     ReaderActionSymbol(canNavigate ? "arrow.up.forward" : "chevron.down")
                         .rotationEffect(.degrees(!canNavigate && expanded ? 180 : 0))
@@ -131,7 +131,7 @@ struct PaperAssistantCitations: View {
         let subject = isNote ? "笔记" : (key == nil ? "摘录" : "原文")
         let tool = source.readingNoteID != nil && excerpt.isEmpty ? "笔记已不可用" : "引用" + subject
         let tile = AssistantToolTile(
-            tool: tool, icon: .reader(isNote ? .notebook : .citation), title: source.title,
+            tool: tool, icon: .reader(isNote ? .notebook : .citation), title: source.displayTitle,
             detail: expanded || excerpt.isEmpty
                 ? nil : (source.readingNoteID == nil ? previews[source.id] : ReadingNoteSummary.excerpt(excerpt)),
             metadata: metadata,
@@ -167,7 +167,7 @@ struct PaperAssistantCitations: View {
                 tile.assistantToolSurface()
             }
         }
-        .help(source.title)
+        .help(source.displayTitle)
         .id(AssistantCitationAnchor(turn: turn.id, source: source.id))
     }
 }

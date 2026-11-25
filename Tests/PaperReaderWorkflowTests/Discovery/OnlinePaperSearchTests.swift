@@ -11,13 +11,19 @@ private func onlineFixtureCandidate(_ number: Int = 1) -> PaperCandidate {
         year: "2024", pdfURL: URL(string: "https://arxiv.org/pdf/\(identifier)")!)
 }
 
-@Test func onlineResultTitleUnwrapsLiteralSymbolsAndHighlightsTheDisplayedText() {
+@Test(arguments: [
+    ("$β$-OPSD", "β-OPSD"),
+    (#"$\beta$-OPSD"#, "β-OPSD"),
+    (#"A \(β\) and $$y$$"#, "A β and y"),
+    (#"$ β $ and $$ \beta $$ and \[\beta\]"#, "β and β and β"),
+    (#"Keep $x^2$, $\unknown$, and $abc$"#, #"Keep $x^2$, $\unknown$, and $abc$"#),
+    (#"Costs $10 and $20; literal \$z$; then $x$"#, #"Costs $10 and $20; literal \$z$; then x"#),
+    (#"Unclosed $β and \(\beta"#, #"Unclosed $β and \(\beta"#),
+])
+func onlineResultTitleDisplaysUnambiguousSymbolsAndRetainsRawMetadata(raw: String, expected: String) {
     var candidate = onlineFixtureCandidate()
-    let raw = #"$β$-OPSD with $x$, $x^2$, $$y$$, \$z$, $10 and $20"#
     candidate.title = raw
-    let display = candidate.searchResultTitle
-    #expect(display == #"β-OPSD with x, $x^2$, $$y$$, \$z$, $10 and $20"#)
-    #expect(SearchTermMatches.ranges(in: display, query: "OPSD").map { String(display[$0]) } == ["OPSD"])
+    #expect(candidate.displayTitle == expected)
     #expect(candidate.title == raw && candidate.landingURL?.absoluteString == candidate.id)
 }
 
@@ -230,33 +236,40 @@ private struct OnlineToolReplyEcho: AgentCompleting {
     let second = try #require(await model.createShelf(name: "Second"))
     let source = model.root.appendingPathComponent("fixture.pdf")
     try DemoPaper.write(to: source)
-    let discovery = InlineDiscoveryFixture(source: source, holdDownload: true)
+    var candidate = onlineFixtureCandidate()
+    candidate.title = #"$\beta$-OPSD Fixture"#
+    let discovery = InlineDiscoveryFixture(source: source, holdDownload: true, searchResults: [candidate])
     let search = OnlinePaperSearch(reader: model, discovery: discovery)
     search.open(shelfID: first)
-    search.query = "Original Fixture 1"
+    search.query = "OPSD"
     search.search()
     await search.searchTask?.value
     #expect(await discovery.downloads == 0)
-    search.confirmImport(onlineFixtureCandidate())
+    search.confirmImport(candidate)
     while await discovery.pendingDownload == nil { await Task.yield() }
     search.open(shelfID: second)
     #expect(search.targetShelfID == second)
     #expect(search.importProgress.contains("First"))
-    #expect(search.results.map(\.id) == [onlineFixtureCandidate().id])
+    #expect(search.results.map(\.id) == [candidate.id])
     await discovery.releaseDownload()
     await search.importTask?.value
-    let id = try #require(search.imported[onlineFixtureCandidate().id])
+    let id = try #require(search.imported[candidate.id])
     #expect(model.state.shelfID(for: id) == first)
     #expect(model.selectedPaperID == nil)
     #expect(search.isExpanded && search.targetShelfID == second)
-    #expect(search.importedPaperID(for: onlineFixtureCandidate()) == nil)
+    #expect(search.importedPaperID(for: candidate) == nil)
     search.open(shelfID: first)
-    #expect(search.importedPaperID(for: onlineFixtureCandidate()) == id)
-    search.confirmImport(onlineFixtureCandidate())
+    #expect(search.importedPaperID(for: candidate) == id)
+    search.confirmImport(candidate)
     #expect(await discovery.downloads == 1)
     let restarted = try ReaderModel(root: model.root)
     await restarted.load()
     #expect(restarted.state.shelfID(for: id) == first)
+    let saved = try #require(restarted.state.papers.first { $0.id == id })
+    #expect(saved.title == candidate.title)
+    let displayed = saved.displayTitle
+    #expect(displayed == "β-OPSD Fixture" && displayed == candidate.displayTitle)
+    #expect(SearchTermMatches.ranges(in: displayed, query: "OPSD").map { String(displayed[$0]) } == ["OPSD"])
 }
 
 @MainActor @Test(arguments: [false, true]) func onlineCloseOrDeletedTargetCannotCommitLateDownload(deleteTarget: Bool)

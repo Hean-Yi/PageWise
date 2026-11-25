@@ -74,7 +74,7 @@ struct ShelfPaperPreview: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("书目预览，" + paper.title)
+        .accessibilityLabel("书目预览，" + paper.displayTitle)
         .accessibilityAddTraits(.isModal)
         .accessibilityAction(.escape, dismiss)
         .task(id: paper.id) {
@@ -99,7 +99,8 @@ struct ShelfPaperPreview: View {
 
     private func previewPanel(wide: Bool, size: CGSize, cover: CGSize) -> some View {
         let space = Color.clear.frame(width: cover.width, height: cover.height)
-            .accessibilityElement(children: .ignore).accessibilityLabel(paper.title).accessibilityAddTraits(.isHeader)
+            .accessibilityElement(children: .ignore).accessibilityLabel(paper.displayTitle).accessibilityAddTraits(
+                .isHeader)
         let text = details.modifier(PreviewFade(progress: revealProgress, range: 0.37...0.93))
         return Group {
             if wide {
