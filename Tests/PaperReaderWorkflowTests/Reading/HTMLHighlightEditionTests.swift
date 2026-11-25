@@ -107,7 +107,8 @@ func htmlMarksFollowTheirEditionThroughRebuildAndErase(reusesFirstBlock: Bool) a
     let continuation = try await store.append(
         [BilingualBlock(block: next, translation: "追加。")], to: stable, paper: paper, root: root)
     #expect(continuation.readingNoteVersion(digest: paper.digest) == newStamp)
-    await reader.highlightSaveTask?.value
+    let didSave = await reader.highlightSaveTask?.value
+    #expect(didSave == true)
     let reopened = try ReaderModel(root: root, credentials: WorkflowCredentials())
     await reopened.load()
     #expect(Set(reopened.state.highlights.compactMap(\.contentVersion)) == [oldStamp, newStamp])
