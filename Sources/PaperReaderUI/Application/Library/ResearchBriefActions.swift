@@ -71,6 +71,11 @@ import PaperReaderKit
                         continue
                     }
                     self.retry = false
+                    if await self.index.hasPendingResearchEvents() {
+                        // The bounded batch left older rows behind. Keep the worker in the loop
+                        // until the watermark catches the committed source generation.
+                        self.requested = true
+                    }
                 } catch { self.retry = true }
             }
             self?.worker = nil

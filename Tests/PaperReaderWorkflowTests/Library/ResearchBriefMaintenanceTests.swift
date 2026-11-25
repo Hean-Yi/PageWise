@@ -58,6 +58,27 @@ import Testing
     #expect(kept.topics.flatMap(\.sources).contains { $0.noteID == note.id })
 }
 
+@MainActor @Test func researchBriefDrainsMoreThanOneBoundedEventBatch() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let store = try LibraryStore(directory: root)
+    var state = try await store.load()
+    let paper = Paper(
+        title: "Batch source", digest: "batch", originalPath: "unused.pdf", pageCount: 1, blocks: [],
+        warnings: [], canReflow: false)
+    state.papers = [paper]
+    state.readingNotes = (0..<300).map { index in
+        ReadingNote(
+            paperID: paper.id, contentVersion: "v", anchors: [], markdown: "Observation \(index) about calibration.")
+    }
+    #expect(try await store.save(state).researchSourcesChanged)
+    let maintenance = ResearchBriefMaintenance(store: store, notes: ReadingNoteMemoryIndex())
+    maintenance.sourcesChanged()
+    await maintenance.worker?.value
+    #expect(try await store.researchEventCounts().pending == 0)
+    #expect(try await store.readResearchCheckpoint() != nil)
+}
+
 @MainActor @Test func researchBriefMaintenanceSkipsHotPositionAndTranslationSavesInALargeLibrary() async throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: root) }

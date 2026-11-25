@@ -51,6 +51,13 @@ public actor ResearchBriefIndex {
         }
     }
 
+    /// A bounded pass may leave older rows behind. The foreground worker uses this to continue
+    /// immediately instead of waiting for the next scheduled audit.
+    public func hasPendingResearchEvents() async -> Bool {
+        guard let pending = try? await store.pendingResearchEvents(limit: 1) else { return false }
+        return !pending.isEmpty
+    }
+
     private func maintainHoldingLease(
         audit: Bool, warming notes: ReadingNoteMemoryIndex?, memories: ResearchMemory?
     ) async throws {
