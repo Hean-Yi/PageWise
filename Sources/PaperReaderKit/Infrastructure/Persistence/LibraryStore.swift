@@ -122,6 +122,20 @@ public actor LibraryStore {
         baseline = (state, revision)
     }
 
+    /// Hold the writer lock while deciding which files have committed references. A second
+    /// instance may have finished an import between this instance's load and startup recovery.
+    public func recoverManagedFiles() throws {
+        guard let previous = baseline else { throw ReaderError.message("请先读取书库再清理文件。") }
+        try Self.database(at: databaseURL) { db in
+            try Self.transaction(db) {
+                guard try Self.integer(db, "SELECT revision FROM library_generation WHERE id=1") == previous.revision
+                else { return }
+                try recoverFileRemovals(keeping: previous.state.papers)
+                try ReadingArtifactCleanup.removeUncommittedFiles(in: directory, papers: previous.state.papers)
+            }
+        }
+    }
+
     public func compact() throws {
         try Self.database(at: databaseURL) { db in
             try Self.execute(db, "VACUUM")

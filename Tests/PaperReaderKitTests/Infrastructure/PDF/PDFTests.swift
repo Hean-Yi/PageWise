@@ -83,3 +83,22 @@ import Testing
     try ReadingArtifactCleanup.removeUncommittedFiles(in: root, papers: [committed])
     #expect(exists(committed) && exists(unmanaged))
 }
+
+@Test func staleStartupCannotReclaimAnotherInstancesJustCommittedOriginal() async throws {
+    let manager = FileManager.default
+    let root = manager.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? manager.removeItem(at: root) }
+    let early = try LibraryStore(directory: root)
+    _ = try await early.load()
+    let writer = try LibraryStore(directory: root)
+    var current = try await writer.load()
+    let pending = try await PDFImporter(root: root).prepareOriginal(at: DemoPaper.fileURL()).paper
+    current.papers = [pending]
+    try await writer.save(current)
+    let file = root.appendingPathComponent(pending.originalPath)
+    let marker = PendingPDFImport.marker(in: file.deletingLastPathComponent(), id: pending.id)
+    try await early.recoverManagedFiles()
+    #expect(manager.fileExists(atPath: file.path) && manager.fileExists(atPath: marker.path))
+    try await writer.recoverManagedFiles()
+    #expect(manager.fileExists(atPath: file.path) && !manager.fileExists(atPath: marker.path))
+}

@@ -191,8 +191,7 @@ public final class ReaderModel {
         do {
             state = try await store.load()
             do {
-                try await store.recoverFileRemovals(keeping: state.papers)
-                try ReadingArtifactCleanup.removeUncommittedFiles(in: root, papers: state.papers)
+                try await store.recoverManagedFiles()
             } catch {
                 status = "部分临时文件暂未清理，将在下次打开时重试。"
             }
