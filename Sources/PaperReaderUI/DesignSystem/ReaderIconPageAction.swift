@@ -5,9 +5,13 @@ struct ReaderIconPageAction: View, Animatable {
     static let hoverProgress: CGFloat = 0.48
     let glyph: ReaderIcon.Glyph
     nonisolated var progress: CGFloat
-    nonisolated var animatableData: CGFloat {
-        get { progress }
-        set { progress = newValue }
+    nonisolated var calendarTurns: CGFloat = 0
+    nonisolated var animatableData: AnimatablePair<CGFloat, CGFloat> {
+        get { AnimatablePair(progress, calendarTurns) }
+        set {
+            progress = newValue.first
+            calendarTurns = newValue.second
+        }
     }
 
     var body: some View {
@@ -21,52 +25,61 @@ struct ReaderIconPageAction: View, Animatable {
         }
     }
 
-    private static let seven = Path { path in
-        path.move(to: CGPoint(x: 8, y: 12))
-        path.addLine(to: CGPoint(x: 14, y: 12))
-        path.addLine(to: CGPoint(x: 10.2, y: 18.2))
-    }
-    private static let eight = Path { path in
-        path.addEllipse(in: CGRect(x: 8.9, y: 10.6, width: 5.5, height: 4.3))
-        path.addEllipse(in: CGRect(x: 8.5, y: 14.9, width: 6.3, height: 4.6))
-    }
     private static let thinInk = StrokeStyle(lineWidth: 1.2, lineCap: .round, lineJoin: .round)
-    private static let dateInk = StrokeStyle(lineWidth: 1.85, lineCap: .square, lineJoin: .round)
+    private static let dateInk = StrokeStyle(lineWidth: 1.5, lineCap: .round, lineJoin: .round)
+    // Inside the stationary frame, below the printed binding.
+    private static let sheet = Path { path in
+        path.addLines([
+            CGPoint(x: 3.6, y: 9.4), CGPoint(x: 20, y: 9.4), CGPoint(x: 20, y: 15.6),
+            CGPoint(x: 15.4, y: 20.4), CGPoint(x: 3.6, y: 20.4),
+        ])
+        path.closeSubpath()
+    }
+    private static let crease = Path { path in
+        path.move(to: CGPoint(x: 15.8, y: 19.4))
+        path.addQuadCurve(to: CGPoint(x: 19.2, y: 15.8), control: CGPoint(x: 15.6, y: 15.6))
+    }
+    private static let tornEdge = Path { path in
+        path.addLines([
+            CGPoint(x: 4.2, y: 9.7), CGPoint(x: 7, y: 9.7), CGPoint(x: 7.8, y: 10.4),
+            CGPoint(x: 8.6, y: 9.7), CGPoint(x: 15.1, y: 9.7), CGPoint(x: 16, y: 10.4),
+            CGPoint(x: 16.8, y: 9.7), CGPoint(x: 19.5, y: 9.7),
+        ])
+    }
 
     private func drawCalendar(in context: GraphicsContext) {
-        let phase = min(1, max(0, progress))
-        let lift = min(1, phase / Self.hoverProgress)
-        let tear = max(0, (phase - Self.hoverProgress) / (1 - Self.hoverProgress))
-        var next = context
-        next.opacity = Double(tear)
-        next.stroke(Self.eight, with: .foreground, style: Self.dateInk)
+        let position = max(0, calendarTurns)
+        let whole = position.rounded(.down)
+        let day = (6 + Int(whole) % 31) % 31 + 1
+        let fraction = position - whole
+        let contact = min(1, max(0, progress))
+        let lift = min(1, contact / Self.hoverProgress)
+        let curl = 0.7 * lift + 0.3 * max(0, (contact - Self.hoverProgress) / (1 - Self.hoverProgress))
+        func printPage(_ day: Int, in page: GraphicsContext) {
+            page.stroke(CalendarNumerals.path(day: day, lift: lift), with: .foreground, style: Self.dateInk)
+            page.stroke(
+                Self.crease.trimmedPath(from: 0, to: curl),
+                with: .color(ReaderTheme.accent.opacity(lift)), style: Self.thinInk)
+        }
 
-        var leaf = context
-        leaf.opacity = Double(1 - tear)
-        // The top stays on the binding until the press tears the sheet free.
-        leaf.translateBy(x: 11.5 + 4 * tear, y: 9.5 - 4 * tear)
-        leaf.rotate(by: .degrees(-14 * tear))
-        leaf.translateBy(x: -11.5, y: -9.5)
-        let fold = 4.6 * lift
-        let corner = CGPoint(x: 19.2, y: 20 - fold)
-        let tip = CGPoint(x: 19.2 - fold, y: 20)
-        var sheet = Path()
-        sheet.addLines([
-            CGPoint(x: 3.8, y: 9.5), CGPoint(x: 19.2, y: 9.5), corner, tip, CGPoint(x: 3.8, y: 20),
-        ])
-        sheet.closeSubpath()
-        var curl = Path()
-        curl.addLines([corner, CGPoint(x: tip.x + 0.6 * lift, y: corner.y + 0.6 * lift), tip])
-        // Fade the paper with its crease. Even the last subpixel of a hover shares the resting artwork.
-        var paper = leaf
-        paper.opacity *= Double(lift)
-        paper.fill(sheet, with: .color(ReaderTheme.surface))
-        paper.stroke(sheet, with: .foreground, style: Self.thinInk)
-        paper.stroke(curl, with: .color(ReaderTheme.accent), style: Self.thinInk)
-        leaf.translateBy(x: 11, y: 15)
-        leaf.scaleBy(x: 1 + 0.28 * lift, y: 1 + 0.28 * lift)
-        leaf.translateBy(x: -11, y: -15)
-        leaf.stroke(Self.seven, with: .foreground, style: Self.dateInk)
+        var face = context
+        face.clip(to: Self.sheet)
+        guard fraction > 0 else {
+            printPage(day, in: face)
+            return
+        }
+        // A committed turn only travels forward. At each integer the newly uncovered sheet is the resting page.
+        let peel = fraction * fraction * (3 - 2 * fraction)
+        let departure = CGAffineTransform(translationX: 3.6 + 2 * peel, y: 9.4 + 15 * peel)
+            .rotated(by: 0.17 * peel).translatedBy(x: -3.6, y: -9.4)
+        var exposed = face
+        exposed.clip(to: Self.sheet.applying(departure), options: .inverse)
+        printPage(day % 31 + 1, in: exposed)
+
+        face.concatenate(departure)
+        printPage(day, in: face)
+        face.opacity *= Double(sin(.pi * fraction))
+        face.stroke(Self.tornEdge, with: .foreground, style: Self.thinInk)
     }
 
     private static let writtenLine = Path { path in

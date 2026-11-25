@@ -79,9 +79,13 @@
             // Inspect the printed area alone. Motion of the header or book spine cannot satisfy this check.
             let printArea = CGRect(x: 8, y: 11, width: 11, height: 8)
             for glyph in [ReaderIcon.Glyph.calendar, .notebook] {
-                let frames = try [0, ReaderIconPageAction.hoverProgress, 1].map { progress in
-                    try pagePixels(glyph, progress: progress, background: .white, region: printArea)
-                }
+                let frames = try [
+                    pagePixels(glyph, progress: 0, background: .white, region: printArea),
+                    pagePixels(
+                        glyph, progress: ReaderIconPageAction.hoverProgress, background: .white, region: printArea),
+                    pagePixels(
+                        glyph, progress: 1, turns: glyph == .calendar ? 1 : 0, background: .white, region: printArea),
+                ]
                 #expect(Set(frames).count == 3, "printed area for \(glyph)")
             }
         }
@@ -97,6 +101,63 @@
             }
         }
 
+        @Test func calendarHoverDoesNotAddAnotherLineAlongThePageEdge() throws {
+            // This strip is beside the printed day, away from the corner that lifts.
+            let edge = CGRect(x: 2, y: 11, width: 3, height: 6)
+            func darkCoverage(at progress: CGFloat) throws -> Int {
+                let rgba = try pagePixels(.calendar, progress: progress, background: .white, region: edge)
+                return stride(from: 0, to: rgba.count, by: 4).count { rgba[$0] < 128 }
+            }
+            #expect(try darkCoverage(at: 0) == darkCoverage(at: ReaderIconPageAction.hoverProgress))
+        }
+
+        @Test func tearingCalendarPagesLeavesTheNewDatePrintedWhenThePointerLeaves() throws {
+            let face = CGRect(x: 3, y: 9, width: 18, height: 12)
+            func frame(turns: CGFloat, contact: CGFloat = 0) throws -> [UInt8] {
+                try pagePixels(.calendar, progress: contact, turns: turns, background: .white, region: face)
+            }
+            let digit = CGRect(x: 8, y: 11, width: 6, height: 8)
+            let hover = try pagePixels(
+                .calendar, progress: ReaderIconPageAction.hoverProgress, background: .white, region: digit)
+            let mouseDown = try pagePixels(.calendar, progress: 1, background: .white, region: digit)
+            let activated = try pagePixels(.calendar, progress: 1, turns: 1, background: .white, region: digit)
+            #expect(mouseDown == hover && activated != mouseDown)
+
+            let restingPages = try (0..<31).map { try frame(turns: CGFloat($0)) }
+            #expect(Set(restingPages).count == 31)
+            let firstPageAfterCycle = try frame(turns: 31)
+            #expect(firstPageAfterCycle == restingPages[0])
+            for turn: CGFloat in [1, 2, 24, 25, 31] {
+                for contact in [CGFloat(0), ReaderIconPageAction.hoverProgress, 1] {
+                    let completed = try frame(turns: turn, contact: contact)
+                    let lastFrame = try frame(turns: turn - 0.0001, contact: contact)
+                    let oldPage = try frame(turns: turn - 1, contact: contact)
+                    let stillOld = completed == oldPage
+                    let discontinuous = zip(lastFrame, completed).count { abs(Int($0.0) - Int($0.1)) > 8 }
+                    #expect(!stillOld && discontinuous < completed.count / 100, "turn \(turn), contact \(contact)")
+                }
+            }
+        }
+
+        @Test func liftedDatesKeepTheirCenterAndPrintedStrokeWidth() throws {
+            for day in 1...31 {
+                let rest = CalendarNumerals.path(day: day, lift: 0).boundingRect
+                let lifted = CalendarNumerals.path(day: day, lift: 1).boundingRect
+                #expect(abs(rest.midX - lifted.midX) < 0.01 && abs(rest.midY - lifted.midY) < 0.01)
+                #expect(lifted.height > rest.height && lifted.height < 1.2 * rest.height)
+            }
+
+            // A short vertical slice across the seven's horizontal stroke measures actual rendered pen width.
+            let bar = CGRect(x: 10, y: 10, width: 2, height: 4)
+            func ink(at progress: CGFloat) throws -> Double {
+                let rgba = try pagePixels(.calendar, progress: progress, background: .white, region: bar)
+                return stride(from: 0, to: rgba.count, by: 4).reduce(0.0) { $0 + Double(255 - rgba[$1]) / 255 }
+            }
+            let rest = try ink(at: 0)
+            let hovered = try ink(at: ReaderIconPageAction.hoverProgress)
+            #expect(rest > 10 && abs(hovered - rest) < 2.5, "stroke coverage in pixels: \(rest) → \(hovered)")
+        }
+
         @Test func writingStaysOnTheRightOfTheNotebookBinding() throws {
             let margin = CGRect(x: 0, y: 2, width: 6, height: 20)
             let rest = try pagePixels(.notebook, progress: 0, background: .clear, region: margin)
@@ -108,9 +169,9 @@
         }
 
         private func pagePixels(
-            _ glyph: ReaderIcon.Glyph, progress: CGFloat, background: Color, region: CGRect
+            _ glyph: ReaderIcon.Glyph, progress: CGFloat, turns: CGFloat = 0, background: Color, region: CGRect
         ) throws -> [UInt8] {
-            let detail = ReaderIconPageAction(glyph: glyph, progress: progress)
+            let detail = ReaderIconPageAction(glyph: glyph, progress: progress, calendarTurns: turns)
                 .frame(width: 24, height: 24).foregroundStyle(.black).background(background)
                 .environment(\.colorScheme, .light)
             let renderer = ImageRenderer(content: detail)

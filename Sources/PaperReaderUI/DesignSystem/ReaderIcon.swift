@@ -1,5 +1,9 @@
 import SwiftUI
 
+extension EnvironmentValues {
+    @Entry var calendarIconTurns = 0
+}
+
 /// Two printing plates on a shared 24-point grid. The outline follows the control's ink.
 struct ReaderIcon: View {
     enum Glyph: Int, CaseIterable {
@@ -15,6 +19,7 @@ struct ReaderIcon: View {
     @Environment(\.isEnabled) private var enabled
     @Environment(\.backgroundProminence) private var backgroundProminence
     @Environment(\.readerIconInteraction) private var interaction
+    @Environment(\.calendarIconTurns) private var calendarTurns
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     init(_ glyph: Glyph, size: CGFloat = 16, filled: Bool = false, sidebarSelected: Bool? = nil) {
@@ -47,7 +52,8 @@ struct ReaderIcon: View {
                     case .hovered: ReaderIconPageAction.hoverProgress
                     case .pressed: 1
                     }
-                ReaderIconPageAction(glyph: glyph, progress: progress)
+                ReaderIconPageAction(glyph: glyph, progress: progress, calendarTurns: CGFloat(calendarTurns))
+                    .animation(reduceMotion ? nil : .linear(duration: 0.36), value: calendarTurns)
                     .foregroundStyle(sidebarLineStyle)
                     .opacity(enabled ? 1 : 0.5)
             }
@@ -86,7 +92,7 @@ struct ReaderIcon: View {
         ZStack {
             plate.fill(plateStyle)
             plate.stroke(plateStyle, lineWidth: size / 24)
-            outline.stroke(plateStyle, style: outlineStroke(weight: 2.1))
+            outline.stroke(plateStyle, style: outlineStroke(weight: glyph == .calendar ? 1.4 : 2.1))
         }
         .mask {
             SidebarIconFill(glyph: glyph, progress: selected ? 1 : 0)

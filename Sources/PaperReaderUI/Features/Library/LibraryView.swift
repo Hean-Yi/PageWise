@@ -16,6 +16,7 @@ public struct LibraryView: View {
     @State private var onlineSearch: OnlinePaperSearch
     @State private var selectedShelfID: UUID?
     @State private var calendarDate = Date()
+    @State private var calendarIconTurns = 0
     @State private var expandedNotebooks = Set<UUID>()
     @State private var notebookScroll = NotebookScrollBookmark()
     @State private var expandedNotebookAnnotations = Set<UUID>()
@@ -470,10 +471,11 @@ public struct LibraryView: View {
                 }
                 Rectangle().fill(ReaderTheme.line).frame(height: 1).padding(.vertical, 12).padding(.horizontal, 12)
                 navigation("阅读日历", icon: .calendar, selected: model.selectedSection == "calendar") {
+                    calendarIconTurns += 1
                     model.endReading()
                     model.selectedSection = "calendar"
                     preferredColumn = .detail
-                }
+                }.environment(\.calendarIconTurns, calendarIconTurns)
                 navigation("阅读笔记", icon: .notebook, selected: model.selectedSection == "notebooks") {
                     model.endReading()
                     model.selectedSection = "notebooks"
