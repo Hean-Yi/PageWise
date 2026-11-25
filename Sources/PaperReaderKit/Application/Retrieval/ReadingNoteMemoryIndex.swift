@@ -23,8 +23,21 @@ public actor ReadingNoteMemoryIndex {
     public init() {}
 
     public func search(
+        query: String, state: LibraryState, pending: Set<UUID>, excluding: UUID?, paperID: UUID?, limit: Int,
+        includeArchived: Bool
+    ) throws -> [Evidence] {
+        let unavailable = includeArchived ? [] : ChatSourceVersions.withdrawnNoteIDs(in: state, excluding: pending)
+        let titles = Dictionary(
+            state.papers.lazy.filter { !pending.contains($0.id) }.map { ($0.id, $0.title) },
+            uniquingKeysWith: { first, _ in first })
+        return try search(
+            query: query, notes: state.readingNotes, paperTitles: titles, excluding: excluding, paperID: paperID,
+            limit: limit, unavailable: unavailable)
+    }
+
+    public func search(
         query: String, notes: [ReadingNote], paperTitles: [UUID: String], excluding: UUID? = nil,
-        paperID: UUID? = nil, limit: Int = 6
+        paperID: UUID? = nil, limit: Int = 6, unavailable: Set<UUID> = []
     ) throws -> [Evidence] {
         let active = notes.filter { $0.deletedAt == nil && paperTitles[$0.paperID] != nil }
         let liveIDs = Set(active.map(\.id))
@@ -52,9 +65,12 @@ public actor ReadingNoteMemoryIndex {
         let browsing = query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         var weights: [String: Double] = [:]
         var candidates = Set<UUID>()
+        let eligibleCount = unavailable.isEmpty ? liveIDs.count : liveIDs.subtracting(unavailable).count
         for term in terms {
-            guard let matches = postings[term] else { continue }
-            weights[term] = log(1 + Double(entries.count) / Double(matches.count))
+            guard let indexed = postings[term] else { continue }
+            let matches = unavailable.isEmpty ? indexed : indexed.subtracting(unavailable)
+            guard !matches.isEmpty else { continue }
+            weights[term] = log(1 + Double(eligibleCount) / Double(matches.count))
             candidates.formUnion(matches)
         }
         func weight(_ terms: Set<String>) -> Double {
@@ -62,7 +78,9 @@ public actor ReadingNoteMemoryIndex {
             return weights.reduce(0) { $0 + (terms.contains($1.key) ? $1.value : 0) }
         }
         var results: [(evidence: Evidence, score: Double, modified: Date)] = []
-        for note in active where note.paperID != excluding && (paperID == nil || note.paperID == paperID) {
+        for note in active
+        where !unavailable.contains(note.id) && note.paperID != excluding && (paperID == nil || note.paperID == paperID)
+        {
             guard browsing || candidates.contains(note.id), let entry = entries[note.id],
                 let first = entry.chunks.first
             else { continue }

@@ -1,6 +1,25 @@
 import Foundation
 import PaperReaderKit
 
+/// Track all supplied note versions, including background the model paraphrases without a link.
+@MainActor private final class CloseReadingBackground {
+    private(set) var versions = ChatSourceVersions()
+
+    func retrieve(_ query: String, paperID: UUID, reader: ReaderModel) async throws -> [Evidence] {
+        let hits = try await reader.readingNoteEvidence(query: query, excluding: paperID, limit: 5)
+        try check(in: reader)
+        return hits.filter { evidence in
+            guard let note = reader.referencedReadingNote(for: evidence) else { return false }
+            versions.include(note)
+            return true
+        }
+    }
+
+    func check(in reader: ReaderModel) throws {
+        try reader.validateAssistantBackground(versions)
+    }
+}
+
 extension ReaderModel {
     func closeReadingVersion(for scope: DiscussionNoteScope) -> String {
         scope.htmlReading?.readingNoteVersion(digest: scope.digest) ?? scope.digest + ":original-0"
@@ -14,6 +33,7 @@ extension ReaderModel {
             document.htmlReading?.readingNoteVersion(digest: document.digest) ?? document.digest + ":original-0"
         return state.chats.last {
             $0.paperID == paperID && $0.closeReadingVersion == version && (focus.isEmpty || $0.question == focus)
+                && $0.backgroundSources?.isCurrent(in: state, excluding: pendingImportIDs) != false
         }
     }
 
@@ -48,19 +68,24 @@ extension ReaderModel {
         let task = Task {
             let config = modelSettings
             let key = try await modelKey(for: config)
+            let background = CloseReadingBackground()
             let analysis = try await CloseReadingEngine.run(
                 paper: document, root: root, focus: focus,
-                retrieveNotes: { query in try await self.readingNoteEvidence(query: query, excluding: paperID, limit: 5)
-                },
+                retrieveNotes: { query in try await background.retrieve(query, paperID: paperID, reader: self) },
                 progress: { [weak self] text in
                     await self?.setCloseReadingProgress(text)
                 },
                 complete: { [client] system, user in
-                    try await client.complete(
+                    try await background.check(in: self)
+                    let result = try await client.complete(
                         settings: config, key: key, system: system, user: user, jsonOutput: true, maxOutputTokens: 8192)
+                    try await background.check(in: self)
+                    return result
                 })
-            try validateDiscussionScope(scope)
-            return try await saveCloseReading(analysis, scope: scope, focus: focus)
+            var verifiedScope = scope
+            verifiedScope.backgroundSources = background.versions
+            try validateDiscussionScope(verifiedScope)
+            return try await saveCloseReading(analysis, scope: verifiedScope, focus: focus)
         }
         closeReadingTask = task
         defer {
@@ -160,6 +185,7 @@ extension ReaderModel {
         var report = ChatTurn(
             paperID: scope.paperID, question: focus.isEmpty ? "AI 精读" : focus, selection: "",
             answer: coverage, evidence: [])
+        report.backgroundSources = scope.backgroundSources
         report.closeReadingVersion = closeReadingVersion(for: scope)
         report.closeReadingNoteIDs = insertions.map(\.note.id)
         if let version = outlineRefs.first(where: { $0.paperID == scope.paperID && $0.readingNoteID == nil })?
@@ -168,6 +194,7 @@ extension ReaderModel {
             let body = sections.joined(separator: "\n\n")
             try await validateNoteCitations(outlineRefs, markdown: body, documentEnd: true)
             var note = ReadingNote(paperID: scope.paperID, contentVersion: version, anchors: [], markdown: body)
+            note.backgroundSources = scope.backgroundSources
             note.placement = .documentEnd
             note.citations = outlineRefs
             report.readingNoteID = note.id

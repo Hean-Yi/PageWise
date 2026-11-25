@@ -28,6 +28,8 @@ public struct ReadingNote: Identifiable, Codable, Sendable, Equatable {
     /// Display can recover its sibling ranges after checking the PDF. The stored anchors remain authoritative.
     public var legacyStrokeMemberID: UUID?
     public var citations: [LocalPassageCitation]?
+    /// Sources supplied to the Agent when it wrote this note. The reader can always open the saved text.
+    public var backgroundSources: ChatSourceVersions?
     public var markdown: String
     public var dimension: CloseReadingDimension?
     /// Ordinary notes use their passage anchors. Document summaries own their citations separately.

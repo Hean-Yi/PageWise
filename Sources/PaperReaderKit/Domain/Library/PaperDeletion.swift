@@ -6,7 +6,13 @@ extension LibraryState {
             throw ReaderError.message("这篇论文已不在书库中。")
         }
         let turnIDs = Set(chats.lazy.filter { $0.paperID == id }.map(\.id))
-        memories.removeAll { turnIDs.contains($0.sourceID) }
+        var rejected = Set<String>()
+        memories.removeAll { item in
+            guard turnIDs.contains(item.sourceID) else { return false }
+            rejected.formUnion(item.rejectedFingerprints)
+            return true
+        }
+        suppressedMemoryFingerprints.formUnion(rejected)
         chats.removeAll { $0.paperID == id }
         readingNotes.removeAll { $0.paperID == id }
         highlights.removeAll { $0.paperID == id }

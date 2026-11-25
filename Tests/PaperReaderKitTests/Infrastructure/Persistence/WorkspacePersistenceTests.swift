@@ -217,3 +217,22 @@ private let versionOneWorkspaceFixture = Data(
         #expect(sqlite3_column_int(statement, 0) == 1)
     }
 }
+
+@Test func normalizedVersionThirteenCatalogUpgradesWithoutChangingSourceRecords() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let store = try LibraryStore(directory: root)
+    let original = try JSONDecoder().decode(LibraryState.self, from: versionOneWorkspaceFixture)
+    try await store.save(original)
+    var old = try #require(JSONSerialization.jsonObject(with: readWorkspaceFixture(root: root)) as? [String: Any])
+    old["version"] = 13
+    old["suppressedMemoryFingerprints"] = nil
+    try writeWorkspaceFixture(JSONSerialization.data(withJSONObject: old), root: root)
+    let restored = try await LibraryStore(directory: root).load()
+    #expect(restored.suppressedMemoryFingerprints.isEmpty)
+    #expect(
+        restored.papers == original.papers && restored.chats == original.chats && restored.memories == original.memories
+    )
+    let header = try #require(JSONSerialization.jsonObject(with: readWorkspaceFixture(root: root)) as? [String: Any])
+    #expect(header["version"] as? Int == LibraryState.currentVersion)
+}

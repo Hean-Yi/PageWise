@@ -209,19 +209,22 @@ extension ReaderModel {
 
 extension ReaderModel {
     /// Read live note state whenever a recalled result is used; an old tool result cannot revive a deleted note.
-    func referencedReadingNote(id: UUID, paperID: UUID) -> ReadingNote? {
+    func referencedReadingNote(id: UUID, paperID: UUID, includeArchived: Bool = true) -> ReadingNote? {
         guard !pendingImportIDs.contains(paperID), state.papers.contains(where: { $0.id == paperID }) else {
             return nil
         }
-        return state.readingNotes.first {
-            $0.id == id && $0.paperID == paperID && $0.deletedAt == nil
-                && !$0.markdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        }
+        guard
+            let note = state.readingNotes.first(where: {
+                $0.id == id && $0.paperID == paperID && $0.deletedAt == nil
+                    && !$0.markdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            })
+        else { return nil }
+        return includeArchived ? note : ChatSourceVersions.recalledNote(note, in: state, excluding: pendingImportIDs)
     }
 
-    func referencedReadingNote(for evidence: Evidence) -> ReadingNote? {
+    func referencedReadingNote(for evidence: Evidence, includeArchived: Bool = false) -> ReadingNote? {
         guard let id = evidence.readingNoteID, let paper = evidence.paperID, !evidence.text.isEmpty,
-            let note = referencedReadingNote(id: id, paperID: paper),
+            let note = referencedReadingNote(id: id, paperID: paper, includeArchived: includeArchived),
             ReadingNoteMemoryIndex.searchableBody(note.markdown).contains(evidence.text)
         else { return nil }
         return note
@@ -235,16 +238,13 @@ extension ReaderModel {
         return (note, paper)
     }
 
-    func readingNoteEvidence(query: String, excluding: UUID? = nil, paperID: UUID? = nil, limit: Int = 6) async throws
-        -> [Evidence]
-    {
-        let titles = Dictionary(
-            state.papers.lazy.filter { !self.pendingImportIDs.contains($0.id) }.map { ($0.id, $0.title) },
-            uniquingKeysWith: { first, _ in first })
+    func readingNoteEvidence(
+        query: String, excluding: UUID? = nil, paperID: UUID? = nil, limit: Int = 6, includeArchived: Bool = false
+    ) async throws -> [Evidence] {
         let hits = try await readingNoteIndex.search(
-            query: query, notes: state.readingNotes, paperTitles: titles,
-            excluding: excluding, paperID: paperID, limit: limit)
+            query: query, state: state, pending: pendingImportIDs, excluding: excluding, paperID: paperID, limit: limit,
+            includeArchived: includeArchived)
         try Task.checkCancellation()
-        return hits.filter { referencedReadingNote(for: $0) != nil }
+        return hits.filter { referencedReadingNote(for: $0, includeArchived: includeArchived) != nil }
     }
 }

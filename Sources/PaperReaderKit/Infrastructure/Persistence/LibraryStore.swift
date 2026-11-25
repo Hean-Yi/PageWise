@@ -71,13 +71,22 @@ public actor LibraryStore {
                     try Self.execute(db, "UPDATE library_generation SET revision=revision+1 WHERE id=1")
                     revision += 1
                 } else {
-                    guard header.recordFormat == 2, header.version == LibraryState.currentVersion else {
+                    guard header.recordFormat == 2,
+                        header.version == LibraryState.currentVersion || header.version == 13
+                    else {
                         throw ReaderError.message("书库版本不受支持，原资料已保留。")
                     }
                     var restored = try decoder.decode(Catalog.self, from: data).state
                     try rows.read(into: &restored)
                     try restored.validateOrdering()
                     try restored.validateShelves()
+                    try restored.validateMemorySuppression()
+                    if header.version == 13 {
+                        // v14 adds anonymous suppression. Legacy rows, including their original IDs, stay untouched.
+                        try Self.writeCatalog(Catalog(restored), db: db)
+                        try Self.execute(db, "UPDATE library_generation SET revision=revision+1 WHERE id=1")
+                        revision += 1
+                    }
                     state = restored
                 }
                 return (state, revision)
@@ -96,6 +105,9 @@ public actor LibraryStore {
         guard let previous = baseline else { throw LibraryRecords.writeFailure }
         let catalog = Catalog(state)
         let catalogChanged = catalog != Catalog(previous.state) || previous.revision == 0
+        if state.suppressedMemoryFingerprints != previous.state.suppressedMemoryFingerprints {
+            try state.validateMemorySuppression()
+        }
         if catalogChanged || previous.state.papers != state.papers {
             try state.validateShelves()
             try state.validateOrdering()
@@ -157,6 +169,7 @@ public actor LibraryStore {
         let paperShelfIDs: [String: UUID]
         let manualPaperIDs: [UUID]
         let preferredSort: LibrarySort
+        let suppressedMemoryFingerprints: Set<String>?
 
         init(_ state: LibraryState) {
             recordFormat = 2
@@ -165,6 +178,8 @@ public actor LibraryStore {
             paperShelfIDs = state.paperShelfIDs
             manualPaperIDs = state.manualPaperIDs
             preferredSort = state.preferredSort
+            suppressedMemoryFingerprints =
+                state.suppressedMemoryFingerprints.isEmpty ? nil : state.suppressedMemoryFingerprints
         }
 
         var state: LibraryState {
@@ -173,6 +188,7 @@ public actor LibraryStore {
             state.paperShelfIDs = paperShelfIDs
             state.manualPaperIDs = manualPaperIDs
             state.preferredSort = preferredSort
+            state.suppressedMemoryFingerprints = suppressedMemoryFingerprints ?? []
             return state
         }
     }

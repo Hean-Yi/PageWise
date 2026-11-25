@@ -7,6 +7,8 @@ public struct ChatTurn: Identifiable, Codable, Sendable, Equatable {
     public var selection: String
     public var answer: String
     public var evidence: [Evidence]
+    /// Absent on legacy turns, whose supplied background cannot be reconstructed safely.
+    public var backgroundSources: ChatSourceVersions?
     /// A note lives in the same collection as manually made reading notes.
     public var readingNoteID: UUID?
     public var closeReadingVersion: String?
@@ -18,5 +20,6 @@ public struct ChatTurn: Identifiable, Codable, Sendable, Equatable {
         self.selection = selection
         self.answer = answer
         self.evidence = evidence
+        self.backgroundSources = .init()
     }
 }

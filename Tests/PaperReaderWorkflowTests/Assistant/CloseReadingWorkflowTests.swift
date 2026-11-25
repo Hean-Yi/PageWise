@@ -255,6 +255,63 @@ private func closeReadingWorkflowFailuresLeaveNoPartialNotesOrReport(
     }
 }
 
+@Test @MainActor func closeReadingRevokesUncitedNoteBackgroundBeforeSendingSynthesisOrSaving() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let api = CloseReadingTransport(.outlineOnly)
+    let (reader, id, other) = try await closeReadingLibrary(root: root, api: api)
+    let index = try #require(reader.state.readingNotes.firstIndex { $0.paperID == other.id })
+    await api.setOnRequest {
+        reader.state.readingNotes[index].markdown = "读者更正了之前的判断。"
+        reader.state.readingNotes[index].modifiedAt.addTimeInterval(1)
+    }
+    await #expect(throws: ReaderError.self) { try await reader.runCloseReading(id) }
+    #expect(await api.requests == 1)
+    #expect(!reader.state.chats.contains { $0.closeReadingVersion != nil })
+    #expect(!reader.state.readingNotes.contains { $0.paperID == id })
+    let saved = try await reader.store.load()
+    #expect(!saved.chats.contains { $0.closeReadingVersion != nil })
+    #expect(!saved.readingNotes.contains { $0.paperID == id })
+}
+
+@Test @MainActor func archivedCloseReadingAndIndirectUncitedNotesRemainReadableAndLeaveRecallAfterSourceEdit()
+    async throws
+{
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let (reader, primary, other) = try await closeReadingLibrary(root: root, api: CloseReadingTransport(.outlineOnly))
+    let report = try await reader.runCloseReading(primary)
+    let summary = try #require(reader.currentReadingNotes.first { $0.id == report.readingNoteID })
+    #expect(summary.citations?.allSatisfy { $0.readingNoteID == nil } == true)
+    #expect(summary.backgroundSources?.isCurrent(in: reader.state, excluding: []) == true)
+    let block = try #require(other.blocks.first)
+    let source = Evidence(id: "current", title: other.title, text: block.text, paperID: other.id, blockID: block.id)
+    let original = try #require(reader.state.readingNotes.first { $0.paperID == other.id })
+    reader.select(other.id)
+    let scope = try reader.discussionNoteScope(for: other.id)
+    let independent = try await reader.saveDiscussionNote(
+        in: scope, sources: [(source, block.text)], markdown: "预算匹配基线独立记录。", requestID: UUID())
+    var derivedScope = scope
+    var versions = ChatSourceVersions()
+    versions.include(summary)
+    derivedScope.backgroundSources = versions
+    let indirect = try await reader.saveDiscussionNote(
+        in: derivedScope, sources: [(source, block.text)], markdown: "预算匹配结论使用旧总结推断。", requestID: UUID())
+    #expect(try await reader.readingNoteEvidence(query: "预算匹配").compactMap(\.readingNoteID).contains(indirect.id))
+    try #require(reader.updateReadingNote(id: original.id, anchors: original.anchors, markdown: "新的分析意见。"))
+    await reader.flushReadingNotes()
+    let restored = try ReaderModel(root: root, credentials: WorkflowCredentials())
+    await restored.load()
+    #expect(try await restored.readingNoteEvidence(query: "", paperID: primary).isEmpty)
+    // Higher-ranked invalid matches must not consume the available result count.
+    #expect(
+        try await restored.readingNoteEvidence(query: "预算匹配", limit: 1).compactMap(\.readingNoteID) == [independent.id])
+    #expect(
+        try await restored.readingNoteEvidence(query: "", paperID: primary, includeArchived: true).compactMap(
+            \.readingNoteID) == [summary.id])
+    #expect(restored.referencedReadingNote(id: indirect.id, paperID: other.id)?.markdown == indirect.markdown)
+}
+
 @Test @MainActor func rerunningSameFocusKeepsEditsAndDoesNotRestoreDeletedPassageNotes() async throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: root) }

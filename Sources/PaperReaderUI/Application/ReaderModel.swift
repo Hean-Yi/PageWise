@@ -52,6 +52,7 @@ public final class ReaderModel {
     public var reflowStages: [UUID: String] = [:]
     public var reflowBodyCount = 0
     @ObservationIgnored var reflowPresenting: Set<UUID> = []
+    let researchMemory = ResearchMemory()
     public var assistantDraft: ChatTurn?
     public var busyAI = false
     var closeReadingPaperID: UUID?

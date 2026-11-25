@@ -184,6 +184,16 @@ public struct AgentClient: AgentCompleting {
         private static let shelfName = Property(type: "string", description: "Shelf display name, 1–60 characters")
         static let definitions: [Tool] = [
             make(
+                "research_overview",
+                "Read research activity by shelf. Supply query only when the reader asks about their own long-term interests or remembered concerns.",
+                [
+                    "query": .init(
+                        type: "string",
+                        description:
+                            "Optional focus keywords. Use * for a broad sample of recent reader-edited and provisional memories. Omitting query returns shelf counts only."
+                    )
+                ], []),
+            make(
                 "list_library",
                 "Page through the local library for inventory and organization. Discover shelf IDs before inspecting a shelf. Follow next_offset for complete coverage.",
                 [

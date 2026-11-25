@@ -1,13 +1,15 @@
 import Foundation
 
 public struct LibraryState: Codable, Sendable {
-    public static let currentVersion = 13
+    public static let currentVersion = 14
     public var version = currentVersion
     public var papers: [Paper] = []
     public var readingNotes: [ReadingNote] = []
     public var highlights: [Highlight] = []
     public var chats: [ChatTurn] = []
     public var memories: [MemoryItem] = []
+    /// After a source paper is removed, only irreversible hashes of explicitly rejected propositions survive.
+    var suppressedMemoryFingerprints: Set<String> = []
     public var reading: [ReadingEntry] = []
     public var workspace: [String: PaperWorkspace] = [:]
     public var bookmarks: [PageBookmark] = []
@@ -19,7 +21,7 @@ public struct LibraryState: Codable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case version, papers, highlights, chats, memories, reading, workspace, bookmarks, shelves, paperShelfIDs
-        case manualPaperIDs, preferredSort, readingNotes
+        case manualPaperIDs, preferredSort, readingNotes, suppressedMemoryFingerprints
     }
 
     public init(from decoder: any Decoder) throws {
@@ -83,8 +85,21 @@ public struct LibraryState: Codable, Sendable {
         }
         if storedVersion == 11 { try migrateVersion11(from: decoder) }
         if storedVersion < 13 { recordLegacyStrokeMembers() }
+        if storedVersion >= 14 {
+            suppressedMemoryFingerprints =
+                try values.decodeIfPresent(Set<String>.self, forKey: .suppressedMemoryFingerprints) ?? []
+        }
+        try validateMemorySuppression()
         try validateOrdering()
         try validateShelves()
         version = Self.currentVersion
+    }
+
+    func validateMemorySuppression() throws {
+        guard
+            suppressedMemoryFingerprints.allSatisfy({ hash in
+                hash.utf8.count == 64 && hash.utf8.allSatisfy { (48...57).contains($0) || (97...102).contains($0) }
+            })
+        else { throw ReaderError.message("书库记忆指纹格式无效，原资料已保留。") }
     }
 }

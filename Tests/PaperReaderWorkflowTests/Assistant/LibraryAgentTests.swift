@@ -75,13 +75,18 @@ private actor AgentDiscoveryFixture: PaperDiscovery {
 private actor SuspendedAgentModel: AgentCompleting {
     let onlinePrelude: Bool
     private var callCount = 0
-    init(onlinePrelude: Bool = false) { self.onlinePrelude = onlinePrelude }
+    let initialTool: AgentMessage?
+    init(onlinePrelude: Bool = false, initialTool: AgentMessage? = nil) {
+        self.onlinePrelude = onlinePrelude
+        self.initialTool = initialTool
+    }
     var waiting = false
     private var continuation: CheckedContinuation<AgentMessage, Never>?
     func respond(settings: ModelSettings, key: String, messages: [AgentMessage], limits: AgentLimits) async throws
         -> AgentMessage
     {
         callCount += 1
+        if let initialTool, callCount == 1 { return initialTool }
         if onlinePrelude, callCount == 1 { return tool("search_online", #"{"query":"attention"}"#) }
         if onlinePrelude, callCount == 2 { return .init(role: "assistant", content: "已找到") }
         waiting = true
@@ -491,7 +496,7 @@ func changingAgentServiceOrModelStartsFreshWireHistoryAndKeepsDisplayedTurns(cha
     let rounds = await model.requestLimits
     #expect(
         rounds.first?.availableToolNames == [
-            "search_online", "search_library", "search_reading_notes", "ask_user", "list_library",
+            "search_online", "search_library", "search_reading_notes", "ask_user", "list_library", "research_overview",
         ])
     let afterSearch = try #require(rounds.dropFirst().first?.availableToolNames)
     #expect(afterSearch.contains("prepare_import") && afterSearch.contains("present_results"))
@@ -1414,6 +1419,13 @@ func closeReadingToolBecomesAvailableAsSoonAsTheTargetPaperIsRegistered(selected
     let searchCard = try #require(turn.cards.first { $0.readingNoteID == saved.id })
     #expect(agent.open(cardID: searchCard.id))
     #expect(reader.selectedPaperID == comparisonID && reader.requestedReadingNote == saved.id)
+    reader.deleteReadingNote(saved.id)
+    await reader.flushReadingNotes()
+    #expect(note.backgroundSources?.isCurrent(in: reader.state, excluding: []) == false)
+    #expect(try await reader.readingNoteEvidence(query: "", paperID: primary.id).isEmpty)
+    #expect(
+        try await reader.readingNoteEvidence(query: "", paperID: primary.id, includeArchived: true).map(\.readingNoteID)
+            == [note.id])
 }
 
 @Test @MainActor func libraryAgentRecallsDistinctNotesOnTheSamePageAndRefreshesMemoryAfterEditsAndDeletion()
@@ -1858,4 +1870,139 @@ private func libraryPayload(_ messages: [AgentMessage], _ call: String) throws -
     try await eventually { !agent.isRunning }
     #expect(agent.turns.last?.activities.map(\.status) == [.failed, .succeeded, .succeeded])
     #expect(reader.state.shelves.first { $0.id == shelf }?.name == "新名称")
+}
+
+@Test @MainActor func researchOverviewReportsDistinctPapersAndRefreshesAfterShelfEdits() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let reader = try await makeAgentReader(root)
+    let paper = Paper(
+        title: "Budget", digest: "fixture", originalPath: "unused.pdf", pageCount: 1, blocks: [], warnings: [],
+        canReflow: false)
+    let shelf = try Shelf(name: "实验设计")
+    reader.state.papers = [paper]
+    reader.state.shelves = [shelf]
+    reader.state.paperShelfIDs = [paper.id.uuidString: shelf.id]
+    let note = ReadingNote(paperID: paper.id, contentVersion: "v1", anchors: [], markdown: "预算需要固定。")
+    reader.state.readingNotes = [
+        note, ReadingNote(paperID: paper.id, contentVersion: "v1", anchors: [], markdown: "核对基线。"),
+    ]
+    let client = ScriptedLibraryModel { messages, count in
+        if count == 1 || count == 3 { return tool("research_overview", "{}") }
+        let payload = try #require(messages.last?.content)
+        if count == 2 { #expect(payload.contains("实验设计") && payload.contains("\"papersWithNotes\":1")) }
+        if count == 4 { #expect(payload.contains("更名") && !messages.contains { $0.content?.contains("实验设计") == true }) }
+        return .init(role: "assistant", content: "已核对当前书架。")
+    }
+    let agent = LibraryAgent(reader: reader, client: client, discovery: AgentDiscoveryFixture())
+    agent.send("我在研究哪些主题？")
+    try await eventually { !agent.isRunning }
+    try reader.state.shelves[0].rename("更名")
+    agent.send("再看一次。")
+    try await eventually { !agent.isRunning }
+    #expect(agent.turns.count == 2 && agent.turns.allSatisfy { $0.error == nil })
+}
+
+@MainActor private func overviewMemoryFixture(_ reader: ReaderModel) -> (Paper, MemoryItem) {
+    let paper = Paper(
+        title: "Sampling methods", digest: "fixture", originalPath: "unused.pdf", pageCount: 1,
+        blocks: [], warnings: [], canReflow: false)
+    let turn = ChatTurn(paperID: paper.id, question: "Inference budgets?", selection: "", answer: "", evidence: [])
+    reader.state.papers = [paper]
+    reader.state.chats = [turn]
+    let remembered = MemoryItem(text: "I track budget saturation: private-marker-old", sourceID: turn.id)
+    reader.state.memories = [
+        remembered, MemoryItem(text: "Interest in volcanology: unrelated-private-marker", sourceID: turn.id),
+    ]
+    return (paper, remembered)
+}
+
+@Test @MainActor func researchOverviewQueriesRelevantMemoriesAndDiscardsSupersededHistory() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let reader = try await makeAgentReader(root)
+    let (paper, _) = overviewMemoryFixture(reader)
+    let client = ScriptedLibraryModel { messages, count in
+        switch count {
+        case 1: return tool("research_overview", "{}", id: "scope")
+        case 2:
+            let body = try #require(messages.last?.content)
+            #expect(body.contains("private-marker") == false)
+            return tool("research_overview", #"{"query":"saturation"}"#, id: "focus")
+        case 3:
+            let body = try #require(messages.last?.content)
+            #expect(
+                body.contains("private-marker-old") && body.contains("ai_unverified")
+                    && body.contains(paper.id.uuidString))
+            #expect(!body.contains("volcanology"))
+            return .init(role: "assistant", content: "private-marker-old")
+        case 4:
+            #expect(!messages.contains { ($0.content ?? "").contains("private-marker-old") })
+            return tool("research_overview", #"{"query":"*"}"#, id: "broad")
+        default:
+            let payload = try #require(messages.last?.content)
+            let object = try #require(try JSONSerialization.jsonObject(with: Data(payload.utf8)) as? [String: Any])
+            let results = try #require(object["memories"] as? [[String: Any]])
+            #expect(results.first?["text"] as? String == "I now track matching compute.")
+            #expect(results.first?["status"] as? String == "user_edited")
+            #expect(results.count == 1)
+            return .init(role: "assistant", content: "已按最新记录核对。")
+        }
+    }
+    let agent = LibraryAgent(reader: reader, client: client, discovery: AgentDiscoveryFixture())
+    agent.send("长期记忆里，我关注预算吗？")
+    try await eventually { !agent.isRunning }
+    let corrected = reader.state.memories[0].correct(to: "I now track matching compute.")
+    let withdrawn = reader.state.memories[1].forget()
+    #expect(corrected && withdrawn)
+    agent.send("我还长期关心什么？")
+    try await eventually { !agent.isRunning }
+    #expect(agent.turns.allSatisfy { $0.error == nil })
+    #expect(await client.requests.count == 5)
+}
+
+@Test @MainActor func researchOverviewWithdrawalDuringResponseDropsTheLateAnswer() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let reader = try await makeAgentReader(root)
+    _ = overviewMemoryFixture(reader)
+    let client = SuspendedAgentModel(initialTool: tool("research_overview", #"{"query":"saturation"}"#))
+    let agent = LibraryAgent(reader: reader, client: client, discovery: AgentDiscoveryFixture())
+    agent.send("我长期关注什么？")
+    try await eventually { await client.waiting }
+    let withdrawn = reader.state.memories[0].forget()
+    #expect(withdrawn)
+    await client.release()
+    try await eventually { !agent.isRunning }
+    #expect(agent.turns.last?.error != nil)
+    #expect(agent.turns.last?.answer.isEmpty == true)
+}
+
+@Test @MainActor func researchOverviewAllowsAuthorizedOrganizationToRefreshShelfCountsWithinTheTurn() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let reader = try await makeAgentReader(root)
+    let (paper, _) = overviewMemoryFixture(reader)
+    let shelf = try Shelf(name: "Old methods")
+    reader.state.shelves = [shelf]
+    reader.state.paperShelfIDs = [paper.id.uuidString: shelf.id]
+    let client = ScriptedLibraryModel { messages, count in
+        switch count {
+        case 1: return tool("research_overview", "{}", id: "before")
+        case 2: return tool("list_library", #"{"scope":"shelves"}"#, id: "shelves")
+        case 3: return tool("rename_shelf", #"{"shelf_id":"\#(shelf.id)","name":"New methods"}"#, id: "rename")
+        case 4:
+            #expect(messages.last?.content?.contains("research_overview_changed") == true)
+            return tool("research_overview", "{}", id: "after")
+        default:
+            #expect(messages.last?.content?.contains("New methods") == true)
+            return .init(role: "assistant", content: "已更名并核对最新计数。")
+        }
+    }
+    let agent = LibraryAgent(reader: reader, client: client)
+    agent.send("查看研究方向，然后把书架重命名为 New methods")
+    try await eventually { !agent.isRunning }
+    #expect(agent.turns.last?.error == nil)
+    #expect(reader.state.shelves.first?.name == "New methods")
+    #expect(await client.requests.count == 5)
 }

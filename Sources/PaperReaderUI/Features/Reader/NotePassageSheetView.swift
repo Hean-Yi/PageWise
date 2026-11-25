@@ -117,7 +117,7 @@ private struct NotePassagePicker: View {
             error = nil
             do {
                 if !query.isEmpty { try await Task.sleep(for: .milliseconds(180)) }
-                let results = try await model.readingNoteEvidence(query: query, limit: 31)
+                let results = try await model.readingNoteEvidence(query: query, limit: 31, includeArchived: true)
                 try Task.checkCancellation()
                 choices = Array(results.lazy.filter { $0.readingNoteID != draft.noteID }.prefix(30))
                 loading = false

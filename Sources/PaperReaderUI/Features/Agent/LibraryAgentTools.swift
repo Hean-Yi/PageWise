@@ -9,6 +9,7 @@ struct AgentToolOutcome {
     var clarification: AgentClarification?
     var presentation: [AgentPresentedResult]?
     var versionCards: [AgentCard] = []
+    var changedResearchOverview = false
 }
 
 struct AgentRecommendationSeed: Sendable {
@@ -60,11 +61,34 @@ extension LibraryAgent {
             name: call.function.name, json: call.function.arguments, limits: limits)
         try check(epoch)
         switch arguments {
+        case .researchOverview(let query):
+            return try await researchOverview(query: query, epoch: epoch, onSubject: onSubject)
         case .library(let operation):
             guard call.function.name == "list_library" || organization.contains(call.function.name),
                 limits.availableToolNames?.contains(call.function.name) != false
             else { throw ReaderError.message("本次提问未授权该书库操作。") }
-            return try await organize(operation, onSubject: onSubject)
+            var outcome = try await organize(operation, onSubject: onSubject)
+            switch operation {
+            case .createShelf, .renameShelf, .movePapers:
+                if let previous = lastResearchOverview {
+                    let current = ResearchOverview(state: reader.state, excluding: reader.pendingImportIDs)
+                    if current != previous {
+                        lastResearchOverview = current
+                        outcome.changedResearchOverview = true
+                        var receipt =
+                            (try? JSONSerialization.jsonObject(with: Data(outcome.content.utf8))) as? [String: Any]
+                            ?? [:]
+                        receipt["research_overview_changed"] = true
+                        if let bytes = try? JSONSerialization.data(withJSONObject: receipt),
+                            bytes.count <= limits.maxToolResultBytes
+                        {
+                            outcome.content = String(decoding: bytes, as: UTF8.self)
+                        }
+                    }
+                }
+            default: break
+            }
+            return outcome
         case .closeReadPaper(let raw):
             let paper = try registeredPaper(raw, page: nil)
             guard let request = noteRequest, CloseReadingIntent.isRequested(request.instruction),
@@ -74,7 +98,7 @@ extension LibraryAgent {
             let report = try await reader.runCloseReading(paper.id, focus: request.instruction)
             let ids = [report.readingNoteID].compactMap { $0 } + (report.closeReadingNoteIDs ?? [])
             let cards = ids.compactMap { id -> AgentCard? in
-                guard let note = reader.state.readingNotes.first(where: { $0.id == id && $0.deletedAt == nil }) else {
+                guard let note = reader.referencedReadingNote(id: id, paperID: paper.id, includeArchived: false) else {
                     return nil
                 }
                 let title = note.isDocumentSummary ? "文末总结" : note.dimension?.title ?? "阅读笔记"
@@ -107,7 +131,8 @@ extension LibraryAgent {
                 sources.allSatisfy({ $0.evidence.paperID == paperID }),
                 request.target == nil || request.target == paperID
             else { throw ReaderError.message("一条阅读笔记只能标在本轮目标论文上。") }
-            let scope = try request.scope ?? reader.discussionNoteScope(for: paperID)
+            var scope = try request.scope ?? reader.discussionNoteScope(for: paperID)
+            scope.backgroundSources = recalledSources
             onSubject(evidence.displayTitle)
             let links = try references.map { reference -> NoteLinkRequest in
                 guard let registered = card(reference.passage.resultID), registered.kind == .evidence,
@@ -482,5 +507,80 @@ private struct ToolRecord: Encodable {
         case blockID = "block_id"
         case sourceURL = "source_url"
         case importStatus = "import_status"
+    }
+}
+
+extension LibraryAgent {
+    private struct RecalledMemory: Encodable {
+        enum CodingKeys: String, CodingKey {
+            case memoryID = "memory_id"
+            case paperID = "paper_id"
+            case sourceTurnID = "source_turn_id"
+            case status, text
+        }
+
+        let memoryID: UUID
+        let paperID: UUID
+        let sourceTurnID: UUID
+        let status: String
+        let text: String
+    }
+
+    private struct MemoryOverview: Encodable {
+        let overview: ResearchOverview
+        let memories: [RecalledMemory]
+    }
+
+    private func researchOverview(query: String?, epoch: UUID, onSubject: @MainActor (String) -> Void) async throws
+        -> AgentToolOutcome
+    {
+        var records: [RecalledMemory] = []
+        var sources: [MemoryItem] = []
+        if let query {
+            let found = try await reader.researchMemory.relevant(
+                to: query, state: reader.state, excluding: reader.pendingImportIDs)
+            try check(epoch)
+            let turns = Dictionary(
+                reader.state.chats.map { ($0.id, $0.paperID) }, uniquingKeysWith: { first, _ in first })
+            var versions = ChatSourceVersions()
+            for memory in found.prefix(max(0, limits.maxResults)) {
+                guard let id = turns[memory.sourceID], !reader.pendingImportIDs.contains(id) else { continue }
+                versions.include(memory)
+                sources.append(memory)
+                records.append(
+                    .init(
+                        memoryID: memory.id, paperID: id, sourceTurnID: memory.sourceID,
+                        status: memory.userEdited ? "user_edited" : "ai_unverified",
+                        text: String(memory.text.prefix(400))))
+            }
+            guard versions.isCurrent(in: reader.state, excluding: reader.pendingImportIDs) else {
+                throw ReaderError.message("长期记忆刚刚更新，请重新检索。")
+            }
+        }
+        let overview = ResearchOverview(state: reader.state, excluding: reader.pendingImportIDs)
+        let encoder = JSONEncoder()
+        var bytes =
+            try query == nil
+            ? encoder.encode(overview) : encoder.encode(MemoryOverview(overview: overview, memories: records))
+        var shortened = false
+        while bytes.count > limits.maxToolResultBytes, !records.isEmpty {
+            records.removeLast()
+            sources.removeLast()
+            bytes = try encoder.encode(MemoryOverview(overview: overview, memories: records))
+            shortened = true
+        }
+        guard bytes.count <= limits.maxToolResultBytes else { throw ReaderError.message("研究概览超过本次工具容量。") }
+        if !sources.isEmpty {
+            var recalled = ChatSourceVersions()
+            for memory in sources { recalled.include(memory) }
+            // Keep the earliest revision when two calls recall the same item in one transcript.
+            remember(recalled)
+            paperRegistry.formUnion(records.map(\.paperID))
+        }
+        lastResearchOverview = overview
+        onSubject(query == nil ? "书架、笔记与讨论" : "长期研究记忆")
+        return AgentToolOutcome(
+            content: String(decoding: bytes, as: UTF8.self), cards: [],
+            truncated: shortened || overview.shelfCount > overview.topics.count, message: nil)
     }
 }

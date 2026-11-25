@@ -11,7 +11,7 @@ struct PaperAssistantView: View {
     @FocusState private var composerFocused: Bool
 
     private var displayedChats: [ChatTurn] {
-        model.currentChats + (model.assistantDraft.flatMap { $0.paperID == model.selectedPaperID ? [$0] : nil } ?? [])
+        model.currentChats + (model.currentAssistantDraft.map { [$0] } ?? [])
     }
 
     var body: some View {

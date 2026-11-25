@@ -13,6 +13,7 @@ struct DiscussionNoteScope {
     let selectedPaperID: UUID?
     let retainedID: UUID?
     let readingMode: String?
+    var backgroundSources: ChatSourceVersions?
     let selection: [NoteAnchor]
     let pdfSelection: [Int: [NSRange]]
     let pdfSelectedText: [Int: String]
@@ -35,7 +36,7 @@ struct AnchoredNoteInsertion {
         return notes.first {
             $0.deletedAt == nil && $0.paperID == note.paperID && $0.contentVersion == note.contentVersion
                 && $0.anchors == note.anchors && $0.markdown == note.markdown && $0.dimension == note.dimension
-                && ($0.citations ?? []) == (note.citations ?? [])
+                && ($0.citations ?? []) == (note.citations ?? []) && $0.backgroundSources == note.backgroundSources
         }
     }
 
@@ -96,6 +97,7 @@ extension ReaderModel {
     }
 
     func validateDiscussionScope(_ scope: DiscussionNoteScope, usesHTMLAnchor: Bool = false) throws {
+        if let sources = scope.backgroundSources { try validateAssistantBackground(sources) }
         guard lastPaperDeletion[scope.paperID] == scope.lastDeletion, selectedPaperID == scope.selectedPaperID,
             state.papers.contains(where: { $0.id == scope.paperID && $0.digest == scope.digest }),
             !pendingImportIDs.contains(scope.paperID)
@@ -171,6 +173,7 @@ extension ReaderModel {
             var note = ReadingNote(
                 id: requestID, paperID: scope.paperID, contentVersion: version ?? closeReadingVersion(for: scope),
                 anchors: [], markdown: text)
+            note.backgroundSources = scope.backgroundSources
             note.placement = .documentEnd
             note.citations = references
             return AnchoredNoteInsertion(note: note, highlights: [], scope: scope)
@@ -181,6 +184,7 @@ extension ReaderModel {
         var note = ReadingNote(
             id: requestID, paperID: scope.paperID, contentVersion: version, anchors: anchors, markdown: body)
         note.citations = citations.isEmpty ? nil : citations
+        note.backgroundSources = scope.backgroundSources
         note.dimension = dimension
         let highlights = marks.map { original in
             var mark = original
