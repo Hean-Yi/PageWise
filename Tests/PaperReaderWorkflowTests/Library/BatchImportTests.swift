@@ -155,6 +155,24 @@ func repeatedDownloadFillsMissingSameEditionAbstractAndKeepsIt(hasArchive: Bool)
     #expect(reader.state.papers.count == 2)
 }
 
+@MainActor @Test func importRejectsDisplayEquivalentMathTitlesWithoutLinkingDifferentOriginals() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let reader = try ReaderModel(root: root)
+    await reader.load()
+    let first = try batchFixture(named: "$β$-OPSD.pdf", in: root)
+    let other = try batchFixture(named: "Other edition.pdf", in: root)
+    let id = try #require(await reader.importURLs([first], selectAfterImport: false).first)
+    let candidate = PaperCandidate(
+        id: "https://doi.org/10.18653/v1/2025.acl-long.12", title: #"\(\beta\)-OPSD"#, authors: "", year: "2025",
+        source: .crossref)
+    #expect(await reader.importURLs([other], selectAfterImport: false, metadata: candidate).isEmpty)
+    #expect(reader.message?.contains("同名论文") == true)
+    #expect(reader.state.papers.map(\.id) == [id])
+    #expect(reader.state.papers.first?.title == "$β$-OPSD")
+    #expect(reader.importedPaperID(for: candidate) == nil)
+}
+
 /// Distinct metadata gives each original teaching fixture a distinct digest, without network material.
 @MainActor private func batchFixture(named name: String, in root: URL) throws -> URL {
     let url = root.appendingPathComponent(name)

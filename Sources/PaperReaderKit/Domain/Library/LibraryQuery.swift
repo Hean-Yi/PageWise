@@ -46,7 +46,8 @@ public enum LibraryQuery {
     /// Keep meaningful punctuation (e.g. C vs. C++) when comparing titles across the entire library.
     public static func paper(named title: String, in state: LibraryState) -> Paper? {
         func titleKey(_ value: String) -> String {
-            value.folding(options: [.caseInsensitive, .widthInsensitive], locale: Locale(identifier: "en_US_POSIX"))
+            PaperTitle.display(value)
+                .folding(options: [.caseInsensitive, .widthInsensitive], locale: Locale(identifier: "en_US_POSIX"))
                 .split(whereSeparator: \.isWhitespace).joined(separator: " ")
         }
         let key = titleKey(title)
