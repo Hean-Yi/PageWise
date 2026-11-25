@@ -21,7 +21,7 @@ public struct ReflowJob: Codable, Sendable, Equatable {
 }
 
 /// Preserves the exact reading artifact to which existing user records refer.
-public struct RetainedReading: Identifiable, Codable, Sendable {
+public struct RetainedReading: Identifiable, Codable, Sendable, Equatable {
     public var id = UUID()
     public var createdAt = Date()
     public var blocks: [TextBlock]

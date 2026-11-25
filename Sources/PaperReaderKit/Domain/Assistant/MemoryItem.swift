@@ -1,6 +1,6 @@
 import Foundation
 
-public struct MemoryItem: Identifiable, Codable, Sendable {
+public struct MemoryItem: Identifiable, Codable, Sendable, Equatable {
     public var id = UUID()
     public var text: String
     public var sourceID: UUID

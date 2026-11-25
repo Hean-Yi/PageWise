@@ -1,6 +1,6 @@
 import Foundation
 
-public struct Paper: Identifiable, Codable, Sendable {
+public struct Paper: Identifiable, Codable, Sendable, Equatable {
     public var id: UUID
     public var title: String
     public var displayTitle: String { PaperTitle.display(title) }

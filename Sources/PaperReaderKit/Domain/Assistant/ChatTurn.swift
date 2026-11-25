@@ -1,6 +1,6 @@
 import Foundation
 
-public struct ChatTurn: Identifiable, Codable, Sendable {
+public struct ChatTurn: Identifiable, Codable, Sendable, Equatable {
     public var id = UUID()
     public var paperID: UUID
     public var question: String

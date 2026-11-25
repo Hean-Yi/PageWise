@@ -50,14 +50,25 @@ import Testing
 @Test func storedVersionOneUpgradesAtomicallyAndUnknownVersionKeepsItsPayload() async throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: root) }
-    let store = try LibraryStore(directory: root)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    try withWorkspaceDatabase(root: root) { db in
+        try #require(
+            sqlite3_exec(
+                db, "CREATE TABLE library(id INTEGER PRIMARY KEY,payload BLOB NOT NULL); PRAGMA user_version=1", nil,
+                nil, nil) == SQLITE_OK)
+    }
     try writeWorkspaceFixture(versionOneWorkspaceFixture, root: root)
+    let store = try LibraryStore(directory: root)
     let upgraded = try await store.load()
     #expect(upgraded.version == LibraryState.currentVersion)
     let stored = try readWorkspaceFixture(root: root)
     let json = try #require(JSONSerialization.jsonObject(with: stored) as? [String: Any])
     #expect(json["version"] as? Int == LibraryState.currentVersion)
     #expect(upgraded.memories[1].deleted)
+    let reopened = try await LibraryStore(directory: root).load()
+    #expect(reopened.papers == upgraded.papers && reopened.highlights == upgraded.highlights)
+    #expect(reopened.memories == upgraded.memories && reopened.chats == upgraded.chats)
+    #expect(reopened.reading == upgraded.reading)
 
     var future = json
     future["version"] = 99
@@ -158,4 +169,51 @@ private let versionOneWorkspaceFixture = Data(
     #expect(
         try JSONDecoder().decode(LibraryState.self, from: JSONEncoder().encode(migrated)).readingNotes
             == migrated.readingNotes)
+}
+
+@Test func failedRecordTransactionPreservesOriginalsOrderAndCanRetry() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let store = try LibraryStore(directory: root)
+    let original = try JSONDecoder().decode(LibraryState.self, from: versionOneWorkspaceFixture)
+    try await store.save(original)
+    var next = original
+    var added = original.papers[0]
+    added.id = UUID()
+    next.papers.insert(added, at: 0)
+    next.readingNotes = [ReadingNote(paperID: added.id, contentVersion: "version", anchors: [], markdown: "New note")]
+    try withWorkspaceDatabase(root: root) { db in
+        let sql = """
+            CREATE TRIGGER fail_note BEFORE INSERT ON library_records WHEN NEW.kind='notes'
+            BEGIN SELECT RAISE(ABORT,'injected note failure'); END
+            """
+        try #require(sqlite3_exec(db, sql, nil, nil, nil) == SQLITE_OK)
+    }
+    await #expect(throws: (any Error).self) { try await store.save(next) }
+    let reopened = try LibraryStore(directory: root)
+    let restored = try await reopened.load()
+    #expect(restored.papers == original.papers && restored.readingNotes.isEmpty)
+    try withWorkspaceDatabase(root: root) { db in
+        try #require(sqlite3_exec(db, "DROP TRIGGER fail_note", nil, nil, nil) == SQLITE_OK)
+    }
+    try await store.save(next)
+    let retried = try await reopened.load()
+    #expect(retried.papers == next.papers && retried.readingNotes == next.readingNotes)
+}
+
+@Test func unsupportedLegacyPayloadKeepsItsPhysicalSchemaAfterMigrationFails() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let store = try LibraryStore(directory: root)
+    let future = Data(#"{"version":99}"#.utf8)
+    try writeWorkspaceFixture(future, root: root)
+    await #expect(throws: (any Error).self) { try await store.load() }
+    #expect(try readWorkspaceFixture(root: root) == future)
+    try withWorkspaceDatabase(root: root) { db in
+        var statement: OpaquePointer?
+        try #require(sqlite3_prepare_v2(db, "PRAGMA user_version", -1, &statement, nil) == SQLITE_OK)
+        defer { sqlite3_finalize(statement) }
+        try #require(sqlite3_step(statement) == SQLITE_ROW)
+        #expect(sqlite3_column_int(statement, 0) == 1)
+    }
 }

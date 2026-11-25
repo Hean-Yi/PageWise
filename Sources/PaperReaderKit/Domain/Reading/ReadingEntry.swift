@@ -1,6 +1,6 @@
 import Foundation
 
-public struct ReadingEntry: Identifiable, Codable, Sendable {
+public struct ReadingEntry: Identifiable, Codable, Sendable, Equatable {
     public var id = UUID()
     public var paperID: UUID
     public var start: Date

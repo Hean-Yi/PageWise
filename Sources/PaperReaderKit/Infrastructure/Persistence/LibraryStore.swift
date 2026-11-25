@@ -4,60 +4,87 @@ import Foundation
 public actor LibraryStore {
     public nonisolated let directory: URL
     private let databaseURL: URL
+    private var baseline: (state: LibraryState, revision: Int64)?
 
     public init(directory: URL) throws {
         self.directory = directory
-        self.databaseURL = directory.appendingPathComponent("library.sqlite")
+        databaseURL = directory.appendingPathComponent("library.sqlite")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         try Self.database(at: databaseURL) { db in
-            var query: OpaquePointer?
-            guard sqlite3_prepare_v2(db, "PRAGMA user_version", -1, &query, nil) == SQLITE_OK else {
-                throw ReaderError.message("无法读取书库版本。")
-            }
-            defer { sqlite3_finalize(query) }
-            guard sqlite3_step(query) == SQLITE_ROW else { throw ReaderError.message("书库版本读取失败。") }
-            let version = sqlite3_column_int(query, 0)
-            sqlite3_finalize(query)
-            query = nil
-            guard version <= 1 else { throw ReaderError.message("书库来自更新版本，请升级应用。") }
+            let version = try Self.integer(db, "PRAGMA user_version")
+            guard (0...2).contains(version) else { throw ReaderError.message("书库来自更新版本，请升级应用。") }
             try Self.execute(db, "PRAGMA journal_mode=WAL")
             if version == 0 {
-                try Self.execute(db, "BEGIN IMMEDIATE")
-                do {
+                try Self.transaction(db) {
+                    guard try Self.integer(db, "PRAGMA user_version") == 0 else { return }
                     try Self.execute(
                         db,
-                        "CREATE TABLE IF NOT EXISTS library (id INTEGER PRIMARY KEY CHECK (id=1), payload BLOB NOT NULL)"
+                        "CREATE TABLE IF NOT EXISTS library (id INTEGER PRIMARY KEY CHECK(id=1), payload BLOB NOT NULL)"
                     )
                     try Self.execute(db, "PRAGMA user_version=1")
-                    try Self.execute(db, "COMMIT")
-                } catch {
-                    try? Self.execute(db, "ROLLBACK")
-                    throw error
                 }
             }
         }
     }
 
     public func load() throws -> LibraryState {
-        let data: Data? = try Self.database(at: databaseURL) { db in
-            var statement: OpaquePointer?
-            guard sqlite3_prepare_v2(db, "SELECT payload FROM library WHERE id=1", -1, &statement, nil) == SQLITE_OK
-            else {
-                throw ReaderError.message("无法读取本地书库。")
+        baseline = nil
+        let loaded = try Self.database(at: databaseURL) { db in
+            try Self.transaction(db) { () -> (state: LibraryState, revision: Int64) in
+                if try Self.integer(db, "PRAGMA user_version") == 1 {
+                    try Self.execute(
+                        db,
+                        """
+                        CREATE TABLE IF NOT EXISTS library_records (
+                            kind TEXT NOT NULL, record_key TEXT NOT NULL, payload BLOB NOT NULL,
+                            PRIMARY KEY(kind,record_key)
+                        ) WITHOUT ROWID
+                        """)
+                    try Self.execute(
+                        db,
+                        "CREATE TABLE IF NOT EXISTS library_generation (id INTEGER PRIMARY KEY CHECK(id=1), revision INTEGER NOT NULL)"
+                    )
+                    try Self.execute(db, "INSERT OR IGNORE INTO library_generation VALUES(1,0)")
+                    try Self.execute(db, "PRAGMA user_version=2")
+                }
+                let data: Data? = try LibraryRecords.statement(db, "SELECT payload FROM library WHERE id=1") { stmt in
+                    let result = sqlite3_step(stmt)
+                    if result == SQLITE_DONE { return nil }
+                    guard result == SQLITE_ROW else { throw LibraryRecords.writeFailure }
+                    return try LibraryRecords.blob(stmt, column: 0)
+                }
+                var revision = try Self.integer(db, "SELECT revision FROM library_generation WHERE id=1")
+                guard let data else {
+                    guard revision == 0 else { throw ReaderError.message("书库目录信息缺失，原资料已保留。") }
+                    return (LibraryState(), revision)
+                }
+                let decoder = JSONDecoder()
+                let header = try decoder.decode(Header.self, from: data)
+                let rows = LibraryRecords(db)
+                let state: LibraryState
+                if header.recordFormat == nil {
+                    // The payload remains authoritative until every migrated row and its order commit together.
+                    state = try decoder.decode(LibraryState.self, from: data)
+                    try Self.execute(db, "DELETE FROM library_records")
+                    try rows.write(from: LibraryState(), to: state)
+                    try Self.writeCatalog(Catalog(state), db: db)
+                    try Self.execute(db, "UPDATE library_generation SET revision=revision+1 WHERE id=1")
+                    revision += 1
+                } else {
+                    guard header.recordFormat == 2, header.version == LibraryState.currentVersion else {
+                        throw ReaderError.message("书库版本不受支持，原资料已保留。")
+                    }
+                    var restored = try decoder.decode(Catalog.self, from: data).state
+                    try rows.read(into: &restored)
+                    try restored.validateOrdering()
+                    try restored.validateShelves()
+                    state = restored
+                }
+                return (state, revision)
             }
-            defer { sqlite3_finalize(statement) }
-            let result = sqlite3_step(statement)
-            if result == SQLITE_DONE { return nil }
-            guard result == SQLITE_ROW, let pointer = sqlite3_column_blob(statement, 0) else {
-                throw ReaderError.message("本地书库读取失败，原文件已保留。")
-            }
-            return Data(bytes: pointer, count: Int(sqlite3_column_bytes(statement, 0)))
         }
-        guard let data else { return LibraryState() }
-        let state = try JSONDecoder().decode(LibraryState.self, from: data)
-        let header = try JSONDecoder().decode(SnapshotHeader.self, from: data)
-        if header.version < LibraryState.currentVersion { try save(state) }
-        return state
+        baseline = loaded
+        return loaded.state
     }
 
     public func save(_ state: LibraryState, respectingCancellation: Bool = false, deleting paper: Paper? = nil) throws {
@@ -65,44 +92,36 @@ public actor LibraryStore {
         guard state.version == LibraryState.currentVersion else {
             throw ReaderError.message("不能写入不受支持的书库版本，原有资料已保留。")
         }
-        try state.validateShelves()
-        try state.validateOrdering()
-        let data = try JSONEncoder().encode(state)
-        if let paper {
-            guard !state.papers.contains(where: { $0.id == paper.id }) else { throw ReaderError.message("论文仍在书库中。") }
-            try stageFileRemoval(paper)
+        if baseline == nil { _ = try load() }
+        guard let previous = baseline else { throw LibraryRecords.writeFailure }
+        let catalog = Catalog(state)
+        let catalogChanged = catalog != Catalog(previous.state) || previous.revision == 0
+        if catalogChanged || previous.state.papers != state.papers {
+            try state.validateShelves()
+            try state.validateOrdering()
         }
-        try Self.database(at: databaseURL) { db in
-            try Self.execute(db, "BEGIN IMMEDIATE")
-            do {
-                var statement: OpaquePointer?
-                guard
-                    sqlite3_prepare_v2(
-                        db,
-                        "INSERT INTO library(id,payload) VALUES(1,?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload",
-                        -1, &statement, nil) == SQLITE_OK
-                else {
-                    throw ReaderError.message("无法准备书库写入。")
+        let revision = try Self.database(at: databaseURL) { db in
+            try Self.transaction(db) {
+                guard try Self.integer(db, "SELECT revision FROM library_generation WHERE id=1") == previous.revision
+                else { throw ReaderError.message("书库已由另一个实例更新，请重新打开书库后保存。") }
+                if let paper {
+                    guard !state.papers.contains(where: { $0.id == paper.id }) else {
+                        throw ReaderError.message("论文仍在书库中。")
+                    }
+                    try stageFileRemoval(paper)
                 }
-                defer { sqlite3_finalize(statement) }
-                let status = data.withUnsafeBytes { bytes in
-                    sqlite3_bind_blob(
-                        statement, 1, bytes.baseAddress, Int32(bytes.count),
-                        unsafeBitCast(-1, to: sqlite3_destructor_type.self))
-                }
-                guard status == SQLITE_OK, sqlite3_step(statement) == SQLITE_DONE else {
-                    throw ReaderError.message("保存失败，请检查剩余磁盘空间。")
-                }
+                let start = sqlite3_total_changes64(db)
+                try LibraryRecords(db).write(from: previous.state, to: state)
+                if catalogChanged { try Self.writeCatalog(catalog, db: db) }
                 if respectingCancellation { try Task.checkCancellation() }
-                try Self.execute(db, "COMMIT")
-            } catch {
-                try? Self.execute(db, "ROLLBACK")
-                throw error
+                guard sqlite3_total_changes64(db) > start else { return previous.revision }
+                try Self.execute(db, "UPDATE library_generation SET revision=revision+1 WHERE id=1")
+                return previous.revision + 1
             }
         }
+        baseline = (state, revision)
     }
 
-    /// Reclaims the normalized HTML/image payload after the last fixed page has committed.
     public func compact() throws {
         try Self.database(at: databaseURL) { db in
             try Self.execute(db, "VACUUM")
@@ -110,8 +129,64 @@ public actor LibraryStore {
         }
     }
 
-    private struct SnapshotHeader: Decodable {
+    private struct Header: Decodable {
         let version: Int
+        let recordFormat: Int?
+    }
+
+    /// Only collection-level settings are serialized together. The domain Codable format remains
+    /// readable for old snapshots. New persistent fields must belong here or in LibraryRecords.
+    private struct Catalog: Codable, Equatable {
+        let recordFormat: Int
+        let version: Int
+        let shelves: [Shelf]
+        let paperShelfIDs: [String: UUID]
+        let manualPaperIDs: [UUID]
+        let preferredSort: LibrarySort
+
+        init(_ state: LibraryState) {
+            recordFormat = 2
+            version = state.version
+            shelves = state.shelves
+            paperShelfIDs = state.paperShelfIDs
+            manualPaperIDs = state.manualPaperIDs
+            preferredSort = state.preferredSort
+        }
+
+        var state: LibraryState {
+            var state = LibraryState()
+            state.shelves = shelves
+            state.paperShelfIDs = paperShelfIDs
+            state.manualPaperIDs = manualPaperIDs
+            state.preferredSort = preferredSort
+            return state
+        }
+    }
+
+    private static func writeCatalog(_ catalog: Catalog, db: OpaquePointer) throws {
+        try LibraryRecords.statement(db, "INSERT OR REPLACE INTO library(id,payload) VALUES(1,?)") { stmt in
+            try LibraryRecords.bind(JSONEncoder().encode(catalog), to: 1, in: stmt)
+            guard sqlite3_step(stmt) == SQLITE_DONE else { throw LibraryRecords.writeFailure }
+        }
+    }
+
+    private static func integer(_ db: OpaquePointer, _ sql: String) throws -> Int64 {
+        try LibraryRecords.statement(db, sql) { stmt in
+            guard sqlite3_step(stmt) == SQLITE_ROW else { throw LibraryRecords.writeFailure }
+            return sqlite3_column_int64(stmt, 0)
+        }
+    }
+
+    private static func transaction<T>(_ db: OpaquePointer, _ body: () throws -> T) throws -> T {
+        try execute(db, "BEGIN IMMEDIATE")
+        do {
+            let value = try body()
+            try execute(db, "COMMIT")
+            return value
+        } catch {
+            try? execute(db, "ROLLBACK")
+            throw error
+        }
     }
 
     private static func database<T>(at url: URL, body: (OpaquePointer) throws -> T) throws -> T {
