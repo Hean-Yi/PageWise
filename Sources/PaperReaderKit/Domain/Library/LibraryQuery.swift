@@ -68,27 +68,12 @@ public enum LibraryQuery {
     public static func searchCandidates(in state: LibraryState, query: String) -> [Paper] {
         let search = TitleSearch(query)
         guard !search.raw.isEmpty else { return [] }
-        return state.papers.filter(search.matches).sorted {
-            let order = $0.displayTitle.localizedStandardCompare($1.displayTitle)
-            return order == .orderedSame ? $0.id.uuidString < $1.id.uuidString : order == .orderedAscending
-        }
-    }
-
-    private struct TitleSearch {
-        let raw: [Substring]
-        let display: [Substring]
-
-        init(_ query: String) {
-            raw = query.split(whereSeparator: \.isWhitespace)
-            display = PaperTitle.display(query).split(whereSeparator: \.isWhitespace)
-        }
-
-        func matches(_ paper: Paper) -> Bool {
-            if raw.allSatisfy({ paper.title.localizedStandardContains($0) }) { return true }
-            let title = paper.displayTitle
-            guard title != paper.title || raw != display else { return false }
-            return display.allSatisfy { title.localizedStandardContains($0) }
-        }
+        return state.papers.filter { search.matches($0.title, displayTitle: $0.displayTitle) }.map {
+            ($0, $0.displayTitle)
+        }.sorted {
+            let order = $0.1.localizedStandardCompare($1.1)
+            return order == .orderedSame ? $0.0.id.uuidString < $1.0.id.uuidString : order == .orderedAscending
+        }.map { $0.0 }
     }
 
     public static func papers(
@@ -98,7 +83,7 @@ public enum LibraryQuery {
         let visible = state.papers.filter { paper in
             (collection == .all
                 || collection.includes(state.workspace[paper.id.uuidString] ?? PaperWorkspace(), for: paper))
-                && search.matches(paper)
+                && search.matches(paper.title, displayTitle: paper.displayTitle)
         }
         return sorted(visible, in: state, sort: sort, unfinishedFirst: collection == .all)
     }
@@ -121,6 +106,9 @@ public enum LibraryQuery {
         let ranks =
             sort == .manual
             ? Dictionary(uniqueKeysWithValues: state.manualPaperIDs.enumerated().map { ($1, $0) }) : [:]
+        let titles =
+            sort == .title
+            ? Dictionary(papers.map { ($0.id, $0.displayTitle) }, uniquingKeysWith: { first, _ in first }) : [:]
         return papers.sorted { lhs, rhs in
             let leftFinished = finishedIDs.contains(lhs.id)
             let rightFinished = finishedIDs.contains(rhs.id)
@@ -131,7 +119,7 @@ public enum LibraryQuery {
                 let b = state.workspace[rhs.id.uuidString]?.lastOpenedAt ?? .distantPast
                 if a != b { return a > b }
             case .title:
-                let order = lhs.displayTitle.localizedStandardCompare(rhs.displayTitle)
+                let order = (titles[lhs.id] ?? lhs.title).localizedStandardCompare(titles[rhs.id] ?? rhs.title)
                 if order != .orderedSame { return order == .orderedAscending }
             case .manual:
                 let a = ranks[lhs.id] ?? Int.max

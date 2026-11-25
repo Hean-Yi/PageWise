@@ -90,12 +90,19 @@ extension View {
     ) -> some View {
         modifier(
             LibrarySearchSuggestions(
-                state: state, findRequest: findRequest, dismissRequest: dismissRequest, onSelect: onSelect))
+                state: state, titles: state.papers.map(LibraryTitleIndex.Document.init), findRequest: findRequest,
+                dismissRequest: dismissRequest, onSelect: onSelect))
     }
 }
 
 private struct LibrarySearchSuggestions: ViewModifier {
+    struct Request: Equatable {
+        let query: String
+        let titles: [LibraryTitleIndex.Document]
+    }
+
     let state: LibraryState
+    let titles: [LibraryTitleIndex.Document]
     let findRequest: Int
     let dismissRequest: Int
     let onSelect: (UUID) -> Void
@@ -105,10 +112,16 @@ private struct LibrarySearchSuggestions: ViewModifier {
     @State private var query = ""
     @State private var selection: UUID?
     @State private var keyboardScrollTarget: UUID?
+    @State private var index = LibraryTitleIndex()
+    @State private var resultRequest: Request?
+    @State private var results: [LibraryTitleIndex.Match] = []
+    @State private var submitWhenReady = false
 
     func body(content: Content) -> some View {
         let showing = focused && !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        let matches = showing ? LibraryQuery.searchCandidates(in: state, query: query) : []
+        let request = showing ? Request(query: query, titles: titles) : nil
+        let ready = request != nil && resultRequest == request
+        let matches = ready ? results : []
         content
             .environment(
                 \.librarySearchInput,
@@ -117,6 +130,7 @@ private struct LibrarySearchSuggestions: ViewModifier {
                         get: { query },
                         set: {
                             guard query != $0 else { return }
+                            submitWhenReady = false
                             query = $0
                             selection = nil
                             keyboardScrollTarget = nil
@@ -130,16 +144,19 @@ private struct LibrarySearchSuggestions: ViewModifier {
                         return .handled
                     },
                     submit: {
-                        guard let id = activeID(in: LibraryQuery.searchCandidates(in: state, query: query)) else {
-                            return .ignored
+                        guard showing else { return .ignored }
+                        guard ready else {
+                            submitWhenReady = true
+                            return .handled
                         }
+                        guard let id = activeID(in: matches) else { return .ignored }
                         choose(id)
                         return .handled
                     }, dismiss: dismiss
                 )
             )
             .overlayPreferenceValue(SearchFieldAnchor.self) { anchor in
-                if showing, let anchor {
+                if ready, let anchor {
                     GeometryReader { proxy in
                         panel(in: proxy.size, field: proxy[anchor], matches: matches, current: activeID(in: matches))
                     }
@@ -147,11 +164,24 @@ private struct LibrarySearchSuggestions: ViewModifier {
                 }
             }
             .animation(ReaderMotion.feedback(reduceMotion), value: showing)
+            .task(id: request) {
+                guard let request, let updated = try? await index.search(request.query, in: request.titles),
+                    !Task.isCancelled, focused, query == request.query
+                else { return }
+                results = updated
+                resultRequest = request
+                if submitWhenReady {
+                    submitWhenReady = false
+                    if let id = activeID(in: updated) { choose(id) }
+                }
+            }
             .onChange(of: findRequest) { _, _ in focused = true }
             .onChange(of: dismissRequest) { _, _ in dismiss() }
     }
 
-    @ViewBuilder private func panel(in size: CGSize, field: CGRect, matches: [Paper], current: UUID?) -> some View {
+    @ViewBuilder private func panel(in size: CGSize, field: CGRect, matches: [LibraryTitleIndex.Match], current: UUID?)
+        -> some View
+    {
         let bounds = CGRect(origin: .zero, size: size)
         let gap: CGFloat = 6
         let below = size.height - field.maxY - gap
@@ -201,7 +231,7 @@ private struct LibrarySearchSuggestions: ViewModifier {
         }
     }
 
-    private func row(_ paper: Paper, selected: Bool) -> some View {
+    private func row(_ paper: LibraryTitleIndex.Match, selected: Bool) -> some View {
         let shelf = state.shelfID(for: paper.id).flatMap { id in state.shelves.first { $0.id == id }?.name } ?? "未分类论文"
         let title = paper.displayTitle
         return Button {
@@ -251,11 +281,12 @@ private struct LibrarySearchSuggestions: ViewModifier {
         onSelect(id)
     }
 
-    private func activeID(in matches: [Paper]) -> UUID? {
+    private func activeID(in matches: [LibraryTitleIndex.Match]) -> UUID? {
         selection.flatMap { id in matches.contains { $0.id == id } ? id : nil } ?? matches.first?.id
     }
 
     private func dismiss() {
+        submitWhenReady = false
         query = ""
         selection = nil
         keyboardScrollTarget = nil

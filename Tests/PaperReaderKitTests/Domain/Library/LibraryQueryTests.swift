@@ -186,3 +186,16 @@ private func queryPaper(_ title: String, added: TimeInterval) -> Paper {
     paper.addedAt = Date(timeIntervalSince1970: added)
     return paper
 }
+
+@Test func librarySuggestionIndexUsesRawAndDisplayTitlesAndRefreshesEditedDocuments() async throws {
+    let index = LibraryTitleIndex()
+    var paper = queryPaper(#"$\beta$-OPSD"#, added: 1)
+    let second = queryPaper("Alpha OPSD", added: 2)
+    let first = [paper, second].map(LibraryTitleIndex.Document.init)
+    #expect(try await index.search("β-OPSD", in: first).map(\.id) == [paper.id])
+    #expect(try await index.search("OPSD", in: first).count == 2)
+    paper.title = "Revised name"
+    let changed = [paper].map(LibraryTitleIndex.Document.init)
+    #expect(try await index.search("OPSD", in: changed).isEmpty)
+    #expect(try await index.search("Revised", in: changed).first?.displayTitle == paper.title)
+}
