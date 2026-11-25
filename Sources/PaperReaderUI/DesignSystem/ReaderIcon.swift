@@ -26,6 +26,7 @@ struct ReaderIcon: View {
 
     var body: some View {
         let state = enabled && !reduceMotion ? interaction : .idle
+        let hasPageAction = glyph == .calendar || glyph == .notebook
         let outline = ReaderIconLayer(glyph: glyph, ink: .outline, state: state)
         ZStack {
             if let sidebarSelected, glyph != .favorite {
@@ -39,15 +40,25 @@ struct ReaderIcon: View {
                 }
                 outline.stroke(sidebarLineStyle, style: outlineStroke(weight: 1.7))
             }
-            if glyph == .calendar || glyph == .notebook {
-                ReaderIconPageAction(glyph: glyph, progress: state == .idle ? 0 : state == .hovered ? 0.48 : 1)
+            if hasPageAction {
+                let progress: CGFloat =
+                    switch state {
+                    case .idle: 0
+                    case .hovered: ReaderIconPageAction.hoverProgress
+                    case .pressed: 1
+                    }
+                ReaderIconPageAction(glyph: glyph, progress: progress)
                     .foregroundStyle(sidebarLineStyle)
                     .opacity(enabled ? 1 : 0.5)
             }
         }
         .frame(width: size, height: size)
         .animation(
-            reduceMotion ? nil : state == .pressed ? .easeOut(duration: 0.18) : .smooth(duration: 0.26),
+            reduceMotion
+                ? nil
+                : state == .pressed
+                    ? .easeOut(duration: 0.18)
+                    : hasPageAction ? .easeInOut(duration: 0.24) : .smooth(duration: 0.26),
             value: state
         )
         .accessibilityHidden(true)

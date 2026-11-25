@@ -2,6 +2,7 @@ import SwiftUI
 
 /// Paper and ink sit inside the glyph's 24-point grid. Only the hovered or pressed control interpolates.
 struct ReaderIconPageAction: View, Animatable {
+    static let hoverProgress: CGFloat = 0.48
     let glyph: ReaderIcon.Glyph
     nonisolated var progress: CGFloat
     nonisolated var animatableData: CGFloat {
@@ -33,38 +34,37 @@ struct ReaderIconPageAction: View, Animatable {
     private static let dateInk = StrokeStyle(lineWidth: 1.85, lineCap: .square, lineJoin: .round)
 
     private func drawCalendar(in context: GraphicsContext) {
-        let lift = min(1, progress / 0.48)
-        let tear = max(0, (progress - 0.48) / 0.52)
-        if tear > 0 {
-            var next = context
-            next.opacity = Double(tear)
-            next.stroke(Self.eight, with: .foreground, style: Self.dateInk)
-        }
+        let phase = min(1, max(0, progress))
+        let lift = min(1, phase / Self.hoverProgress)
+        let tear = max(0, (phase - Self.hoverProgress) / (1 - Self.hoverProgress))
+        var next = context
+        next.opacity = Double(tear)
+        next.stroke(Self.eight, with: .foreground, style: Self.dateInk)
+
         var leaf = context
         leaf.opacity = Double(1 - tear)
-        leaf.translateBy(x: 11.5 + 5.4 * tear, y: 14 - 4.5 * tear)
-        leaf.rotate(by: .degrees(-5 * lift - 15 * tear))
-        leaf.scaleBy(x: 1 + 0.12 * lift, y: 1 + 0.12 * lift)
-        leaf.translateBy(x: -11.5, y: -14)
-        if lift > 0 {
-            let fold = 0.4 + 4 * lift
-            let corner = CGPoint(x: 19.2, y: 20 - fold)
-            var sheet = Path()
-            sheet.addLines([
-                CGPoint(x: 3.8, y: 9.5), CGPoint(x: 19.2, y: 9.5), corner,
-                CGPoint(x: 19.2 - fold, y: 20), CGPoint(x: 3.8, y: 20),
-            ])
-            sheet.closeSubpath()
-            leaf.fill(sheet, with: .color(ReaderTheme.surface))
-            var edge = leaf
-            edge.opacity *= Double(lift)
-            edge.stroke(sheet, with: .foreground, style: Self.thinInk)
-            var curl = Path()
-            curl.addLines([corner, CGPoint(x: 19.2 - fold, y: 20 - fold), CGPoint(x: 19.2 - fold, y: 20)])
-            leaf.stroke(curl, with: .color(ReaderTheme.accent.opacity(lift)), style: Self.thinInk)
-        }
+        // The top stays on the binding until the press tears the sheet free.
+        leaf.translateBy(x: 11.5 + 4 * tear, y: 9.5 - 4 * tear)
+        leaf.rotate(by: .degrees(-14 * tear))
+        leaf.translateBy(x: -11.5, y: -9.5)
+        let fold = 4.6 * lift
+        let corner = CGPoint(x: 19.2, y: 20 - fold)
+        let tip = CGPoint(x: 19.2 - fold, y: 20)
+        var sheet = Path()
+        sheet.addLines([
+            CGPoint(x: 3.8, y: 9.5), CGPoint(x: 19.2, y: 9.5), corner, tip, CGPoint(x: 3.8, y: 20),
+        ])
+        sheet.closeSubpath()
+        var curl = Path()
+        curl.addLines([corner, CGPoint(x: tip.x + 0.6 * lift, y: corner.y + 0.6 * lift), tip])
+        // Fade the paper with its crease. Even the last subpixel of a hover shares the resting artwork.
+        var paper = leaf
+        paper.opacity *= Double(lift)
+        paper.fill(sheet, with: .color(ReaderTheme.surface))
+        paper.stroke(sheet, with: .foreground, style: Self.thinInk)
+        paper.stroke(curl, with: .color(ReaderTheme.accent), style: Self.thinInk)
         leaf.translateBy(x: 11, y: 15)
-        leaf.scaleBy(x: 1 + 0.22 * lift, y: 1 + 0.22 * lift)
+        leaf.scaleBy(x: 1 + 0.28 * lift, y: 1 + 0.28 * lift)
         leaf.translateBy(x: -11, y: -15)
         leaf.stroke(Self.seven, with: .foreground, style: Self.dateInk)
     }
@@ -89,21 +89,18 @@ struct ReaderIconPageAction: View, Animatable {
     }
 
     static func notebookInk(at progress: CGFloat) -> (line: Path, pencil: Path, nib: Path) {
-        let turn = min(1, progress / 0.48)
-        let stroke = min(1, turn * 0.72 + max(0, progress - 0.48) * 0.76)
+        let advance = min(1, max(0, progress) / hoverProgress)
+        let finish = min(1, max(0, (progress - hoverProgress) / (0.85 - hoverProgress)))
+        let stroke = 0.72 * advance + 0.28 * finish
         let line = writtenLine.trimmedPath(from: 0, to: stroke)
         let tip = line.currentPoint ?? CGPoint(x: 9, y: 16.3)
         let lift = max(0, (progress - 0.85) / 0.15)
         let pose = CGAffineTransform(translationX: tip.x - 0.8 * lift, y: tip.y - 2 * lift)
-            .rotated(by: (-8 + 8 * turn - 14 * progress) * .pi / 180)
+            .rotated(by: (-8 + 8 * advance - 14 * progress) * .pi / 180)
         return (line, pencil.applying(pose), point.applying(pose))
     }
 
     private func drawNotebook(in context: GraphicsContext) {
-        let turn = min(1, progress / 0.48)
-        let leaf = NotebookLeaf(progress: turn).path(in: CGRect(x: 0, y: 0, width: 24, height: 24))
-        context.fill(leaf, with: .color(ReaderTheme.surface))
-        context.stroke(leaf, with: .color(ReaderTheme.accent.opacity(turn)), style: Self.thinInk)
         let ink = Self.notebookInk(at: progress)
         context.stroke(ink.line, with: .foreground, style: Self.thinInk)
         context.fill(ink.pencil, with: .color(ReaderTheme.surface))

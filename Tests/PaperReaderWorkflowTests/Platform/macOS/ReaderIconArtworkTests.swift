@@ -77,28 +77,68 @@
 
         @Test func dateAndHandwritingChangeWithinThePageWithoutMovingItsBinding() throws {
             // Inspect the printed area alone. Motion of the header or book spine cannot satisfy this check.
-            let printArea = CGRect(x: 16, y: 22, width: 22, height: 16)
+            let printArea = CGRect(x: 8, y: 11, width: 11, height: 8)
             for glyph in [ReaderIcon.Glyph.calendar, .notebook] {
-                let frames = try [CGFloat(0), 0.48, 1].map { progress in
-                    let detail = ReaderIconPageAction(glyph: glyph, progress: progress)
-                        .frame(width: 24, height: 24).foregroundStyle(.black).background(.white)
-                    let renderer = ImageRenderer(content: detail)
-                    renderer.scale = 2
-                    let crop = try #require(renderer.cgImage?.cropping(to: printArea))
-                    return try #require(crop.dataProvider?.data) as Data
+                let frames = try [0, ReaderIconPageAction.hoverProgress, 1].map { progress in
+                    try pagePixels(glyph, progress: progress, background: .white, region: printArea)
                 }
                 #expect(Set(frames).count == 3, "printed area for \(glyph)")
             }
+        }
+
+        @Test func calendarSettlesContinuouslyOntoItsRestingPage() throws {
+            let sheet = CGRect(x: 4, y: 9, width: 16, height: 12)
+            for background in [Color.clear, .black] {
+                let nearRest = try pagePixels(.calendar, progress: 0.0001, background: background, region: sheet)
+                let rest = try pagePixels(.calendar, progress: 0, background: background, region: sheet)
+                // One subpixel of antialiasing is acceptable. Removing an opaque page changes its entire interior.
+                let changedChannels = zip(nearRest, rest).count { abs(Int($0.0) - Int($0.1)) > 8 }
+                #expect(changedChannels < rest.count / 100, "discontinuous channels: \(changedChannels)")
+            }
+        }
+
+        @Test func writingStaysOnTheRightOfTheNotebookBinding() throws {
+            let margin = CGRect(x: 0, y: 2, width: 6, height: 20)
+            let rest = try pagePixels(.notebook, progress: 0, background: .clear, region: margin)
+            for progress: CGFloat in [0.12, 0.24, ReaderIconPageAction.hoverProgress, 0.75, 1] {
+                let frame = try pagePixels(.notebook, progress: progress, background: .clear, region: margin)
+                let differs = frame != rest
+                #expect(!differs, "left of the binding at progress \(progress)")
+            }
+        }
+
+        private func pagePixels(
+            _ glyph: ReaderIcon.Glyph, progress: CGFloat, background: Color, region: CGRect
+        ) throws -> [UInt8] {
+            let detail = ReaderIconPageAction(glyph: glyph, progress: progress)
+                .frame(width: 24, height: 24).foregroundStyle(.black).background(background)
+                .environment(\.colorScheme, .light)
+            let renderer = ImageRenderer(content: detail)
+            renderer.scale = 3
+            let crop = try #require(renderer.cgImage?.cropping(to: region.applying(.init(scaleX: 3, y: 3))))
+            let stride = crop.width * 4
+            var bytes = [UInt8](repeating: 0, count: stride * crop.height)
+            try bytes.withUnsafeMutableBytes { buffer in
+                let context = try #require(
+                    CGContext(
+                        data: buffer.baseAddress, width: crop.width, height: crop.height, bitsPerComponent: 8,
+                        bytesPerRow: stride, space: CGColorSpaceCreateDeviceRGB(),
+                        bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+                context.draw(crop, in: CGRect(x: 0, y: 0, width: crop.width, height: crop.height))
+            }
+            return bytes
         }
 
         @Test func notebookPencilStaysInsideTheGlyphAndLeavesALegibleLineOnHover() {
             let frame = CGRect(x: 0, y: 0, width: 24, height: 24)
             let penStroke = StrokeStyle(lineWidth: 1.2, lineCap: .round, lineJoin: .round)
             let idle = ReaderIconPageAction.notebookInk(at: 0)
-            let hover = ReaderIconPageAction.notebookInk(at: 0.48)
+            let hover = ReaderIconPageAction.notebookInk(at: ReaderIconPageAction.hoverProgress)
+            let lifting = ReaderIconPageAction.notebookInk(at: 0.9)
             let pressed = ReaderIconPageAction.notebookInk(at: 1)
             #expect(!idle.pencil.isEmpty && !idle.nib.isEmpty && idle.line.currentPoint == nil)
             #expect(hover.line.boundingRect.width >= pressed.line.boundingRect.width * 0.6)
+            #expect(lifting.line == pressed.line && lifting.nib != pressed.nib)
             for frameIndex in 0...100 {
                 let ink = ReaderIconPageAction.notebookInk(at: CGFloat(frameIndex) / 100)
                 #expect(frame.contains(ink.pencil.strokedPath(penStroke).boundingRect))

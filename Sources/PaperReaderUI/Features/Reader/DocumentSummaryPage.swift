@@ -79,7 +79,7 @@ struct DocumentSummaryLinkLabel: View {
     var body: some View {
         let active = interaction != .idle
         HStack(spacing: 7) {
-            ReaderIcon(.notebook, size: inOutline ? 16 : 14)
+            ReaderIcon(.source, size: inOutline ? 16 : 14)
             Text("文末总结")
             if inOutline { Spacer(minLength: 0) }
         }
