@@ -337,6 +337,14 @@ private func closeReadingWorkflowFailuresLeaveNoPartialNotesOrReport(
     #expect(reader.currentReadingNotes.first { $0.id == edited.id }?.markdown == revised)
     #expect(!reader.inlineReadingNotes.contains { $0.id == removed })
     #expect(reader.existingCloseReading(for: id)?.id == next.id && reader.state.chats.count == 2)
+    // Opening a paper records lastOpenedAt. Inspect the committed tombstone without
+    // turning the restart check into a second writer before the original window undoes it.
+    let beforeUndo = try await LibraryStore(directory: root).load()
+    let tombstone = try #require(beforeUndo.readingNotes.first { $0.id == removed })
+    #expect(tombstone.deletedAt != nil)
+    reader.undoReadingNoteDeletion()
+    await reader.flushReadingNotes()
+    #expect(reader.inlineReadingNotes.contains { $0.id == removed })
     let restored = try ReaderModel(root: root, client: ModelClient(transport: api), credentials: WorkflowCredentials())
     await restored.load()
     restored.select(id)
@@ -344,11 +352,7 @@ private func closeReadingWorkflowFailuresLeaveNoPartialNotesOrReport(
     #expect(restored.currentHighlights.map(\.color) == originalMarks.map(\.color))
     #expect(restored.currentReadingNotes.first { $0.id == edited.id }?.markdown == revised)
     #expect(try await restored.previewLocalPassage(noteID: edited.id, citationID: citation.id).quote == comparisonText)
-    #expect(!restored.currentReadingNotes.contains { $0.id == removed })
-    reader.undoReadingNoteDeletion()
-    await reader.flushReadingNotes()
-    #expect(reader.inlineReadingNotes.contains { $0.id == removed })
-    #expect(try await reader.store.load().readingNotes.first { $0.id == removed }?.deletedAt == nil)
+    #expect(restored.inlineReadingNotes.contains { $0.id == removed })
     #expect(await api.requests == 4)
 }
 

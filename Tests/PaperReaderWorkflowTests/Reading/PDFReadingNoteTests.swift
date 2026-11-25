@@ -221,11 +221,8 @@ func pdfDiscussionNoteKeepsTheColorAndInkOfAnOverlappingManualMark(style: Annota
     await reader.performReflowSelectionAction(.bookmark, selection: [english])
     await reader.performReflowSelectionAction(.bookmark, selection: [english])
     #expect(reader.currentBookmarks.count == 1)
-    let reopened = try ReaderModel(root: root, credentials: WorkflowCredentials())
-    await reopened.load()
-    reopened.select(id)
-    #expect(reopened.currentReadingNotes.first?.anchors == draft.note.anchors)
-    #expect(reopened.inlinePDFHighlights.map(\.anchors) == [draft.note.anchors])
+    let savedEnglish = try await LibraryStore(directory: root).load()
+    #expect(savedEnglish.readingNotes.first { $0.id == draft.id }?.anchors == draft.note.anchors)
 
     let chinese = "想象一本笔记本。"
     let part = "一本"
@@ -252,17 +249,18 @@ func pdfDiscussionNoteKeepsTheColorAndInkOfAnOverlappingManualMark(style: Annota
     #expect(reader.inlinePDFHighlights.map(\.anchors) == [draft.note.anchors])
     reader.closePDFReadingNote()
     await reader.flushReadingNotes()
-    let again = try ReaderModel(root: root, credentials: WorkflowCredentials())
-    await again.load()
-    again.select(id)
-    let saved = try #require(again.currentReadingNotes.first { $0.id == chineseDraft.id })
-    again.openReadingNote(saved)
-    #expect(again.pdfNoteEditor?.note.markdown == "来自所选中文" && again.pdfBilingual.isOpen)
     let stale = PDFReflowTextSelection(sentence: sentence, language: "en", range: range, text: "outdated")
     await reader.performReflowSelectionAction(.note, selection: [stale])
     #expect(reader.pdfNoteEditor == nil)
     session.close()
     #expect(!reader.hasPDFNoteSelection)
+    let reopened = try ReaderModel(root: root, credentials: WorkflowCredentials())
+    await reopened.load()
+    reopened.select(id)
+    #expect(reopened.inlinePDFHighlights.map(\.anchors) == [draft.note.anchors])
+    let saved = try #require(reopened.currentReadingNotes.first { $0.id == chineseDraft.id })
+    reopened.openReadingNote(saved)
+    #expect(reopened.pdfNoteEditor?.note.markdown == "来自所选中文" && reopened.pdfBilingual.isOpen)
 }
 
 @Test @MainActor func nativePDFInkOpensTheExistingNoteAfterAdjacentRunsWereCoalesced() async throws {
