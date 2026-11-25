@@ -58,6 +58,8 @@ SQLite 格式 v2 的 `LibraryStore` 在一次事务内将旧版整库 JSON 转�
 
 研究记忆使用同一书库的持久化与变更校验。`ResearchMemory` 管理与提问相关的个人关注，`ReadingNoteMemoryIndex` 返回可核对的笔记片段，`ResearchBriefIndex` 在设备端整理题名与跨论文证据。`ChatSourceVersions` 记录新回答和派生笔记所用的背景。书库 Agent 通过工具读取这些投影，写入研究问题时仍由应用检查来源、修订和去重。
 
+`DeviceSemanticEncoder` 管理按需下载的 Core ML 模型，`SemanticPassageIndex` 用稳定来源和内容指纹维护派生向量。明确的回答习惯经 `ReaderPreference` 确定作用域。`MemorySleepSession` 在空闲时调用书库配置的模型，`MemorySleepStore` 核验变更并原子更新同库 `memory_sleep` 表。书库工具和两处对话复用 `effectiveSleepMemory`，历史重放同时检查来源和当时生效的记忆版本。
+
 上述内部依赖是工程约定，并非已经由独立 target 强制隔离。新增代码应沿此方向组织；发现跨层依赖时优先拆清职责，再考虑是否需要新的编译边界。
 
 ## 新文件放在哪里
