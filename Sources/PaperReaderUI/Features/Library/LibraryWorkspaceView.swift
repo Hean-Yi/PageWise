@@ -191,7 +191,7 @@ private struct ShelfWorkspaceContent: View {
                     }
                     LazyVGrid(columns: columns, alignment: .leading, spacing: 32) {
                         if leadingCoverCount != 0 {
-                            AddPaperCover { onlineSearch.open(shelfID: collection == .all ? selectedShelfID : nil) }
+                            AddPaperCover { onlineSearch.open(shelfID: selection.shelfID) }
                                 .quickStartTarget(onlineSearch.isExpanded ? nil : .discovery)
                         }
                         ForEach(listing.entries, id: \.element.id) { index, paper in
@@ -254,7 +254,9 @@ private struct ShelfWorkspaceContent: View {
                 }
             #endif
         }.coordinateSpace(.named(ShelfCoverFlight.coordinateSpace))
-            .onChange(of: selection) {
+            .onChange(of: selection, initial: true) { previous, current in
+                if onlineSearch.isExpanded { onlineSearch.open(shelfID: current.shelfID) }
+                guard previous != current else { return }
                 dismissSearchRequest += 1
                 arrangement.end()
                 preview = nil

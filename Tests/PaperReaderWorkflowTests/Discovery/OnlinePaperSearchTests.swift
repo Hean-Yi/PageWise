@@ -11,6 +11,16 @@ private func onlineFixtureCandidate(_ number: Int = 1) -> PaperCandidate {
         year: "2024", pdfURL: URL(string: "https://arxiv.org/pdf/\(identifier)")!)
 }
 
+@Test func onlineResultTitleUnwrapsLiteralSymbolsAndHighlightsTheDisplayedText() {
+    var candidate = onlineFixtureCandidate()
+    let raw = #"$β$-OPSD with $x$, $x^2$, $$y$$, \$z$, $10 and $20"#
+    candidate.title = raw
+    let display = candidate.searchResultTitle
+    #expect(display == #"β-OPSD with x, $x^2$, $$y$$, \$z$, $10 and $20"#)
+    #expect(SearchTermMatches.ranges(in: display, query: "OPSD").map { String(display[$0]) } == ["OPSD"])
+    #expect(candidate.title == raw && candidate.landingURL?.absoluteString == candidate.id)
+}
+
 private actor InlineDiscoveryFixture: PaperDiscovery {
     let source: URL?
     let holdSearch: Bool
@@ -230,14 +240,18 @@ private struct OnlineToolReplyEcho: AgentCompleting {
     search.confirmImport(onlineFixtureCandidate())
     while await discovery.pendingDownload == nil { await Task.yield() }
     search.open(shelfID: second)
-    #expect(search.targetShelfID == first)
-    #expect(search.contextNotice != nil)
+    #expect(search.targetShelfID == second)
+    #expect(search.importProgress.contains("First"))
+    #expect(search.results.map(\.id) == [onlineFixtureCandidate().id])
     await discovery.releaseDownload()
     await search.importTask?.value
     let id = try #require(search.imported[onlineFixtureCandidate().id])
     #expect(model.state.shelfID(for: id) == first)
     #expect(model.selectedPaperID == nil)
-    #expect(search.isExpanded)
+    #expect(search.isExpanded && search.targetShelfID == second)
+    #expect(search.importedPaperID(for: onlineFixtureCandidate()) == nil)
+    search.open(shelfID: first)
+    #expect(search.importedPaperID(for: onlineFixtureCandidate()) == id)
     search.confirmImport(onlineFixtureCandidate())
     #expect(await discovery.downloads == 1)
     let restarted = try ReaderModel(root: model.root)
@@ -265,16 +279,17 @@ private struct OnlineToolReplyEcho: AgentCompleting {
         #expect(await model.deleteShelf(shelf))
     } else {
         search.close()
-        #expect(search.closing)
-        #expect(search.isExpanded)
+        #expect(!search.isExpanded)
+        search.open(shelfID: nil)
+        #expect(search.isExpanded && search.targetShelfID == nil)
     }
     let task = search.importTask
     await discovery.releaseDownload()
     await task?.value
     #expect(model.state.papers.isEmpty)
     #expect(model.state.paperShelfIDs.isEmpty)
-    #expect(search.importErrors[onlineFixtureCandidate().id] != nil)
-    #expect(search.isExpanded == deleteTarget)
+    #expect((search.importErrors[onlineFixtureCandidate().id] != nil) == deleteTarget)
+    #expect(search.isExpanded)
     let temporary = try #require(await discovery.returnedURL)
     #expect(!FileManager.default.fileExists(atPath: temporary.path))
 }
@@ -311,7 +326,7 @@ private struct OnlineToolReplyEcho: AgentCompleting {
     #expect(search.importErrors[onlineFixtureCandidate().id] == nil)
 }
 
-@MainActor @Test func onlineExplicitTargetSwitchCancelsOldQueryAndKeepsNewResults() async throws {
+@MainActor @Test func onlineShelfChangeKeepsThePendingSearchAndNewQueryStillSupersedesIt() async throws {
     let model = try await onlineModel()
     defer { try? FileManager.default.removeItem(at: model.root) }
     let first = try #require(await model.createShelf(name: "First"))
@@ -327,7 +342,7 @@ private struct OnlineToolReplyEcho: AgentCompleting {
     #expect(search.isExpanded)
     #expect(search.targetShelfID == second)
     #expect(search.results.isEmpty)
-    #expect(!search.isSearching)
+    #expect(search.isSearching && search.searchTask == firstTask)
     search.query = "second"
     search.search()
     while await discovery.pendingSearch["second"] == nil { await Task.yield() }
@@ -352,10 +367,12 @@ private struct OnlineToolReplyEcho: AgentCompleting {
     for target: UUID? in [first, second, nil] {
         search.open(shelfID: target)
         #expect(search.imported.isEmpty)
-        #expect(search.results.isEmpty)
-        search.query = "fixture"
-        search.search()
-        await search.searchTask?.value
+        if originalID == nil {
+            search.query = "fixture"
+            search.search()
+            await search.searchTask?.value
+        }
+        #expect(search.results.map(\.id) == [onlineFixtureCandidate().id])
         search.confirmImport(onlineFixtureCandidate())
         await search.importTask?.value
         let id = try #require(search.imported[onlineFixtureCandidate().id])
@@ -368,6 +385,33 @@ private struct OnlineToolReplyEcho: AgentCompleting {
     await restarted.load()
     #expect(restarted.state.papers.count == 1)
     #expect(restarted.state.paperShelfIDs.isEmpty)
+}
+
+@MainActor @Test func onlineSameTitleWithDifferentSourceAndPDFShowsTheConflictOnThatCandidate() async throws {
+    let model = try await onlineModel()
+    defer { try? FileManager.default.removeItem(at: model.root) }
+    let source = model.root.appendingPathComponent("fixture.pdf")
+    try DemoPaper.write(to: source)
+    let first = onlineFixtureCandidate()
+    var second = onlineFixtureCandidate(2)
+    second.title = first.title
+    let discovery = InlineDiscoveryFixture(source: source, searchResults: [first, second])
+    let search = OnlinePaperSearch(reader: model, discovery: discovery)
+    search.open(shelfID: nil)
+    search.query = first.title
+    search.search()
+    await search.searchTask?.value
+    search.confirmImport(first)
+    await search.importTask?.value
+    let original = try #require(search.importedPaperID(for: first))
+    let bytes = try Data(contentsOf: source)
+    try (bytes + Data("\n% distinct publication\n".utf8)).write(to: source)
+    #expect(search.importedPaperID(for: second) == nil)
+    search.confirmImport(second)
+    await search.importTask?.value
+    #expect(model.state.papers.map(\.id) == [original])
+    #expect(search.importErrors[second.id]?.contains("同名论文") == true)
+    #expect(search.importErrors[first.id] == nil && search.importedPaperID(for: second) == nil)
 }
 
 @MainActor @Test func onlineAutomaticDownloadResolvesTheSelectedVersionAndPreservesItsOrigin() async throws {
@@ -446,11 +490,12 @@ private struct OnlineToolReplyEcho: AgentCompleting {
     search.importSelectedPDF(pdf)
     #expect(search.importTask == nil)
     #expect(search.choosePDF(for: submitted))
-    search.importSelectedPDF(pdf)
     search.open(shelfID: second)
-    #expect(search.targetShelfID == first)
+    #expect(search.targetShelfID == second)
+    search.importSelectedPDF(pdf)
     await search.importTask?.value
-    let id = try #require(search.importedPaperID(for: publication))
+    let id = try #require(search.imported[publication.id])
+    #expect(search.importedPaperID(for: publication) == nil)
     #expect(search.importedPaperID(for: preprint) == nil)
     #expect(model.selectedPaperID == nil)
     #expect(model.state.papers.first?.title == publication.title)
@@ -503,7 +548,7 @@ private struct OnlineToolReplyEcho: AgentCompleting {
     search.importSelectedPDF(pdf)
     search.close()
     await search.importTask?.value
-    #expect(!search.isExpanded && !search.closing)
+    #expect(!search.isExpanded)
     #expect(search.imported.isEmpty && model.state.papers.isEmpty)
     search.importSelectedPDF(pdf)
     #expect(search.importTask == nil)
