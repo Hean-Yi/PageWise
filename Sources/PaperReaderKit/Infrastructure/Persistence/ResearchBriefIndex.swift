@@ -189,8 +189,10 @@ public actor ResearchBriefIndex {
             return ($0.group.shelf?.uuidString ?? "") < ($1.group.shelf?.uuidString ?? "")
         }
         var versions = ChatSourceVersions()
+        let memoryOrigins = ResearchMemoryOrigins(state: state, excluding: pending)
         let topics = ranked.prefix(max(0, min(8, limit))).map { candidate in
             let group = candidate.group
+            let members = Set(group.ids)
             let ordered = group.ids.sorted {
                 let lhs = sourceScores[$0] ?? 0
                 let rhs = sourceScores[$1] ?? 0
@@ -209,14 +211,44 @@ public actor ResearchBriefIndex {
                     paperID: id, title: String(PaperTitle.display(paper.title).prefix(240)),
                     noteID: hit?.0.id, excerpt: hit?.1, noteOrigin: origin)
             }
+            let openQuestions = state.memories.lazy
+                .filter { memory in
+                    guard !memory.deleted, memory.text.hasPrefix(MemoryItem.automaticPrefix),
+                        let origin = memoryOrigins.resolve(memory), case .paper(let paperID) = origin,
+                        members.contains(paperID)
+                    else { return false }
+                    return true
+                }
+                .sorted { $0.createdAt > $1.createdAt }
+                .prefix(3)
+                .map { String($0.text.dropFirst(MemoryItem.automaticPrefix.count)) }
+            let counterNotes = state.readingNotes.lazy
+                .filter { note in
+                    note.deletedAt == nil && note.dimension == .rebuttal && members.contains(note.paperID)
+                        && ChatSourceVersions.recalledNote(note, in: state, excluding: pending) != nil
+                }
+                .sorted { $0.modifiedAt > $1.modifiedAt }
+                .prefix(2)
+                .compactMap { note -> ResearchBrief.Source? in
+                    guard let paper = basis.papers[note.paperID] else { return nil }
+                    versions.include(note)
+                    let origin = note.backgroundSources == nil ? "localNote" : "aiDiscussion"
+                    return .init(
+                        paperID: note.paperID, title: String(PaperTitle.display(paper.title).prefix(240)),
+                        noteID: note.id,
+                        excerpt: String(ReadingNoteMemoryIndex.searchableBody(note.markdown).prefix(180)),
+                        noteOrigin: origin)
+                }
             let identity = Self.topicIdentity(
                 kind: candidate.kind, label: candidate.label, shelf: group.shelf, terms: group.terms,
-                ids: group.ids)
+                ids: group.ids, openQuestions: Array(openQuestions),
+                counterIDs: counterNotes.compactMap(\.noteID))
             return ResearchBrief.Topic(
                 id: identity.id, version: identity.version, label: candidate.label,
                 basis: candidate.kind,
                 paperCount: group.ids.count, notedPapers: group.ids.filter(basis.noted.contains).count,
-                discussedPapers: group.ids.filter(basis.discussed.contains).count, sources: sources)
+                discussedPapers: group.ids.filter(basis.discussed.contains).count, sources: sources,
+                openQuestions: openQuestions, counterNotes: counterNotes)
         }
         return ResearchBrief(
             topics: topics, scope: scope, inputs: basis, versions: versions,
@@ -224,7 +256,8 @@ public actor ResearchBriefIndex {
     }
 
     private static func topicIdentity(
-        kind: String, label: String, shelf: UUID?, terms: [String], ids: [UUID]
+        kind: String, label: String, shelf: UUID?, terms: [String], ids: [UUID], openQuestions: [String],
+        counterIDs: [UUID]
     ) -> (id: String, version: String) {
         let canonicalIDS = ids.map(\.uuidString).sorted().joined(separator: ",")
         let canonicalTerms = terms.sorted().joined(separator: "/")
@@ -236,7 +269,10 @@ public actor ResearchBriefIndex {
         case "matching_note_passages": identity = "query:" + label
         default: identity = kind + ":" + label
         }
-        let payload = "\(kind)|\(label)|\(shelf?.uuidString ?? "")|\(canonicalTerms)|\(canonicalIDS)"
+        let questions = openQuestions.sorted().joined(separator: "/")
+        let counterIDS = counterIDs.map(\.uuidString).sorted().joined(separator: ",")
+        let payload =
+            "\(kind)|\(label)|\(shelf?.uuidString ?? "")|\(canonicalTerms)|\(canonicalIDS)|\(questions)|\(counterIDS)"
         let version = SHA256.hash(data: Data(payload.utf8)).map { String(format: "%02x", $0) }.joined()
         return (identity, version)
     }

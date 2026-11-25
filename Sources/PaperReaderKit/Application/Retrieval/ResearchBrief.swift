@@ -37,10 +37,14 @@ public struct ResearchBrief: Encodable, Sendable {
         public let notedPapers: Int
         public let discussedPapers: Int
         public let sources: [Source]
+        /// Tentative agent questions linked to this topic; never reader-endorsed facts.
+        public let openQuestions: [String]
+        /// Reader notes marked as concessions or rebuttals for a member paper.
+        public let counterNotes: [Source]
 
         public init(
             id: String, version: String, label: String, basis: String, paperCount: Int, notedPapers: Int,
-            discussedPapers: Int, sources: [Source]
+            discussedPapers: Int, sources: [Source], openQuestions: [String] = [], counterNotes: [Source] = []
         ) {
             self.id = id
             self.version = version
@@ -50,10 +54,12 @@ public struct ResearchBrief: Encodable, Sendable {
             self.notedPapers = notedPapers
             self.discussedPapers = discussedPapers
             self.sources = sources
+            self.openQuestions = openQuestions
+            self.counterNotes = counterNotes
         }
 
         enum CodingKeys: String, CodingKey {
-            case label, basis, paperCount, notedPapers, discussedPapers, sources
+            case label, basis, paperCount, notedPapers, discussedPapers, sources, openQuestions, counterNotes
         }
     }
 
@@ -84,7 +90,7 @@ public struct ResearchBrief: Encodable, Sendable {
         else {
             return false
         }
-        let quoted = topics.flatMap(\.sources).compactMap { source -> (UUID, String)? in
+        let quoted = topics.flatMap { $0.sources + $0.counterNotes }.compactMap { source -> (UUID, String)? in
             guard let id = source.noteID, let excerpt = source.excerpt else { return nil }
             return (id, excerpt)
         }

@@ -182,3 +182,36 @@ private func briefPaper(_ title: String) -> Paper {
     #expect(moved.topics.flatMap(\.sources).isEmpty)
     #expect(!shelfBrief.isCurrent(in: state, excluding: []))
 }
+
+@Test func researchBriefSurfacesOpenQuestionsAndCounterNotesWithLiveSources() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let store = try LibraryStore(directory: root)
+    let index = ResearchBriefIndex(store: store)
+    let a = briefPaper("Quartz Distillation")
+    let b = briefPaper("Quartz Calibration")
+    var overviewNote = ReadingNote(
+        paperID: a.id, contentVersion: "v", anchors: [], markdown: "Budget controls must match across groups.")
+    overviewNote.backgroundSources = .init()
+    var counter = ReadingNote(
+        paperID: b.id, contentVersion: "v", anchors: [],
+        markdown: "The reported gain disappears when compute is matched.")
+    counter.dimension = .rebuttal
+    var state = LibraryState()
+    state.papers = [a, b]
+    state.readingNotes = [overviewNote, counter]
+    var report = ChatTurn(paperID: a.id, question: "Read", selection: "", answer: "", evidence: [])
+    report.closeReadingVersion = "v"
+    report.closeReadingNoteIDs = [overviewNote.id]
+    state.chats = [report]
+    state.memories = [MemoryItem(text: MemoryItem.automaticPrefix + "Does compute matching hold?", sourceID: report.id)]
+    try await store.save(state)
+    try await index.maintain()
+    let hits = try await ReadingNoteMemoryIndex().search(
+        query: "budget", state: state, pending: [], excluding: nil, paperID: nil, limit: 8, includeArchived: false)
+    let brief = try await index.brief(matching: nil, limit: 4, state: state, excluding: [], noteHits: hits)
+    let quartz = try #require(brief.topics.first { $0.label == "quartz" })
+    #expect(quartz.openQuestions.contains("Does compute matching hold?"))
+    #expect(quartz.counterNotes.contains { $0.noteID == counter.id && $0.excerpt?.contains("compute") == true })
+    #expect(brief.isCurrent(in: state, excluding: []))
+}
