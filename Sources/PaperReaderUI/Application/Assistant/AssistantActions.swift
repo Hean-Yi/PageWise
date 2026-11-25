@@ -175,7 +175,9 @@ extension ReaderModel {
             guard lastPaperDeletion[paper.id] == deletion else { return }
             // Reading notes have a revision-aware index. Copying their contents into a new
             // permanent memory would bypass a later edit or deletion.
-            guard !evidence.contains(where: { $0.readingNoteID != nil }) else { return }
+            guard ResearchMemory.permitsAutomaticWrite(for: question),
+                !evidence.contains(where: { $0.readingNoteID != nil })
+            else { return }
             let extracted: String
             do {
                 extracted = try await client.complete(

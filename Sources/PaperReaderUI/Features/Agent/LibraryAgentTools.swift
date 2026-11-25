@@ -63,6 +63,49 @@ extension LibraryAgent {
         switch arguments {
         case .researchOverview(let query):
             return try await researchOverview(query: query, epoch: epoch, onSubject: onSubject)
+        case .proposeResearchQuestion(let question, let noteResult, let quote):
+            guard let turn = activeTurn, permitsResearchProposal(in: turn),
+                limits.availableToolNames?.contains(call.function.name) != false
+            else { throw ReaderError.message("本轮没有新的可保存研究问题。请根据已取回的资料回答。") }
+            var authorizedSource = ChatSourceVersions()
+            func needsVerbatimSource() -> Bool {
+                let sawOtherSource = turn.cards.contains { $0.id != noteResult }
+                return turns.count > 1 || sawOtherSource
+                    || (recalledSources.map { !$0.isEmpty && $0 != authorizedSource } ?? false)
+            }
+            let proposal: ResearchQuestionProposal
+            if let noteResult {
+                guard let card = turn.cards.first(where: { $0.id == noteResult && $0.kind == .evidence }),
+                    let noteID = card.readingNoteID, let paperID = card.paperID,
+                    let note = reader.referencedReadingNote(id: noteID, paperID: paperID, includeArchived: false),
+                    note.modifiedAt == card.noteModifiedAt
+                else { throw ReaderError.message("请先在本轮检索当前的个人阅读笔记。") }
+                authorizedSource.include(note)
+                proposal = try ResearchQuestionProposal(
+                    question: question, quote: quote, registeredExcerpt: card.excerpt, note: note,
+                    sourceOnly: needsVerbatimSource())
+            } else {
+                proposal = try ResearchQuestionProposal(
+                    question: question, readerTurnID: turn.id, readerMessage: turn.question, quote: quote,
+                    sourceOnly: needsVerbatimSource())
+            }
+            guard proposal.isEligible(in: reader.state, excluding: reader.pendingImportIDs) else {
+                throw ReaderError.message("线索与既有记忆重复、已撤回，或来自派生笔记。")
+            }
+            guard await reader.save(cancellable: true, proposingQuestion: proposal) else {
+                try check(epoch)
+                throw ReaderError.message("来源已变化或保存失败，此次未记录新问题。")
+            }
+            try check(epoch)
+            var versions = ChatSourceVersions()
+            versions.include(proposal.item)
+            remember(versions)
+            onSubject("待核实的研究问题")
+            var record = AgentCard(kind: .navigation, title: "待查研究问题")
+            record.researchMemoryID = proposal.item.id
+            return AgentToolOutcome(
+                content: #"{"ok":true,"status":"ai_unverified"}"#, cards: [record], truncated: false,
+                message: "待查研究问题已保存。")
         case .library(let operation):
             guard call.function.name == "list_library" || organization.contains(call.function.name),
                 limits.availableToolNames?.contains(call.function.name) != false
@@ -70,10 +113,9 @@ extension LibraryAgent {
             var outcome = try await organize(operation, onSubject: onSubject)
             switch operation {
             case .createShelf, .renameShelf, .movePapers:
-                if let previous = lastResearchOverview {
-                    let current = ResearchOverview(state: reader.state, excluding: reader.pendingImportIDs)
-                    if current != previous {
-                        lastResearchOverview = current
+                if let previous = lastResearchBrief {
+                    if !reader.isResearchBriefCurrent(previous) {
+                        lastResearchBrief = nil
                         outcome.changedResearchOverview = true
                         var receipt =
                             (try? JSONSerialization.jsonObject(with: Data(outcome.content.utf8))) as? [String: Any]
@@ -132,7 +174,7 @@ extension LibraryAgent {
                 request.target == nil || request.target == paperID
             else { throw ReaderError.message("一条阅读笔记只能标在本轮目标论文上。") }
             var scope = try request.scope ?? reader.discussionNoteScope(for: paperID)
-            scope.backgroundSources = recalledSources
+            scope.backgroundSources = recalledSources ?? ChatSourceVersions()
             onSubject(evidence.displayTitle)
             let links = try references.map { reference -> NoteLinkRequest in
                 guard let registered = card(reference.passage.resultID), registered.kind == .evidence,
@@ -516,19 +558,36 @@ extension LibraryAgent {
             case memoryID = "memory_id"
             case paperID = "paper_id"
             case sourceTurnID = "source_turn_id"
-            case status, text
+            case sourceNoteID = "source_note_id"
+            case status, text, origin
         }
 
         let memoryID: UUID
-        let paperID: UUID
-        let sourceTurnID: UUID
+        let paperID: UUID?
+        let sourceTurnID: UUID?
+        let sourceNoteID: UUID?
+        let origin: String
         let status: String
         let text: String
     }
 
     private struct MemoryOverview: Encodable {
         let overview: ResearchOverview
+        let topics: [ResearchBrief.Topic]
         let memories: [RecalledMemory]
+        let sources: [SourceReference]
+    }
+
+    private struct SourceReference: Encodable {
+        let resultID: UUID
+        let paperID: UUID?
+        let readingNoteID: UUID?
+
+        enum CodingKeys: String, CodingKey {
+            case resultID = "result_id"
+            case paperID = "paper_id"
+            case readingNoteID = "reading_note_id"
+        }
     }
 
     private func researchOverview(query: String?, epoch: UUID, onSubject: @MainActor (String) -> Void) async throws
@@ -536,20 +595,30 @@ extension LibraryAgent {
     {
         var records: [RecalledMemory] = []
         var sources: [MemoryItem] = []
+        let brief = try await reader.researchBrief(matching: query, limit: min(4, limits.maxResults))
+        try check(epoch)
         if let query {
             let found = try await reader.researchMemory.relevant(
                 to: query, state: reader.state, excluding: reader.pendingImportIDs)
             try check(epoch)
-            let turns = Dictionary(
-                reader.state.chats.map { ($0.id, $0.paperID) }, uniquingKeysWith: { first, _ in first })
+            let origins = ResearchMemoryOrigins(state: reader.state, excluding: reader.pendingImportIDs)
             var versions = ChatSourceVersions()
             for memory in found.prefix(max(0, limits.maxResults)) {
-                guard let id = turns[memory.sourceID], !reader.pendingImportIDs.contains(id) else { continue }
+                guard let origin = origins.resolve(memory) else { continue }
+                let paperID: UUID? = if case .paper(let id) = origin { id } else { nil }
+                let source: String
+                switch memory.librarySource {
+                case .reader: source = "library_reader"
+                case .note: source = "personal_note_hypothesis"
+                case nil: source = "paper_discussion"
+                }
                 versions.include(memory)
                 sources.append(memory)
                 records.append(
                     .init(
-                        memoryID: memory.id, paperID: id, sourceTurnID: memory.sourceID,
+                        memoryID: memory.id, paperID: paperID,
+                        sourceTurnID: source == "personal_note_hypothesis" ? nil : memory.sourceID,
+                        sourceNoteID: source == "personal_note_hypothesis" ? memory.sourceID : nil, origin: source,
                         status: memory.userEdited ? "user_edited" : "ai_unverified",
                         text: String(memory.text.prefix(400))))
             }
@@ -557,30 +626,71 @@ extension LibraryAgent {
                 throw ReaderError.message("长期记忆刚刚更新，请重新检索。")
             }
         }
+        guard reader.isResearchBriefCurrent(brief) else {
+            throw ReaderError.message("研究简报的来源刚刚更新，请重新检索。")
+        }
         let overview = ResearchOverview(state: reader.state, excluding: reader.pendingImportIDs)
         let encoder = JSONEncoder()
-        var bytes =
-            try query == nil
-            ? encoder.encode(overview) : encoder.encode(MemoryOverview(overview: overview, memories: records))
+        var topics = brief.topics
+        var registered: [AgentSourceTarget: AgentCard] = [:]
+        for source in topics.flatMap(\.sources) {
+            var card = AgentCard(kind: source.noteID == nil ? .localPaper : .evidence, title: source.title)
+            card.paperID = source.paperID
+            if let noteID = source.noteID {
+                guard
+                    let note = reader.referencedReadingNote(id: noteID, paperID: source.paperID, includeArchived: false)
+                else { continue }
+                card.readingNoteID = noteID
+                card.noteModifiedAt = note.modifiedAt
+                card.excerpt = source.excerpt ?? ""
+                card.subtitle = "阅读笔记"
+            }
+            registered[AgentSourceTarget(card)] = card
+        }
+        func cardsForTopics() -> [AgentCard] {
+            var seen: Set<UUID> = []
+            return topics.flatMap(\.sources).compactMap { source in
+                let key = source.noteID.map(AgentSourceTarget.readingNote) ?? .paper(source.paperID, nil)
+                guard let card = registered[key], seen.insert(card.id).inserted else { return nil }
+                return card
+            }
+        }
+        var cards = cardsForTopics()
+        func payload() throws -> Data {
+            try encoder.encode(
+                MemoryOverview(
+                    overview: overview, topics: topics, memories: records,
+                    sources: cards.map {
+                        SourceReference(resultID: $0.id, paperID: $0.paperID, readingNoteID: $0.readingNoteID)
+                    }))
+        }
+        var bytes = try payload()
         var shortened = false
-        while bytes.count > limits.maxToolResultBytes, !records.isEmpty {
-            records.removeLast()
-            sources.removeLast()
-            bytes = try encoder.encode(MemoryOverview(overview: overview, memories: records))
+        while bytes.count > limits.maxToolResultBytes {
+            if !topics.isEmpty {
+                topics.removeLast()
+                cards = cardsForTopics()
+            } else if !records.isEmpty {
+                records.removeLast()
+                sources.removeLast()
+            } else {
+                throw ReaderError.message("研究概览超过本次工具容量。")
+            }
+            bytes = try payload()
             shortened = true
         }
-        guard bytes.count <= limits.maxToolResultBytes else { throw ReaderError.message("研究概览超过本次工具容量。") }
         if !sources.isEmpty {
             var recalled = ChatSourceVersions()
             for memory in sources { recalled.include(memory) }
             // Keep the earliest revision when two calls recall the same item in one transcript.
             remember(recalled)
-            paperRegistry.formUnion(records.map(\.paperID))
+            paperRegistry.formUnion(records.compactMap(\.paperID))
         }
-        lastResearchOverview = overview
+        paperRegistry.formUnion(cards.compactMap(\.paperID))
+        lastResearchBrief = brief
         onSubject(query == nil ? "书架、笔记与讨论" : "长期研究记忆")
         return AgentToolOutcome(
-            content: String(decoding: bytes, as: UTF8.self), cards: [],
+            content: String(decoding: bytes, as: UTF8.self), cards: cards,
             truncated: shortened || overview.shelfCount > overview.topics.count, message: nil)
     }
 }

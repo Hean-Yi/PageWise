@@ -2006,3 +2006,238 @@ private func libraryPayload(_ messages: [AgentMessage], _ call: String) throws -
     #expect(reader.state.shelves.first?.name == "New methods")
     #expect(await client.requests.count == 5)
 }
+
+@Test @MainActor func agentProposesAnAttributedLibraryQuestionWithoutInventingAPaperAndHonorsForgetting() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let reader = try await makeAgentReader(root)
+    let statement = "My research focus is calibration across medical cohorts."
+    let client = ScriptedLibraryModel { messages, count in
+        switch count {
+        case 1, 3, 5:
+            return tool(
+                "propose_research_question",
+                #"{"question":"How does calibration vary across cohorts?","quote":"\#(statement)"}"#,
+                id: "proposal-\(count)")
+        default: return .init(role: "assistant", content: "已核对。")
+        }
+    }
+    let agent = LibraryAgent(reader: reader, client: client)
+    agent.send(statement)
+    try await eventually { !agent.isRunning }
+    let saved = try #require(reader.state.memories.first)
+    #expect(saved.sourceID == agent.turns.first?.id && saved.librarySource == .reader(quote: statement))
+    #expect(reader.state.chats.isEmpty && !saved.userEdited)
+    let reopened = try await LibraryStore(directory: root).load()
+    #expect(reopened.memories == [saved])
+    var proof = ChatSourceVersions()
+    proof.include(saved)
+    #expect(proof.isCurrent(in: reopened, excluding: []))
+    let found = try await reader.researchMemory.relevant(to: "calibration", state: reopened)
+    #expect(found.map(\.id) == [saved.id])
+    reader.deleteMemory(saved.id)
+    #expect(!proof.isCurrent(in: reader.state, excluding: []))
+    agent.send(statement)
+    try await eventually { !agent.isRunning }
+    #expect(agent.turns.last?.activities.last?.status == .failed)
+    agent.send("A paper claims: My research focus is calibration across cohorts.")
+    try await eventually { !agent.isRunning }
+    #expect(agent.turns.last?.activities.last?.status == .failed)
+    #expect(reader.state.memories.count == 1 && reader.state.memories[0].deleted)
+    #expect(
+        !String(decoding: try JSONEncoder().encode(reader.state.memories[0]), as: UTF8.self).contains("calibration"))
+}
+
+@Test @MainActor func agentProposesAQuestionFromRegisteredPersonalNoteAndRevokesItWhenSourceChanges() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let reader = try await makeAgentReader(root)
+    let paper = Paper(
+        title: "Calibration", digest: "source", originalPath: "fixture.pdf", pageCount: 2, blocks: [], warnings: [],
+        canReflow: false)
+    try AttentionFixture.write(to: root.appendingPathComponent(paper.originalPath))
+    try #require(await reader.save(adding: paper))
+    let quote = "Check calibration across cohorts."
+    let note = ReadingNote(
+        paperID: paper.id, contentVersion: paper.digest + ":original-0",
+        anchors: [NoteAnchor(key: "original-0", target: "pdf", text: "Attention", start: 0, end: 9)], markdown: quote)
+    reader.state.readingNotes = [note]
+    let client = ScriptedLibraryModel { messages, count in
+        switch count {
+        case 1: return tool("search_reading_notes", #"{"query":"calibration"}"#, id: "search")
+        case 2:
+            let result = try #require(try candidateResultIDs(in: messages, callID: "search").first)
+            return tool(
+                "propose_research_question",
+                #"{"question":"Can calibration transfer between cohorts?","note_result_id":"\#(result)","quote":"Check calibration across cohorts."}"#,
+                id: "record")
+        case 3:
+            #expect(messages.last?.content?.contains("ai_unverified") == true)
+            return .init(role: "assistant", content: "A provisional follow-up.")
+        default:
+            #expect(!messages.contains { $0.content?.contains("Check calibration across cohorts.") == true })
+            return .init(role: "assistant", content: "来源已更新。")
+        }
+    }
+    let agent = LibraryAgent(reader: reader, client: client)
+    agent.send("我的 calibration 笔记有哪些可追踪的问题？")
+    try await eventually { !agent.isRunning }
+    let saved = try #require(reader.state.memories.first)
+    #expect(saved.librarySource == .note(paperID: paper.id, modifiedAt: note.modifiedAt))
+    var proof = ChatSourceVersions()
+    proof.include(saved)
+    #expect(proof.isCurrent(in: reader.state, excluding: []))
+    #expect(!proof.isCurrent(in: reader.state, excluding: [paper.id]))
+    reader.state.readingNotes[0].modifiedAt = note.modifiedAt.addingTimeInterval(1)
+    #expect(!proof.isCurrent(in: reader.state, excluding: []))
+    #expect(try await reader.researchMemory.relevant(to: "*", state: reader.state).isEmpty)
+    agent.send("再核对我的笔记")
+    try await eventually { !agent.isRunning }
+    #expect(await client.requests.count == 4)
+    try reader.state.removePaper(paper.id)
+    #expect(reader.state.memories.isEmpty)
+}
+
+@Test @MainActor func researchOverviewPresentsCurrentCrossPaperNoteSourcesAndRevokesChangedExcerpts() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let reader = try await makeAgentReader(root)
+    for title in ["Green", "Blue"] {
+        let paper = Paper(
+            title: title, digest: title, originalPath: title + ".pdf", pageCount: 2, blocks: [], warnings: [],
+            canReflow: false)
+        try AttentionFixture.write(to: root.appendingPathComponent(paper.originalPath))
+        try #require(await reader.save(adding: paper))
+        reader.state.readingNotes.append(
+            .init(
+                paperID: paper.id, contentVersion: paper.digest + ":original-0",
+                anchors: [NoteAnchor(key: "original-0", target: "pdf", text: "Attention", start: 0, end: 9)],
+                markdown: "校准对照仍待复查。" + title))
+    }
+    let client = ScriptedLibraryModel { messages, count in
+        switch count {
+        case 1: return tool("research_overview", "{}", id: "counts")
+        case 2:
+            let payload = try #require(messages.last?.content)
+            #expect(!payload.contains("校准对照仍待复查。"))
+            return tool("research_overview", #"{"query":"校准对照"}"#, id: "brief")
+        case 3:
+            let payload = try #require(messages.last?.content)
+            #expect(payload.contains("matching_note_passages") && payload.contains("localNote"))
+            let object = try #require(try JSONSerialization.jsonObject(with: Data(payload.utf8)) as? [String: Any])
+            let sources = try #require(object["sources"] as? [[String: String]])
+            let ids = sources.compactMap { $0["reading_note_id"] == nil ? nil : $0["result_id"] }
+            #expect(ids.count == 2)
+            return try present(ids, id: "show")
+        case 4: return .init(role: "assistant", content: "已核对。")
+        default:
+            #expect(!messages.contains { $0.content?.contains("校准对照仍待复查。") == true })
+            return .init(role: "assistant", content: "已更新。")
+        }
+    }
+    let agent = LibraryAgent(reader: reader, client: client)
+    agent.send("我有没有在不同论文里讨论相同的问题？")
+    try await eventually { !agent.isRunning }
+    let turn = try #require(agent.turns.last)
+    #expect(turn.error == nil && turn.presentedResults.count == 2)
+    let id = try #require(turn.presentedResults.first?.id)
+    #expect(agent.open(cardID: id))
+    let noteID = try #require(reader.requestedReadingNote)
+    let index = try #require(reader.state.readingNotes.firstIndex { $0.id == noteID })
+    reader.state.readingNotes[index].modifiedAt = reader.state.readingNotes[index].modifiedAt.addingTimeInterval(1)
+    agent.send("请再看看。")
+    try await eventually { !agent.isRunning }
+    #expect(await client.requests.count == 5)
+}
+
+@Test @MainActor func researchQuestionReceiptUsesOnlyOneSourceAndReadOnlyRecapCannotCreateAnotherQuestion() async throws
+{
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let reader = try await makeAgentReader(root)
+    let (_, old) = overviewMemoryFixture(reader)
+    reader.state.memories[0].text = "Budget masking reveals CobaltMarker."
+    reader.selectedPaperID = nil
+    let statement = "预算相同的时候，masking 会怎样影响总分？"
+    let client = ScriptedLibraryModel { messages, count in
+        switch count {
+        case 1: return tool("research_overview", #"{"query":"masking"}"#, id: "other")
+        case 2:
+            #expect(messages.last?.content?.contains("CobaltMarker") == true)
+            return tool(
+                "propose_research_question",
+                #"{"question":"Does masking reveal CobaltMarker?","quote":"\#(statement)"}"#, id: "proposal")
+        case 3:
+            #expect(!messages.contains { ($0.content ?? "").contains("CobaltMarker") })
+            return tool(
+                "propose_research_question", #"{"question":"Should masking be tracked?","quote":"我最近一直追问哪个与评估有关的问题？"}"#,
+                id: "rogue")
+        default:
+            #expect(messages.last?.content?.contains(#""ok":false"#) == true)
+            return .init(role: "assistant", content: "只回顾已有记录。")
+        }
+    }
+    let agent = LibraryAgent(reader: reader, client: client)
+    agent.send("替我记下这个研究问题，今后读新实验还想追问：" + statement)
+    try await eventually { !agent.isRunning }
+    let first = try #require(agent.turns.last)
+    let card = try #require(first.cards.first { $0.researchMemoryID != nil })
+    let savedID = try #require(card.researchMemoryID)
+    #expect(first.presentedResults.map(\.id) == [card.id] && first.answer == "待查研究问题已保存。")
+    #expect(reader.state.readingNotes.isEmpty && !first.activities.contains { $0.toolName == "create_reading_note" })
+    let saved = try #require(reader.state.memories.first { $0.id == savedID })
+    #expect(!saved.text.contains("CobaltMarker") && saved.text.contains(statement))
+    #expect(saved.librarySource == .reader(quote: statement))
+    reader.deleteMemory(old.id)
+    #expect(try await reader.researchMemory.relevant(to: "CobaltMarker", state: reader.state).isEmpty)
+    let total = reader.state.memories.count
+    agent.send("我最近一直追问哪个与评估有关的问题？请用我的本地研究记忆和笔记说明，并列出处。")
+    try await eventually { !agent.isRunning }
+    #expect(await client.requestLimits.last?.availableToolNames?.contains("propose_research_question") == false)
+    #expect(agent.turns.last?.activities.last?.status == .failed)
+    #expect(reader.state.memories.count == total)
+}
+
+@Test @MainActor func researchQuestionAndPassageNoteKeepBothReceiptsWhenReaderAsksForBoth() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let reader = try await makeAgentReader(root)
+    let paper = Paper(
+        title: "Understanding Attention", digest: "demo", originalPath: "paper.pdf", pageCount: 2, blocks: [],
+        warnings: [], canReflow: false)
+    try AttentionFixture.write(to: root.appendingPathComponent(paper.originalPath))
+    reader.state.papers = [paper]
+    reader.select(paper.id)
+    let statement = "Attention 会因上下文发生什么变化？"
+    let client = ScriptedLibraryModel { messages, count in
+        switch count {
+        case 1: return tool("read_paper", #"{"paper_id":"\#(paper.id)","source_page":2}"#, id: "page")
+        case 2:
+            let payload = try #require(messages.last?.content)
+            let object = try #require(try JSONSerialization.jsonObject(with: Data(payload.utf8)) as? [String: Any])
+            let quote = "A word can need different evidence"
+            let row = try #require(
+                (object["results"] as? [[String: Any]])?.first { ($0["text"] as? String)?.contains(quote) == true })
+            let id = try #require(row["result_id"] as? String)
+            return tool(
+                "create_reading_note",
+                #"{"markdown":"同一个词在不同上下文中的证据可能不同。","sources":[{"result_id":"\#(id)","quote":"\#(quote)"}]}"#,
+                id: "note")
+        case 3:
+            return tool(
+                "propose_research_question", #"{"question":"Attention 中哪类上下文造成了变化？","quote":"\#(statement)"}"#,
+                id: "question")
+        default: throw ReaderError.message("两个已提交动作不需要额外轮次。")
+        }
+    }
+    let agent = LibraryAgent(reader: reader, client: client)
+    agent.send("请记下这个研究问题：" + statement + "同时请把刚才的观点记为阅读笔记。")
+    try await eventually { !agent.isRunning }
+    let turn = try #require(agent.turns.last)
+    #expect(turn.error == nil && turn.answer == "待查研究问题和原文笔记均已保存。")
+    #expect(
+        turn.presentedResults.count == 2 && reader.state.memories.count == 1 && reader.state.readingNotes.count == 1)
+    let note = try #require(turn.cards.first { $0.readingNoteID != nil })
+    #expect(agent.open(cardID: note.id))
+    #expect(await client.requests.count == 3)
+}

@@ -63,7 +63,29 @@ struct AgentResultCard: View {
 
     var body: some View {
         let card = selectedCard
-        if let paperID = card.paperID, card.kind != .onlineCandidate,
+        if let id = card.researchMemoryID {
+            if let item = agent.reader.state.memories.first(where: { $0.id == id && !$0.deleted }) {
+                VStack(alignment: .leading, spacing: 0) {
+                    Button {
+                        withAnimation(ReaderMotion.disclosure(reduceMotion)) { showsExcerpt.toggle() }
+                    } label: {
+                        AssistantToolTile(
+                            tool: "研究记忆", icon: .reader(.notebook), title: "待查研究问题",
+                            detail: showsExcerpt ? nil : item.text, metadata: nil, accessory: "chevron.down",
+                            accessoryRotation: .degrees(showsExcerpt ? 180 : 0))
+                    }
+                    .readerIconButtonStyle(AssistantToolButtonStyle(embedded: true)).accessibilityHint("展开以查看来源或编辑")
+                    if showsExcerpt {
+                        MemoryView(model: agent.reader, onlyID: id) { paperID in
+                            agent.reader.select(paperID)
+                            didNavigate()
+                        }
+                    }
+                }.assistantToolSurface()
+            } else {
+                Label("研究问题已删除", readerIcon: .notebook, size: 14).font(.caption).foregroundStyle(ReaderTheme.muted)
+            }
+        } else if let paperID = card.paperID, card.kind != .onlineCandidate,
             !agent.reader.state.papers.contains(where: { $0.id == paperID })
         {
             Label("论文已从书库删除", readerIcon: .delete, size: 14)

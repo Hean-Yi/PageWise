@@ -124,9 +124,8 @@ public struct ChatSourceVersions: Codable, Sendable, Equatable {
         var result = Self()
         let papers = Set(state.papers.lazy.map(\.id)).subtracting(pending)
         if !memoryIDs.isEmpty {
-            let validTurns = Set(state.chats.lazy.filter { papers.contains($0.paperID) }.map(\.id))
-            for item in state.memories
-            where memoryIDs.contains(item.id) && !item.deleted && validTurns.contains(item.sourceID) {
+            let origins = ResearchMemoryOrigins(state: state, excluding: pending)
+            for item in state.memories where memoryIDs.contains(item.id) && origins.resolve(item) != nil {
                 result.include(item)
             }
         }
@@ -140,7 +139,14 @@ public struct ChatSourceVersions: Codable, Sendable, Equatable {
     }
 
     private static func fingerprint(_ memory: MemoryItem) -> String {
-        let content = memory.sourceID.uuidString + (memory.userEdited ? "|1|" : "|0|") + memory.text.prefix(400)
+        var content = memory.sourceID.uuidString + (memory.userEdited ? "|1|" : "|0|") + memory.text.prefix(400)
+        switch memory.librarySource {
+        case .reader(let quote): content += "|reader|" + quote
+        case .note(let paperID, let modifiedAt):
+            content +=
+                "|note|" + paperID.uuidString + "|" + String(modifiedAt.timeIntervalSinceReferenceDate.bitPattern)
+        case nil: break
+        }
         return Data(SHA256.hash(data: Data(content.utf8))).base64EncodedString()
     }
 }

@@ -2,9 +2,16 @@ import CryptoKit
 import Foundation
 
 public struct MemoryItem: Identifiable, Codable, Sendable, Equatable {
+    public enum LibrarySource: Codable, Sendable, Equatable {
+        case reader(quote: String)
+        case note(paperID: UUID, modifiedAt: Date)
+    }
+
     public var id = UUID()
     public var text: String
     public var sourceID: UUID
+    public private(set) var librarySource: LibrarySource?
+    private(set) var evidenceFingerprint: String?
     public var userEdited = false
     public var deleted = false
     public var createdAt = Date()
@@ -23,6 +30,12 @@ public struct MemoryItem: Identifiable, Codable, Sendable, Equatable {
         }
     }
 
+    init(question: String, sourceID: UUID, source: LibrarySource, evidence: String) {
+        self.init(text: Self.automaticPrefix + question, sourceID: sourceID)
+        librarySource = source
+        evidenceFingerprint = Self.fingerprint(evidence)
+    }
+
     @discardableResult public mutating func correct(to replacement: String) -> Bool {
         guard !deleted, replacement != text || !userEdited else { return false }
         preserveOriginalFingerprint()
@@ -37,13 +50,14 @@ public struct MemoryItem: Identifiable, Codable, Sendable, Equatable {
         let visible = Self.fingerprint(text)
         forgottenFingerprint = visible == originalFingerprint ? nil : visible
         text = ""
+        if case .reader = librarySource { librarySource = .reader(quote: "") }
         deleted = true
         return true
     }
 
     var rejectedFingerprints: [String] {
         guard userEdited || deleted else { return [] }
-        return [originalFingerprint, forgottenFingerprint].compactMap { $0 }
+        return [originalFingerprint, forgottenFingerprint, evidenceFingerprint].compactMap { $0 }
     }
 
     func suppressesAutomaticProposition(_ fingerprint: String) -> Bool {

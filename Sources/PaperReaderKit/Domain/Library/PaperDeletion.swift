@@ -8,7 +8,11 @@ extension LibraryState {
         let turnIDs = Set(chats.lazy.filter { $0.paperID == id }.map(\.id))
         var rejected = Set<String>()
         memories.removeAll { item in
-            guard turnIDs.contains(item.sourceID) else { return false }
+            switch item.librarySource {
+            case .note(let sourcePaper, _) where sourcePaper == id: break
+            case nil where turnIDs.contains(item.sourceID): break
+            default: return false
+            }
             rejected.formUnion(item.rejectedFingerprints)
             return true
         }

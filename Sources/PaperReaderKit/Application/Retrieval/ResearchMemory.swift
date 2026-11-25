@@ -51,11 +51,17 @@ public actor ResearchMemory {
 
     public init() {}
 
+    public static func permitsAutomaticWrite(for message: String) -> Bool {
+        let denied =
+            #"(?i)(?:不要|不用|别|不必|无需|不许|禁止|暂不|不想).{0,10}(?:记|记录|保存|存储|留存)|(?:删除|撤回|清除|忘掉|忘记).{0,12}(?:记忆|记录|这段|这句|我刚)|(?:don['’]t|do not|never|without)\s+(?:ever\s+)?(?:save|remember|store|retain|record|write.{0,24}memory)|(?:forget|erase|withdraw)\s+(?:this|that|my)|off the record"#
+        return message.range(of: denied, options: .regularExpression) == nil
+    }
+
     /// Compare the extracted proposition independently of a question's wording or source.
     /// Repeated source questions also protect older corrections and tombstones.
     public static func candidate(_ raw: String, turn: ChatTurn, state: LibraryState) -> MemoryItem? {
         let value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !value.isEmpty, value.count <= 200 else { return nil }
+        guard permitsAutomaticWrite(for: turn.question), !value.isEmpty, value.count <= 200 else { return nil }
         let candidate = MemoryItem(text: MemoryItem.automaticPrefix + value, sourceID: turn.id)
         guard let fingerprint = candidate.originalFingerprint, !state.suppressedMemoryFingerprints.contains(fingerprint)
         else { return nil }
@@ -81,12 +87,11 @@ public actor ResearchMemory {
         let words = Retriever.tokens(String(query.prefix(1_000))).subtracting(Self.stopWords)
         let broad = paperID == nil && query == "*"
         guard !words.isEmpty || broad else { return [] }
-        let turns = Dictionary(state.chats.map { ($0.id, $0.paperID) }, uniquingKeysWith: { first, _ in first })
-        let papers = Set(state.papers.map(\.id)).subtracting(pending)
+        let origins = ResearchMemoryOrigins(state: state, excluding: pending)
         var matches: [(item: MemoryItem, score: Int)] = []
         for memory in active {
             try Task.checkCancellation()
-            guard let id = turns[memory.sourceID], papers.contains(id) else { continue }
+            guard let origin = origins.resolve(memory) else { continue }
             if broad {
                 matches.append((memory, memory.userEdited ? 1 : 0))
                 continue
@@ -101,7 +106,11 @@ public actor ResearchMemory {
             }
             let overlap = terms.intersection(words).count
             guard overlap > 0 else { continue }
-            matches.append((memory, overlap * 4 + (memory.userEdited ? 2 : 0) + (id == paperID ? 1 : 0)))
+            matches.append(
+                (
+                    memory,
+                    overlap * 4 + (memory.userEdited ? 2 : 0) + (paperID.map { origin == .paper($0) } == true ? 1 : 0)
+                ))
         }
         return matches.sorted {
             if $0.score != $1.score { return $0.score > $1.score }

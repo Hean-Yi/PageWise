@@ -271,7 +271,7 @@ public final class ReaderModel {
         fillingSourceAbstract: PublicationAbstractFill? = nil,
         presentingReflow: (paperID: UUID, jobID: UUID)? = nil, insertingNote: AnchoredNoteInsertion? = nil,
         closeReading: (notes: [AnchoredNoteInsertion], report: ChatTurn)? = nil,
-        obsidianBinding: ObsidianNoteBinding? = nil
+        obsidianBinding: ObsidianNoteBinding? = nil, proposingQuestion: ResearchQuestionProposal? = nil
     ) async -> Bool {
         guard loaded else { return false }
         let previous = saveQueue
@@ -286,6 +286,12 @@ public final class ReaderModel {
                 // public state or unrelated queued snapshots, and are published only after commit.
                 if let deletingPaper, self.readingPaper == deletingPaper { self.endReading() }
                 var snapshot = self.state
+                if let proposingQuestion {
+                    guard proposingQuestion.isEligible(in: snapshot, excluding: self.pendingImportIDs) else {
+                        return false
+                    }
+                    snapshot.memories.append(proposingQuestion.item)
+                }
                 let removed = try deletingPaper.map { try snapshot.removePaper($0) }
                 if let importedPaper {
                     if let requestedAt,
@@ -373,6 +379,15 @@ public final class ReaderModel {
                 }
                 if let report { snapshot.chats.append(report) }
                 let changes = try await store.save(snapshot, respectingCancellation: cancellable, deleting: removed)
+                if let proposingQuestion {
+                    if proposingQuestion.isEligible(in: self.state, excluding: self.pendingImportIDs) {
+                        self.state.memories.append(proposingQuestion.item)
+                    } else {
+                        // The note or a correction changed during disk I/O. Remove the unexposed proposal before the next queued writer.
+                        try await store.save(self.state)
+                        return false
+                    }
+                }
                 if changes.researchSourcesChanged { self.researchBriefMaintenance.sourcesChanged() }
                 if let removed {
                     self.didDeletePaper(removed)

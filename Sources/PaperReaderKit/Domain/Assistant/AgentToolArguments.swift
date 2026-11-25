@@ -20,6 +20,7 @@ public enum AgentToolArguments: Sendable, Equatable {
     case closeReadPaper(String)
     case askUser(AgentClarification)
     case researchOverview(query: String?)
+    case proposeResearchQuestion(question: String, noteResult: UUID?, quote: String)
     case searchLibrary(String)
     case searchReadingNotes(String)
     case searchOnline(String, limit: Int? = nil, scope: PaperSearchScope = .all)
@@ -68,6 +69,12 @@ public enum AgentToolArguments: Sendable, Equatable {
         case "research_overview":
             try keys(["query"], required: [])
             return .researchOverview(query: values["query"] == nil ? nil : try string("query", max: 500))
+        case "propose_research_question":
+            try keys(["question", "note_result_id", "quote"], required: ["question", "quote"])
+            return .proposeResearchQuestion(
+                question: try string("question", max: 800),
+                noteResult: values["note_result_id"] == nil ? nil : try uuid("note_result_id"),
+                quote: try string("quote", max: 960))
         case "list_library":
             try keys(["scope", "shelf_id", "offset"], required: ["scope"])
             guard let scope = AgentLibraryScope(rawValue: try string("scope", max: 16)),

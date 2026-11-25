@@ -8,6 +8,7 @@ import Testing
 private actor RevocationTransport: HTTPTransport {
     var prompts: [String] = []
     var notePrompts: [String] = []
+    var memoryExtractionRequests = 0
     var pauseNext = false
     var paused: CheckedContinuation<Void, Never>?
 
@@ -30,6 +31,7 @@ private actor RevocationTransport: HTTPTransport {
             notePrompts.append(user)
             content = #"{"markdown":"没有可支持的标画","references":[]}"#
         } else {
+            memoryExtractionRequests += 1
             content = #"{"memory":""}"#
         }
         let json = ["choices": [["message": ["content": content], "finish_reason": "stop"]]]
@@ -158,4 +160,26 @@ private actor RevocationTransport: HTTPTransport {
         try await index.search(
             query: "", state: state, pending: [], excluding: nil, paperID: nil, limit: 8, includeArchived: true
         ).count == 4)
+}
+
+@Test @MainActor func paperQuestionWithExplicitNoMemorySkipsExtractionAndRejectsTheWrite() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let api = RevocationTransport()
+    let reader = try ReaderModel(root: root, client: .init(transport: api), credentials: WorkflowCredentials())
+    await reader.load()
+    var settings = reader.modelSettings
+    settings.model = "fixture"
+    try reader.saveSettings(settings, key: nil)
+    let file = root.appendingPathComponent("current.pdf")
+    try AttentionFixture.write(to: file)
+    _ = try #require(await reader.importURLs([file]).first)
+    let question = "Calibration still looks promising to me. Don't remember this. What does the passage measure?"
+    await reader.ask(question)
+    #expect(await api.prompts.count == 1)
+    #expect(await api.memoryExtractionRequests == 0)
+    let turn = try #require(reader.state.chats.last)
+    #expect(turn.question == question && !turn.answer.isEmpty)
+    #expect(ResearchMemory.candidate("Tracks calibration", turn: turn, state: reader.state) == nil)
+    #expect(reader.state.memories.isEmpty)
 }

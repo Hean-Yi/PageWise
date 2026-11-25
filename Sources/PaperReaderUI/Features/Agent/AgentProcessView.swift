@@ -191,6 +191,7 @@ struct AgentProcessView: View {
     private func name(of activity: AgentActivity) -> String {
         switch activity.toolName {
         case "research_overview": "查看研究方向"
+        case "propose_research_question": "记录待追踪问题"
         case "list_library": "查看馆藏"
         case "create_shelf": "新建书架"
         case "rename_shelf": "重命名书架"

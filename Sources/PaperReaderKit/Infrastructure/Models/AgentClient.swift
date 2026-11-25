@@ -184,13 +184,28 @@ public struct AgentClient: AgentCompleting {
         private static let shelfName = Property(type: "string", description: "Shelf display name, 1–60 characters")
         static let definitions: [Tool] = [
             make(
+                "propose_research_question",
+                "Save one tentative research question grounded in this reader turn’s own research idea or an exact excerpt of a registered personal note. A question is an agent hypothesis, never an endorsed stance.",
+                [
+                    "question": .init(
+                        type: "string", description: "One concrete question using the source topic, ending in ? or ？"),
+                    "note_result_id": .init(
+                        type: "string",
+                        description: "Only for a personal note: the result_id returned by search_reading_notes"),
+                    "quote": .init(
+                        type: "string",
+                        description:
+                            "Exact short complete reader statement in the current message, or exact excerpt of a registered personal note"
+                    ),
+                ], ["question", "quote"]),
+            make(
                 "research_overview",
-                "Read research activity by shelf. Supply query only when the reader asks about their own long-term interests or remembered concerns.",
+                "Read a bounded research brief with local sources. Query a specific topic for relevant notes and provisional or reader-edited memories. Reuse a successful result until its source changes.",
                 [
                     "query": .init(
                         type: "string",
                         description:
-                            "Optional focus keywords. Use * for a broad sample of recent reader-edited and provisional memories. Omitting query returns shelf counts only."
+                            "Optional focus keywords. Use * for a broad sample of recent reader-edited and provisional memories. Omitting query returns activity and representative paper titles without private note excerpts."
                     )
                 ], []),
             make(

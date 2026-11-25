@@ -3,8 +3,11 @@ import SwiftUI
 
 struct MemoryView: View {
     @Bindable var model: ReaderModel
+    var onlyID: UUID?
     let openPaper: (UUID) -> Void
-    private var memories: [MemoryItem] { model.state.memories.filter { !$0.deleted } }
+    private var memories: [MemoryItem] {
+        model.state.memories.filter { !$0.deleted && (onlyID == nil || $0.id == onlyID) }
+    }
 
     var body: some View {
         if memories.isEmpty {
@@ -31,7 +34,20 @@ struct MemoryView: View {
                 Label(memory.userEdited ? "已编辑" : "自动整理", systemImage: memory.userEdited ? "pencil" : "sparkle")
                     .font(.caption)
                 Spacer()
-                if let source = model.state.chats.first(where: { $0.id == memory.sourceID }),
+                if case .note(let paperID, let revision) = memory.librarySource,
+                    let note = model.referencedReadingNote(id: memory.sourceID, paperID: paperID),
+                    note.modifiedAt == revision
+                {
+                    Button {
+                        openPaper(paperID)
+                        model.openReadingNote(note)
+                    } label: {
+                        Label("来源笔记", readerIcon: .source, size: 15)
+                    }
+                } else if case .note = memory.librarySource {
+                    Text("来源笔记已变更")
+                } else if memory.librarySource == nil,
+                    let source = model.state.chats.first(where: { $0.id == memory.sourceID }),
                     model.state.papers.contains(where: { $0.id == source.paperID })
                 {
                     Button {
@@ -48,6 +64,10 @@ struct MemoryView: View {
                 .accessibilityLabel("删除此条记忆").help("删除记忆")
             }
             .font(.caption).foregroundStyle(ReaderTheme.muted).readerIconButtonStyle(.borderless)
+            if case .reader(let quote) = memory.librarySource {
+                DisclosureGroup("读者原话") { Text(verbatim: quote).textSelection(.enabled) }
+                    .font(.caption).foregroundStyle(ReaderTheme.muted)
+            }
         }
         .padding(22).frame(maxWidth: .infinity, alignment: .leading)
         .background(ReaderTheme.surface, in: RoundedRectangle(cornerRadius: 14))
