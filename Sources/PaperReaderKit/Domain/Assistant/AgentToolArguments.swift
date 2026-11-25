@@ -20,7 +20,7 @@ public enum AgentToolArguments: Sendable, Equatable {
     case closeReadPaper(String)
     case askUser(AgentClarification)
     case rememberPreference(quote: String)
-    case researchOverview(query: String?)
+    case researchOverview(query: String?, scope: ResearchBrief.Scope)
     case proposeResearchQuestion(question: String, noteResult: UUID?, quote: String)
     case searchLibrary(String)
     case searchReadingNotes(String)
@@ -71,8 +71,20 @@ public enum AgentToolArguments: Sendable, Equatable {
             try keys(["quote"], required: ["quote"])
             return .rememberPreference(quote: try string("quote", max: 960))
         case "research_overview":
-            try keys(["query"], required: [])
-            return .researchOverview(query: values["query"] == nil ? nil : try string("query", max: 500))
+            try keys(["query", "shelf_id", "paper_id"], required: [])
+            guard !(values["shelf_id"] != nil && values["paper_id"] != nil) else {
+                throw ReaderError.message("研究概览一次只能限定一个书架或一篇论文。")
+            }
+            let scope: ResearchBrief.Scope
+            if values["paper_id"] != nil {
+                scope = .paper(try uuid("paper_id"))
+            } else if values["shelf_id"] != nil {
+                scope = .shelf(try uuid("shelf_id"))
+            } else {
+                scope = .library
+            }
+            return .researchOverview(
+                query: values["query"] == nil ? nil : try string("query", max: 500), scope: scope)
         case "propose_research_question":
             try keys(["question", "note_result_id", "quote"], required: ["question", "quote"])
             return .proposeResearchQuestion(

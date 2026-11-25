@@ -90,8 +90,8 @@ extension LibraryAgent {
                 remember(versions)
             }
             return AgentToolOutcome(content: #"{"ok":true}"#, cards: [], truncated: false, message: "回答偏好已保存。")
-        case .researchOverview(let query):
-            return try await researchOverview(query: query, epoch: epoch, onSubject: onSubject)
+        case .researchOverview(let query, let scope):
+            return try await researchOverview(query: query, scope: scope, epoch: epoch, onSubject: onSubject)
         case .proposeResearchQuestion(let question, let noteResult, let quote):
             guard let turn = activeTurn, permitsResearchProposal(in: turn),
                 limits.availableToolNames?.contains(call.function.name) != false
@@ -621,19 +621,37 @@ extension LibraryAgent {
         }
     }
 
-    private func researchOverview(query: String?, epoch: UUID, onSubject: @MainActor (String) -> Void) async throws
-        -> AgentToolOutcome
-    {
+    private func researchOverview(
+        query: String?, scope: ResearchBrief.Scope, epoch: UUID,
+        onSubject: @MainActor (String) -> Void
+    ) async throws -> AgentToolOutcome {
+        let scopePaperID: UUID?
+        switch scope {
+        case .library:
+            scopePaperID = nil
+        case .paper(let id):
+            guard reader.state.papers.contains(where: { $0.id == id }) else {
+                throw ReaderError.message("这篇论文已不在书库中。")
+            }
+            scopePaperID = id
+        case .shelf(let id):
+            guard reader.state.shelves.contains(where: { $0.id == id }) else {
+                throw ReaderError.message("这个书架已不在书库中。")
+            }
+            scopePaperID = nil
+        }
         var records: [RecalledMemory] = []
         var entries: [EffectiveResearchMemory.Entry] = []
         var sources: [MemoryItem] = []
-        let brief = try await reader.researchBrief(matching: query, limit: min(4, limits.maxResults))
+        let brief = try await reader.researchBrief(
+            matching: query, limit: min(4, limits.maxResults), scope: scope)
         try check(epoch)
         if let query {
             let found = try await reader.researchMemory.relevant(
-                to: query, state: reader.state, excluding: reader.pendingImportIDs)
+                to: query, paperID: scopePaperID, state: reader.state, excluding: reader.pendingImportIDs)
             try check(epoch)
-            let effective = try await reader.effectiveSleepMemory(question: query, paperID: nil, recalled: found)
+            let effective = try await reader.effectiveSleepMemory(
+                question: query, paperID: scopePaperID, recalled: found, scope: scope)
             try check(epoch)
             entries = effective.entries
             sources = effective.sources
@@ -664,7 +682,18 @@ extension LibraryAgent {
         guard reader.isResearchBriefCurrent(brief) else {
             throw ReaderError.message("研究简报的来源刚刚更新，请重新检索。")
         }
-        let overview = ResearchOverview(state: reader.state, excluding: reader.pendingImportIDs)
+        var overviewState = reader.state
+        switch scope {
+        case .library:
+            break
+        case .paper(let id):
+            overviewState.papers = overviewState.papers.filter { $0.id == id }
+        case .shelf(let id):
+            overviewState.papers = overviewState.papers.filter {
+                reader.state.paperShelfIDs[$0.id.uuidString] == id
+            }
+        }
+        let overview = ResearchOverview(state: overviewState, excluding: reader.pendingImportIDs)
         let encoder = JSONEncoder()
         var topics = brief.topics
         var registered: [AgentSourceTarget: AgentCard] = [:]

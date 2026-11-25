@@ -131,16 +131,31 @@ extension ReaderModel {
         return !state.memories.contains { ids.contains($0.id) && !$0.isResponsePreference }
     }
 
+    private func memoryScopeIncludes(_ scope: ResearchBrief.Scope, origin: ResearchMemoryOrigins.Origin) -> Bool {
+        switch (scope, origin) {
+        case (.library, _), (_, .reader):
+            return true
+        case (.paper(let target), .paper(let paperID)):
+            return target == paperID
+        case (.shelf(let target), .paper(let paperID)):
+            return state.paperShelfIDs[paperID.uuidString] == target
+        default:
+            return false
+        }
+    }
+
     /// Replace ranked automatic entries with the current consolidated representation before prompting.
     /// User-authored preferences remain separately available through the explicit preference channel.
-    func effectiveSleepMemory(question: String, paperID: UUID?, recalled: [MemoryItem]) async throws
-        -> EffectiveResearchMemory
-    {
+    func effectiveSleepMemory(
+        question: String, paperID: UUID?, recalled: [MemoryItem], scope: ResearchBrief.Scope = .library
+    ) async throws -> EffectiveResearchMemory {
         guard ReaderPreference.permitsRecall(question) else { return EffectiveResearchMemory() }
         let guardedOrigins = ResearchMemoryOrigins(state: state, excluding: pendingImportIDs)
         let shelf = paperID == nil ? activeShelfID : paperID.flatMap { state.paperShelfIDs[$0.uuidString] }
-        let allowed = state.memories.filter {
-            guardedOrigins.resolve($0) != nil && $0.preference?.applies(paperID: paperID, shelfID: shelf) != false
+        let allowed = state.memories.filter { item in
+            guard let origin = guardedOrigins.resolve(item) else { return false }
+            return item.preference?.applies(paperID: paperID, shelfID: shelf) != false
+                && memoryScopeIncludes(scope, origin: origin)
         }
         let raw = recalled.filter { !$0.isResponsePreference && allowed.contains($0) }
         let edition = memorySleep.edition

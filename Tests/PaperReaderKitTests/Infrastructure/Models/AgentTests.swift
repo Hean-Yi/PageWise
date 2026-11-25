@@ -204,6 +204,27 @@ func agentArgumentsRejectUnknownExtraAndInvalidTypes(_ tool: String, _ json: Str
     #expect(throws: (any Error).self) { try AgentToolArguments.parse(name: tool, json: json, limits: .init()) }
 }
 
+@Test func researchOverviewArgumentsAcceptOneOptionalScope() throws {
+    let shelf = UUID()
+    let paper = UUID()
+    #expect(
+        try AgentToolArguments.parse(
+            name: "research_overview", json: #"{"shelf_id":"\#(shelf)"}"#, limits: .init())
+            == .researchOverview(query: nil, scope: .shelf(shelf)))
+    #expect(
+        try AgentToolArguments.parse(
+            name: "research_overview", json: #"{"query":"budget","paper_id":"\#(paper)"}"#, limits: .init())
+            == .researchOverview(query: "budget", scope: .paper(paper)))
+    #expect(
+        try AgentToolArguments.parse(name: "research_overview", json: "{}", limits: .init())
+            == .researchOverview(query: nil, scope: .library))
+    #expect(throws: (any Error).self) {
+        try AgentToolArguments.parse(
+            name: "research_overview",
+            json: #"{"shelf_id":"\#(shelf)","paper_id":"\#(paper)"}"#, limits: .init())
+    }
+}
+
 @Test func resultSelectionRejectsMalformedIDsUnknownFieldsAndOversizedLists() throws {
     let id = UUID().uuidString
     let row = ["result_id": id]

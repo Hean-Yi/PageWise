@@ -171,3 +171,46 @@ private func sleepSource(_ statement: String) throws -> MemoryItem {
             to: directory.appendingPathComponent("library.sqlite"))
     }
 }
+
+@Test @MainActor func effectiveMemoryRespectsShelfAndPaperScope() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let reader = try ReaderModel(root: root)
+    await reader.load()
+    let paperA = Paper(
+        title: "Scope A", digest: "scope-a", originalPath: "unused.pdf", pageCount: 1, blocks: [],
+        warnings: [], canReflow: false)
+    let paperB = Paper(
+        title: "Scope B", digest: "scope-b", originalPath: "unused.pdf", pageCount: 1, blocks: [],
+        warnings: [], canReflow: false)
+    let shelfA = try Shelf(name: "Shelf A")
+    let shelfB = try Shelf(name: "Shelf B")
+    var noteA = ReadingNote(
+        paperID: paperA.id, contentVersion: "v", anchors: [], markdown: "Scope observation alpha.")
+    var noteB = ReadingNote(
+        paperID: paperB.id, contentVersion: "v", anchors: [], markdown: "Scope observation beta.")
+    let itemA = try ResearchQuestionProposal(
+        question: "Does scope alpha matter?", quote: "Scope observation alpha.",
+        registeredExcerpt: "Scope observation alpha.", note: noteA
+    ).item
+    let itemB = try ResearchQuestionProposal(
+        question: "Does scope beta matter?", quote: "Scope observation beta.",
+        registeredExcerpt: "Scope observation beta.", note: noteB
+    ).item
+    reader.state.papers = [paperA, paperB]
+    reader.state.shelves = [shelfA, shelfB]
+    reader.state.paperShelfIDs[paperA.id.uuidString] = shelfA.id
+    reader.state.paperShelfIDs[paperB.id.uuidString] = shelfB.id
+    reader.state.readingNotes = [noteA, noteB]
+    reader.state.memories = [itemA, itemB]
+
+    let paperScoped = try await reader.effectiveSleepMemory(
+        question: "scope", paperID: nil, recalled: [itemA, itemB], scope: .paper(paperA.id))
+    #expect(paperScoped.originals.map(\.id) == [itemA.id])
+    let shelfScoped = try await reader.effectiveSleepMemory(
+        question: "scope", paperID: nil, recalled: [itemA, itemB], scope: .shelf(shelfA.id))
+    #expect(shelfScoped.originals.map(\.id) == [itemA.id])
+    let libraryScoped = try await reader.effectiveSleepMemory(
+        question: "scope", paperID: nil, recalled: [itemA, itemB], scope: .library)
+    #expect(Set(libraryScoped.originals.map(\.id)) == [itemA.id, itemB.id])
+}
