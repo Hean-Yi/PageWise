@@ -10,14 +10,66 @@ struct MemoryView: View {
     }
 
     var body: some View {
+        if onlyID == nil {
+            sleepPanel
+        }
         if memories.isEmpty {
             ContentUnavailableView("暂无研究记忆", systemImage: "brain.head.profile")
                 .frame(maxWidth: .infinity, minHeight: 240)
         } else {
             LazyVStack(spacing: 12) {
-                ForEach(memories) { memory in memoryCard(memory) }
+                let organized = onlyID == nil ? Set(currentGroups.flatMap(\.members)) : []
+                ForEach(memories.filter { !organized.contains($0.id) }) { memory in memoryCard(memory) }
             }
         }
+    }
+
+    private var currentGroups: [MemorySleepEdition.Connection] {
+        let origins = ResearchMemoryOrigins(state: model.state, excluding: model.pendingImportIDs)
+        let live = memories.filter { origins.resolve($0) != nil }
+        return model.memorySleep.edition.liveConnections(for: live)
+    }
+
+    private var sleepPanel: some View {
+        @Bindable var sleep = model.memorySleep
+        let groups = currentGroups
+        return VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Label("记忆整理", systemImage: "moon.stars").font(.headline)
+                Spacer()
+                if sleep.running {
+                    ProgressView().controlSize(.small)
+                    Button("停止") { sleep.interrupt() }
+                } else {
+                    Button("用 AI 整理") { sleep.run(reader: model, automatic: false, withModel: true) }
+                        .disabled(memories.isEmpty)
+                }
+            }
+            Toggle("空闲时自动维护记忆", isOn: $sleep.enabled)
+            Text("使用当前模型服务，发送本批记忆并计入 API 用量。")
+                .font(.caption).foregroundStyle(ReaderTheme.muted)
+            if let message = sleep.message {
+                Text(verbatim: message).font(.caption).foregroundStyle(ReaderTheme.muted)
+            }
+            ForEach(Array(groups.enumerated()), id: \.offset) { _, group in
+                DisclosureGroup {
+                    ForEach(group.members, id: \.self) { id in
+                        if let memory = memories.first(where: { $0.id == id }) {
+                            memoryCard(memory)
+                        }
+                    }
+                } label: {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(
+                            (group.kind == .superseded || group.kind == .refine)
+                                ? "已更新" : group.kind == .compare ? "保留分歧" : group.kind == .duplicate ? "已归并" : "研究主题"
+                        )
+                        .font(.caption).foregroundStyle(ReaderTheme.accent)
+                        if let summary = group.summary { Text(verbatim: summary) }
+                    }
+                }
+            }
+        }.padding(.bottom, 12)
     }
 
     private func memoryCard(_ memory: MemoryItem) -> some View {
@@ -31,8 +83,11 @@ struct MemoryView: View {
             .textFieldStyle(.plain).font(.system(size: 16)).lineSpacing(5)
             .accessibilityLabel("编辑研究记忆")
             HStack(spacing: 14) {
-                Label(memory.userEdited ? "已编辑" : "自动整理", systemImage: memory.userEdited ? "pencil" : "sparkle")
-                    .font(.caption)
+                Label(
+                    memory.userEdited ? "已编辑" : memory.isResponsePreference ? "读者自述" : "自动整理",
+                    systemImage: memory.userEdited ? "pencil" : "sparkle"
+                )
+                .font(.caption)
                 Spacer()
                 if case .note(let paperID, let revision) = memory.librarySource,
                     let note = model.referencedReadingNote(id: memory.sourceID, paperID: paperID),

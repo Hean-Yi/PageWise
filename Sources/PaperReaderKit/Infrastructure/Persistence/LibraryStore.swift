@@ -72,7 +72,7 @@ public actor LibraryStore {
                     revision += 1
                 } else {
                     guard header.recordFormat == 2,
-                        header.version == LibraryState.currentVersion || header.version == 13
+                        (13...LibraryState.currentVersion).contains(header.version)
                     else {
                         throw ReaderError.message("书库版本不受支持，原资料已保留。")
                     }
@@ -81,8 +81,8 @@ public actor LibraryStore {
                     try restored.validateOrdering()
                     try restored.validateShelves()
                     try restored.validateMemorySuppression()
-                    if header.version == 13 {
-                        // v14 adds anonymous suppression. Legacy rows, including their original IDs, stay untouched.
+                    if header.version < LibraryState.currentVersion {
+                        // v14 adds suppression and v15 adds optional preference attribution. Existing rows keep their IDs.
                         try Self.writeCatalog(Catalog(restored), db: db)
                         try Self.execute(db, "UPDATE library_generation SET revision=revision+1 WHERE id=1")
                         revision += 1
@@ -125,10 +125,25 @@ public actor LibraryStore {
                         throw ReaderError.message("论文仍在书库中。")
                     }
                     try stageFileRemoval(paper)
-                    if try Self.hasResearchCheckpoint(db) { try Self.execute(db, "DELETE FROM research_brief") }
+                    if try Self.hasResearchCheckpoint(db, .brief) { try Self.execute(db, "DELETE FROM research_brief") }
                 }
                 let start = sqlite3_total_changes64(db)
                 let recordsChanged = try LibraryRecords(db).write(from: previous.state, to: state)
+                if recordsChanged, !previous.state.memories.isEmpty,
+                    Self.mayRevokeMemory(from: previous.state, to: state),
+                    let data = try Self.checkpoint(db, .sleep)
+                {
+                    let eligible = MemorySleepEdition.eligible(state)
+                    if var edition = try? JSONDecoder().decode(MemorySleepEdition.self, from: data) {
+                        let previousEdition = edition
+                        try edition.reconcile(eligible)
+                        if edition != previousEdition {
+                            try Self.writeCheckpoint(try JSONEncoder().encode(edition), db, .sleep)
+                        }
+                    } else {
+                        try Self.execute(db, "DELETE FROM memory_sleep")
+                    }
+                }
                 if catalogChanged { try Self.writeCatalog(catalog, db: db) }
                 if respectingCancellation { try Task.checkCancellation() }
                 guard sqlite3_total_changes64(db) > start else { return (previous.revision, false) }
@@ -140,6 +155,26 @@ public actor LibraryStore {
         }
         baseline = (state, revision)
         return Changes(researchSourcesChanged: sourcesChanged)
+    }
+
+    /// Appending papers, ordinary discussion turns and new memories cannot withdraw a source.
+    /// Avoid decoding and hashing the sleep edition on those frequent foreground writes.
+    private static func mayRevokeMemory(from old: LibraryState, to next: LibraryState) -> Bool {
+        if old.papers.count > next.papers.count || old.chats.count > next.chats.count { return true }
+        if old.memories != next.memories && !next.memories.starts(with: old.memories) { return true }
+        if old.readingNotes != next.readingNotes && !next.readingNotes.starts(with: old.readingNotes) { return true }
+        if old.papers != next.papers {
+            let retained = Set(next.papers.map(\.id))
+            if old.papers.contains(where: { !retained.contains($0.id) }) { return true }
+        }
+        if old.chats != next.chats {
+            // A generated report can disqualify a previously reader-owned note from memory.
+            guard next.chats.starts(with: old.chats) else { return true }
+            return next.chats.dropFirst(old.chats.count).contains {
+                $0.readingNoteID != nil || $0.closeReadingNoteIDs != nil
+            }
+        }
+        return false
     }
 
     /// Hold the writer lock while deciding which files have committed references. A second
@@ -158,40 +193,58 @@ public actor LibraryStore {
 
     func committedResearchState() -> (LibraryState, Int64)? { baseline }
 
-    private static func hasResearchCheckpoint(_ db: OpaquePointer) throws -> Bool {
-        try integer(db, "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='research_brief'") != 0
+    enum ResearchTable: String {
+        case brief = "research_brief"
+        case sleep = "memory_sleep"
     }
 
-    func readResearchCheckpoint() throws -> Data? {
-        try Self.database(at: databaseURL) { db in
-            guard try Self.hasResearchCheckpoint(db) else { return nil }
-            return try LibraryRecords.statement(
-                db, "SELECT payload FROM research_brief WHERE id=1 AND length(payload)<=33554432"
-            ) { stmt in
-                guard sqlite3_step(stmt) == SQLITE_ROW else { return nil }
-                return try LibraryRecords.blob(stmt, column: 0)
-            }
+    private static func hasResearchCheckpoint(_ db: OpaquePointer, _ table: ResearchTable) throws -> Bool {
+        try integer(db, "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='\(table.rawValue)'") != 0
+    }
+
+    func readResearchCheckpoint(_ table: ResearchTable = .brief) throws -> Data? {
+        try Self.database(at: databaseURL) { db in try Self.checkpoint(db, table) }
+    }
+
+    private static func checkpoint(_ db: OpaquePointer, _ table: ResearchTable) throws -> Data? {
+        guard try hasResearchCheckpoint(db, table) else { return nil }
+        return try LibraryRecords.statement(
+            db, "SELECT payload FROM \(table.rawValue) WHERE id=1 AND length(payload)<=33554432"
+        ) { stmt in
+            let status = sqlite3_step(stmt)
+            if status == SQLITE_DONE { return nil }
+            guard status == SQLITE_ROW else { throw LibraryRecords.writeFailure }
+            return try LibraryRecords.blob(stmt, column: 0)
+        }
+    }
+
+    private static func writeCheckpoint(_ data: Data, _ db: OpaquePointer, _ table: ResearchTable) throws {
+        try LibraryRecords.statement(db, "INSERT OR REPLACE INTO \(table.rawValue)(id,payload) VALUES(1,?)") { stmt in
+            try LibraryRecords.bind(data, to: 1, in: stmt)
+            guard sqlite3_step(stmt) == SQLITE_DONE else { throw LibraryRecords.writeFailure }
         }
     }
 
     /// A derived publication never changes the authoritative library generation. A stale worker,
     /// including one in another process, cannot replace the result for a later committed revision.
-    func publishResearchCheckpoint(_ data: Data, revision: Int64) throws -> Bool {
+    func publishResearchCheckpoint(
+        _ data: Data, revision: Int64, table: ResearchTable = .brief, previousPayload: Data? = nil
+    ) throws -> Bool {
         guard data.count <= 32 * 1024 * 1024 else { return false }
         return try Self.database(at: databaseURL) { db in
             try Self.transaction(db) {
                 guard try Self.integer(db, "SELECT revision FROM library_generation WHERE id=1") == revision else {
                     return false
                 }
+                if table == .sleep {
+                    try Task.checkCancellation()
+                    guard try Self.checkpoint(db, table) == previousPayload else { return false }
+                }
                 try Self.execute(
                     db,
-                    "CREATE TABLE IF NOT EXISTS research_brief(id INTEGER PRIMARY KEY CHECK(id=1), payload BLOB NOT NULL)"
+                    "CREATE TABLE IF NOT EXISTS \(table.rawValue)(id INTEGER PRIMARY KEY CHECK(id=1), payload BLOB NOT NULL)"
                 )
-                try LibraryRecords.statement(db, "INSERT OR REPLACE INTO research_brief(id,payload) VALUES(1,?)") {
-                    stmt in
-                    try LibraryRecords.bind(data, to: 1, in: stmt)
-                    guard sqlite3_step(stmt) == SQLITE_DONE else { throw LibraryRecords.writeFailure }
-                }
+                try Self.writeCheckpoint(data, db, table)
                 return true
             }
         }
@@ -256,7 +309,7 @@ public actor LibraryStore {
         }
     }
 
-    private static func transaction<T>(_ db: OpaquePointer, _ body: () throws -> T) throws -> T {
+    static func transaction<T>(_ db: OpaquePointer, _ body: () throws -> T) throws -> T {
         try execute(db, "BEGIN IMMEDIATE")
         do {
             let value = try body()
@@ -268,7 +321,7 @@ public actor LibraryStore {
         }
     }
 
-    private static func database<T>(at url: URL, body: (OpaquePointer) throws -> T) throws -> T {
+    static func database<T>(at url: URL, body: (OpaquePointer) throws -> T) throws -> T {
         var pointer: OpaquePointer?
         guard
             sqlite3_open_v2(url.path, &pointer, SQLITE_OPEN_CREATE | SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX, nil)
@@ -283,7 +336,7 @@ public actor LibraryStore {
         return try body(db)
     }
 
-    private static func execute(_ db: OpaquePointer, _ sql: String) throws {
+    static func execute(_ db: OpaquePointer, _ sql: String) throws {
         guard sqlite3_exec(db, sql, nil, nil, nil) == SQLITE_OK else {
             throw ReaderError.message("书库事务失败，原有内容未被替换。")
         }

@@ -60,7 +60,36 @@ extension LibraryAgent {
         let arguments = try AgentToolArguments.parse(
             name: call.function.name, json: call.function.arguments, limits: limits)
         try check(epoch)
+        let useMemory = activeTurn.map { ReaderPreference.permitsRecall($0.question) } ?? true
+        if !useMemory,
+            ["research_overview", "search_reading_notes", "propose_research_question"].contains(call.function.name)
+        {
+            throw ReaderError.message("本轮已跳过个人记忆。")
+        }
         switch arguments {
+        case .rememberPreference(let quote):
+            guard let turn = activeTurn,
+                let declared = ReaderPreference.declaredClauses(in: turn.question).first(where: {
+                    ReaderPreference.sameStatement($0, quote)
+                }),
+                limits.availableToolNames?.contains(call.function.name) != false
+            else {
+                throw ReaderError.message("请仅引用读者本轮明确表达的长期偏好。")
+            }
+            if let change = try reader.preferenceChange(
+                for: declared, turnID: turn.id,
+                paperID: turn.referencedCardID.flatMap { card($0)?.paperID } ?? reader.selectedPaperID,
+                paperTurn: false)
+            {
+                guard await reader.save(cancellable: true, preferenceChange: change) else {
+                    throw ReaderError.message("偏好发生变化，请重新查看。")
+                }
+                try check(epoch)
+                var versions = ChatSourceVersions()
+                for saved in change.insertions { versions.include(saved) }
+                remember(versions)
+            }
+            return AgentToolOutcome(content: #"{"ok":true}"#, cards: [], truncated: false, message: "回答偏好已保存。")
         case .researchOverview(let query):
             return try await researchOverview(query: query, epoch: epoch, onSubject: onSubject)
         case .proposeResearchQuestion(let question, let noteResult, let quote):
@@ -177,7 +206,7 @@ extension LibraryAgent {
             scope.backgroundSources = recalledSources ?? ChatSourceVersions()
             onSubject(evidence.displayTitle)
             let links = try references.map { reference -> NoteLinkRequest in
-                guard let registered = card(reference.passage.resultID), registered.kind == .evidence,
+                guard useMemory, let registered = card(reference.passage.resultID), registered.kind == .evidence,
                     registered.readingNoteID != nil,
                     let evidence = self.evidence(for: registered)
                 else { throw ReaderError.message("请先用 search_reading_notes 检索书库笔记，再引用笔记中的文字。") }
@@ -201,6 +230,7 @@ extension LibraryAgent {
             var cards: [AgentCard] = []
             for item in items {
                 guard let card = card(item.id), card.removal == nil, card.localImportDestination == nil,
+                    useMemory || (card.readingNoteID == nil && card.researchMemoryID == nil),
                     card.noteModifiedAt == nil || evidence(for: card) != nil
                 else {
                     throw ReaderError.message("展示项中有未登记的结果，请使用工具返回的 result_id 重新选择。")
@@ -575,6 +605,7 @@ extension LibraryAgent {
         let overview: ResearchOverview
         let topics: [ResearchBrief.Topic]
         let memories: [RecalledMemory]
+        let connections: [EffectiveResearchMemory.Entry]
         let sources: [SourceReference]
     }
 
@@ -594,6 +625,7 @@ extension LibraryAgent {
         -> AgentToolOutcome
     {
         var records: [RecalledMemory] = []
+        var entries: [EffectiveResearchMemory.Entry] = []
         var sources: [MemoryItem] = []
         let brief = try await reader.researchBrief(matching: query, limit: min(4, limits.maxResults))
         try check(epoch)
@@ -601,9 +633,14 @@ extension LibraryAgent {
             let found = try await reader.researchMemory.relevant(
                 to: query, state: reader.state, excluding: reader.pendingImportIDs)
             try check(epoch)
+            let effective = try await reader.effectiveSleepMemory(question: query, paperID: nil, recalled: found)
+            try check(epoch)
+            entries = effective.entries
+            sources = effective.sources
             let origins = ResearchMemoryOrigins(state: reader.state, excluding: reader.pendingImportIDs)
             var versions = ChatSourceVersions()
-            for memory in found.prefix(max(0, limits.maxResults)) {
+            for source in sources { versions.include(source) }
+            for memory in effective.originals.prefix(max(0, limits.maxResults)) {
                 guard let origin = origins.resolve(memory) else { continue }
                 let paperID: UUID? = if case .paper(let id) = origin { id } else { nil }
                 let source: String
@@ -612,8 +649,6 @@ extension LibraryAgent {
                 case .note: source = "personal_note_hypothesis"
                 case nil: source = "paper_discussion"
                 }
-                versions.include(memory)
-                sources.append(memory)
                 records.append(
                     .init(
                         memoryID: memory.id, paperID: paperID,
@@ -659,7 +694,7 @@ extension LibraryAgent {
         func payload() throws -> Data {
             try encoder.encode(
                 MemoryOverview(
-                    overview: overview, topics: topics, memories: records,
+                    overview: overview, topics: topics, memories: records, connections: entries,
                     sources: cards.map {
                         SourceReference(resultID: $0.id, paperID: $0.paperID, readingNoteID: $0.readingNoteID)
                     }))
@@ -672,7 +707,8 @@ extension LibraryAgent {
                 cards = cardsForTopics()
             } else if !records.isEmpty {
                 records.removeLast()
-                sources.removeLast()
+            } else if !entries.isEmpty {
+                entries.removeLast()
             } else {
                 throw ReaderError.message("研究概览超过本次工具容量。")
             }
@@ -681,6 +717,7 @@ extension LibraryAgent {
         }
         if !sources.isEmpty {
             var recalled = ChatSourceVersions()
+            recalled.sleepRevision = reader.memorySleep.edition.revision
             for memory in sources { recalled.include(memory) }
             // Keep the earliest revision when two calls recall the same item in one transcript.
             remember(recalled)

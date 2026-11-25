@@ -20,6 +20,7 @@ public final class ReaderModel {
     @ObservationIgnored private(set) var stateRevision: UInt64 = 0
     public var selectedPaperID: UUID?
     public var selectedSection = "library"
+    var activeShelfID: UUID?
     private(set) var readerOrigin = ReaderOrigin.library
     public var mode = "reflow"
     public var message: String?
@@ -42,7 +43,7 @@ public final class ReaderModel {
     public var noteSaveFailed = false
     let paperSearchWarmup: PaperSearchWarmup
     var paperSearchIndex: LibraryAgentSearchIndex { paperSearchWarmup.index }
-    let readingNoteIndex = ReadingNoteMemoryIndex()
+    let readingNoteIndex: ReadingNoteMemoryIndex
     let htmlNoteStore = HTMLReadingStore()
     @ObservationIgnored var noteSaveTask: Task<Void, Never>?
     public var htmlSelection: [HTMLTextSelection] = []
@@ -53,7 +54,8 @@ public final class ReaderModel {
     public var reflowStages: [UUID: String] = [:]
     public var reflowBodyCount = 0
     @ObservationIgnored var reflowPresenting: Set<UUID> = []
-    let researchMemory = ResearchMemory()
+    let researchMemory: ResearchMemory
+    let memorySleep: MemorySleepSession
     let researchBriefMaintenance: ResearchBriefMaintenance
     public var assistantDraft: ChatTurn?
     public var busyAI = false
@@ -141,7 +143,14 @@ public final class ReaderModel {
         self.translationValidation = translationValidation ?? PDFTranslationValidationConfiguration.load(root: location)
         self.paperSearchWarmup = PaperSearchWarmup(root: location)
         store = try LibraryStore(directory: location)
-        researchBriefMaintenance = ResearchBriefMaintenance(store: store, notes: readingNoteIndex)
+        memorySleep = MemorySleepSession(store: store, root: location)
+        let indexDirectory = location.appendingPathComponent("DerivedIndexes", isDirectory: true)
+        readingNoteIndex = ReadingNoteMemoryIndex(
+            encoder: DeviceSemanticEncoder.shared, cacheURL: indexDirectory.appendingPathComponent("notes.sqlite"))
+        researchMemory = ResearchMemory(
+            encoder: DeviceSemanticEncoder.shared, cacheURL: indexDirectory.appendingPathComponent("memories.sqlite"))
+        researchBriefMaintenance = ResearchBriefMaintenance(
+            store: store, notes: readingNoteIndex, memories: researchMemory)
         importer = PDFImporter(root: location)
         vault = VaultService(root: location)
         configurationStore = ModelConfigurationStore(directory: location, credentials: credentials)
@@ -201,6 +210,7 @@ public final class ReaderModel {
             }
             if let folder = try? await vault.directory() { vaultName = folder.lastPathComponent }
             loaded = true
+            await memorySleep.restore()
             researchBriefMaintenance.sourcesChanged()
             backfillLibraryAbstracts()
             paperSearchWarmup.enqueue(state.papers)
@@ -271,7 +281,8 @@ public final class ReaderModel {
         fillingSourceAbstract: PublicationAbstractFill? = nil,
         presentingReflow: (paperID: UUID, jobID: UUID)? = nil, insertingNote: AnchoredNoteInsertion? = nil,
         closeReading: (notes: [AnchoredNoteInsertion], report: ChatTurn)? = nil,
-        obsidianBinding: ObsidianNoteBinding? = nil, proposingQuestion: ResearchQuestionProposal? = nil
+        obsidianBinding: ObsidianNoteBinding? = nil, proposingQuestion: ResearchQuestionProposal? = nil,
+        preferenceChange: ReaderPreferenceChange? = nil
     ) async -> Bool {
         guard loaded else { return false }
         let previous = saveQueue
@@ -286,6 +297,7 @@ public final class ReaderModel {
                 // public state or unrelated queued snapshots, and are published only after commit.
                 if let deletingPaper, self.readingPaper == deletingPaper { self.endReading() }
                 var snapshot = self.state
+                if let preferenceChange, !preferenceChange.apply(to: &snapshot) { return false }
                 if let proposingQuestion {
                     guard proposingQuestion.isEligible(in: snapshot, excluding: self.pendingImportIDs) else {
                         return false
@@ -379,6 +391,10 @@ public final class ReaderModel {
                 }
                 if let report { snapshot.chats.append(report) }
                 let changes = try await store.save(snapshot, respectingCancellation: cancellable, deleting: removed)
+                if let preferenceChange, !preferenceChange.apply(to: &self.state) {
+                    try await store.save(self.state)
+                    return false
+                }
                 if let proposingQuestion {
                     if proposingQuestion.isEligible(in: self.state, excluding: self.pendingImportIDs) {
                         self.state.memories.append(proposingQuestion.item)
@@ -388,7 +404,10 @@ public final class ReaderModel {
                         return false
                     }
                 }
-                if changes.researchSourcesChanged { self.researchBriefMaintenance.sourcesChanged() }
+                if changes.researchSourcesChanged {
+                    self.researchBriefMaintenance.sourcesChanged()
+                    self.memorySleep.sourcesChanged()
+                }
                 if let removed {
                     self.didDeletePaper(removed)
                     try self.state.removePaper(removed.id)
@@ -419,6 +438,13 @@ public final class ReaderModel {
                     self.state.papers[index].reflowJob?.id == presentingReflow.jobID
                 {
                     self.state.papers[index].reflowJob?.hasPresentedContent = true
+                }
+                if let shelfChange {
+                    switch shelfChange {
+                    case .delete(let id), .deleteIfUnchanged(let id, _, _):
+                        self.state.removePreferences(forDeletedShelf: id)
+                    default: break
+                    }
                 }
                 self.state.shelves = snapshot.shelves
                 self.state.paperShelfIDs = snapshot.paperShelfIDs

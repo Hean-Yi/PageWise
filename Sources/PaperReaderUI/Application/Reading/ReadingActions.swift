@@ -4,6 +4,7 @@ import PaperReaderKit
 extension ReaderModel {
     public func touch() {
         lastInteraction = Date()
+        if memorySleep.running { memorySleep.interrupt() }
         if readingStart == nil && isActive { beginReading() }
     }
     public func beginReading() {
@@ -29,6 +30,9 @@ extension ReaderModel {
     public func setActive(_ active: Bool, suspendTranslation: Bool = true) {
         isActive = active
         researchBriefMaintenance.setActive(active)
+        #if os(iOS)
+            if !active { memorySleep.interrupt() }
+        #endif
         if active {
             pdfDocumentTranslation.activate(session: pdfBilingual)
             beginReading()
@@ -48,6 +52,7 @@ extension ReaderModel {
     }
     public func tick() {
         if isActive { researchBriefMaintenance.tick() }
+        if memorySleep.enabled { memorySleep.run(reader: self, automatic: true, withModel: true) }
         if Date().timeIntervalSince(lastInteraction) > 300 {
             endReading()
         } else if readingStart != nil {
