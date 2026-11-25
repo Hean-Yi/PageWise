@@ -207,6 +207,7 @@ struct SettingsView: View {
                         case .model: modelForm.disabled(isTesting)
                         case .notes: notesForm
                         case .memory:
+                            SemanticModelSettingsRow(model: model)
                             MemoryView(model: model) { paperID in
                                 openMemorySource(paperID)
                                 if hasModelEdits {

@@ -21,9 +21,12 @@ for built in "$app" "$products/PaperReader_PaperReaderKit.bundle" "$products/Pap
   if [[ -d "$built" ]]; then rm -r -- "$built"; fi
 done
 
+# SentencePiece uses __FILE__ in compiled diagnostics. Keep its paths relative in shared builds.
+cpp_paths="-ffile-prefix-map=$(pwd -P)/="
 xcodebuild -quiet -jobs 2 -project PaperReader.xcodeproj -scheme PaperReader -configuration Release \
   -destination 'generic/platform=macOS' -derivedDataPath "$build_dir" \
   -clonedSourcePackagesDirPath .local/build-mac/SourcePackages -skipPackageUpdates \
+  "OTHER_CFLAGS=\$(inherited) \"$cpp_paths\"" "OTHER_CPLUSPLUSFLAGS=\$(inherited) \"$cpp_paths\"" \
   'ARCHS=arm64 x86_64' ONLY_ACTIVE_ARCH=NO ENABLE_HARDENED_RUNTIME=YES \
   DEPLOYMENT_POSTPROCESSING=YES STRIP_INSTALLED_PRODUCT=YES STRIP_STYLE=debugging \
   CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO CODE_SIGN_IDENTITY="$identity" build

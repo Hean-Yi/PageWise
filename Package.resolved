@@ -1,6 +1,22 @@
 {
-  "originHash" : "63dab3268aa2930a94a7ab43e3de87a64c1d6cc373e469f8ecf494eef2779f47",
+  "originHash" : "b5fbb586d6ea78d841639054d4ee2523d398711ebf88271a87a09beaff364da8",
   "pins" : [
+    {
+      "identity" : "swift-package-support-sentencepiece",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/liuliu/swift-package-support-sentencepiece",
+      "state" : {
+        "revision" : "48f1241971c19dc79c314e5a9c5b9c38cbf25a53"
+      }
+    },
+    {
+      "identity" : "swift-sentencepiece",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/liuliu/swift-sentencepiece.git",
+      "state" : {
+        "revision" : "4c8baf1b03569428ab38dda7fdecf27886a16c1f"
+      }
+    },
     {
       "identity" : "swiftsoup",
       "kind" : "remoteSourceControl",
