@@ -3,6 +3,9 @@ import NaturalLanguage
 import PDFKit
 
 public enum PDFSentenceExtractor {
+    /// Bump when paragraph membership or translation-mode layout changes invalidate a complete page.
+    static let translationLayoutVersion = "paragraph-layout-1:"
+
     public static func extract(url: URL, pageIndex: Int) throws -> [PDFSourceSentence] {
         let result = try extractPage(url: url, pageIndex: pageIndex)
         guard !result.sentences.isEmpty else { throw ReaderError.message(result.notice ?? "本页没有可译文字。") }

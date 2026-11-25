@@ -67,6 +67,16 @@ public actor PDFDocumentTranslationQueue {
         while let index = priorityPage ?? remaining.first {
             try Task.checkCancellation()
             priorityPage = nil
+            if let saved = try await store.completedPage(
+                documentHash: documentHash, pageIndex: index, settings: settings)
+            {
+                if saved.isEmpty { progress.skippedPages += 1 }
+                remaining.remove(index)
+                if priorityPage == index { priorityPage = nil }
+                progress.processedPages += 1
+                await onUpdate(index, saved)
+                continue
+            }
             progress.activePageIndex = index
             await onProgress(progress)
             try Task.checkCancellation()
@@ -75,17 +85,14 @@ public actor PDFDocumentTranslationQueue {
                 try PDFSentenceExtractor.extractPage(url: url, pageIndex: index, illustrations: .translation)
                     .paragraphSentences
             }
-            if sentences.isEmpty {
-                progress.skippedPages += 1
-            } else {
-                do {
-                    try await store.translate(
-                        documentHash: documentHash, sentences: sentences, settings: settings, client: client, key: key,
-                        onUpdate: { values in await onUpdate(index, values) })
-                } catch ReaderError.pdfTranslationIncomplete {
-                    partial.insert(index)
-                    progress.partialPages = partial.count
-                }
+            do {
+                try await store.translate(
+                    documentHash: documentHash, pageIndex: index, entirePage: true, sentences: sentences,
+                    settings: settings, client: client, key: key, onUpdate: { values in await onUpdate(index, values) })
+                if sentences.isEmpty { progress.skippedPages += 1 }
+            } catch ReaderError.pdfTranslationIncomplete {
+                partial.insert(index)
+                progress.partialPages = partial.count
             }
             remaining.remove(index)
             if priorityPage == index { priorityPage = nil }

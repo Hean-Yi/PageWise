@@ -151,6 +151,7 @@ private actor QueueProgressLog {
     let log = QueueProgressLog()
     try await reopened.run(prioritizing: 1, onProgress: { await log.record($0) }, onUpdate: { _, _ in })
     #expect(await healthy.requests == [["10"], ["30"]])
+    #expect(await log.values.compactMap(\.activePageIndex) == [0, 2])
     #expect(await log.values.last?.processedPages == 3)
 }
 
@@ -221,4 +222,45 @@ private actor QueueProgressLog {
     #expect(await transport.requests == [["10"]])
     try await queue.run(prioritizing: 1, onProgress: { _ in }, onUpdate: { _, _ in })
     #expect(await transport.requests == [["10"], ["20"]])
+}
+
+@Test func pdfQueueReopensCompletedAndBlankPagesWithoutConsultingPDFKit() async throws {
+    let fixture = try QueueFixture([[10], [], [30]])
+    defer { try? FileManager.default.removeItem(at: fixture.root) }
+    let transport = QueueTransport()
+    try await fixture.queue(transport).run(prioritizing: 2, onProgress: { _ in }, onUpdate: { _, _ in })
+    // Any accidental extraction would now fail. The visible reader loads its own page geometry separately.
+    try FileManager.default.removeItem(at: fixture.url)
+    let fresh = PDFSentenceTranslationStore(root: fixture.root)
+    let log = QueueProgressLog()
+    try await fixture.queue(transport, store: fresh).run(
+        prioritizing: 1, onProgress: { await log.record($0) },
+        onUpdate: { page, values in
+            #expect(page == 1 ? values.isEmpty : values.count == 1)
+        })
+    #expect(await transport.requests.count == 2)
+    #expect(await log.values.compactMap(\.activePageIndex).isEmpty)
+    #expect(await log.values.last?.skippedPages == 1)
+    #expect(await log.values.last?.processedPages == 3)
+    var changed = fixture.settings
+    changed.model += "-new"
+    #expect(try await fresh.completedPage(documentHash: "fixture", pageIndex: 0, settings: changed) == nil)
+}
+
+@Test func pdfQueueDoesNotInterpretManualSentenceCacheAsACompletePage() async throws {
+    let fixture = try QueueFixture([[10, 11]])
+    defer { try? FileManager.default.removeItem(at: fixture.root) }
+    let transport = QueueTransport()
+    let first = try #require(PDFSentenceExtractor.extract(url: fixture.url, pageIndex: 0).first)
+    try await fixture.store.translate(
+        documentHash: "fixture", sentences: [first], settings: fixture.settings,
+        client: ModelClient(transport: transport),
+        key: { "fixture" })
+    #expect(
+        try await fixture.store.completedPage(documentHash: "fixture", pageIndex: 0, settings: fixture.settings) == nil)
+    try await fixture.queue(transport).run(prioritizing: 0, onProgress: { _ in }, onUpdate: { _, _ in })
+    #expect(await transport.requests == [["10"], ["11"]])
+    #expect(
+        try await fixture.store.completedPage(documentHash: "fixture", pageIndex: 0, settings: fixture.settings)?.count
+            == 2)
 }

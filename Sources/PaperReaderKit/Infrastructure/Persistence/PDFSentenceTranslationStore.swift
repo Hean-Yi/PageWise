@@ -7,6 +7,12 @@ public actor PDFSentenceTranslationStore {
         var schema = 1
         var revisions: [String: [String: String]] = [:]
         var recent: [String] = []
+        // Present only after a complete queue page, never after an ad-hoc selection.
+        var fullPageKeys: [String: [String: String]]?
+        mutating func markComplete(edition: String, keys: [String: String]) {
+            if fullPageKeys == nil { fullPageKeys = [:] }
+            fullPageKeys?[edition] = keys
+        }
     }
 
     private struct Waiter {
@@ -28,7 +34,9 @@ public actor PDFSentenceTranslationStore {
     }
 
     func hasSavedPage(documentHash: String, among pages: Range<Int>) -> Bool {
-        pages.contains { FileManager.default.fileExists(atPath: pageURL(documentHash: documentHash, page: $0).path) }
+        pages.contains { index in
+            (try? read(pageURL(documentHash: documentHash, page: index)).recent.isEmpty) == false
+        }
     }
 
     /// Opens an existing translation without credentials. Prefer the configured edition, then the latest saved one.
@@ -54,19 +62,44 @@ public actor PDFSentenceTranslationStore {
         onUpdate: @Sendable ([String: String]) async -> Void = { _ in }
     ) async throws -> [String: String] {
         guard let first = sentences.first else { return [:] }
-        let url = pageURL(documentHash: documentHash, page: first.pageIndex)
+        return try await translate(
+            documentHash: documentHash, pageIndex: first.pageIndex, entirePage: false, sentences: sentences,
+            settings: settings, client: client, key: key, onUpdate: onUpdate)
+    }
+
+    func completedPage(documentHash: String, pageIndex: Int, settings: ModelSettings) throws -> [String: String]? {
+        let page = try read(pageURL(documentHash: documentHash, page: pageIndex))
+        let edition = try revision(for: settings)
+        guard let keys = page.fullPageKeys?[PDFSentenceExtractor.translationLayoutVersion + edition] else { return nil }
+        let result = values(keys: keys, from: page.revisions[edition] ?? [:])
+        return result.count == keys.count ? result : nil
+    }
+
+    @discardableResult
+    func translate(
+        documentHash: String, pageIndex: Int, entirePage: Bool, sentences: [PDFSourceSentence], settings: ModelSettings,
+        client: ModelClient, key: @Sendable () async throws -> String,
+        onUpdate: @Sendable ([String: String]) async -> Void
+    ) async throws -> [String: String] {
+        let url = pageURL(documentHash: documentHash, page: pageIndex)
         let revision = try revision(for: settings)
+        let layoutEdition = PDFSentenceExtractor.translationLayoutVersion + revision
         let keys = try sourceKeys(sentences)
         let generation = deletionGenerations[documentHash]
         try await acquire(url)
         defer { release(url) }
         try Task.checkCancellation()
 
+        guard deletionGenerations[documentHash] == generation else { throw CancellationError() }
         var page = try read(url)
         var stored = page.revisions[revision] ?? [:]
         var result = values(keys: keys, from: stored)
         let missing = sentences.filter { result[$0.id] == nil }
         guard !missing.isEmpty else {
+            if entirePage, page.fullPageKeys?[layoutEdition] != keys {
+                page.markComplete(edition: layoutEdition, keys: keys)
+                try save(page, to: url)
+            }
             await onUpdate(result)
             return result
         }
@@ -96,9 +129,10 @@ public actor PDFSentenceTranslationStore {
                 page.revisions[revision] = stored
                 page.recent.removeAll { $0 == revision }
                 page.recent.insert(revision, at: 0)
-                try FileManager.default.createDirectory(
-                    at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-                try JSONEncoder().encode(page).write(to: url, options: .atomic)
+                if entirePage, result.count == keys.count {
+                    page.markComplete(edition: layoutEdition, keys: keys)
+                }
+                try save(page, to: url)
                 await onUpdate(result)
             }
         }
@@ -201,6 +235,11 @@ public actor PDFSentenceTranslationStore {
 
     private func digest(_ data: Data) -> String {
         SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+
+    private func save(_ page: Page, to url: URL) throws {
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try JSONEncoder().encode(page).write(to: url, options: .atomic)
     }
 
     private func read(_ url: URL) throws -> Page {
