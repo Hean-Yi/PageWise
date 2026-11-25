@@ -228,6 +228,10 @@ public actor LibraryStore {
         }
     }
 
+    func researchIndexState() throws -> ResearchIndexState? {
+        try Self.database(at: databaseURL) { db in try Self.readResearchIndexState(db) }
+    }
+
     func pendingResearchEvents(limit: Int = 256) throws -> [StoredResearchEvent] {
         guard limit > 0 else { return [] }
         return try Self.database(at: databaseURL) { db in

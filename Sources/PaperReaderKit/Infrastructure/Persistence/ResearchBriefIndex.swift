@@ -27,6 +27,7 @@ public actor ResearchBriefIndex {
     private var current: Catalog?
     private var published: Catalog?
     private var publishedPayload: Data?
+    private var indexState: ResearchIndexState?
     private var opened = false
     private var publishedRevision: Int64 = -1
 
@@ -92,13 +93,18 @@ public actor ResearchBriefIndex {
         guard try await store.renewResearchLease(owner: owner) else {
             throw ReaderError.message("整理任务租约已失效，将在下一次维护时重试。")
         }
+        let auditedAt = Date()
         guard
             try await store.publishResearchIndex(
                 data, previousPayload: publishedPayload, libraryRevision: snapshot.libraryRevision,
-                researchRevision: snapshot.researchRevision, lastEventSequence: lastSequence, auditedAt: Date())
+                researchRevision: snapshot.researchRevision, lastEventSequence: lastSequence, auditedAt: auditedAt)
         else {
             throw ReaderError.message("研究简报尚未写入，将在下一次维护时重试。")
         }
+        indexState = ResearchIndexState(
+            lastResearchRevision: snapshot.researchRevision,
+            lastEventSequence: max(lastSequence, snapshot.indexState?.lastEventSequence ?? 0),
+            lastAuditAt: auditedAt, format: 1)
         if snapshot.libraryRevision >= publishedRevision {
             published = catalog
             publishedPayload = data
@@ -203,13 +209,36 @@ public actor ResearchBriefIndex {
                     paperID: id, title: String(PaperTitle.display(paper.title).prefix(240)),
                     noteID: hit?.0.id, excerpt: hit?.1, noteOrigin: origin)
             }
+            let identity = Self.topicIdentity(
+                kind: candidate.kind, label: candidate.label, shelf: group.shelf, terms: group.terms,
+                ids: group.ids)
             return ResearchBrief.Topic(
-                label: candidate.label,
+                id: identity.id, version: identity.version, label: candidate.label,
                 basis: candidate.kind,
                 paperCount: group.ids.count, notedPapers: group.ids.filter(basis.noted.contains).count,
                 discussedPapers: group.ids.filter(basis.discussed.contains).count, sources: sources)
         }
-        return ResearchBrief(topics: topics, inputs: basis, versions: versions)
+        return ResearchBrief(
+            topics: topics, inputs: basis, versions: versions,
+            researchRevision: indexState?.lastResearchRevision, coveredAt: indexState?.lastAuditAt)
+    }
+
+    private static func topicIdentity(
+        kind: String, label: String, shelf: UUID?, terms: [String], ids: [UUID]
+    ) -> (id: String, version: String) {
+        let canonicalIDS = ids.map(\.uuidString).sorted().joined(separator: ",")
+        let canonicalTerms = terms.sorted().joined(separator: "/")
+        let identity: String
+        switch kind {
+        case "shelf": identity = "shelf:" + (shelf?.uuidString ?? "none")
+        case "unfiled": identity = "unfiled"
+        case "recurring_title_terms": identity = "terms:" + canonicalTerms
+        case "matching_note_passages": identity = "query:" + label
+        default: identity = kind + ":" + label
+        }
+        let payload = "\(kind)|\(label)|\(shelf?.uuidString ?? "")|\(canonicalTerms)|\(canonicalIDS)"
+        let version = SHA256.hash(data: Data(payload.utf8)).map { String(format: "%02x", $0) }.joined()
+        return (identity, version)
     }
 
     private func open() async throws {
@@ -220,6 +249,7 @@ public actor ResearchBriefIndex {
         opened = true
         published = nil
         publishedPayload = nil
+        indexState = try? await store.researchIndexState()
         if let data, let saved = try? JSONDecoder().decode(Catalog.self, from: data), saved.format == 1 {
             // Reconcile all memberships with live sources before using a cache, including after restoration.
             titles = saved.terms

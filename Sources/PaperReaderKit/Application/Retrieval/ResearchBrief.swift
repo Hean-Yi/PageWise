@@ -12,18 +12,55 @@ public struct ResearchBrief: Encodable, Sendable {
     }
 
     public struct Topic: Encodable, Sendable, Equatable {
+        /// Stable across queries for the same shelf/title-topic; a query-specific note group uses
+        /// the query text so repeated requests can refer to the same topic.
+        public let id: String
+        /// Changes when the topic's member set, label or basis changes, without exposing prose.
+        public let version: String
         public let label: String
         public let basis: String
         public let paperCount: Int
         public let notedPapers: Int
         public let discussedPapers: Int
         public let sources: [Source]
+
+        public init(
+            id: String, version: String, label: String, basis: String, paperCount: Int, notedPapers: Int,
+            discussedPapers: Int, sources: [Source]
+        ) {
+            self.id = id
+            self.version = version
+            self.label = label
+            self.basis = basis
+            self.paperCount = paperCount
+            self.notedPapers = notedPapers
+            self.discussedPapers = discussedPapers
+            self.sources = sources
+        }
+
+        enum CodingKeys: String, CodingKey {
+            case label, basis, paperCount, notedPapers, discussedPapers, sources
+        }
     }
 
     public let topics: [Topic]
+    /// The source generation and time the persisted index had covered when this brief was read.
+    public let researchRevision: Int64?
+    public let coveredAt: Date?
     let inputs: BriefInputs
     let versions: ChatSourceVersions
     enum CodingKeys: String, CodingKey { case topics }
+
+    init(
+        topics: [Topic], inputs: BriefInputs, versions: ChatSourceVersions, researchRevision: Int64? = nil,
+        coveredAt: Date? = nil
+    ) {
+        self.topics = topics
+        self.inputs = inputs
+        self.versions = versions
+        self.researchRevision = researchRevision
+        self.coveredAt = coveredAt
+    }
 
     public func isCurrent(in state: LibraryState, excluding pending: Set<UUID>) -> Bool {
         guard inputs == BriefInputs(state, excluding: pending), versions.isCurrent(in: state, excluding: pending) else {
