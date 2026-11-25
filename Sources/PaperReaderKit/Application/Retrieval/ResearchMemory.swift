@@ -63,6 +63,16 @@ public actor ResearchMemory {
         return message.range(of: denied, options: .regularExpression) == nil
     }
 
+    /// Deferring an annotation leaves the discussion available for a later reader-authorized note.
+    /// Any separate non-retention request in the same turn continues to exclude it from replay.
+    public static func permitsConversationHistory(for message: String) -> Bool {
+        if permitsAutomaticWrite(for: message) { return true }
+        let noteVeto =
+            #"(?i)(?:不要|不用|别|不必|无需|暂不|不想)(?:现在|先|再|帮我|给我|直接|实际|自动)*(?:记|做|写|记录|保存|添加|生成)(?:一条|这条|一份|我的)?(?:阅读|论文|页内|页边)?笔记(?:了|吧)?(?=$|[\s，,。；;.!！?？])|(?:don['’]t|do not|never)\s+(?:write|make|save|create|take|record)\s+(?:(?:a|any|the|reading|paper)\s+)*notes?\s*(?:yet|for now)?(?=$|[,.!?;])"#
+        let remaining = message.replacingOccurrences(of: noteVeto, with: "。", options: .regularExpression)
+        return remaining != message && permitsAutomaticWrite(for: remaining)
+    }
+
     /// Compare the extracted proposition independently of a question's wording or source.
     /// Repeated source questions also protect older corrections and tombstones.
     public static func candidate(_ raw: String, turn: ChatTurn, state: LibraryState) -> MemoryItem? {

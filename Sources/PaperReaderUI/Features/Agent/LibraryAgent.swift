@@ -807,7 +807,7 @@ public final class LibraryAgent {
         _ current: [AgentMessage], after prior: [[AgentMessage]], system: AgentMessage, epoch: UUID
     ) throws {
         try check(epoch)
-        if let turn = activeTurn, !ResearchMemory.permitsAutomaticWrite(for: turn.question) {
+        if let turn = activeTurn, !ResearchMemory.permitsConversationHistory(for: turn.question) {
             history = prior
             return
         }

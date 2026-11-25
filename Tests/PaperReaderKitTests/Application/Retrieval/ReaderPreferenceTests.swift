@@ -59,3 +59,13 @@ import Testing
     #expect(components.map { $0.0.aspect } == [.language, .terminology])
     #expect(components.map { $0.1 } == ["以后默认用中文", "术语保留英文。"])
 }
+
+@Test func noteDeferralKeepsConversationAvailableWithoutOverridingAnExplicitNonRetentionRequest() {
+    let noteOnly = "这个结论如何理解？先不要记笔记。"
+    #expect(!ResearchMemory.permitsAutomaticWrite(for: noteOnly))
+    #expect(ResearchMemory.permitsConversationHistory(for: noteOnly))
+    #expect(ResearchMemory.permitsConversationHistory(for: "Explain the result. Don't save a note yet."))
+    for text in ["这段别记。", "先不要记笔记，也不要保存这段讨论。", "不要保存笔记里的私人信息。", "Don't save a note. Off the record."] {
+        #expect(!ResearchMemory.permitsConversationHistory(for: text))
+    }
+}

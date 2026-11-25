@@ -105,7 +105,8 @@ extension ReaderModel {
             let overrides = overriddenPreferences(for: question, paperID: paper.id)
             let history = Array(
                 state.chats.reversed().lazy.filter { turn in
-                    useMemory && ResearchMemory.permitsAutomaticWrite(for: turn.question) && turn.paperID == paper.id
+                    useMemory && ResearchMemory.permitsConversationHistory(for: turn.question)
+                        && turn.paperID == paper.id
                         && turn.readingNoteID == nil && turn.closeReadingVersion == nil
                         && self.canReplayResearchMemory(turn.backgroundSources)
                         && self.preferenceScopeIsCurrent(turn.backgroundSources, paperID: paper.id)
