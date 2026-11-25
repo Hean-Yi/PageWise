@@ -258,14 +258,18 @@ struct CloseReadingCorpus {
             let hasVisualOnly = try !element.select("img,svg").isEmpty() || matrices.count < tables.count
             if hasVisualOnly { collection.visuals += 1 }
             let caption = try element.select("caption,figcaption").map { try $0.text() }.joined(separator: " ")
-            try element.select("table,math,img,svg,.paper-equation").remove()
-            let anchor = try element.text()
+            let runs = try HTMLReadingStore.closeReadingSourceRuns(element, key: section.id.uuidString)
+                .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
             let count = collection.passages.count
-            collection.add(
-                anchor.isEmpty ? ([caption] + matrices).filter { !$0.isEmpty }.joined(separator: "\n") : anchor,
-                kind: matrices.isEmpty ? (hasVisualOnly ? "captionOnly" : "prose") : "table",
-                table: matrices.isEmpty ? nil : matrices.joined(separator: "\n\n"), paper: paper, page: nil,
-                block: block)
+            // Shared objects interrupt the selectable DOM stream. Give the model exactly those
+            // same intervals so its verbatim quote can be registered by the margin-note locator.
+            let anchors = runs.isEmpty ? [caption.isEmpty ? (matrices.first ?? "") : caption] : runs
+            for (offset, anchor) in anchors.enumerated() {
+                let rows = offset == 0 && !matrices.isEmpty ? matrices.joined(separator: "\n\n") : nil
+                collection.add(
+                    anchor, kind: rows != nil ? "table" : (hasVisualOnly ? "captionOnly" : "prose"),
+                    table: rows, paper: paper, page: nil, block: block)
+            }
             for equation in equations where !repeatedEquations.contains(equation) {
                 collection.add(equation, kind: "equation", table: nil, paper: paper, page: nil, block: block)
             }

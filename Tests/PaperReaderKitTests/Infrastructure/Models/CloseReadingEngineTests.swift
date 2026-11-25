@@ -166,7 +166,8 @@ private func closeReadingFixture(root: URL, texts: [String]) async throws -> Pap
     let repeated = #"<math display="block" alttext="a=b"><mi>a</mi><mo>=</mo><mi>b</mi></math>"#
     let unlabelled = #"<math display="block"><mfrac><mi>x</mi><mi>y</mi></mfrac></math>"#
     block.richContent = .init(
-        html: "<p>\(sentence)</p>" + markup + repeated + unlabelled + repeated, translationInput: "[[MATH_1]]",
+        html: "<p>\(sentence)" + markup + "This second sentence follows the equation.</p>" + repeated + unlabelled
+            + repeated, translationInput: "[[MATH_1]]",
         mathematics: ["[[MATH_1]]": markup], mathDescriptions: ["[[MATH_1]]": formula])
     var paper = Paper(
         title: "Variance weighting", digest: "formula", originalPath: "unused.pdf", pageCount: 1, blocks: [block],
@@ -174,6 +175,14 @@ private func closeReadingFixture(root: URL, texts: [String]) async throws -> Pap
     let artifact = try await HTMLReadingStore().append(
         [.init(block: block, translation: "译文 [[MATH_1]]")], to: nil, paper: paper, root: root)
     paper.htmlReading = artifact
+    let corpus = try await CloseReadingCorpus.read(paper: paper, root: root, progress: { _ in })
+    let prose = corpus.windows.flatMap { $0 }.filter { $0.kind == "prose" }
+    #expect(prose.map(\.evidence.text) == [sentence, "This second sentence follows the equation."])
+    for run in prose {
+        let anchors = try await HTMLReadingStore().noteAnchors(
+            for: run.evidence.text, evidence: run.evidence, paperID: paper.id, artifact: artifact, root: root)
+        #expect(anchors.map(\.text).joined() == run.evidence.text)
+    }
     let body = """
         权重控制的是一次偏差会付出多少代价。
 
@@ -191,7 +200,7 @@ private func closeReadingFixture(root: URL, texts: [String]) async throws -> Pap
             let input = try JSONDecoder().decode(CloseReadingTestInput.self, from: Data(user.utf8))
             let equation = try #require(input.passages.first { $0.anchorText == "[公式] " + formula })
             let prose = try #require(input.passages.first { $0.anchorText == sentence })
-            #expect(input.passages.count == 2)
+            #expect(input.passages.count == 3)
             func annotation(citing quote: String) -> [String: Any] {
                 [
                     "source": prose.source, "quote": sentence, "dimension": "method", "analysis": body,
@@ -565,4 +574,67 @@ private func closeReadingRepairsOnlyRejectedNumbersAndKeepsTheOtherSections(
     #expect(result.sections.map(\.markdown) == ["预算相同。", "表6(a) 的两组预算一致。\n\nAlpha 为 38.1，Beta 为 37.5。"])
     #expect(result.coverage.contains("2 节仅保留已核对段落"))
     #expect(result.coverage.contains("5 节文末解读未通过"))
+}
+
+@Test func notebookWritingDoesNotRemoveVerifiedMarginNotes() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let paper = try await closeReadingFixture(
+        root: root,
+        texts: [
+            "The larger budget doubles the available routes.", "The held-out routes have equal budgets.",
+        ])
+    let result = try await CloseReadingEngine.run(
+        paper: paper, root: root, progress: { _ in },
+        complete: { _, input in
+            if let window = try? JSONDecoder().decode(CloseReadingTestInput.self, from: Data(input.utf8)) {
+                let rows = window.passages.enumerated().map { index, passage in
+                    [
+                        "source": passage.source, "quote": passage.anchorText, "dimension": "evidence",
+                        "analysis": index == 0 ? "预算同时增加，因此不能分离策略的作用。" : "等预算比较能排除预算变化这种解释。",
+                    ]
+                }
+                return String(
+                    decoding: try JSONSerialization.data(withJSONObject: ["annotations": rows]), as: UTF8.self)
+            }
+            return #"{"keep":[],"sections":[{"heading":"预算改变了什么","markdown":"更高的预算提供更多可选路线。","sources":["Q1"]}]}"#
+        })
+    #expect(result.annotations.count == 2)
+    #expect(result.sections.count == 1)
+}
+
+@Test func sparseMarginCoverageAndThinNotebookGetIndependentEvidencePasses() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let terms = ["budget", "rule", "baseline", "cohort", "control", "replication"]
+    let paper = try await closeReadingFixture(
+        root: root,
+        texts: terms.map { term in
+            "The " + term + " is recorded independently. "
+                + String(repeating: "The effect depends on the comparison group. ", count: 5)
+        })
+    let result = try await CloseReadingEngine.run(
+        paper: paper, root: root, progress: { _ in },
+        complete: { system, input in
+            if system.contains("只追加尚未展开") {
+                return
+                    #"{"sections":[{"heading":"还能排除哪种解释","markdown":"分组改变比较口径，固定比较组才能检验策略本身。","sources":["Q2","Q3"]}]}"#
+            }
+            if system.contains("最终综合") {
+                return #"{"sections":[{"heading":"一句话概括","markdown":"可观察到的效果取决于比较组。","sources":["Q1"]}]}"#
+            }
+            let window = try JSONDecoder().decode(CloseReadingTestInput.self, from: Data(input.utf8))
+            let extra = system.contains("本次只补读")
+            if extra { #expect(!window.passages.contains { $0.source == "P1" }) }
+            let records = window.passages.prefix(extra ? 4 : 1).map { passage in
+                let quote = String(passage.anchorText.prefix { $0 != "." })
+                return [
+                    "source": passage.source, "quote": quote, "dimension": "method",
+                    "analysis": quote + "。需要固定比较组以解释这项观察。",
+                ]
+            }
+            return String(decoding: try JSONSerialization.data(withJSONObject: ["annotations": records]), as: UTF8.self)
+        })
+    #expect(result.annotations.count == 5)
+    #expect(result.sections.map(\.heading) == ["一句话概括", "还能排除哪种解释"])
 }

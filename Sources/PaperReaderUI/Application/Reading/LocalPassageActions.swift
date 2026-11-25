@@ -31,8 +31,11 @@ extension ReaderModel {
             anchors: location.anchors, quote: quote)
     }
 
-    func validateNoteCitations(_ citations: [LocalPassageCitation], markdown: String) async throws {
-        guard citations.count <= 16 else { throw ReaderError.message("一条笔记最多可登记十六个引用。") }
+    func validateNoteCitations(_ citations: [LocalPassageCitation], markdown: String, documentEnd: Bool = false)
+        async throws
+    {
+        let limit = documentEnd ? LocalPassageCitation.notebookLimit : LocalPassageCitation.marginLimit
+        guard citations.count <= limit else { throw ReaderError.message("这条笔记最多可登记 " + String(limit) + " 个引用。") }
         var authorized = Set<String>()
         for citation in citations {
             let url = citation.url.absoluteString.lowercased()
@@ -59,14 +62,17 @@ extension ReaderModel {
         try validateLocalPassageTargets([citation])
         guard markdown.localizedCaseInsensitiveContains(citation.url.absoluteString)
         else { throw ReaderError.message("目标引文已不可用，请重新选择。") }
-        let registered = currentReadingNotes.first { $0.id == noteID }?.citations ?? []
+        let current = currentReadingNotes.first { $0.id == noteID }
+        let registered = current?.citations ?? []
         guard let target = citation.readingNoteID, target != noteID else {
             throw ReaderError.message("请选择另一条书库笔记。")
         }
         var used = registered.filter { markdown.localizedCaseInsensitiveContains($0.url.absoluteString) }
         if !used.contains(citation) { used.append(citation) }
-        guard used.count <= 16 else {
-            throw ReaderError.message("一条笔记最多可登记十六个引用。")
+        let limit =
+            current?.placement == .documentEnd ? LocalPassageCitation.notebookLimit : LocalPassageCitation.marginLimit
+        guard used.count <= limit else {
+            throw ReaderError.message("这条笔记最多可登记 " + String(limit) + " 个引用。")
         }
         guard updateReadingNote(id: noteID, anchors: anchors, markdown: markdown),
             let index = state.readingNotes.firstIndex(where: { $0.id == noteID && $0.deletedAt == nil })
@@ -193,7 +199,7 @@ extension ReaderModel {
                 let html = position.editionID.flatMap({ id in paper.retainedReadings?.first { $0.id == id }?.html })
                     ?? paper.htmlReading
             else { throw unavailable }
-            context = try await HTMLReadingStore().citationContext(for: citation, artifact: html, root: root)
+            context = try await htmlNoteStore.citationContext(for: citation, artifact: html, root: root)
             location = "源码第 \(position.index + 1) 段"
         }
         try validateLocalPassageTargets([citation])

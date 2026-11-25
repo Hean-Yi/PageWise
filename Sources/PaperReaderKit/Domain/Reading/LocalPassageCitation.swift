@@ -3,6 +3,9 @@ import Foundation
 
 /// A note stores its own authorized destinations. The URL carries no path, excerpt, page or paper identifier.
 public struct LocalPassageCitation: Codable, Sendable, Equatable, Identifiable {
+    public static let marginLimit = 16
+    public static let notebookLimit = 64
+
     public let id: UUID
     public let paperID: UUID
     public let digest: String

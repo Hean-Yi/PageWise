@@ -83,6 +83,9 @@ public enum CloseReadingEngine {
         var notes = [CloseReadingAnnotation]()
         var seenAnalyses = Set<String>()
         var stages = [CloseReadingOutlineItem]()
+        var supplementaryWindows = 0
+        var missedSupplement = 0
+        var annotatedSources = Set<String>()
         var rejected = 0
         var skippedWindows: [ResponseIssue: [Int]] = [:]
         var fallbackReason: ResponseIssue?
@@ -124,45 +127,77 @@ public enum CloseReadingEngine {
                 continue
             }
             let registry = Dictionary(uniqueKeysWithValues: (passages + memory).map { ($0.evidence.id, $0) })
-            // Both the source ID and the exact quotation must match the locally registered window.
-            for record in (batch.annotations ?? []).prefix(8) {
-                guard let item = record.value, let passage = registry[item.source],
-                    passage.evidence.paperID == paper.id,
-                    let quote = exact(item.quote, in: passage), let body = plain(item.analysis, limit: 1_400)
-                else {
-                    rejected += 1
-                    continue
-                }
-                let requested = item.references ?? []
-                let linked = requested.prefix(4).compactMap { citation($0, in: registry) }
-                guard linked.count == requested.count else {
-                    rejected += 1
-                    continue
-                }
-                let extra =
-                    linked
-                    .filter { $0.evidence.id != passage.evidence.id || $0.quote != quote }
-                let evidence =
-                    [passage.evidence.text, tableEvidence(passage)]
-                    + extra.map {
-                        $0.quote + "\n" + (registry[$0.evidence.id].map(tableEvidence) ?? "")
+            let priorCount = notes.count
+            func registerAnnotations(_ batch: Batch) {
+                // Both the source ID and the exact quotation must match the locally registered window.
+                for record in (batch.annotations ?? []).prefix(12) {
+                    guard let item = record.value, let passage = registry[item.source],
+                        passage.evidence.paperID == paper.id,
+                        let quote = exact(item.quote, in: passage), let body = plain(item.analysis, limit: 1_400)
+                    else {
+                        rejected += 1
+                        continue
                     }
-                guard numbersAreGrounded(body, in: evidence.joined(separator: "\n")) else {
-                    rejected += 1
-                    continue
+                    let requested = item.references ?? []
+                    let linked = requested.prefix(4).compactMap { citation($0, in: registry) }
+                    guard linked.count == requested.count else {
+                        rejected += 1
+                        continue
+                    }
+                    let extra =
+                        linked
+                        .filter { $0.evidence.id != passage.evidence.id || $0.quote != quote }
+                    let evidence =
+                        [passage.evidence.text, tableEvidence(passage)]
+                        + extra.map {
+                            $0.quote + "\n" + (registry[$0.evidence.id].map(tableEvidence) ?? "")
+                        }
+                    guard numbersAreGrounded(body, in: evidence.joined(separator: "\n")) else {
+                        rejected += 1
+                        continue
+                    }
+                    // Leave one new insight per registered passage. Preserve numbers and mathematical
+                    // symbols when comparing prose: two results can differ only by a sign.
+                    let analysis = readerProse(body, citing: linked.map(\.evidence) + [passage.evidence])
+                    let key = analysis.filter { !$0.isWhitespace }.lowercased()
+                    if annotatedSources.contains(passage.evidence.id) || !seenAnalyses.insert(key).inserted {
+                        continue
+                    }
+                    annotatedSources.insert(passage.evidence.id)
+                    notes.append(
+                        .init(
+                            dimension: item.dimension, source: passage.evidence, quote: quote, markdown: analysis,
+                            references: extra))
                 }
-                // Leave one new insight per registered passage. Preserve numbers and mathematical
-                // symbols when comparing prose: two results can differ only by a sign.
-                let analysis = readerProse(body, citing: linked.map(\.evidence) + [passage.evidence])
-                let key = analysis.filter { !$0.isWhitespace }.lowercased()
-                if notes.contains(where: { $0.source.id == passage.evidence.id }) || !seenAnalyses.insert(key).inserted
-                {
-                    continue
+            }
+            registerAnnotations(batch)
+            // Only revisit substantial windows with unusually thin coverage. Bound the extra
+            // work for long papers and leave bibliographies or legitimately empty windows alone.
+            let substantive = passages.filter { $0.table != nil || $0.evidence.text.count >= 180 }
+            if supplementaryWindows < 2, substantive.count >= 6, notes.count - priorCount < 3,
+                !(batch.annotations ?? []).isEmpty || !(batch.outline ?? []).isEmpty
+            {
+                supplementaryWindows += 1
+                let remaining = passages.filter { !annotatedSources.contains($0.evidence.id) }
+                let supplement = Window(
+                    paper: name, focus: focus, window: index + 1, windows: corpus.windows.count,
+                    passages: remaining.map(Input.init), readingNotes: memory.map(Input.init),
+                    alreadyDiscussed: notes.suffix(8).map { String($0.markdown.prefix(180)) })
+                await progress("正在复核第 \(index + 1) 组尚未标注的依据")
+                do {
+                    let extra = try await request(
+                        prompt: windowPrompt + "\n本次只补读未标注的原文。选择能改变判断的机制、对照或失效条件；所给材料没有新信息时返回空数组。outline 留空。",
+                        input: try json(supplement), progress: progress, retryLabel: "", attempts: 1,
+                        complete: complete,
+                        accept: { (value: Batch) in value.annotations == nil ? nil : value })
+                    registerAnnotations(extra)
+                } catch {
+                    try Task.checkCancellation()
+                    if error is CancellationError || (error as? URLError)?.code == .cancelled {
+                        throw CancellationError()
+                    }
+                    missedSupplement += 1
                 }
-                notes.append(
-                    .init(
-                        dimension: item.dimension, source: passage.evidence, quote: quote, markdown: analysis,
-                        references: extra))
             }
             for record in (batch.outline ?? []).prefix(10) {
                 guard let item = record.value else { continue }
@@ -197,7 +232,7 @@ public enum CloseReadingEngine {
         var partialSections = 0
         var repairDiagnostic: String?
         do {
-            (notes, sections, rejectedSections, partialSections, repairDiagnostic) = try await synthesize(
+            (sections, rejectedSections, partialSections, repairDiagnostic) = try await synthesize(
                 notes: notes, stages: stages, passages: sources, paper: name, focus: focus, coverage: corpus.coverage,
                 progress: progress, complete: complete)
         } catch let issue as ResponseIssue {
@@ -214,6 +249,7 @@ public enum CloseReadingEngine {
         if let fallbackReason {
             coverage += " · 文末写作重试后仍" + fallbackReason.description + "，采用分组核实的批注和论证环节"
         }
+        if missedSupplement > 0 { coverage += " · \(missedSupplement) 组补读未完成，保留初读结果" }
         if let repairDiagnostic { coverage += " · " + repairDiagnostic }
         if partialSections > 0 { coverage += " · \(partialSections) 节仅保留已核对段落" }
         if rejectedSections > 0 { coverage += " · \(rejectedSections) 节文末解读未通过格式或依据核对" }

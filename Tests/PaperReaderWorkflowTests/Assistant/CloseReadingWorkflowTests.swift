@@ -244,8 +244,9 @@ private func closeReadingWorkflowFailuresLeaveNoPartialNotesOrReport(
         reader.state.version = LibraryState.currentVersion + 1
         await #expect(throws: ReaderError.self) { try await reader.runCloseReading(id) }
     }
-    #expect(
-        await api.requests == (failure == .rejectedSave ? 2 : 1) && !reader.busyAI && reader.closeReadingTask == nil)
+    // Sparse windows with invalid quotes get one bounded second look. Cancellation stops at once.
+    #expect(await api.requests == (failure == .cancelled ? 1 : 2))
+    #expect(!reader.busyAI && reader.closeReadingTask == nil)
     let disk = try await reader.store.load()
     for snapshot in [reader.state, disk] {
         #expect(

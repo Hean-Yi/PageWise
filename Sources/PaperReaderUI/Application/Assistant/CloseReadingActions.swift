@@ -137,7 +137,7 @@ extension ReaderModel {
             }
             guard !links.isEmpty, links.count == item.references.count,
                 references.contains(where: { $0.paperID == scope.paperID && $0.readingNoteID == nil }),
-                Set((outlineRefs + references).map(\.id)).count <= 16
+                Set((outlineRefs + references).map(\.id)).count <= LocalPassageCitation.notebookLimit
             else {
                 omittedSections += 1
                 continue
@@ -166,7 +166,7 @@ extension ReaderModel {
             .contentVersion
         {
             let body = sections.joined(separator: "\n\n")
-            try await validateNoteCitations(outlineRefs, markdown: body)
+            try await validateNoteCitations(outlineRefs, markdown: body, documentEnd: true)
             var note = ReadingNote(paperID: scope.paperID, contentVersion: version, anchors: [], markdown: body)
             note.placement = .documentEnd
             note.citations = outlineRefs

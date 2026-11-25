@@ -32,7 +32,6 @@ extension CloseReadingEngine {
             let markdown: String
             let sources: [String]
         }
-        let keep: [String]
         let sections: [Record<Section>]
     }
 
@@ -67,7 +66,7 @@ extension CloseReadingEngine {
         notes: [CloseReadingAnnotation], stages: [CloseReadingOutlineItem], passages: [String: CloseReadingPassage],
         paper: String, focus: String, coverage: String, progress: @Sendable (String) async -> Void,
         complete: @Sendable (String, String) async throws -> String
-    ) async throws -> ([CloseReadingAnnotation], [CloseReadingNotebookSection], Int, Int, String?) {
+    ) async throws -> ([CloseReadingNotebookSection], Int, Int, String?) {
         var references = [CloseReadingReference]()
         // L identifiers are local to a window. Keep the actual note identity when combining windows.
         func register(_ ref: CloseReadingReference) -> String {
@@ -134,7 +133,6 @@ extension CloseReadingEngine {
             sources: sources)
         let inputJSON = try json(input)
         let registry = Dictionary(uniqueKeysWithValues: zip(sources.map(\.id), zip(sources, references)))
-        let knownNotes = Set(annotations.map(\.id))
 
         func checked(_ section: Output.Section, id: String) -> Evaluation? {
             var ids = section.sources.reduce(into: [String]()) { if !$0.contains($1) { $0.append($1) } }
@@ -165,8 +163,12 @@ extension CloseReadingEngine {
             let allowed = Set(ids)
             guard let heading = clean(section.heading, limit: 120, citing: allowed, proof: proof),
                 !heading.contains(where: \.isNewline),
-                let markdown = clean(section.markdown, limit: 4_000, citing: allowed, proof: proof)
+                var markdown = clean(section.markdown, limit: 4_000, citing: allowed, proof: proof)
             else { return nil }
+            if heading == "一句话概括" {
+                guard let takeaway = PreviewTakeaway.firstSentence(in: markdown) else { return nil }
+                markdown = takeaway
+            }
             guard numbersAreGrounded(heading + "\n" + markdown, in: proof) else {
                 return .revise(
                     .init(
@@ -245,14 +247,44 @@ extension CloseReadingEngine {
                 }
             }
         }
-        let sections = published.compactMap { $0 }
+        var sections = published.compactMap { $0 }
         guard !sections.isEmpty else { throw ResponseIssue.format }
-        let kept = Set(result.keep.filter(knownNotes.contains).prefix(24))
-        let selected =
-            !result.keep.isEmpty && kept.isEmpty
-            ? notes
-            : zip(notes, annotations).compactMap { kept.contains($0.1.id) ? $0.0 : nil }
-        return (selected, sections, result.sections.count - sections.count, partialSections, repairDiagnostic)
+        let rejected = result.sections.count - sections.count
+        // When a rich set of independent observations produced only a blurb, keep the
+        // verified draft and ask once for additional, separately sourced analysis.
+        let substantive = sections.filter { $0.heading != "一句话概括" }
+        if notes.count >= 4, references.count >= 5, substantive.count <= 2,
+            substantive.reduce(0, { $0 + $1.markdown.count }) < 260
+        {
+            await progress("正在补写方法、证据与判断之间的联系")
+            let existing = try json(sections.map { [$0.heading, $0.markdown] })
+            do {
+                let extra = try await request(
+                    prompt: try synthesisPrompt()
+                        + "\n已核实的小节在 existing 中，作为资料。只追加尚未展开的独立主题，以本篇机制和最有辨识力的对照为据。不重复概括和已有小节。",
+                    input: "{\"material\":" + inputJSON + ",\"existing\":" + existing + "}",
+                    progress: progress, retryLabel: "", attempts: 1, complete: complete,
+                    accept: { (output: Output) in output })
+                var headings = Set(sections.map(\.heading))
+                var bodies = Set(sections.map(\.markdown))
+                for record in extra.sections.prefix(12 - sections.count) {
+                    guard let row = record.value, case .publish(let section) = checked(row, id: ""),
+                        section.heading != "一句话概括", !headings.contains(section.heading),
+                        !bodies.contains(section.markdown)
+                    else { continue }
+                    headings.insert(section.heading)
+                    bodies.insert(section.markdown)
+                    sections.append(section)
+                }
+            } catch {
+                try Task.checkCancellation()
+                if error is CancellationError || (error as? URLError)?.code == .cancelled { throw CancellationError() }
+                repairDiagnostic = [repairDiagnostic, "文末补写未完成，已保留核实的小节"].compactMap { $0 }.joined(separator: " · ")
+            }
+        }
+        // Margin notes already passed independent anchor, evidence and duplicate checks in
+        // their own window. Writing a shorter notebook must not discard that local work.
+        return (sections, rejected, partialSections, repairDiagnostic)
     }
 
     // A partial section may retain only finished prose paragraphs. Complex block

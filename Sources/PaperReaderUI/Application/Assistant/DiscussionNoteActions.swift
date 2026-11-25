@@ -166,7 +166,7 @@ extension ReaderModel {
                 }
             }
             let text = ([body] + links).joined(separator: "\n\n")
-            try await validateNoteCitations(references, markdown: text)
+            try await validateNoteCitations(references, markdown: text, documentEnd: true)
             try validateDiscussionScope(scope)
             var note = ReadingNote(
                 id: requestID, paperID: scope.paperID, contentVersion: version ?? closeReadingVersion(for: scope),
