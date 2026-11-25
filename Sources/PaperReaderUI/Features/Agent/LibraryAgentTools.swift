@@ -606,6 +606,14 @@ extension LibraryAgent {
         let topics: [ResearchBrief.Topic]
         let memories: [RecalledMemory]
         let connections: [EffectiveResearchMemory.Entry]
+        let sources: [SourceReference]
+    }
+
+    private struct SourceReference: Encodable {
+        let paperID: UUID
+        let noteID: UUID?
+        let title: String
+        let excerpt: String?
     }
 
     private func researchOverview(
@@ -684,8 +692,17 @@ extension LibraryAgent {
         let encoder = JSONEncoder()
         var topics = brief.topics
         func payload() throws -> Data {
-            try encoder.encode(
-                MemoryOverview(overview: overview, topics: topics, memories: records, connections: entries))
+            var seen = Set<String>()
+            let sourceReferences = topics.flatMap(\.sources).compactMap { source -> SourceReference? in
+                let key = source.noteID?.uuidString ?? source.paperID.uuidString
+                guard seen.insert(key).inserted else { return nil }
+                return SourceReference(
+                    paperID: source.paperID, noteID: source.noteID, title: source.title, excerpt: source.excerpt)
+            }
+            return try encoder.encode(
+                MemoryOverview(
+                    overview: overview, topics: topics, memories: records, connections: entries,
+                    sources: sourceReferences))
         }
         var bytes = try payload()
         var shortened = false
