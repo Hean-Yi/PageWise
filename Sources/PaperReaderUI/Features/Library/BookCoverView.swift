@@ -207,33 +207,37 @@ struct BookshelfItem: View {
                 .help("\(paper.title) · \(progress.label) · 按住空格预览")
                 .readerContextMenu(paper.title + "的选项", items: contextActions, width: 184)
             HStack(spacing: 7) {
-                Button {
-                    showPreview(.pinned(paper.id))
-                } label: {
-                    Image(systemName: "eye").readerSymbolInk().readerIconTarget(macOS: 30)
+                HStack(spacing: 7) {
+                    Button {
+                        showPreview(.pinned(paper.id))
+                    } label: {
+                        Image(systemName: "eye").readerSymbolInk().readerIconTarget(macOS: 30)
+                    }
+                    .readerIconButtonStyle(.plain).focused($focus, equals: .preview)
+                    .foregroundStyle(ReaderTheme.muted).help("预览论文（按住空格）")
+                    .accessibilityLabel("预览论文：\(paper.title)")
+                    Spacer(minLength: 0)
+                    Button {
+                        model.toggleFavorite(paper.id)
+                    } label: {
+                        ReaderIcon(.favorite, filled: workspace.isFavorite)
+                            .foregroundStyle(workspace.isFavorite ? ReaderTheme.accent : ReaderTheme.muted)
+                            .readerIconTarget(macOS: 30)
+                    }.readerIconButtonStyle(.plain).focused($focus, equals: .favorite)
+                        .help(workspace.isFavorite ? "取消收藏" : "收藏")
+                        .accessibilityLabel("\(workspace.isFavorite ? "取消收藏" : "收藏") \(paper.title)")
                 }
-                .readerIconButtonStyle(.plain).focused($focus, equals: .preview)
-                .foregroundStyle(ReaderTheme.muted).help("预览论文（按住空格）")
-                .accessibilityLabel("预览论文：\(paper.title)")
-                Spacer(minLength: 0)
-                Button {
-                    model.toggleFavorite(paper.id)
-                } label: {
-                    ReaderIcon(.favorite, filled: workspace.isFavorite)
-                        .foregroundStyle(workspace.isFavorite ? ReaderTheme.accent : ReaderTheme.muted)
-                        .readerIconTarget(macOS: 30)
-                }.readerIconButtonStyle(.plain).focused($focus, equals: .favorite)
-                    .help(workspace.isFavorite ? "取消收藏" : "收藏")
-                    .accessibilityLabel("\(workspace.isFavorite ? "取消收藏" : "收藏") \(paper.title)")
+                .opacity(showsActions ? 1 : 0)
+                .allowsHitTesting(showsActions)
                 ReaderPopupMenu(paper.title + "的选项", items: actions, width: 174, isPresented: $menuOpen) {
                     Image(systemName: "ellipsis").readerSymbolInk().font(.system(size: 16, weight: .semibold))
                         .readerIconTarget(macOS: 30)
                 }.fixedSize()
-                    .foregroundStyle(ReaderTheme.muted).focused($focus, equals: .menu)
+                    .foregroundStyle(ReaderTheme.muted.opacity(showsActions ? 1 : 0.72)).focused($focus, equals: .menu)
                     .help("论文选项")
                     .accessibilityIdentifier("paper-options-" + paper.id.uuidString)
-            }.frame(minHeight: 30).opacity(showsActions && !lifted ? 1 : 0)
-                .allowsHitTesting(showsActions && !lifted)
+            }.frame(minHeight: 30).opacity(lifted ? 0 : 1)
+                .allowsHitTesting(!lifted)
                 .offset(arrangementOffset)
         }
         .contentShape(Rectangle())

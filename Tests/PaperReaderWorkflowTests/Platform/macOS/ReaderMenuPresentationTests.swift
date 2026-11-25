@@ -1,5 +1,6 @@
 #if os(macOS)
     import AppKit
+    import PaperReaderKit
     import SwiftUI
     import Testing
     @testable import PaperReaderUI
@@ -182,6 +183,42 @@
         scroll.contentView.scroll(to: CGPoint(x: 0, y: rows.bounds.height - scroll.documentVisibleRect.height))
         scroll.reflectScrolledClipView(scroll.contentView)
         #expect(scroll.documentVisibleRect.maxY >= rows.bounds.maxY - 1)
+        #expect(!window.isVisible)
+    }
+
+    @Test @MainActor func restingCoverExposesItsOptionsBeforeAnyHover() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let model = try ReaderModel(root: root, credentials: WorkflowCredentials())
+        let paper = Paper(
+            title: "Menu fixture", digest: "cover-options", originalPath: "unused.pdf", pageCount: 1, blocks: [],
+            warnings: [], canReflow: false)
+        let host = NSHostingView(
+            rootView: BookshelfItem(
+                model: model, paper: paper, recordFrame: { _ in }, previewed: false, showPreview: { _ in },
+                releasePreview: { false }, hoverCover: { _ in }
+            ).frame(width: 168).environment(\.accessibilityEnabled, true))
+        let window = NSWindow(
+            contentRect: .init(origin: .zero, size: host.fittingSize), styleMask: .borderless, backing: .buffered,
+            defer: false)
+        window.contentView = host
+        defer { window.contentView = nil }
+        func options(in element: AnyObject) -> AnyObject? {
+            if element.accessibilityIdentifier?() == "paper-options-" + paper.id.uuidString { return element }
+            for child in element.accessibilityChildren?() ?? [] {
+                if let button = options(in: child as AnyObject) { return button }
+            }
+            return nil
+        }
+        let deadline = ContinuousClock.now + .seconds(2)
+        while options(in: host) == nil && ContinuousClock.now < deadline {
+            host.layoutSubtreeIfNeeded()
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let button = try #require(options(in: host))
+        #expect(button.accessibilityLabel?() == paper.title + "的选项")
+        let frame = try #require(button.accessibilityFrame?())
+        #expect(frame.width >= 30 && frame.height >= 30)
         #expect(!window.isVisible)
     }
 #endif
