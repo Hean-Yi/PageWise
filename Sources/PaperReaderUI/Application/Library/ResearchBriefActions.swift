@@ -10,6 +10,8 @@ import PaperReaderKit
     private var requested = false
     private var auditing = false
     private var retry = false
+    private var retryAfter = Date.distantPast
+    private var consecutiveFailures = 0
     private var lastAudit = Date.distantPast
     var verification: (briefID: UUID, revision: UInt64, pending: Set<UUID>, valid: Bool)?
     private(set) var worker: Task<Void, Never>?
@@ -38,8 +40,12 @@ import PaperReaderKit
     /// Uses the reader's existing minute/foreground lifecycle; reopening also reconciles missed work.
     func tick(now: Date = .now) {
         guard active, loaded else { return }
-        let elapsed = now.timeIntervalSince(lastAudit)
-        guard retry || elapsed < 0 || elapsed >= 6 * 3600 else { return }
+        if retry {
+            guard now >= retryAfter else { return }
+        } else {
+            let elapsed = now.timeIntervalSince(lastAudit)
+            guard elapsed < 0 || elapsed >= 6 * 3600 else { return }
+        }
         requested = true
         auditing = true
         lastAudit = now
@@ -71,12 +77,19 @@ import PaperReaderKit
                         continue
                     }
                     self.retry = false
+                    self.consecutiveFailures = 0
+                    self.retryAfter = .distantPast
                     if await self.index.hasPendingResearchEvents() {
                         // The bounded batch left older rows behind. Keep the worker in the loop
                         // until the watermark catches the committed source generation.
                         self.requested = true
                     }
-                } catch { self.retry = true }
+                } catch {
+                    self.retry = true
+                    self.consecutiveFailures = min(self.consecutiveFailures + 1, 6)
+                    let delay = min(300.0, 15.0 * pow(2.0, Double(self.consecutiveFailures - 1)))
+                    self.retryAfter = Date().addingTimeInterval(delay)
+                }
             }
             self?.worker = nil
         }

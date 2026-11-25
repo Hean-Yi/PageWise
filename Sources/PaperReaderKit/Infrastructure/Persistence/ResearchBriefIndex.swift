@@ -42,7 +42,7 @@ public actor ResearchBriefIndex {
         let owner = UUID()
         guard try await store.acquireResearchLease(owner: owner) else { return false }
         do {
-            try await maintainHoldingLease(audit: audit, warming: notes, memories: memories)
+            try await maintainHoldingLease(audit: audit, warming: notes, memories: memories, owner: owner)
             try await store.releaseResearchLease(owner: owner)
             return true
         } catch {
@@ -59,7 +59,7 @@ public actor ResearchBriefIndex {
     }
 
     private func maintainHoldingLease(
-        audit: Bool, warming notes: ReadingNoteMemoryIndex?, memories: ResearchMemory?
+        audit: Bool, warming notes: ReadingNoteMemoryIndex?, memories: ResearchMemory?, owner: UUID
     ) async throws {
         if audit { opened = false }
         try await open()
@@ -77,6 +77,9 @@ public actor ResearchBriefIndex {
         }
         try await memories?.prepare(snapshot.state)
         guard needsAudit || generationChanged || !snapshot.pendingEvents.isEmpty else { return }
+        guard try await store.renewResearchLease(owner: owner) else {
+            throw ReaderError.message("整理任务租约已失效，将在下一次维护时重试。")
+        }
         let catalog = try resolve(BriefInputs(snapshot.state, excluding: []))
         let data: Data
         if catalog == published, let payload = publishedPayload {
@@ -86,6 +89,9 @@ public actor ResearchBriefIndex {
         }
         let lastSequence = snapshot.pendingEvents.last?.sequence ?? snapshot.indexState?.lastEventSequence ?? 0
         try Task.checkCancellation()
+        guard try await store.renewResearchLease(owner: owner) else {
+            throw ReaderError.message("整理任务租约已失效，将在下一次维护时重试。")
+        }
         guard
             try await store.publishResearchIndex(
                 data, previousPayload: publishedPayload, libraryRevision: snapshot.libraryRevision,

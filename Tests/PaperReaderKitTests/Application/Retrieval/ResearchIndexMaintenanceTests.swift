@@ -187,3 +187,46 @@ private func withMaintenanceDatabase(_ root: URL, _ body: (OpaquePointer) throws
             auditedAt: Date()))
     #expect(try await store.researchEventCounts().pending == 0)
 }
+
+@Test func researchLeaseCanBeRenewedOnlyByItsOwner() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let store = try LibraryStore(directory: root)
+    _ = try await store.load()
+    let now = Date()
+    let first = UUID()
+    let second = UUID()
+    #expect(try await store.acquireResearchLease(owner: first, now: now, duration: 60))
+    #expect(try await store.renewResearchLease(owner: first, now: now.addingTimeInterval(30), duration: 60))
+    #expect(!(try await store.acquireResearchLease(owner: second, now: now.addingTimeInterval(70), duration: 60)))
+    #expect(!(try await store.renewResearchLease(owner: second, now: now.addingTimeInterval(30), duration: 60)))
+    try await store.releaseResearchLease(owner: first)
+    #expect(try await store.acquireResearchLease(owner: second, now: now.addingTimeInterval(70), duration: 60))
+}
+
+@Test func processedResearchEventsAreBoundedWithoutDroppingPendingRows() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let store = try LibraryStore(directory: root)
+    _ = try await store.load()
+    try withMaintenanceDatabase(root) { db in
+        let now = Date().timeIntervalSinceReferenceDate
+        for index in 0..<5 {
+            let sql = """
+                INSERT INTO research_events(
+                    event_key,kind,record_id,paper_id,shelf_id,record_revision,occurred_at,library_revision,
+                    processed_research_revision
+                ) VALUES('processed-\(index)','paperImported','\(UUID().uuidString)',NULL,NULL,'r\(index)',\(now),1,1)
+                """
+            try #require(sqlite3_exec(db, sql, nil, nil, nil) == SQLITE_OK)
+        }
+        let pending = """
+            INSERT INTO research_events(
+                event_key,kind,record_id,paper_id,shelf_id,record_revision,occurred_at,library_revision
+            ) VALUES('pending','noteChanged','\(UUID().uuidString)',NULL,NULL,'r',\(now),1)
+            """
+        try #require(sqlite3_exec(db, pending, nil, nil, nil) == SQLITE_OK)
+        try LibraryStore.pruneProcessedResearchEvents(db, keeping: 2)
+    }
+    #expect(try await store.researchEventCounts() == (3, 1))
+}

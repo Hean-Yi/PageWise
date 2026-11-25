@@ -252,7 +252,7 @@ public actor LibraryStore {
 
     /// A single local worker owns index maintenance for a bounded interval. The lease is stored in
     /// SQLite so two app windows or a restarted process cannot publish overlapping work.
-    func acquireResearchLease(owner: UUID, now: Date = Date(), duration: TimeInterval = 120) throws -> Bool {
+    func acquireResearchLease(owner: UUID, now: Date = Date(), duration: TimeInterval = 300) throws -> Bool {
         guard duration > 0 else { return false }
         let expires = now.addingTimeInterval(duration).timeIntervalSinceReferenceDate
         return try Self.database(at: databaseURL) { db in
@@ -277,6 +277,23 @@ public actor LibraryStore {
                     guard sqlite3_step(stmt) == SQLITE_DONE else { throw LibraryRecords.writeFailure }
                 }
                 return true
+            }
+        }
+    }
+
+    /// A long rebuild renews its lease between the expensive phases. The owner check prevents a
+    /// worker whose lease expired from reviving a lease another window already took.
+    func renewResearchLease(owner: UUID, now: Date = Date(), duration: TimeInterval = 300) throws -> Bool {
+        guard duration > 0 else { return false }
+        let expires = now.addingTimeInterval(duration).timeIntervalSinceReferenceDate
+        return try Self.database(at: databaseURL) { db in
+            try LibraryRecords.statement(
+                db, "UPDATE research_maintenance_lease SET expires_at=? WHERE id=1 AND owner=?"
+            ) { stmt in
+                sqlite3_bind_double(stmt, 1, expires)
+                try Self.bindResearchText(owner.uuidString, to: 2, in: stmt)
+                guard sqlite3_step(stmt) == SQLITE_DONE else { throw LibraryRecords.writeFailure }
+                return sqlite3_changes(db) > 0
             }
         }
     }
@@ -331,6 +348,7 @@ public actor LibraryStore {
                         sqlite3_bind_int64(stmt, 2, watermark)
                         guard sqlite3_step(stmt) == SQLITE_DONE else { throw LibraryRecords.writeFailure }
                     }
+                    try Self.pruneProcessedResearchEvents(db)
                 }
                 return true
             }
@@ -406,6 +424,28 @@ public actor LibraryStore {
                 guard sqlite3_step(stmt) == SQLITE_DONE else { throw LibraryRecords.writeFailure }
             }
         }
+    }
+
+    /// The derived index never needs the complete processed history to rebuild; the main library
+    /// is authoritative. Keep a bounded recent tail so diagnostics stay useful without growing
+    /// the event table for the lifetime of the library.
+    static let retainedProcessedEvents = 4_096
+
+    static func pruneProcessedResearchEvents(
+        _ db: OpaquePointer, keeping: Int = retainedProcessedEvents
+    ) throws {
+        guard keeping >= 0 else { return }
+        try execute(
+            db,
+            """
+            DELETE FROM research_events
+            WHERE processed_research_revision IS NOT NULL
+              AND sequence <= (
+                SELECT sequence FROM research_events
+                WHERE processed_research_revision IS NOT NULL
+                ORDER BY sequence DESC LIMIT 1 OFFSET \(keeping)
+              )
+            """)
     }
 
     private static func readPendingResearchEvents(_ db: OpaquePointer, limit: Int) throws -> [StoredResearchEvent] {

@@ -1,3 +1,4 @@
+import CSQLite
 import Foundation
 import Testing
 
@@ -118,4 +119,46 @@ import Testing
     #expect(try await store.researchGeneration() == researchGeneration)
     state.papers[0].title = "Updated title"
     #expect(try await store.save(state).researchSourcesChanged)
+}
+
+@MainActor @Test func researchBriefFailureBacksOffBeforeRetrying() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let store = try LibraryStore(directory: root)
+    var state = try await store.load()
+    let paper = Paper(
+        title: "Backoff source", digest: "backoff", originalPath: "unused.pdf", pageCount: 1, blocks: [],
+        warnings: [], canReflow: false)
+    state.papers = [paper]
+    try await store.save(state)
+    try withResearchDatabase(root) { db in
+        let sql = """
+            CREATE TABLE IF NOT EXISTS research_brief(id INTEGER PRIMARY KEY CHECK(id=1), payload BLOB NOT NULL);
+            CREATE TRIGGER fail_brief BEFORE INSERT ON research_brief
+            BEGIN SELECT RAISE(ABORT,'injected index failure'); END;
+            """
+        try #require(sqlite3_exec(db, sql, nil, nil, nil) == SQLITE_OK)
+    }
+    let maintenance = ResearchBriefMaintenance(store: store, notes: ReadingNoteMemoryIndex())
+    maintenance.sourcesChanged()
+    await maintenance.worker?.value
+    #expect(maintenance.worker == nil)
+    // A failed pass must wait for its short backoff instead of spinning on every minute tick.
+    maintenance.tick(now: Date().addingTimeInterval(1))
+    #expect(maintenance.worker == nil)
+    try withResearchDatabase(root) { db in
+        try #require(sqlite3_exec(db, "DROP TRIGGER fail_brief", nil, nil, nil) == SQLITE_OK)
+    }
+    maintenance.tick(now: Date().addingTimeInterval(20))
+    await maintenance.worker?.value
+    #expect(try await store.readResearchCheckpoint() != nil)
+}
+
+private func withResearchDatabase(_ root: URL, _ body: (OpaquePointer) throws -> Void) throws {
+    var db: OpaquePointer?
+    guard sqlite3_open_v2(root.appendingPathComponent("library.sqlite").path, &db, 2, nil) == SQLITE_OK, let db else {
+        throw ReaderError.message("无法打开测试书库。")
+    }
+    defer { sqlite3_close(db) }
+    try body(db)
 }
