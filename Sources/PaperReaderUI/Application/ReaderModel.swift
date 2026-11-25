@@ -284,7 +284,7 @@ public final class ReaderModel {
         presentingReflow: (paperID: UUID, jobID: UUID)? = nil, insertingNote: AnchoredNoteInsertion? = nil,
         closeReading: (notes: [AnchoredNoteInsertion], report: ChatTurn)? = nil,
         obsidianBinding: ObsidianNoteBinding? = nil, proposingQuestion: ResearchQuestionProposal? = nil,
-        preferenceChange: ReaderPreferenceChange? = nil
+        proposingMemory: MemoryStatementProposal? = nil, preferenceChange: ReaderPreferenceChange? = nil
     ) async -> Bool {
         guard loaded else { return false }
         let previous = saveQueue
@@ -305,6 +305,13 @@ public final class ReaderModel {
                         return false
                     }
                     snapshot.memories.append(proposingQuestion.item)
+                }
+                if let proposingMemory {
+                    guard
+                        MemoryStatementProposal.isEligible(
+                            proposingMemory.item, in: snapshot, excluding: self.pendingImportIDs)
+                    else { return false }
+                    snapshot.memories.append(proposingMemory.item)
                 }
                 let removed = try deletingPaper.map { try snapshot.removePaper($0) }
                 if let importedPaper {
@@ -402,6 +409,16 @@ public final class ReaderModel {
                         self.state.memories.append(proposingQuestion.item)
                     } else {
                         // The note or a correction changed during disk I/O. Remove the unexposed proposal before the next queued writer.
+                        try await store.save(self.state)
+                        return false
+                    }
+                }
+                if let proposingMemory {
+                    if MemoryStatementProposal.isEligible(
+                        proposingMemory.item, in: self.state, excluding: self.pendingImportIDs)
+                    {
+                        self.state.memories.append(proposingMemory.item)
+                    } else {
                         try await store.save(self.state)
                         return false
                     }

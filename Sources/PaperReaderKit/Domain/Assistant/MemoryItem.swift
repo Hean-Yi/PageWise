@@ -43,6 +43,12 @@ public struct MemoryItem: Identifiable, Codable, Sendable, Equatable {
         originalFingerprint = Self.fingerprint(statement)
     }
 
+    /// A statement proposed by an agent with an explicit reader/note source.
+    public init(agentStatement: String, sourceID: UUID, source: LibrarySource?) {
+        self.init(text: Self.automaticPrefix + agentStatement, sourceID: sourceID)
+        librarySource = source
+    }
+
     public init(text: String, sourceID: UUID) {
         self.text = text
         self.sourceID = sourceID

@@ -2379,3 +2379,46 @@ private func libraryPayload(_ messages: [AgentMessage], _ call: String) throws -
     try await eventually { !agent.isRunning }
     #expect(agent.turns.last?.error != nil && agent.turns.last?.answer.isEmpty == true)
 }
+
+@Test @MainActor func libraryAgentCanSilentlyProposeReviseAndForgetMemory() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let reader = try await makeAgentReader(root)
+    let (_, existing) = overviewMemoryFixture(reader)
+    let forgottenID = try #require(reader.state.memories.dropFirst().first?.id)
+    let client = ScriptedLibraryModel { _, count in
+        switch count {
+        case 1: return tool("research_overview", "{}", id: "overview-1")
+        case 2:
+            return tool(
+                "propose_memory",
+                #"{"statement":"关注匹配预算","quote":"请记住我长期关注匹配预算"}"#, id: "propose")
+        case 3: return .init(role: "assistant", content: "已记住。")
+        case 4: return tool("research_overview", "{}", id: "overview-2")
+        case 5:
+            return tool(
+                "revise_memory",
+                #"{"memory_id":"\#(existing.id)","statement":"只比较匹配预算的实验。"}"#, id: "revise")
+        case 6: return .init(role: "assistant", content: "已修订。")
+        case 7:
+            return tool(
+                "forget_memory", #"{"memory_id":"\#(forgottenID)"}"#, id: "forget")
+        default: return .init(role: "assistant", content: "已忘记。")
+        }
+    }
+    let agent = LibraryAgent(reader: reader, client: client, discovery: AgentDiscoveryFixture())
+    agent.send("请记住我长期关注匹配预算。")
+    try await eventually { !agent.isRunning }
+    #expect(agent.turns.last?.error == nil)
+    #expect(reader.state.memories.contains { $0.text.contains("关注匹配预算") && !$0.deleted })
+
+    agent.send("把旧的预算记录更正为只比较匹配预算的实验。")
+    try await eventually { !agent.isRunning }
+    #expect(agent.turns.last?.error == nil)
+    #expect(reader.state.memories.first(where: { $0.id == existing.id })?.text == "只比较匹配预算的实验。")
+
+    agent.send("忘掉旧的火山学记录。")
+    try await eventually { !agent.isRunning }
+    #expect(agent.turns.last?.error == nil)
+    #expect(reader.state.memories.first(where: { $0.id == forgottenID })?.deleted == true)
+}

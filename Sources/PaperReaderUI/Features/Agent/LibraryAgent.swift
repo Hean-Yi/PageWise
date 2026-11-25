@@ -759,17 +759,18 @@ public final class LibraryAgent {
         if let turn = activeTurn, permitsResearchProposal(in: turn) {
             names.insert("propose_research_question")
         }
+        if let turn = activeTurn, ReaderPreference.permitsRecall(turn.question),
+            turn.question.range(
+                of: #"(?i)忘掉|忘记|删除|移除|撤回|forget|remove|delete"#, options: .regularExpression) != nil
+        {
+            names.insert("forget_memory")
+        }
         if let turn = activeTurn, ReaderPreference.permitsExtraction(turn.question),
             !ResearchQuestionProposal.isRecallRequest(turn.question),
             turn.activities.contains(where: { $0.toolName == "research_overview" && $0.status == .succeeded })
                 || ResearchQuestionProposal.isWriteRequest(turn.question)
         {
             names.formUnion(["propose_memory", "revise_memory"])
-            if turn.question.range(
-                of: #"(?i)忘掉|忘记|删除|移除|撤回|forget|remove|delete"#, options: .regularExpression) != nil
-            {
-                names.insert("forget_memory")
-            }
         }
         if candidates.values.contains(where: \.canAttemptDownload) { names.insert("prepare_import") }
         if canRecommend { names.insert("recommend_related") }

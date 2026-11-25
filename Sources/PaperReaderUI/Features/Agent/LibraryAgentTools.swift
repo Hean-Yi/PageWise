@@ -140,32 +140,26 @@ extension LibraryAgent {
                 !ResearchQuestionProposal.isRecallRequest(turn.question),
                 limits.availableToolNames?.contains(call.function.name) != false
             else { throw ReaderError.message("本轮不记录新的长期记忆。") }
-            var authorizedSource = ChatSourceVersions()
-            func needsVerbatimSource() -> Bool {
-                let sawOtherSource = turn.cards.contains { $0.id != noteResult }
-                return turns.count > 1 || sawOtherSource
-                    || (recalledSources.map { !$0.isEmpty && $0 != authorizedSource } ?? false)
-            }
-            let proposal: ResearchQuestionProposal
+            let proposal: MemoryStatementProposal
             if let noteResult {
                 guard let card = turn.cards.first(where: { $0.id == noteResult && $0.kind == .evidence }),
                     let noteID = card.readingNoteID, let paperID = card.paperID,
                     let note = reader.referencedReadingNote(id: noteID, paperID: paperID, includeArchived: false),
                     note.modifiedAt == card.noteModifiedAt
                 else { throw ReaderError.message("请先在本轮检索当前的个人阅读笔记。") }
-                authorizedSource.include(note)
-                proposal = try ResearchQuestionProposal(
-                    question: statement, quote: quote, registeredExcerpt: card.excerpt, note: note,
-                    sourceOnly: needsVerbatimSource())
+                proposal = try MemoryStatementProposal(
+                    statement: statement, quote: quote, registeredExcerpt: card.excerpt, note: note)
             } else {
-                proposal = try ResearchQuestionProposal(
-                    question: statement, readerTurnID: turn.id, readerMessage: turn.question, quote: quote,
-                    sourceOnly: needsVerbatimSource())
+                proposal = try MemoryStatementProposal(
+                    statement: statement, readerTurnID: turn.id, readerMessage: turn.question, quote: quote)
             }
-            guard proposal.isEligible(in: reader.state, excluding: reader.pendingImportIDs) else {
+            guard
+                MemoryStatementProposal.isEligible(
+                    proposal.item, in: reader.state, excluding: reader.pendingImportIDs)
+            else {
                 throw ReaderError.message("线索与既有记忆重复、已撤回，或来自派生笔记。")
             }
-            guard await reader.save(cancellable: true, proposingQuestion: proposal) else {
+            guard await reader.save(cancellable: true, proposingMemory: proposal) else {
                 try check(epoch)
                 throw ReaderError.message("来源已变化或保存失败，此次未记录新记忆。")
             }
@@ -177,7 +171,7 @@ extension LibraryAgent {
             return AgentToolOutcome(
                 content: #"{"ok":true,"status":"ai_unverified"}"#, cards: [], truncated: false, message: nil)
         case .reviseMemory(let memoryID, let statement):
-            guard let turn = activeTurn, ReaderPreference.permitsExtraction(turn.question),
+            guard let turn = activeTurn, ReaderPreference.permitsRecall(turn.question),
                 limits.availableToolNames?.contains(call.function.name) != false,
                 let index = reader.state.memories.firstIndex(where: { $0.id == memoryID }),
                 !reader.state.memories[index].deleted, !reader.state.memories[index].userEdited
@@ -193,7 +187,7 @@ extension LibraryAgent {
             onSubject("研究记忆已静默修订")
             return AgentToolOutcome(content: #"{"ok":true}"#, cards: [], truncated: false, message: nil)
         case .forgetMemory(let memoryID):
-            guard let turn = activeTurn, ReaderPreference.permitsExtraction(turn.question),
+            guard let turn = activeTurn, ReaderPreference.permitsRecall(turn.question),
                 turn.question.range(
                     of: #"(?i)忘掉|忘记|删除|移除|撤回|forget|remove|delete"#, options: .regularExpression) != nil,
                 limits.availableToolNames?.contains(call.function.name) != false,
