@@ -1,7 +1,7 @@
 import {EditorState} from '@codemirror/state';
 import {history, undo, redo} from '@codemirror/commands';
 import {
-  readSummarySelection, restoreSummarySelection, summarySourcePoint, summaryDOMPoint, summaryMathRange, summaryTaskRange
+  readSummarySelection, restoreSummarySelection, summarySourcePoint, summaryDOMPoint, summaryMathRange, summaryTaskRange, noteFormulaRanges
 } from './SummarySelection.js';
 
 // WebKit edits the typeset document itself. The source document and its undo history
@@ -180,6 +180,36 @@ export function attachSummary(prose, onChange, onEditing) {
     else if (!type.startsWith('insert') && !type.startsWith('delete')) return null;
     return {from, to, text: text.replace(/\r\n?/g, '\n'), type};
   }
+  // A newly typed delimiter must survive the preview that arrives after this input.
+  // Mark just the typed run as source, using the same in-place editor as an existing formula.
+  function keepTypedSource(change, head) {
+    if (raw?.draft) {
+      const entered = source.slice(raw.from, raw.to);
+      const formula = raw.draft === 'math' ? noteFormulaRanges(entered)[0] : null;
+      const leftFormula = formula?.from === 0 && head > raw.from + formula.to;
+      const ordinaryEscape = entered.startsWith('\\') && entered.length >= 2 && !/^\\[[(]/.test(entered);
+      const newLine = change.type === 'insertParagraph' || change.type === 'insertLineBreak';
+      const display = entered.startsWith('$$') || entered.startsWith('\\[');
+      if (leftFormula || ordinaryEscape || (newLine && (!display || formula))) closeRaw();
+      return;
+    }
+    if (raw || change.type !== 'insertText' || !['#','$','\\'].includes(change.text)) return;
+    const sel = getSelection(), node = sel.focusNode, end = sel.focusOffset;
+    if (!sel.isCollapsed || node?.nodeType !== Node.TEXT_NODE || !inProse(node) ||
+        node.parentElement.closest('pre,code') || node.data[end - 1] !== change.text) return;
+    const before = source.slice(state.doc.lineAt(head).from, head - 1);
+    const heading = change.text === '#';
+    if (heading ? !/^ {0,3}#{0,5}$/.test(before) : /(?:^|[^\\])(?:\\\\)*\\$/.test(before)) return;
+    const range = document.createRange();
+    range.setStart(node, end - 1);
+    range.setEnd(node, end);
+    const element = document.createElement('span');
+    element.dataset.summarySource = heading ? 'heading' : 'math';
+    range.surroundContents(element);
+    raw = {element, originalNode: document.createTextNode(change.text), originalText: change.text,
+           from: head - 1, to: head, draft: heading ? 'heading' : 'math'};
+    sel.setBaseAndExtent(element.firstChild, 1, element.firstChild, 1);
+  }
   function replace(change) {
     const {from, to, text, type} = change;
     if (from === to && !text) return;
@@ -187,6 +217,7 @@ export function attachSummary(prose, onChange, onEditing) {
     const selection = caret(from + text.length);
     const userEvent = type.startsWith('delete') ? 'delete' : type === 'insertFromPaste' ? 'input.paste' : 'input.type';
     store(state.update({changes: {from, to, insert: text}, selection, userEvent}));
+    keepTypedSource(change, selection.head);
     remember(selection);
   }
   function replaceDOM(range, text) {
@@ -248,7 +279,7 @@ export function attachSummary(prose, onChange, onEditing) {
     }
     begin();
     const replacement = document.createElement(formula ? 'span' : 'div');
-    replacement.dataset.summarySource = '';
+    replacement.dataset.summarySource = formula ? 'math' : 'block';
     replacement.textContent = source.slice(from, to);
     if (region.dataset.noteRange) replacement.dataset.noteRange = region.dataset.noteRange;
     raw = {element: replacement, originalNode: region, originalText: replacement.textContent, from, to};
@@ -273,6 +304,7 @@ export function attachSummary(prose, onChange, onEditing) {
     if (editing && !composing && !pendingInput && inProse(getSelection().anchorNode)) {
       const s = read();
       if (s) remember(s);
+      if (raw && !raw.element.contains(getSelection().focusNode)) closeRaw();
     }
   });
   listen(prose, 'pointerdown', () => { pointerDown = true; });

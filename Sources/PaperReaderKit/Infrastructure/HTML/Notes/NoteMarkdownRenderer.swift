@@ -135,7 +135,7 @@ public actor NoteMarkdownRenderer {
             const html=this.parser.parse([token]);
             return html.replace(/^\s*<[a-z][\w-]*(?=[\s>])/i,tag=>tag+' '+noteBlockAttribute+'="'+start+':'+end+'"');
           }},
-          {name:'noteBlockMath',level:'block',start(src){return src.search(/(?:\$\$|\\\[)/);},
+          {name:'noteBlockMath',level:'block',start(src){const m=/\n(?:\$\$|\\\[)/.exec(src);return m ? m.index+1 : -1;},
            tokenizer(src){const m=/^\$\$\s*([\s\S]+?)\$\$[ \t]*(?:\n|$)/.exec(src)||/^\\\[\s*([\s\S]+?)\\\][ \t]*(?:\n|$)/.exec(src);
              if(m)return {type:'noteBlockMath',raw:m[0],text:m[1],display:true};},
            renderer(t){return '<p>'+recordMath(t)+'</p>';}},

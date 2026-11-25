@@ -44,20 +44,28 @@ function project(raw, literal) {
     }
     i = end;
   }
-  const formulas = [];
-  const math = /\$\$([\s\S]+?)\$\$|\\\[([\s\S]+?)\\\]|\\\(([\s\S]+?)\\\)|(?<![\\$])\$(?![\s$])((?:\\.|[^$\n])+?)(?<!\s)\$(?![\d$])/g;
-  // Code can contain a single dollar sign before a real formula. Mask its delimiters without shifting offsets.
-  let mathInput = '', copied = 0;
-  for (const [from, to] of code) {
-    mathInput += raw.slice(copied, from) + ' '.repeat(to - from);
-    copied = to;
-  }
-  mathInput += raw.slice(copied);
-  for (const match of mathInput.matchAll(math)) {
-    formulas.push({from: match.index, to: match.index + match[0].length,
-      latex: (match[1] ?? match[2] ?? match[3] ?? match[4]).trim(), raw: match[0]});
-  }
+  const formulas = noteFormulaRanges(raw, code);
   return {visible, starts, ends, formulas, taskItems, raw};
+}
+
+// Scan each prose interval separately: a literal dollar inside code cannot open or close a formula.
+export function noteFormulaRanges(text, excluded = []) {
+  const formulas = [];
+  const pattern = /(?<![\\$])\$\$([\s\S]+?)\$\$|(?<!\\)\\\[([\s\S]+?)\\\]|(?<!\\)\\\(([\s\S]+?)\\\)|(?<![\\$])\$(?![\s$])((?:\\.|[^$\n])+?)(?<!\s)\$(?![\d$])/g;
+  let start = 0;
+  function scan(end) {
+    for (const m of text.slice(start, end).matchAll(pattern)) {
+      const from = start + m.index;
+      formulas.push({from, to: from + m[0].length, latex: (m[1] ?? m[2] ?? m[3] ?? m[4]).trim(),
+        display: m[1] !== undefined || m[2] !== undefined, raw: m[0]});
+    }
+  }
+  for (const [from, to] of excluded) {
+    if (from > start) scan(from);
+    start = Math.max(start, to);
+  }
+  scan(text.length);
+  return formulas;
 }
 
 function blockOf(prose, node) {

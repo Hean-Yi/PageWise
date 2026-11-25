@@ -1,4 +1,5 @@
 import {attachSummary} from './SummaryEditor.js';
+import {noteFormulaRanges} from './SummarySelection.js';
 import {EditorState, StateField, StateEffect, Transaction} from '@codemirror/state';
 import {EditorView, Decoration, WidgetType, keymap, placeholder} from '@codemirror/view';
 import {history, historyKeymap, defaultKeymap, undo, redo} from '@codemirror/commands';
@@ -9,12 +10,12 @@ import {GFM} from '@lezer/markdown';
 // Markdown remains the sole source. Decorations never serialize rendered HTML back to text.
 const compiled = StateEffect.define();
 class Rendered extends WidgetType {
-  constructor(html, from, to, block=false) {super();Object.assign(this,{html,from,to,block});}
+  constructor(html, from, to, block=false, offset=1) {super();Object.assign(this,{html,from,to,block,offset});}
   eq(other) {return this.html===other.html && this.from===other.from && this.to===other.to;}
   toDOM(view) {
     const node=document.createElement(this.block?'div':'span');node.className='note-md-widget';node.innerHTML=this.html;
     node.title='点击编辑 Markdown';node.setAttribute('contenteditable','false');
-    node.onmousedown=event=>{if(event.target.closest('a[data-passage]'))return;event.preventDefault();view.dispatch({selection:{anchor:Math.min(this.to,this.from+1)}});view.focus();};
+    node.onmousedown=event=>{if(event.target.closest('a[data-passage]'))return;event.preventDefault();view.dispatch({selection:{anchor:Math.min(this.to,this.from+this.offset)}});view.focus();};
     return node;
   }
   ignoreEvent() {return true;}
@@ -87,7 +88,8 @@ class TaskCheckbox extends WidgetType {
   ignoreEvent(){return true;}
 }
 function decorations(state, preview) {
-  const ranges=[], occupied=[], text=state.doc.toString(), sel=state.selection.main;
+  let ranges=[];
+  const occupied=[], text=state.doc.toString(), sel=state.selection.main;
   const selected=(from,to)=>!sel.empty && sel.from<to && sel.to>from;
   const editing=(from,to)=>sel.empty && sel.head>from && sel.head<to || selected(from,to);
   const hide=(from,to)=>{if(from<to&&!selected(from,to))ranges.push(Decoration.replace({noteAtomic:true}).range(from,to));};
@@ -109,7 +111,11 @@ function decorations(state, preview) {
     if(name==='Strikethrough')mark(from,to,'note-md-strike');
     if(name==='Blockquote')for(let n=state.doc.lineAt(from).number;n<=state.doc.lineAt(to).number;n++)ranges.push(Decoration.line({class:'note-md-quote'}).range(state.doc.line(n).from));
     if(['EmphasisMark','CodeMark','StrikethroughMark','QuoteMark'].includes(name))hide(from,to);
-    if(name==='HeaderMark'){const end=text[to]===' '?to+1:to;if(sel.head>=end||sel.head<from)hide(from,end);}
+    if(name==='HeaderMark'){
+      const line=state.doc.lineAt(from),end=text[to]===' '?to+1:to;
+      if(sel.from<=line.to && sel.to>=line.from)mark(from,end,'note-md-syntax');
+      else hide(from,end);
+    }
     if(name==='ListMark'){if(/[-+*]/.test(text.slice(from,to)))ranges.push(Decoration.replace({noteAtomic:true,widget:new Rendered('<span class="note-md-list-mark">•</span>',from,to)}).range(from,to));else mark(from,to,'note-md-list-mark');}
     if(name==='TaskMarker'&&!editing(from,to))ranges.push(Decoration.replace({noteAtomic:true,widget:new TaskCheckbox(from,text[from+1].toLowerCase()==='x')}).range(from,to));
     if(name==='Link'){
@@ -127,20 +133,31 @@ function decorations(state, preview) {
       }
     }
   }});
-  const pattern=/\$\$([\s\S]+?)\$\$|(?<![\\$])\$(?!\$)((?:\\.|[^$\n])+?)\$(?!\$)/g;
-  for(const match of text.matchAll(pattern)){
-    const from=match.index,to=from+match[0].length;if(occupied.some(([a,b])=>from<b&&to>a)||editing(from,to))continue;
-    const display=match[1]!==undefined,latex=(match[1]??match[2]).trim(),html=preview.math.get((display?'block:':'inline:')+latex);if(!html)continue;
+  const formulas=noteFormulaRanges(text,occupied);
+  // TeX characters such as * and _ belong to the formula, even when the Markdown grammar sees emphasis.
+  ranges=ranges.filter(range=>range.from===range.to || !formulas.some(f=>range.from>=f.from && range.to<=f.to));
+  for(const {from,to,display,latex,raw} of formulas){
+    // Keep the close delimiter editable through its keystroke. Moving past the formula typesets it.
+    if(editing(from,to) || (sel.empty && sel.head===to)) {
+      mark(from,to,'note-md-math-source');
+      continue;
+    }
+    const html=preview.math.get((display?'block:':'inline:')+latex);
+    if(!html) {
+      if(preview.errors.has(raw))mark(from,to,'note-math-error');
+      continue;
+    }
     const block=display&&state.doc.lineAt(from).from===from&&state.doc.lineAt(to).to===to;
-    ranges.push(Decoration.replace({noteAtomic:true,widget:new Rendered(html,from,to,block),block}).range(from,to));
+    const opening=raw.startsWith('$')&&!display?1:2;
+    ranges.push(Decoration.replace({noteAtomic:true,widget:new Rendered(html,from,to,block,opening),block}).range(from,to));
   }
   return Decoration.set(ranges,true);
 }
 const presentation=StateField.define({
-  create(state){const preview={math:new Map(),tables:[],links:new Map()};return {preview,ranges:decorations(state,preview)};},
+  create(state){const preview={math:new Map(),errors:new Set(),tables:[],links:new Map()};return {preview,ranges:decorations(state,preview)};},
   update(value,tr){let preview=value.preview;for(const effect of tr.effects)if(effect.is(compiled))preview=effect.value;
     // Old tables must never replace a newly edited table before the new source has compiled.
-    if(tr.docChanged)preview={math:preview.math,tables:[],links:preview.links};
+    if(tr.docChanged)preview={math:preview.math,errors:preview.errors,tables:[],links:preview.links};
     return tr.docChanged||tr.selection||syntaxTree(tr.startState)!==syntaxTree(tr.state)||preview!==value.preview?{preview,ranges:decorations(tr.state,preview)}:value;
   },
   provide:field=>[EditorView.decorations.from(field,v=>v.ranges),EditorView.atomicRanges.of(view=>view.state.field(field).ranges.update({filter:(_from,_to,value)=>!!value.spec.noteAtomic}))]
@@ -150,7 +167,7 @@ window.PaperNoteEditor={bindPassages,attachSummary,create(host,source,onChange,o
   const view=new EditorView({parent:host,state:EditorState.create({doc:source,extensions:[
     markdown({extensions:GFM}),history(),presentation,EditorView.lineWrapping,
     keymap.of([{key:'Mod-Enter',run:()=>{onDone();return true;}},{key:'Escape',run:()=>{onDone();return true;}},...markdownKeymap,...defaultKeymap,...historyKeymap]),
-    placeholder('写下想法，支持 Markdown 和 $公式$'),
+    placeholder('写下想法…　# 标题　$x^2$ 公式'),
     EditorView.contentAttributes.of({'aria-label':'笔记 Markdown 编辑器','spellcheck':'false'}),
     EditorView.updateListener.of(update=>{if(update.docChanged&&!silent)onChange(view.state.doc.toString());})
   ]})});
@@ -162,7 +179,7 @@ window.PaperNoteEditor={bindPassages,attachSummary,create(host,source,onChange,o
       view.dispatch({changes:{from,to,insert:markdown},selection:{anchor:from+markdown.length}});
       view.focus();return true;
     },
-    preview(source,html){if(api.value!==source)return;const doc=new DOMParser().parseFromString(html,'text/html'),math=new Map(),links=new Map();for(const node of doc.querySelectorAll('math[alttext]'))math.set((node.getAttribute('display')==='block'?'block:':'inline:')+node.getAttribute('alttext').trim(),node.outerHTML);for(const a of doc.querySelectorAll('a[data-passage]'))links.set(a.getAttribute('href'),a.dataset.passage);view.dispatch({effects:compiled.of({math,links,tables:[...doc.querySelectorAll('table')].map(n=>n.outerHTML)})});}
+    preview(source,html){if(api.value!==source)return;const doc=new DOMParser().parseFromString(html,'text/html'),math=new Map(),links=new Map();for(const node of doc.querySelectorAll('math[alttext]'))math.set((node.getAttribute('display')==='block'?'block:':'inline:')+node.getAttribute('alttext').trim(),node.outerHTML);for(const a of doc.querySelectorAll('a[data-passage]'))links.set(a.getAttribute('href'),a.dataset.passage);view.dispatch({effects:compiled.of({math,links,errors:new Set([...doc.querySelectorAll('.note-math-error')].map(node=>node.textContent)),tables:[...doc.querySelectorAll('table')].map(n=>n.outerHTML)})});}
   };
   host.noteEditor=api;Object.defineProperties(host,{value:{get:()=>api.value,set:v=>{api.value=v;}},selectionStart:{get:()=>api.selectionStart},selectionEnd:{get:()=>api.selectionEnd}});
   host.setSelectionRange=(a,b)=>api.setSelectionRange(a,b);host.focus=()=>api.focus();return api;

@@ -1005,6 +1005,87 @@
         }
     }
 
+    @Test(arguments: [false, true]) @MainActor
+    func activeNoteSyntaxStaysEditableThroughLiveCompilation(summary: Bool) async throws {
+        let config = WKWebViewConfiguration()
+        config.userContentController.addUserScript(
+            .init(
+                source: HTMLNativeNoteEditorScript.source, injectionTime: .atDocumentEnd, forMainFrameOnly: true,
+                in: .defaultClient))
+        let web = WKWebView(frame: CGRect(x: 0, y: 0, width: 640, height: 360), configuration: config)
+        web.loadHTMLString("<main class='note-prose'></main>", baseURL: nil)
+        try await noteWait { (try? await noteJS(web, "return !!window.PaperNoteEditor")) as? Bool == true }
+        let renderer = NoteMarkdownRenderer()
+        _ = try await noteJS(
+            web,
+            """
+            window.host=document.querySelector('main'); window.saved='';
+            if(summary){
+                window.edit=PaperNoteEditor.attachSummary(host,text=>{saved=text},()=>{});
+                edit.update('', ''); edit.editForCitation();
+            }else{
+                window.edit=PaperNoteEditor.create(host,'',text=>{saved=text},()=>{}); edit.focus();
+            }
+            """, ["summary": summary])
+        func type(_ value: String) async throws {
+            _ = try await noteJS(
+                web,
+                """
+                for(const c of characters){
+                    if(summary)document.execCommand('insertText',false,c);
+                    else edit.view.dispatch(edit.view.state.replaceSelection(c));
+                }
+                """, ["characters": value, "summary": summary])
+        }
+        func compile(_ expected: String) async throws {
+            #expect(try await noteJS(web, "return saved") as? String == expected)
+            let html = try await renderer.renderReadingNote(expected, passageIDs: [], trackSourceRanges: summary)
+            _ = try await noteJS(
+                web, "if(summary)edit.update(saved,html);else edit.preview(saved,html);",
+                ["summary": summary, "html": html])
+        }
+        try await type("#")
+        try await compile("#")
+        #expect(try await noteJS(web, "return host.textContent.includes('#')") as? Bool == true)
+        try await type(" Heading")
+        try await compile("# Heading")
+        #expect(try await noteJS(web, "return host.textContent.includes('# Heading')") as? Bool == true)
+        if summary {
+            _ = try await noteJS(web, "edit.finish()")
+            #expect(try await noteJS(web, "return host.querySelector('h1')?.textContent") as? String == "Heading")
+            _ = try await noteJS(web, "edit.update('', '<p></p>');edit.editForCitation();")
+        } else {
+            _ = try await noteJS(
+                web, "edit.view.dispatch(edit.view.state.replaceSelection('\\n'));return true")
+            #expect(try await noteJS(web, "return !host.textContent.includes('#')") as? Bool == true)
+            _ = try await noteJS(web, "edit.value='';edit.setSelectionRange(0,0);")
+        }
+        try await type(#"\("#)
+        try await compile(#"\("#)
+        #expect(try await noteJS(web, #"return host.textContent.includes('\\(')"#) as? Bool == true)
+        let formula = #"\(x_1+\beta\)"#
+        try await type(#"x_1+\beta\)"#)
+        try await compile(formula)
+        #expect(
+            try await noteJS(web, "return host.textContent.includes(formula)", ["formula": formula]) as? Bool == true)
+        try await type("!")
+        try await compile(formula + "!")
+        #expect(
+            try await noteJS(web, "return host.querySelector('math')?.getAttribute('alttext')") as? String
+                == #"x_1+\beta"#)
+        if !summary {
+            let source = #"`$ignored` $a$ and \(b\) and \[c\] and $$d$$."#
+            _ = try await noteJS(
+                web, "edit.value=source;edit.setSelectionRange(source.length,source.length)", ["source": source])
+            let html = try await renderer.renderReadingNote(source, passageIDs: [])
+            _ = try await noteJS(web, "edit.preview(source,html)", ["source": source, "html": html])
+            #expect(
+                try await noteJS(web, "return [...host.querySelectorAll('math')].map(m=>m.getAttribute('alttext'))")
+                    as? [String] == ["a", "b", "c", "d"])
+        }
+        _ = try await noteJS(web, "edit.destroy()")
+    }
+
     @MainActor private func noteJS(_ web: WKWebView, _ source: String, _ arguments: [String: Any] = [:]) async throws
         -> Any?
     {

@@ -64,6 +64,8 @@ enum HTMLNoteStyle {
           .reader-note-card .cm-selectionBackground{background:#b8c6d55c!important}
           .reader-note-card .note-md-strong{font-weight:700}.reader-note-card .note-md-em{font-style:italic}.reader-note-card .note-md-strike{text-decoration:line-through}
           .reader-note-card .note-md-heading{font-weight:650;font-size:1.2em;line-height:1.5;padding:4px 0}.reader-note-card .note-md-h1{font-size:1.35em}
+          .reader-note-card .note-md-syntax{color:light-dark(#96503a,#e7ab91);font-family:ui-monospace,monospace}
+          .reader-note-card .note-md-math-source{font-family:ui-monospace,monospace;background:light-dark(#f3ece3,#3b332e)}
           .reader-note-card .note-md-code,.reader-note-card .note-md-code-line{font-family:ui-monospace,monospace;background:#b7a88e15;border-radius:3px}
           .reader-note-card .note-md-quote{border-left:2px solid #b9ac98;padding-left:9px}
           .reader-note-card .note-md-link,.reader-note-card .note-md-list-mark{color:#a34c33}
