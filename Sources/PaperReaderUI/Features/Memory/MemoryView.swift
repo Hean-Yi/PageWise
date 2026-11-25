@@ -27,7 +27,7 @@ struct MemoryView: View {
     private var currentGroups: [MemorySleepEdition.Connection] {
         let origins = ResearchMemoryOrigins(state: model.state, excluding: model.pendingImportIDs)
         let live = memories.filter { origins.resolve($0) != nil }
-        return model.memorySleep.edition.liveConnections(for: live)
+        return model.memorySleep.edition.recallConnections(for: live)
     }
 
     private var sleepPanel: some View {
