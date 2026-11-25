@@ -122,9 +122,7 @@ extension ReaderModel {
                         && current.sourcePage == captured.sourcePage
                 })
         else { throw ReaderError.message("原文版式已变化，请在要标记的版本重新记笔记。") }
-        var pinned = original
-        pinned.relativePath = current.relativePath
-        return pinned
+        return current
     }
 
     func saveDiscussionNote(
@@ -216,7 +214,6 @@ extension ReaderModel {
         } else {
             version = scope.digest + ":original-0"
         }
-        let store = HTMLReadingStore()
         let pdf = PDFReadingNoteLocator()
         for (evidence, quote) in located {
             try Task.checkCancellation()
@@ -226,7 +223,10 @@ extension ReaderModel {
                 Self.containsDiscussionQuote(quote, in: evidence.text)
             else { throw ReaderError.message("引文与这篇论文提供的证据不符，请选择原句。") }
             if let artifact {
-                let parts = try await store.noteAnchors(
+                guard evidence.blockID.map(published.contains) ?? true else {
+                    throw ReaderError.message("这处原文在开始本次讨论时尚未发布。")
+                }
+                let parts = try await htmlNoteStore.noteAnchors(
                     for: quote, evidence: evidence, paperID: scope.paperID, artifact: artifact,
                     root: root, selection: scope.selection)
                 for part in parts where !anchors.contains(part) {

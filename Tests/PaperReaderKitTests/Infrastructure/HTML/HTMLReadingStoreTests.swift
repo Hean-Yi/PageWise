@@ -176,3 +176,30 @@ import Testing
         try await store.append(pairs(["No write"]), to: damaged, paper: paper, root: root)
     }
 }
+
+@Test func outlineBackfillsOldManifestsAndKeepsOnlyRealTwoLevelHeadings() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let paper = Paper(
+        title: "Outline", digest: "fixture", originalPath: "original.pdf", pageCount: 1,
+        blocks: [], warnings: [], canReflow: true)
+    let store = HTMLReadingStore()
+    func heading(_ tag: String, _ title: String) -> BilingualBlock {
+        var block = TextBlock(sourcePage: 0, text: title)
+        block.richContent = RichContent(
+            html: "<span id='anchor'></span><\(tag)>\(title)</\(tag)>",
+            translationInput: title, mathematics: [:], mathDescriptions: [:])
+        return .init(block: block, translation: nil)
+    }
+    var old = try await store.append(
+        [heading("h3", "Orphan"), heading("h6", "Abstract")], to: nil, paper: paper, root: root)
+    old.outline = nil
+    let next = try await store.append(
+        [heading("h2", "Methods"), heading("h3", "Control"), heading("h4", "Details")],
+        to: old, paper: paper, root: root)
+    let index = try #require(next.outline)
+    #expect(index.map(\.title) == ["Abstract", "Methods", "Control"])
+    #expect(index.map(\.depth) == [0, 0, 1])
+    let restored = try JSONDecoder().decode(HTMLReadingArtifact.self, from: JSONEncoder().encode(next))
+    #expect(try await store.navigationItems(for: restored, root: root) == index)
+}

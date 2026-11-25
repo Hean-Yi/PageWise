@@ -10,6 +10,7 @@ public struct HTMLReadingArtifact: Codable, Sendable, Equatable {
 
     // Missing in earlier editions. Its absence never changes a saved page or its anchors.
     var sectionIndex: HTMLSectionIndex?
+    var outline: [PaperNavigationItem]?
     public var relativePath: String
     public var sections: [PageArtifact]
     public var assets: [String]
@@ -25,5 +26,4 @@ struct HTMLSectionIndex: Codable, Sendable, Equatable {
     let start: UInt64
     var ends: [UInt64]
     var end: UInt64 { ends.last ?? start }
-
 }

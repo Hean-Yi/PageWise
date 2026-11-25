@@ -1,6 +1,7 @@
+import CoreGraphics
 import Foundation
 
-public struct PaperNavigationItem: Identifiable, Sendable, Equatable {
+public struct PaperNavigationItem: Identifiable, Codable, Sendable, Equatable {
     public let id: String
     public let title: String
     public let sourcePage: Int

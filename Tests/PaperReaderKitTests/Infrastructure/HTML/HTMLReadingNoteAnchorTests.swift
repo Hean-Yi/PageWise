@@ -104,3 +104,50 @@ private struct QuoteFixture {
     invalid.target = "object:1"
     await #expect(throws: ReaderError.self) { try await fixture.resolve(math.text, evidence, selection: [invalid]) }
 }
+
+@Test func quoteReadsOnlyItsIndexedSectionAndReusesVerifiedStreamsForContext() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let paper = Paper(
+        title: "Scoped HTML", digest: "local", originalPath: "test.pdf", pageCount: 1,
+        blocks: [], warnings: [], canReflow: true)
+    let first = TextBlock(sourcePage: 0, text: "Other section")
+    let second = TextBlock(sourcePage: 0, text: "🧪 Before quoted words after.")
+    let store = HTMLReadingStore()
+    let artifact = try await store.append(
+        [first, second].map { .init(block: $0, translation: nil) },
+        to: nil, paper: paper, root: root)
+    let url = root.appendingPathComponent(artifact.relativePath)
+    let index = try #require(artifact.sectionIndex)
+    // Deliberately invalid UTF-8 in an unrelated section detects a fallback to whole-file decoding.
+    let file = try FileHandle(forWritingTo: url)
+    try file.seek(toOffset: index.start)
+    try file.write(contentsOf: Data([0xFF]))
+    try file.close()
+    let quote = "quoted words"
+    let evidence = Evidence(id: "S1", title: "Test", text: second.text, paperID: paper.id, blockID: second.id)
+    let anchors = try await store.noteAnchors(
+        for: quote, evidence: evidence, paperID: paper.id,
+        artifact: artifact, root: root)
+    #expect(anchors == [.init(key: second.id.uuidString, target: "source", text: quote, start: 10, end: 22)])
+    let reference = LocalPassageCitation(
+        paperID: paper.id, digest: paper.digest, contentVersion: "test",
+        anchors: anchors, quote: quote)
+    let context = try await store.citationContext(for: reference, artifact: artifact, root: root)
+    #expect(context.before == "🧪 Before ")
+    #expect(context.after == " after.")
+    try FileManager.default.removeItem(at: url)
+    await #expect(throws: (any Error).self) {
+        try await store.citationContext(for: reference, artifact: artifact, root: root)
+    }
+}
+
+@Test func oldQuoteCacheCannotResurrectADeletedPublishedEdition() async throws {
+    let fixture = try QuoteFixture()
+    defer { try? FileManager.default.removeItem(at: fixture.root) }
+    let quote = "Data & nets"
+    let evidence = Evidence(id: "S1", title: "Test", text: quote, paperID: fixture.paperID, blockID: fixture.second)
+    #expect(try await !fixture.resolve(quote, evidence).isEmpty)
+    try FileManager.default.removeItem(at: fixture.root.appendingPathComponent(fixture.artifact.relativePath))
+    await #expect(throws: (any Error).self) { try await fixture.resolve(quote, evidence) }
+}

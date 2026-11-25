@@ -8,6 +8,16 @@ extension HTMLReadingStore {
         for quote: String, evidence: Evidence, paperID: UUID, artifact: HTMLReadingArtifact, root: URL,
         selection: [NoteAnchor] = []
     ) throws -> [NoteAnchor] {
+        try verifiedNote(
+            for: quote, evidence: evidence, paperID: paperID, artifact: artifact, root: root,
+            selection: selection
+        ).anchors
+    }
+
+    private func verifiedNote(
+        for quote: String, evidence: Evidence, paperID: UUID, artifact: HTMLReadingArtifact, root: URL,
+        selection: [NoteAnchor]
+    ) throws -> (anchors: [NoteAnchor], streams: [String: PublishedText]) {
         let unavailable = ReaderError.message("无法在这份阅读版本中核对引文，请选中对应原句。")
         let ambiguous = ReaderError.message("引文在原文中出现多次，请选中要标记的位置。")
         let words = quote.split(whereSeparator: \.isWhitespace)
@@ -21,23 +31,22 @@ extension HTMLReadingStore {
                 != nil
         else { throw unavailable }
 
-        let sections = artifact.sections.filter { section in
-            evidence.blockID.map { section.blockIDs.contains($0) }
+        let positions = artifact.sections.indices.filter { index in
+            let section = artifact.sections[index]
+            return evidence.blockID.map { section.blockIDs.contains($0) }
                 ?? selection.contains { $0.key == section.id.uuidString }
         }
-        guard !sections.isEmpty else { throw unavailable }
-        let keys = Set(sections.map { $0.id.uuidString })
+        guard !positions.isEmpty else { throw unavailable }
+        let keys = Set(positions.map { artifact.sections[$0].id.uuidString })
         let url = root.appendingPathComponent(artifact.relativePath)
         Self.retainOpenDocument(url)
         defer { Self.releaseOpenDocument(url) }
         try Task.checkCancellation()
-        let document = try SwiftSoup.parse(String(contentsOf: url, encoding: .utf8))
-        guard let body = document.body(), try body.attr("data-paper-id") == paperID.uuidString,
-            let reader = try document.getElementById("reader")
-        else { throw unavailable }
+        let sections = try verifiedSections.elements(
+            at: url, paperID: paperID, artifact: artifact, positions: positions)
         var streams: [String: PublishedText] = [:]
         let citesEquation = evidence.text.hasPrefix("[公式] ")
-        for element in reader.children() where element.tagName() == "section" {
+        for element in sections {
             let key = try element.attr("data-key")
             guard keys.contains(key) else { continue }
             guard element.id() == "block-" + key, streams[key] == nil else { throw unavailable }
@@ -63,7 +72,7 @@ extension HTMLReadingStore {
             }
             let matches = try verifiedMatches(in: selected, expression: expression)
             if matches.count > 1 { throw ambiguous }
-            if let match = matches.first { return match }
+            if let match = matches.first { return (match, streams) }
         }
         guard evidence.blockID != nil else { throw unavailable }
         var matches: [[NoteAnchor]] = []
@@ -80,7 +89,25 @@ extension HTMLReadingStore {
             if matches.count > 1 { throw ambiguous }
         }
         guard let match = matches.first else { throw unavailable }
-        return match
+        return (match, streams)
+    }
+
+    /// The model receives exactly the prose runs the annotation verifier can locate.
+    static func closeReadingSourceRuns(_ element: Element, key: String) throws -> [String] {
+        let stream = try PublishedText(element: element, key: key, includesSelectedObjects: false)
+        var runs: [String] = []
+        var text = ""
+        for fragment in stream.source {
+            if fragment.boundary == .object {
+                if !text.isEmpty { runs.append(text) }
+                text = ""
+            } else if fragment.boundary == .space, !text.isEmpty {
+                text += " "
+            }
+            text += fragment.anchor.text
+        }
+        if !text.isEmpty { runs.append(text) }
+        return runs
     }
 
     /// Read the expression preserved by the publisher or by the local TeX compiler.
@@ -295,18 +322,13 @@ extension HTMLReadingStore {
     {
         let failure = ReaderError.message("这处引用已无法在保存的阅读版本中核对。")
         let evidence = Evidence(id: "", title: "", text: citation.quote, paperID: citation.paperID)
-        let verified = try noteAnchors(
+        let (verified, streams) = try verifiedNote(
             for: citation.quote, evidence: evidence, paperID: citation.paperID,
             artifact: artifact, root: root, selection: citation.anchors)
         guard verified == citation.anchors, let first = verified.first, let last = verified.last else { throw failure }
         guard !first.target.hasPrefix("object:"), !last.target.hasPrefix("object:") else { return ("", "") }
-        let url = root.appendingPathComponent(artifact.relativePath)
-        Self.retainOpenDocument(url)
-        defer { Self.releaseOpenDocument(url) }
-        let document = try SwiftSoup.parse(String(contentsOf: url, encoding: .utf8))
         func text(for anchor: NoteAnchor) throws -> NSString {
-            guard let element = try document.getElementById("block-" + anchor.key) else { throw failure }
-            let stream = try PublishedText(element: element, key: anchor.key, includesSelectedObjects: false)
+            guard let stream = streams[anchor.key] else { throw failure }
             let parts = anchor.target == "source" ? stream.source : stream.translation
             let value = parts.map(\.anchor.text).joined() as NSString
             guard anchor.start >= 0, anchor.end > anchor.start, anchor.end <= value.length,

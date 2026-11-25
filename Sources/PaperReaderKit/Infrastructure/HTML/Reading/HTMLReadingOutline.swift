@@ -3,30 +3,35 @@ import SwiftSoup
 
 extension HTMLReadingStore {
     public func navigationItems(for artifact: HTMLReadingArtifact, root: URL) throws -> [PaperNavigationItem] {
+        if let outline = artifact.outline { return outline }
         let html = try String(contentsOf: root.appendingPathComponent(artifact.relativePath), encoding: .utf8)
         let document = try SwiftSoup.parse(html)
         let sections = Dictionary(artifact.sections.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         var items: [PaperNavigationItem] = []
-        var hasSection = false
         for element in try document.select("#reader > section[data-key]") {
             try Task.checkCancellation()
             guard let id = UUID(uuidString: try element.attr("data-key")), let section = sections[id],
-                let heading = element.children().first(where: {
-                    $0.tagName() != "span" && !$0.hasClass("translation")
-                })
+                let item = try Self.outlineItem(
+                    in: element, id: id, page: section.sourcePage, hasSection: !items.isEmpty)
             else { continue }
-            // Source conversion reserves h1 for the paper title and h4–h6 for deeper sections.
-            let title = try heading.text().trimmingCharacters(in: .whitespacesAndNewlines)
-            let tag = heading.tagName()
-            let isAbstract = tag == "h6" && title.caseInsensitiveCompare("Abstract") == .orderedSame
-            guard tag == "h2" || (tag == "h3" && hasSection) || isAbstract, !title.isEmpty else { continue }
-            let depth = tag == "h3" ? 1 : 0
-            if depth == 0 { hasSection = true }
-            items.append(
-                PaperNavigationItem(
-                    id: id.uuidString, title: title, sourcePage: section.sourcePage, depth: depth, isOutline: true,
-                    readingSectionID: id))
+            items.append(item)
         }
         return items
+    }
+
+    static func outlineItem(in container: Element, id: UUID, page: Int, hasSection: Bool) throws -> PaperNavigationItem?
+    {
+        guard let heading = container.children().first(where: { $0.tagName() != "span" && !$0.hasClass("translation") })
+        else { return nil }
+        // h1 is the paper title, h4–h6 are deeper headings, except for the source's Abstract.
+        let tag = heading.tagName()
+        guard tag == "h2" || (tag == "h3" && hasSection) || tag == "h6" else { return nil }
+        let title = try heading.text().trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !title.isEmpty, tag != "h6" || title.caseInsensitiveCompare("Abstract") == .orderedSame else {
+            return nil
+        }
+        return PaperNavigationItem(
+            id: id.uuidString, title: title, sourcePage: page, depth: tag == "h3" ? 1 : 0,
+            isOutline: true, readingSectionID: id)
     }
 }

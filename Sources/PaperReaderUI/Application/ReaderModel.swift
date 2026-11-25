@@ -42,6 +42,7 @@ public final class ReaderModel {
     let paperSearchWarmup: PaperSearchWarmup
     var paperSearchIndex: LibraryAgentSearchIndex { paperSearchWarmup.index }
     let readingNoteIndex = ReadingNoteMemoryIndex()
+    let htmlNoteStore = HTMLReadingStore()
     @ObservationIgnored var noteSaveTask: Task<Void, Never>?
     public var htmlSelection: [HTMLTextSelection] = []
     public var usesHTMLReading: Bool { mode == "translated" && paper?.htmlReading != nil }

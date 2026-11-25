@@ -7,6 +7,7 @@ import Synchronization
 public actor HTMLReadingStore {
     private static let openDocuments = Mutex<[URL: Int]>([:])
     private static let publishingDirectories = Mutex<[URL: Int]>([:])
+    let verifiedSections = HTMLVerifiedSections()
     public init() {}
 
     /// Includes the interval between staging bytes and committing the reference in the database.
@@ -81,6 +82,7 @@ public actor HTMLReadingStore {
         let appendOffset = index.end
         var additions = Data()
         var sections = previous?.sections ?? []
+        var outline = try previous.map { try navigationItems(for: $0, root: root) } ?? []
         var publishedIDs = Set(sections.flatMap(\.blockIDs))
         var assets = Set(previous?.assets ?? [])
         var created: [URL] = []
@@ -108,6 +110,13 @@ public actor HTMLReadingStore {
                 html = pair.block.richContent?.html ?? "<p>\(Self.escape(pair.block.text))</p>"
                 let parsed = try SwiftSoup.parseBodyFragment(html)
                 if pair.block.richContent == nil, let body = parsed.body() { try HTMLMathNormalizer.normalize(body) }
+                if let body = parsed.body(),
+                    let heading = try Self.outlineItem(
+                        in: body, id: pair.block.id, page: pair.block.sourcePage,
+                        hasSection: !outline.isEmpty)
+                {
+                    outline.append(heading)
+                }
                 if let tag = parsed.body()?.children().first(where: { $0.tagName() != "span" || !$0.hasAttr("id") })?
                     .tagName(),
                     ["h1", "h2", "h3", "h4", "h5", "h6"].contains(tag)
@@ -159,6 +168,7 @@ public actor HTMLReadingStore {
         retained = true
         var artifact = HTMLReadingArtifact(relativePath: path, sections: sections, assets: assets.sorted())
         artifact.sectionIndex = index
+        artifact.outline = outline
         artifact.editionID = previous?.editionID
         if previous?.sections.isEmpty != false, let first = sections.first?.id,
             ([paper.htmlReading] + (paper.retainedReadings ?? []).map(\.html)).contains(where: {
