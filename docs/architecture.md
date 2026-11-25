@@ -60,7 +60,7 @@ SQLite 格式 v2 的 `LibraryStore` 在一次事务内将旧版整库 JSON 转�
 
 研究来源变更在主库事务内写入 `research_events`，并推进独立的 `research_generation`。事件只含稳定 ID、修订哈希和归属，不含正文；阅读位置、翻译与工作区保存不生成事件。`research_index_state` 记录事件水位与最近核对时间，`research_maintenance_lease` 限制同一本地库的并发整理并在长任务中续租；已处理事件保留有界尾部。`ResearchBriefIndex` 只在有待处理事件、来源代次变化或需要审计时重建，题项带稳定 ID/成员版本、待核实问题与相反笔记，可按全局/书架/论文作用域读取，并把简报与水位原子发布；`research_brief` 或水位表损坏时从主库重建。
 
-`DeviceSemanticEncoder` 管理按需下载的 Core ML 模型，`SemanticPassageIndex` 用稳定来源和内容指纹维护派生向量。明确的回答习惯经 `ReaderPreference` 确定作用域。`MemorySleepSession` 在空闲时调用书库配置的模型，`MemorySleepStore` 核验变更并原子更新同库 `memory_sleep` 表。书库工具和两处对话复用 `effectiveSleepMemory`，历史重放同时检查来源和当时生效的记忆版本。
+`NoteReviewSession` 在用户开启后按间隔检查新增笔记/阅读状态，使用紧凑关系图静默生成新笔记修订并保留历史；`NoteReviewReport` 只接受来源版本匹配的修订。`DeviceSemanticEncoder` 管理按需下载的 Core ML 模型，`SemanticPassageIndex` 用稳定来源和内容指纹维护派生向量。明确的回答习惯经 `ReaderPreference` 确定作用域。`MemorySleepSession` 在空闲时调用书库配置的模型，`MemorySleepStore` 核验变更并原子更新同库 `memory_sleep` 表。书库工具和两处对话复用 `effectiveSleepMemory`，历史重放同时检查来源和当时生效的记忆版本。
 
 上述内部依赖是工程约定，并非已经由独立 target 强制隔离。新增代码应沿此方向组织；发现跨层依赖时优先拆清职责，再考虑是否需要新的编译边界。
 
