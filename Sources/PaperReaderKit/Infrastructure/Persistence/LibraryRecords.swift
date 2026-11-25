@@ -23,12 +23,12 @@ struct LibraryRecords {
         }
     }
 
-    func write(from old: LibraryState, to state: LibraryState) throws {
-        try sync("papers", old.papers, state.papers)
-        try sync("notes", old.readingNotes, state.readingNotes)
+    @discardableResult func write(from old: LibraryState, to state: LibraryState) throws -> Bool {
+        let titles = try sync("papers", old.papers, state.papers) { $0.title != $1.title }
+        let notes = try sync("notes", old.readingNotes, state.readingNotes)
         try sync("highlights", old.highlights, state.highlights)
-        try sync("chats", old.chats, state.chats)
-        try sync("memories", old.memories, state.memories)
+        let chats = try sync("chats", old.chats, state.chats)
+        let memories = try sync("memories", old.memories, state.memories)
         try sync("reading", old.reading, state.reading)
         try sync("bookmarks", old.bookmarks, state.bookmarks)
         if old.workspace != state.workspace {
@@ -37,6 +37,7 @@ struct LibraryRecords {
             }
             for key in old.workspace.keys where state.workspace[key] == nil { try remove("workspace", key) }
         }
+        return titles || notes || chats || memories
     }
 
     private func ordered<T: Decodable & Identifiable>(_ kind: String) throws -> [T] where T.ID == UUID {
@@ -58,15 +59,18 @@ struct LibraryRecords {
         }
     }
 
-    private func sync<T: Encodable & Equatable & Identifiable>(_ kind: String, _ old: [T], _ new: [T]) throws
-    where T.ID == UUID {
+    @discardableResult private func sync<T: Encodable & Equatable & Identifiable>(
+        _ kind: String, _ old: [T], _ new: [T], affectsResearch: (T, T) -> Bool = { _, _ in true }
+    ) throws -> Bool where T.ID == UUID {
         // Swift Array equality immediately succeeds for the shared COW buffer of untouched collections.
-        guard old != new else { return }
+        guard old != new else { return false }
         if old.count == new.count && zip(old, new).allSatisfy({ $0.id == $1.id }) {
+            var changed = false
             for (prior, next) in zip(old, new) where prior != next {
+                if affectsResearch(prior, next) { changed = true }
                 try put(kind, next.id.uuidString, encoder.encode(next))
             }
-            return
+            return changed
         }
         var remaining = Dictionary(uniqueKeysWithValues: old.map { ($0.id, $0) })
         let ids = new.map(\.id)
@@ -76,6 +80,7 @@ struct LibraryRecords {
         }
         for id in remaining.keys { try remove(kind, id.uuidString) }
         try put(kind, "", encoder.encode(ids))
+        return true
     }
 
     private func enumerate(_ kind: String, row: (String, Data) throws -> Void) throws {

@@ -16,7 +16,8 @@ enum ReaderOrigin: String {
 
 @MainActor @Observable
 public final class ReaderModel {
-    public var state = LibraryState()
+    public var state = LibraryState() { didSet { stateRevision &+= 1 } }
+    @ObservationIgnored private(set) var stateRevision: UInt64 = 0
     public var selectedPaperID: UUID?
     public var selectedSection = "library"
     private(set) var readerOrigin = ReaderOrigin.library
@@ -53,6 +54,7 @@ public final class ReaderModel {
     public var reflowBodyCount = 0
     @ObservationIgnored var reflowPresenting: Set<UUID> = []
     let researchMemory = ResearchMemory()
+    let researchBriefMaintenance: ResearchBriefMaintenance
     public var assistantDraft: ChatTurn?
     public var busyAI = false
     var closeReadingPaperID: UUID?
@@ -139,6 +141,7 @@ public final class ReaderModel {
         self.translationValidation = translationValidation ?? PDFTranslationValidationConfiguration.load(root: location)
         self.paperSearchWarmup = PaperSearchWarmup(root: location)
         store = try LibraryStore(directory: location)
+        researchBriefMaintenance = ResearchBriefMaintenance(store: store, notes: readingNoteIndex)
         importer = PDFImporter(root: location)
         vault = VaultService(root: location)
         configurationStore = ModelConfigurationStore(directory: location, credentials: credentials)
@@ -198,6 +201,7 @@ public final class ReaderModel {
             }
             if let folder = try? await vault.directory() { vaultName = folder.lastPathComponent }
             loaded = true
+            researchBriefMaintenance.sourcesChanged()
             backfillLibraryAbstracts()
             paperSearchWarmup.enqueue(state.papers)
         } catch {
@@ -368,7 +372,8 @@ public final class ReaderModel {
                     snapshot.highlights += marks
                 }
                 if let report { snapshot.chats.append(report) }
-                try await store.save(snapshot, respectingCancellation: cancellable, deleting: removed)
+                let changes = try await store.save(snapshot, respectingCancellation: cancellable, deleting: removed)
+                if changes.researchSourcesChanged { self.researchBriefMaintenance.sourcesChanged() }
                 if let removed {
                     self.didDeletePaper(removed)
                     try self.state.removePaper(removed.id)

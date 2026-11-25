@@ -28,6 +28,7 @@ extension ReaderModel {
     }
     public func setActive(_ active: Bool, suspendTranslation: Bool = true) {
         isActive = active
+        researchBriefMaintenance.setActive(active)
         if active {
             pdfDocumentTranslation.activate(session: pdfBilingual)
             beginReading()
@@ -46,6 +47,7 @@ extension ReaderModel {
         }
     }
     public func tick() {
+        if isActive { researchBriefMaintenance.tick() }
         if Date().timeIntervalSince(lastInteraction) > 300 {
             endReading()
         } else if readingStart != nil {
