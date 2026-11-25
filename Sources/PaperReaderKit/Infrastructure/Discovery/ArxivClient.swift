@@ -88,16 +88,21 @@ public actor ArxivClient: PaperDiscovery {
         var archive: Data?
         var notice: String?
         do {
-            let (data, response) = try await transport.data(for: URLRequest(url: sourceURL))
+            let (file, response) = try await transport.downloadFile(
+                for: URLRequest(url: sourceURL), maximumBytes: 50_000_000)
+            defer { try? FileManager.default.removeItem(at: file) }
             try Task.checkCancellation()
             guard response.statusCode == 200, Self.trustedOrigin(response.url),
-                response.url?.path == sourceURL.path, !data.isEmpty, data.count <= 50_000_000,
-                TeXArchive.looksLikeSource(data)
+                response.url?.path == sourceURL.path
+            else { throw ReaderError.message("此版本没有可用的 TeX 源码包。") }
+            // The mapping retains the downloaded bytes after unlink, until import finishes or fails.
+            let data = try Data(contentsOf: file, options: .alwaysMapped)
+            guard TeXArchive.looksLikeSource(data)
             else { throw ReaderError.message("此版本没有可用的 TeX 源码包。") }
             archive = data
         } catch {
             try Task.checkCancellation()
-            if (error as? URLError)?.code == .cancelled { throw CancellationError() }
+            if error is CancellationError || (error as? URLError)?.code == .cancelled { throw CancellationError() }
             notice = "TeX 源码包未能获取；重排时将尝试同版本 HTML；原版 PDF 仍可阅读。"
         }
         let pdf = try await download(pinned)
@@ -173,15 +178,17 @@ public actor ArxivClient: PaperDiscovery {
             throw ReaderError.message("论文下载来源无效。")
         }
         try Task.checkCancellation()
-        let (data, response) = try await transport.data(for: URLRequest(url: pdfURL))
+        let (file, response) = try await transport.downloadFile(for: URLRequest(url: pdfURL), maximumBytes: 50_000_000)
+        defer { try? FileManager.default.removeItem(at: file) }
         try Task.checkCancellation()
-        guard response.statusCode == 200, Self.trustedOrigin(response.url),
-            response.url?.path == pdfURL.path, data.count <= 50_000_000,
-            data.prefix(1_024).range(of: Data("%PDF-".utf8)) != nil
+        let handle = try FileHandle(forReadingFrom: file)
+        defer { try? handle.close() }
+        guard response.statusCode == 200, Self.trustedOrigin(response.url), response.url?.path == pdfURL.path,
+            let prefix = try handle.read(upToCount: 1_024), prefix.range(of: Data("%PDF-".utf8)) != nil
         else { throw ReaderError.message("全文下载失败或不是有效 PDF，可手动导入。") }
         let target = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).pdf")
         do {
-            try data.write(to: target, options: .withoutOverwriting)
+            try FileManager.default.moveItem(at: file, to: target)
             try Task.checkCancellation()
             return target
         } catch {

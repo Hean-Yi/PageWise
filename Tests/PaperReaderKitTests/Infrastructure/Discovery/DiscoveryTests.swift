@@ -94,6 +94,8 @@ func arxivRejectsUntrustedCandidateWithoutNetworking(_ address: String) async th
 
 private actor PublicationTransport: HTTPTransport {
     var paths: [String] = []
+    var files: [URL] = []
+    var limits: [Int64] = []
     let sourceAvailable: Bool
     let wrongVersion: Bool
     init(sourceAvailable: Bool = true, wrongVersion: Bool = false) {
@@ -101,6 +103,18 @@ private actor PublicationTransport: HTTPTransport {
         self.wrongVersion = wrongVersion
     }
     func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        #expect(request.url?.path == "/api/query")
+        return response(for: request)
+    }
+    func downloadFile(for request: URLRequest, maximumBytes: Int64) async throws -> (URL, HTTPURLResponse) {
+        let (bytes, http) = response(for: request)
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try bytes.write(to: file)
+        files.append(file)
+        limits.append(maximumBytes)
+        return (file, http)
+    }
+    private func response(for request: URLRequest) -> (Data, HTTPURLResponse) {
         let url = request.url!
         paths.append(url.path)
         let source = url.path.hasPrefix("/src/")
@@ -135,6 +149,10 @@ private actor PublicationTransport: HTTPTransport {
     #expect(downloaded.candidate.id == "https://arxiv.org/abs/2401.00001v2")
     #expect(downloaded.texArchive != nil)
     #expect(downloaded.sourceNotice == nil)
+    #expect(await transport.limits == [50_000_000, 50_000_000])
+    #expect(await transport.files.allSatisfy { !FileManager.default.fileExists(atPath: $0.path) })
+    #expect(String(decoding: downloaded.texArchive ?? Data(), as: UTF8.self).contains("Original source"))
+    #expect(try Data(contentsOf: downloaded.pdfURL).starts(with: Data("%PDF-".utf8)))
     #expect(await transport.paths == ["/api/query", "/src/2401.00001v2", "/pdf/2401.00001v2"])
 }
 
@@ -149,4 +167,40 @@ private actor PublicationTransport: HTTPTransport {
     #expect(downloaded.texArchive == nil)
     #expect(downloaded.sourceNotice != nil)
     #expect(await transport.paths == ["/src/2401.00001v2", "/pdf/2401.00001v2"])
+}
+
+private final class UnfinishedDownloadProtocol: URLProtocol, @unchecked Sendable {
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    override func startLoading() {
+        guard let url = request.url else { return }
+        let headers = url.path == "/declared" ? ["Content-Length": "50000000"] : [:]
+        let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: headers)!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        if url.path == "/stream" {
+            client?.urlProtocol(self, didLoad: Data(repeating: 1, count: 3_000))
+            client?.urlProtocol(self, didLoad: Data(repeating: 1, count: 3_000))
+        }
+        // Deliberately never send a completion. Only early header/chunk checks can reject this file.
+    }
+    override func stopLoading() {}
+}
+
+@Test(arguments: ["/declared", "/stream"]) func networkTransportStopsAnOversizedResponseBeforeEOF(path: String)
+    async throws
+{
+    let config = URLSessionConfiguration.ephemeral
+    config.protocolClasses = [UnfinishedDownloadProtocol.self]
+    config.timeoutIntervalForRequest = 2
+    config.timeoutIntervalForResource = 3
+    let transport = NetworkTransport(configuration: config)
+    do {
+        let (file, _) = try await transport.downloadFile(
+            for: URLRequest(url: URL(string: "https://fixture.invalid" + path)!), maximumBytes: 4_096)
+        try? FileManager.default.removeItem(at: file)
+        Issue.record("Oversized download was accepted")
+    } catch let error as ReaderError {
+        #expect(error.localizedDescription == "全文超出下载大小限制。")
+    }
 }
