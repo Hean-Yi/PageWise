@@ -7,7 +7,7 @@ import PaperReaderKit
 
     func retrieve(_ query: String, paperID: UUID, reader: ReaderModel) async throws -> [Evidence] {
         let hits = try await reader.readingNoteEvidence(query: query, excluding: paperID, limit: 5)
-        try check(in: reader)
+        try check(in: reader, paperID: paperID)
         return hits.filter { evidence in
             guard let note = reader.referencedReadingNote(for: evidence) else { return false }
             versions.include(note)
@@ -15,8 +15,8 @@ import PaperReaderKit
         }
     }
 
-    func check(in reader: ReaderModel) throws {
-        try reader.validateAssistantBackground(versions)
+    func check(in reader: ReaderModel, paperID: UUID) throws {
+        try reader.validateAssistantBackground(versions, paperID: paperID)
     }
 }
 
@@ -69,17 +69,21 @@ extension ReaderModel {
             let config = modelSettings
             let key = try await modelKey(for: config)
             let background = CloseReadingBackground()
+            let useMemory = ReaderPreference.permitsRecall(focus)
             let analysis = try await CloseReadingEngine.run(
                 paper: document, root: root, focus: focus,
-                retrieveNotes: { query in try await background.retrieve(query, paperID: paperID, reader: self) },
+                retrieveNotes: { query in
+                    guard useMemory else { return [] }
+                    return try await background.retrieve(query, paperID: paperID, reader: self)
+                },
                 progress: { [weak self] text in
                     await self?.setCloseReadingProgress(text)
                 },
                 complete: { [client] system, user in
-                    try await background.check(in: self)
+                    try await background.check(in: self, paperID: paperID)
                     let result = try await client.complete(
                         settings: config, key: key, system: system, user: user, jsonOutput: true, maxOutputTokens: 8192)
-                    try await background.check(in: self)
+                    try await background.check(in: self, paperID: paperID)
                     return result
                 })
             var verifiedScope = scope

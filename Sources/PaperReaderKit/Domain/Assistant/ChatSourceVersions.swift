@@ -7,6 +7,10 @@ public struct ChatSourceVersions: Codable, Sendable, Equatable {
     private var memories: [UUID: String] = [:]
     private var notes: [UUID: Date] = [:]
 
+    /// The active research representation used to compose this dialogue. Raw evidence keeps
+    /// its independent source fingerprint even if a later idle session changes the working memory.
+    public var sleepRevision: UUID?
+
     public init() {}
 
     public mutating func include(_ memory: MemoryItem) {
@@ -19,9 +23,12 @@ public struct ChatSourceVersions: Codable, Sendable, Equatable {
     }
 
     public mutating func include(_ other: Self) {
+        sleepRevision = sleepRevision ?? other.sleepRevision
         memories.merge(other.memories) { current, _ in current }
         notes.merge(other.notes) { current, _ in current }
     }
+
+    public var memoryIDs: Set<UUID> { Set(memories.keys) }
 
     public var isEmpty: Bool { memories.isEmpty && notes.isEmpty }
 
@@ -140,6 +147,7 @@ public struct ChatSourceVersions: Codable, Sendable, Equatable {
 
     private static func fingerprint(_ memory: MemoryItem) -> String {
         var content = memory.sourceID.uuidString + (memory.userEdited ? "|1|" : "|0|") + memory.text.prefix(400)
+        if let revision = memory.correctionRevision { content += "|revision|" + revision.uuidString }
         switch memory.librarySource {
         case .reader(let quote): content += "|reader|" + quote
         case .note(let paperID, let modifiedAt):

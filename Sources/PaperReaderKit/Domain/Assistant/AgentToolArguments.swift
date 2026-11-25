@@ -19,6 +19,7 @@ public enum AgentToolArguments: Sendable, Equatable {
         markdown: String, sources: [Quotation], citations: [NoteCitation], dimension: CloseReadingDimension?)
     case closeReadPaper(String)
     case askUser(AgentClarification)
+    case rememberPreference(quote: String)
     case researchOverview(query: String?)
     case proposeResearchQuestion(question: String, noteResult: UUID?, quote: String)
     case searchLibrary(String)
@@ -66,6 +67,9 @@ public enum AgentToolArguments: Sendable, Equatable {
             return id
         }
         switch name {
+        case "remember_preference":
+            try keys(["quote"], required: ["quote"])
+            return .rememberPreference(quote: try string("quote", max: 960))
         case "research_overview":
             try keys(["query"], required: [])
             return .researchOverview(query: values["query"] == nil ? nil : try string("query", max: 500))

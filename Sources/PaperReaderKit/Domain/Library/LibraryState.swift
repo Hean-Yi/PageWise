@@ -1,7 +1,7 @@
 import Foundation
 
 public struct LibraryState: Codable, Sendable {
-    public static let currentVersion = 14
+    public static let currentVersion = 15
     public var version = currentVersion
     public var papers: [Paper] = []
     public var readingNotes: [ReadingNote] = []
@@ -89,6 +89,8 @@ public struct LibraryState: Codable, Sendable {
             suppressedMemoryFingerprints =
                 try values.decodeIfPresent(Set<String>.self, forKey: .suppressedMemoryFingerprints) ?? []
         }
+        // v15 classifies only newly attributed preferences. Missing metadata on older
+        // memories stays nil, preserving evidence ownership and all tombstones.
         try validateMemorySuppression()
         try validateOrdering()
         try validateShelves()

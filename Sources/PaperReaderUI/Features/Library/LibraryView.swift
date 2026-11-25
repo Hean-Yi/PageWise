@@ -46,6 +46,7 @@ public struct LibraryView: View {
 
     public var body: some View {
         navigationSurface
+            .onChange(of: selectedShelfID, initial: true) { _, shelf in model.activeShelfID = shelf }
             .overlayPreferenceValue(QuickStartAnchors.self) { anchors in
                 if let step = guide.step {
                     GeometryReader { geometry in

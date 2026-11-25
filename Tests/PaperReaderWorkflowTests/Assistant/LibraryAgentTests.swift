@@ -7,7 +7,7 @@ import Testing
 
 @testable import PaperReaderUI
 
-private actor ScriptedLibraryModel: AgentCompleting {
+actor ScriptedLibraryModel: AgentCompleting {
     typealias Script = @Sendable ([AgentMessage], Int) throws -> AgentMessage
     private let script: Script
     private(set) var requests: [[AgentMessage]] = []
@@ -2240,4 +2240,144 @@ private func libraryPayload(_ messages: [AgentMessage], _ call: String) throws -
     let note = try #require(turn.cards.first { $0.readingNoteID != nil })
     #expect(agent.open(cardID: note.id))
     #expect(await client.requests.count == 3)
+}
+
+@Test @MainActor func libraryPreferencePersistsAcrossPaperAndLibraryAndRespectsAnOptOut() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let reader = try await makeAgentReader(root)
+    let paper = Paper(
+        title: "Preference fixture", digest: "p", originalPath: "p.pdf", pageCount: 1,
+        blocks: [], warnings: [], canReflow: false)
+    reader.state.papers = [paper]
+    reader.select(paper.id)
+    await reader.ask("以后默认用中文解释。")
+    let item = try #require(reader.state.memories.first)
+    #expect(item.isResponsePreference && item.preference?.aspect == .language)
+    #expect(reader.state.chats.last?.answer == "已记住这条偏好。")
+    #expect(reader.state.chats.last?.backgroundSources == nil)
+    #expect(try await LibraryStore(directory: root).load().memories == [item])
+
+    let client = ScriptedLibraryModel { _, _ in .init(role: "assistant", content: "fixture reply") }
+    let agent = LibraryAgent(reader: reader, client: client)
+    agent.send("Explain standard error.")
+    try await eventually { !agent.isRunning }
+    #expect(await client.requests.last?.last?.content?.contains("以后默认用中文解释") == true)
+    agent.send("刚才用了哪些偏好？")
+    try await eventually { !agent.isRunning }
+    #expect(agent.turns.last?.answer.contains("以后默认用中文解释") == true)
+    agent.send("这次别用我的记忆。Explain aliasing.")
+    try await eventually { !agent.isRunning }
+    #expect(await client.requests.last?.contains(where: { $0.content?.contains("以后默认用中文解释") == true }) == false)
+    #expect(await client.requestLimits.last?.availableToolNames?.contains("research_overview") == false)
+    agent.send("以后改用英文解释。")
+    try await eventually { !agent.isRunning }
+    #expect(reader.state.memories.filter { !$0.deleted }.map(\.text) == ["以后改用英文解释。"])
+    agent.send("忘掉我的英文解释偏好。")
+    try await eventually { !agent.isRunning }
+    let allDeleted = reader.state.memories.allSatisfy(\.deleted)
+    let reopened = try await LibraryStore(directory: root).load()
+    let persistedDeletion = reopened.memories.allSatisfy(\.deleted)
+    #expect(allDeleted && persistedDeletion)
+    agent.send("Explain bias.")
+    try await eventually { !agent.isRunning }
+    #expect(await client.requests.last?.contains(where: { $0.content?.contains("以后改用英文解释") == true }) == false)
+}
+
+@Test @MainActor func libraryPreferenceDoesNotPersistUnverifiedOrTemporaryStatements() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let reader = try await makeAgentReader(root)
+    let client = ScriptedLibraryModel { _, i in
+        if i == 1 { return tool("remember_preference", #"{"quote":"以后用中文解释"}"#) }
+        return .init(role: "assistant", content: "完成。")
+    }
+    let agent = LibraryAgent(reader: reader, client: client)
+    agent.send("原文说「以后用中文解释」，你怎么看？")
+    try await eventually { !agent.isRunning }
+    #expect(reader.state.memories.isEmpty)
+    #expect(agent.turns.last?.activities.first?.status == .failed)
+}
+
+@Test @MainActor func libraryPreferenceToolSavesOnlyDurableClauseFromMixedTurn() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let reader = try await makeAgentReader(root)
+    let client = ScriptedLibraryModel { _, i in
+        if i == 1 { return tool("remember_preference", #"{"quote":"以后先讲结论"}"#) }
+        return .init(role: "assistant", content: "Confidence is a property of the procedure.")
+    }
+    let agent = LibraryAgent(reader: reader, client: client)
+    agent.send("以后先讲结论。置信区间是什么？")
+    try await eventually { !agent.isRunning }
+    #expect(reader.state.memories.map(\.text) == ["以后先讲结论"])
+    #expect(agent.turns.last?.answer.contains("Confidence") == true)
+    #expect(await client.requestLimits.first?.availableToolNames?.contains("remember_preference") == true)
+    #expect(await client.requestLimits.first?.availableToolNames?.contains("propose_research_question") == false)
+}
+
+@Test @MainActor func libraryPreferenceUpdatingOneFacetDuringMixedTurnKeepsItsSiblingAndAnswers() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let reader = try await makeAgentReader(root)
+    let client = ScriptedLibraryModel { _, i in
+        if i == 2 { return tool("remember_preference", #"{"quote":"以后改用英文。"}"#) }
+        return .init(role: "assistant", content: "The data support a comparison.")
+    }
+    let agent = LibraryAgent(reader: reader, client: client)
+    for question in ["以后默认用中文，术语保留英文。", "解释一下方差？", "以后改用英文。这个比较能说明什么？"] {
+        agent.send(question)
+        try await eventually { !agent.isRunning }
+    }
+    #expect(agent.turns.last?.error == nil && agent.turns.last?.answer.contains("comparison") == true)
+    let records = Set(reader.state.memories.filter { !$0.deleted }.map(\.text))
+    #expect(records == ["术语保留英文。", "以后改用英文"])
+    let firstChangeRequest = await client.requests[1]
+    #expect(!firstChangeRequest.contains { $0.content?.contains("以后默认用中文") == true })
+}
+
+@Test(.enabled(if: !ProcessInfo.processInfo.isLowPowerModeEnabled))
+@MainActor func libraryPreferenceLongForegroundConversationKeepsIdleConsolidationPaused() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let reader = try await makeAgentReader(root)
+    let sentence = "训练步数相同时采样误差是否缩小？"
+    let item = try ResearchQuestionProposal(
+        question: sentence, readerTurnID: UUID(), readerMessage: sentence, quote: sentence
+    ).item
+    reader.state.memories = [item]
+    await reader.save()
+    let suspended = SuspendedAgentModel()
+    let agent = LibraryAgent(reader: reader, client: suspended)
+    agent.send("Explain a confidence interval.")
+    try await eventually { await suspended.waiting }
+    reader.lastInteraction = Date().addingTimeInterval(-180)
+    reader.memorySleep.run(reader: reader, automatic: true, withModel: false)
+    #expect(!reader.memorySleep.running)
+    await suspended.release()
+    try await eventually { !agent.isRunning }
+    reader.memorySleep.run(reader: reader, automatic: true, withModel: false)
+    #expect(reader.memorySleep.running)
+    try await eventually { !reader.memorySleep.running }
+}
+
+@Test @MainActor func libraryPreferenceLeavingShelfDuringGenerationRejectsThePendingAnswer() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let reader = try await makeAgentReader(root)
+    let methods = try Shelf(name: "Methods")
+    let theory = try Shelf(name: "Theory")
+    reader.state.shelves = [methods, theory]
+    reader.activeShelfID = methods.id
+    let suspended = SuspendedAgentModel()
+    let agent = LibraryAgent(reader: reader, client: suspended)
+    agent.send("在这个书架默认先讲结论。")
+    try await eventually { !agent.isRunning }
+    try #require(reader.state.memories.first?.preference?.scope == .shelf(methods.id))
+    agent.send("解释一下误差。")
+    try await eventually { await suspended.waiting }
+    reader.activeShelfID = theory.id
+    await suspended.release()
+    try await eventually { !agent.isRunning }
+    #expect(agent.turns.last?.error != nil && agent.turns.last?.answer.isEmpty == true)
 }

@@ -97,7 +97,7 @@ extension ReaderModel {
     }
 
     func validateDiscussionScope(_ scope: DiscussionNoteScope, usesHTMLAnchor: Bool = false) throws {
-        if let sources = scope.backgroundSources { try validateAssistantBackground(sources) }
+        if let sources = scope.backgroundSources { try validateAssistantBackground(sources, paperID: scope.paperID) }
         guard lastPaperDeletion[scope.paperID] == scope.lastDeletion, selectedPaperID == scope.selectedPaperID,
             state.papers.contains(where: { $0.id == scope.paperID && $0.digest == scope.digest }),
             !pendingImportIDs.contains(scope.paperID)

@@ -44,6 +44,7 @@ private actor AgentWireTransport: HTTPTransport {
             "ask_user", "create_reading_note", "close_read_paper", "search_reading_notes", "recommend_related",
             "list_library", "create_shelf", "rename_shelf", "move_papers", "prepare_local_import",
             "prepare_delete_shelf", "prepare_delete_paper", "research_overview", "propose_research_question",
+            "remember_preference",
         ])
     let presentation = try #require(definitions.first { $0["name"] as? String == "present_results" })
     let parameters = try #require(presentation["parameters"] as? [String: Any])

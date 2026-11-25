@@ -117,6 +117,7 @@ public struct AgentTurn: Identifiable, Sendable {
     public var clarification: AgentClarification?
     public var answer = ""
     public var activities: [AgentActivity] = []
+    public var suppliedPreferences: ChatSourceVersions?
     public var processNotes: [AgentProcessNote] = []
     public var presentedResults: [AgentPresentedResult] = []
     public var cards: [AgentCard] = []

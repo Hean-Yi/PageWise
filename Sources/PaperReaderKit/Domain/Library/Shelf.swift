@@ -47,6 +47,7 @@ extension LibraryState {
         case .delete(let id):
             guard shelves.contains(where: { $0.id == id }) else { throw ReaderError.message("书架不存在。") }
             shelves.removeAll { $0.id == id }
+            removePreferences(forDeletedShelf: id)
             paperShelfIDs = paperShelfIDs.filter { $0.value != id }
         case .deleteIfUnchanged(let id, let name, let members):
             guard shelves.contains(where: { $0.id == id && $0.name == name }),
@@ -63,6 +64,10 @@ extension LibraryState {
             for id in ids { paperShelfIDs[id.uuidString] = shelfID }
         }
         try validateShelves()
+    }
+
+    public mutating func removePreferences(forDeletedShelf id: UUID) {
+        memories.removeAll { $0.preference?.scope == .shelf(id) }
     }
 
     public func validateShelves() throws {

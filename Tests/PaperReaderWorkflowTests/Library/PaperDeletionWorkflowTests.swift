@@ -115,7 +115,7 @@ func permanentDeletionIgnoresLateChatOrMemoryAfterReimport(delayMemory: Bool) as
     let pdf = root.appendingPathComponent("fixture.pdf")
     try DemoPaper.write(to: pdf)
     let id = try #require(await reader.importURLs([pdf]).first)
-    let answer = Task { await reader.ask("How is attention described?") }
+    let answer = Task { await reader.ask("我正在研究注意力。How is attention described?") }
     for _ in 0..<400 where await !api.waiting { try await Task.sleep(for: .milliseconds(5)) }
     try #require(await api.waiting)
     #expect(await reader.deletePaper(id))

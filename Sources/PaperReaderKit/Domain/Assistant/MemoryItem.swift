@@ -7,6 +7,17 @@ public struct MemoryItem: Identifiable, Codable, Sendable, Equatable {
         case note(paperID: UUID, modifiedAt: Date)
     }
 
+    public private(set) var preference: ReaderPreference?
+    public private(set) var correctionRevision: UUID?
+    public var isResponsePreference: Bool { preference != nil }
+
+    public init(preference: ReaderPreference, statement: String, sourceID: UUID, libraryTurn: Bool) {
+        self.init(text: statement, sourceID: sourceID)
+        self.preference = preference
+        if libraryTurn { librarySource = .reader(quote: statement) }
+        originalFingerprint = Self.fingerprint(statement)
+    }
+
     public var id = UUID()
     public var text: String
     public var sourceID: UUID
@@ -41,6 +52,8 @@ public struct MemoryItem: Identifiable, Codable, Sendable, Equatable {
         preserveOriginalFingerprint()
         text = replacement
         userEdited = true
+        preference = preference?.corrected(using: replacement)
+        correctionRevision = UUID()
         return true
     }
 

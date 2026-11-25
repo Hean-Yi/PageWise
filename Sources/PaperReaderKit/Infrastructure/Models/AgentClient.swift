@@ -184,6 +184,10 @@ public struct AgentClient: AgentCompleting {
         private static let shelfName = Property(type: "string", description: "Shelf display name, 1–60 characters")
         static let definitions: [Tool] = [
             make(
+                "remember_preference",
+                "Save a durable preference explicitly stated in this reader turn. Use only an entire verbatim reader sentence, excluding its final punctuation. One-off requests, quoted authors and model inferences are ineligible.",
+                ["quote": .init(type: "string", description: "Exact reader-authored preference clause")], ["quote"]),
+            make(
                 "propose_research_question",
                 "Save one tentative research question grounded in this reader turn’s own research idea or an exact excerpt of a registered personal note. A question is an agent hypothesis, never an endorsed stance.",
                 [

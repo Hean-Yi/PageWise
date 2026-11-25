@@ -9,6 +9,8 @@ public struct ChatTurn: Identifiable, Codable, Sendable, Equatable {
     public var evidence: [Evidence]
     /// Absent on legacy turns, whose supplied background cannot be reconstructed safely.
     public var backgroundSources: ChatSourceVersions?
+    /// IDs of preferences provided directly in this turn, independent of inherited history.
+    public var suppliedPreferenceIDs: [UUID]?
     /// A note lives in the same collection as manually made reading notes.
     public var readingNoteID: UUID?
     public var closeReadingVersion: String?
