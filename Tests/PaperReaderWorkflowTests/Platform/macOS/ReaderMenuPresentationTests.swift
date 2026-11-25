@@ -40,7 +40,7 @@
             var anchor = ReaderMenuAnchor(
                 open: binding, title: title,
                 items: { [.action(title) { actions.append(title) }] },
-                width: 208, point: nil)
+                width: 208, location: nil)
             anchor.makePopover = {
                 let popup = RecordedMenuPopover()
                 opened.append(popup)
@@ -110,35 +110,54 @@
     }
 
     @Test @MainActor func coverOptionsUseTheVisibleButtonOrClickPointAndFitTheirRows() async throws {
-        let buttonSize = NSSize(width: 30, height: 30)
-        let requestedPoint = CGPoint(x: 6, y: 22)
+        final class FlippedView: NSView { override var isFlipped: Bool { true } }
         let items: [ReaderMenuItem] = [
             .submenu("移动到书架", icon: .library, items: [.action("未分类") {}]),
             .submenu("阅读状态", icon: .read, items: [.action("已读") {}]),
             .divider, .action("删除论文…", icon: .delete, destructive: true) {},
         ]
-        for clickPoint in [nil, requestedPoint] {
+        for (index, type) in [nil, NSEvent.EventType.rightMouseDown, .rightMouseDown].enumerated() {
+            let window = NSWindow(
+                contentRect: NSRect(x: 70 + 45 * index, y: 120 + 50 * index, width: 420, height: 400),
+                styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+            let content: NSView = index.isMultiple(of: 2) ? NSView() : FlippedView()
+            window.contentView = content
+            defer { window.contentView = nil }
+            let section = FlippedView(frame: NSRect(x: 60, y: 47, width: 320, height: 260))
+            content.addSubview(section)
+            let position = NSRect(x: 48, y: 70 + index * 40, width: 30, height: 30)
+            let receiver = ReaderSecondaryClick.Target(frame: position)
+            section.addSubview(receiver)
             var open = false
+            var location: ReaderMenuLocation?
             let recorded = RecordedMenuPopover()
-            func representable() -> ReaderMenuAnchor {
+            func source() -> some View {
                 var anchor = ReaderMenuAnchor(
                     open: Binding(get: { open }, set: { open = $0 }),
-                    title: "论文选项", items: { items }, width: 174, point: clickPoint)
+                    title: "论文选项", items: { items }, width: 174, location: location)
                 anchor.makePopover = { recorded }
-                return anchor
+                return Color.clear.frame(width: 30, height: 30).background { anchor }
             }
-            func source() -> some View {
-                Color.clear.frame(width: buttonSize.width, height: buttonSize.height)
-                    .background { representable() }
-                    .frame(width: 210, height: 320, alignment: clickPoint == nil ? .topTrailing : .bottomTrailing)
-            }
-            let window = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 210, height: 320), styleMask: .borderless, backing: .buffered,
-                defer: false)
             let host = NSHostingView(rootView: source())
-            window.contentView = host
-            defer { window.contentView = nil }
+            // The pointer's receiver can have a different origin from the transient SwiftUI background anchor.
+            let rearranged = index == 2
+            host.frame = rearranged ? position.offsetBy(dx: 80, dy: 24) : position
+            section.addSubview(host)
             host.layoutSubtreeIfNeeded()
+            let trigger: NSRect
+            if let type {
+                let hit = receiver.convert(NSPoint(x: 8, y: 20), to: nil)
+                let event = try #require(
+                    NSEvent.mouseEvent(
+                        with: type, location: hit, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                        windowNumber: window.windowNumber, context: nil, eventNumber: 1, clickCount: 1, pressure: 1))
+                receiver.action = { location = $0 }
+                receiver.rightMouseDown(with: event)
+                try #require(location != nil)
+                trigger = NSRect(origin: hit, size: NSSize(width: 1, height: 1))
+            } else {
+                trigger = receiver.convert(receiver.bounds, to: nil)
+            }
             open = true
             host.rootView = source()
             let deadline = ContinuousClock.now + .seconds(2)
@@ -146,15 +165,126 @@
                 host.layoutSubtreeIfNeeded()
                 try await Task.sleep(for: .milliseconds(10))
             }
-            let trigger = try #require(recorded.anchors.first)
-            #expect(trigger.bounds.size == buttonSize)
-            let expected = clickPoint.map { CGRect(origin: $0, size: .init(width: 1, height: 1)) } ?? trigger.bounds
-            #expect(recorded.rectangles == [expected])
-            #expect(recorded.edges == [clickPoint == nil ? .maxY : .minY])
+            let positioningView = try #require(recorded.anchors.first)
+            let relativeToView = try #require(recorded.rectangles.first)
+            #expect((positioningView === content) == rearranged)
+            #expect(
+                window.convertToScreen(positioningView.convert(relativeToView, to: nil))
+                    == window.convertToScreen(trigger))
             let panel = try #require(recorded.contentViewController)
             #expect(panel.preferredContentSize.width == 174)
             #expect((90...125).contains(panel.preferredContentSize.height))
+            let below = trigger.minY - window.contentLayoutRect.minY
+            let above = window.contentLayoutRect.maxY - trigger.maxY
+            let showBelow = below >= panel.preferredContentSize.height + 14 || below >= above
+            #expect(recorded.edges == [showBelow == positioningView.isFlipped ? .maxY : .minY])
             #expect(!window.isVisible)
+        }
+    }
+
+    @Test @MainActor func transientMenuWindowTouchesItsTriggerAtDifferentScreenPositions() async throws {
+        final class FlippedView: NSView { override var isFlipped: Bool { true } }
+        final class LayoutPopover: NSPopover {
+            override func show(relativeTo rect: NSRect, of view: NSView, preferredEdge: NSRectEdge) {
+                animates = false
+                super.show(relativeTo: rect, of: view, preferredEdge: preferredEdge)
+                contentViewController?.view.window?.alphaValue = 0
+            }
+        }
+
+        let screen = try #require(NSScreen.main).visibleFrame
+        for fromButton in [false, true] {
+            let window = NSWindow(
+                contentRect: NSRect(
+                    x: screen.midX - (fromButton ? 220 : 100), y: screen.midY - (fromButton ? 120 : 60),
+                    width: 340, height: 280), styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+            window.alphaValue = 0
+            let content: NSView = fromButton ? NSView() : FlippedView()
+            window.contentView = content
+            let group = FlippedView(frame: NSRect(x: 47, y: 44, width: 240, height: 195))
+            content.addSubview(group)
+            let button = NSButton(
+                frame: NSRect(x: fromButton ? 42 : 112, y: fromButton ? 135 : 25, width: 32, height: 32))
+            button.title = "…"
+            group.addSubview(button)
+
+            let popover = LayoutPopover()
+            defer {
+                popover.close()
+                window.orderOut(nil)
+                window.contentView = nil
+            }
+            var open = false
+            var location: ReaderMenuLocation?
+            var showsAnchor = true
+            func source() -> some View {
+                var anchor = ReaderMenuAnchor(
+                    open: Binding(get: { open }, set: { open = $0 }), title: "选项",
+                    items: { [.action("移动到书架") {}, .action("阅读状态") {}] }, width: 174, location: location)
+                anchor.makePopover = { popover }
+                return Color.clear.frame(width: 32, height: 32).background { if showsAnchor { anchor } }
+            }
+            let host = NSHostingView(rootView: source())
+            // A mouse event must still attach to its button when the backing view has been rearranged.
+            host.frame = fromButton ? button.frame : button.frame.offsetBy(dx: -88, dy: 64)
+            group.addSubview(host)
+            window.orderBack(nil)
+            host.layoutSubtreeIfNeeded()
+            let sourceRect = button.convert(button.bounds, to: nil)
+            if !fromButton {
+                let event = try #require(
+                    NSEvent.mouseEvent(
+                        with: .rightMouseDown, location: NSPoint(x: sourceRect.midX, y: sourceRect.midY),
+                        modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                        windowNumber: window.windowNumber,
+                        context: nil, eventNumber: 1, clickCount: 1, pressure: 0))
+                location = ReaderMenuLocation(event: event)
+            }
+            open = true
+            host.rootView = source()
+            let deadline = ContinuousClock.now + .seconds(2)
+            while popover.contentViewController?.view.window == nil && ContinuousClock.now < deadline {
+                host.layoutSubtreeIfNeeded()
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            let popupWindow = try #require(popover.contentViewController?.view.window)
+            let firstFrame = popupWindow.frame
+            // An unmeasured hosting controller briefly shows at 320 × 320 and then shrinks away from its arrow.
+            #expect(firstFrame.width < 230 && firstFrame.height < 145)
+            try await Task.sleep(for: .milliseconds(120))
+            let menu = popupWindow.frame
+            #expect(abs(menu.width - firstFrame.width) <= 1 && abs(menu.height - firstFrame.height) <= 1)
+            let triggerOnScreen = window.convertToScreen(sourceRect)
+            let attachment =
+                fromButton
+                ? triggerOnScreen : CGRect(x: triggerOnScreen.midX, y: triggerOnScreen.midY, width: 1, height: 1)
+            let gap = min(abs(menu.maxY - attachment.minY), abs(menu.minY - attachment.maxY))
+            #expect(popover.isShown && menu.width >= 174)
+            #expect(abs(menu.midX - attachment.midX) < 14, "menu \(menu), trigger \(attachment)")
+            #expect(gap < 14, "menu \(menu), trigger \(attachment)")
+
+            if fromButton {
+                button.frame = button.frame.offsetBy(dx: 54, dy: -24)
+                host.frame = button.frame
+                host.rootView = source()
+                let moved = window.convertToScreen(button.convert(button.bounds, to: nil))
+                let moveDeadline = ContinuousClock.now + .seconds(2)
+                while abs(popupWindow.frame.midX - moved.midX) >= 14 && ContinuousClock.now < moveDeadline {
+                    host.layoutSubtreeIfNeeded()
+                    try await Task.sleep(for: .milliseconds(10))
+                }
+                #expect(abs(popupWindow.frame.midX - moved.midX) < 14)
+                #expect(min(abs(popupWindow.frame.maxY - moved.minY), abs(popupWindow.frame.minY - moved.maxY)) < 14)
+            }
+
+            showsAnchor = false
+            host.rootView = source()
+            let closeDeadline = ContinuousClock.now + .seconds(2)
+            while popover.isShown && ContinuousClock.now < closeDeadline {
+                host.layoutSubtreeIfNeeded()
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            #expect(!popover.isShown)
         }
     }
 

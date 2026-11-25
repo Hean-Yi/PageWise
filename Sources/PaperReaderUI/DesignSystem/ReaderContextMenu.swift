@@ -12,7 +12,7 @@ private struct ReaderContextMenu: ViewModifier {
     let title: String
     let items: () -> [ReaderMenuItem]
     let width: CGFloat
-    @State private var point: CGPoint?
+    @State private var location: ReaderMenuLocation?
     @State private var open = false
 
     func body(content: Content) -> some View {
@@ -24,14 +24,14 @@ private struct ReaderContextMenu: ViewModifier {
                 .gesture(ReaderContextTap(action: present))
             #endif
             .accessibilityAction(named: Text(title)) {
-                point = nil
+                location = nil
                 open = true
             }
-            .readerMenuPresentation(open: $open, title: title, items: items, width: width, point: point)
+            .readerMenuPresentation(open: $open, title: title, items: items, width: width, location: location)
     }
 
-    private func present(at location: CGPoint) {
-        point = location
+    private func present(at location: ReaderMenuLocation) {
+        self.location = location
         open = true
     }
 }

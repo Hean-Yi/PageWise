@@ -4,12 +4,12 @@
 
     /// Only secondary clicks hit this view. The cover underneath still owns its primary drag sequence.
     struct ReaderSecondaryClick: NSViewRepresentable {
-        let action: (CGPoint) -> Void
+        let action: (ReaderMenuLocation) -> Void
         func makeNSView(context: Context) -> Target { Target() }
         func updateNSView(_ view: Target, context: Context) { view.action = action }
 
         final class Target: NSView {
-            var action: ((CGPoint) -> Void)?
+            var action: ((ReaderMenuLocation) -> Void)?
             override var isFlipped: Bool { true }
 
             override func hitTest(_ point: NSPoint) -> NSView? {
@@ -21,7 +21,10 @@
                 return secondary || controlClick ? super.hitTest(point) : nil
             }
 
-            override func rightMouseDown(with event: NSEvent) { action?(convert(event.locationInWindow, from: nil)) }
+            override func rightMouseDown(with event: NSEvent) {
+                guard let location = ReaderMenuLocation(event: event) else { return }
+                action?(location)
+            }
             override func mouseDown(with event: NSEvent) { rightMouseDown(with: event) }
         }
     }

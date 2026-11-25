@@ -1,5 +1,9 @@
 import SwiftUI
 
+#if !os(macOS)
+    typealias ReaderMenuLocation = CGPoint
+#endif
+
 /// App commands share a printed treatment across toolbar buttons, context clicks and touch.
 enum ReaderMenuItem {
     case action(
@@ -70,15 +74,15 @@ struct ReaderPopupMenu<Label: View>: View {
 extension View {
     @ViewBuilder func readerMenuPresentation(
         open: Binding<Bool>, title: String, items: @escaping () -> [ReaderMenuItem], width: CGFloat,
-        point: CGPoint? = nil
+        location: ReaderMenuLocation? = nil
     ) -> some View {
         #if os(macOS)
-            background { ReaderMenuAnchor(open: open, title: title, items: items, width: width, point: point) }
+            background { ReaderMenuAnchor(open: open, title: title, items: items, width: width, location: location) }
         #else
             popover(
                 isPresented: open,
                 attachmentAnchor: .rect(
-                    point.map { .rect(CGRect(origin: $0, size: CGSize(width: 1, height: 1))) } ?? .bounds)
+                    location.map { .rect(CGRect(origin: $0, size: CGSize(width: 1, height: 1))) } ?? .bounds)
             ) {
                 ReaderMenuPanel(title: title, items: items(), width: width) { open.wrappedValue = false }
             }

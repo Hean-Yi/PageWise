@@ -2,24 +2,37 @@
     import AppKit
     import SwiftUI
 
+    struct ReaderMenuLocation {
+        let point: CGPoint
+        let windowNumber: Int
+
+        @MainActor init?(event: NSEvent) {
+            guard let window = event.window else { return nil }
+            point = event.locationInWindow
+            windowNumber = window.windowNumber
+        }
+
+    }
+
     /// Hold one popover per invocation. Shelf geometry changes must not re-present it during AppKit layout.
     struct ReaderMenuAnchor: NSViewRepresentable {
         @Binding var open: Bool
         let title: String
         let items: () -> [ReaderMenuItem]
         let width: CGFloat
-        var point: CGPoint?
+        let location: ReaderMenuLocation?
         var makePopover: () -> NSPopover = { NSPopover() }
         @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
         init(
-            open: Binding<Bool>, title: String, items: @escaping () -> [ReaderMenuItem], width: CGFloat, point: CGPoint?
+            open: Binding<Bool>, title: String, items: @escaping () -> [ReaderMenuItem], width: CGFloat,
+            location: ReaderMenuLocation?
         ) {
             _open = open
             self.title = title
             self.items = items
             self.width = width
-            self.point = point
+            self.location = location
         }
 
         final class Anchor: NSView {
@@ -73,7 +86,7 @@
                     coordinator.popover?.performClose(nil)
                     return
                 }
-                guard let anchor, let window = anchor.window else {
+                guard let anchor, let window = anchor.window, let content = window.contentView else {
                     open = false
                     return
                 }
@@ -91,18 +104,27 @@
                 popup.animates = !reduceMotion
                 let panel = ReaderMenuPanel(title: title, items: items(), width: width) { open = false }
                 let host = NSHostingController(rootView: panel)
-                host.preferredContentSize = host.view.fittingSize
+                // AppKit positions the arrow using the initial content size. A hosting controller starts at
+                // 320 × 320; shrinking after show leaves the arrow at the old window origin.
+                let size = host.view.fittingSize
+                host.view.setFrameSize(size)
+                host.preferredContentSize = size
                 popup.contentViewController = host
-                let target = point.map {
-                    CGRect(origin: $0, size: CGSize(width: 1, height: 1)).intersection(visible)
-                }
-                let attachment = target.flatMap { $0.isEmpty ? nil : $0 } ?? visible
-                let trigger = anchor.convert(attachment, to: nil)
+                popup.contentSize = size
+                // Primary clicks, keyboard and accessibility all open from the control's visible bounds.
+                // A context click belongs to its event's window, even if the overlay moved before presentation.
+                let pointer = location.flatMap { $0.windowNumber == window.windowNumber ? $0.point : nil }
+                let trigger =
+                    pointer.map { NSRect(origin: $0, size: NSSize(width: 1, height: 1)) }
+                    ?? anchor.convert(visible, to: nil)
+                let anchorCanFollow = pointer.map { visible.contains(anchor.convert($0, from: nil)) } ?? true
+                let source: NSView = anchorCanFollow ? anchor : content
                 let viewport = window.contentLayoutRect
                 let below = trigger.minY - viewport.minY
                 let above = viewport.maxY - trigger.maxY
-                let edge: NSRectEdge = below >= host.preferredContentSize.height + 14 || below >= above ? .maxY : .minY
-                popup.show(relativeTo: attachment, of: anchor, preferredEdge: edge)
+                let showBelow = below >= size.height + 14 || below >= above
+                let edge: NSRectEdge = showBelow == source.isFlipped ? .maxY : .minY
+                popup.show(relativeTo: source.convert(trigger, from: nil), of: source, preferredEdge: edge)
             }
         }
 
