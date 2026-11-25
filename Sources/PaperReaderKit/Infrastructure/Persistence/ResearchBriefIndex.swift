@@ -59,7 +59,9 @@ public actor ResearchBriefIndex {
         guard let snapshot = try await store.researchMaintenanceSnapshot() else { return }
         let needsAudit = audit || snapshot.indexState == nil || published == nil
         let generationChanged = snapshot.indexState?.lastResearchRevision != snapshot.researchRevision
-        guard needsAudit || generationChanged || !snapshot.pendingEvents.isEmpty else { return }
+        // Warming is independent of whether the bibliographic catalog itself changed. A launch
+        // with no pending events still needs the note postings and optional memory vectors ready
+        // before the first question, especially after a derived vector cache was removed.
         if let notes {
             // The existing note actor reconciles tokens and postings before applying its result limit.
             _ = try await notes.search(
@@ -67,6 +69,7 @@ public actor ResearchBriefIndex {
                 includeArchived: false)
         }
         try await memories?.prepare(snapshot.state)
+        guard needsAudit || generationChanged || !snapshot.pendingEvents.isEmpty else { return }
         let catalog = try resolve(BriefInputs(snapshot.state, excluding: []))
         let data: Data
         if catalog == published, let payload = publishedPayload {
