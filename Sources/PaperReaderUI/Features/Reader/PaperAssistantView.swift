@@ -97,7 +97,7 @@ struct PaperAssistantView: View {
                         }
                         Task { await model.ask("把刚才讨论的观点记为阅读笔记，并标画对应原文。") }
                     } label: {
-                        Image(systemName: "note.text.badge.plus").readerSymbolInk().frame(minWidth: 30, minHeight: 30)
+                        ReaderActionSymbol("note.text.badge.plus").frame(minWidth: 30, minHeight: 30)
                     }
                     .readerIconButtonStyle(.plain).foregroundStyle(ReaderTheme.muted)
                     .help("将刚才的讨论记为笔记").accessibilityLabel("将刚才的讨论记为笔记")
@@ -105,7 +105,7 @@ struct PaperAssistantView: View {
                 }
                 Spacer()
                 Button(action: send) {
-                    Image(systemName: "arrow.up").readerSymbolInk()
+                    ReaderActionSymbol("arrow.up")
                 }.readerIconButtonStyle(AssistantSendButtonStyle()).help("发送问题").accessibilityLabel("发送问题")
                     .disabled(question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || model.busyAI)
             }

@@ -9,7 +9,7 @@ struct AssistantToolTile: View {
         var body: some View {
             switch self {
             case .reader(let glyph): ReaderIcon(glyph, size: 14)
-            case .system(let name): Image(systemName: name).readerSymbolInk()
+            case .system(let name): ReaderActionSymbol(name)
             }
         }
     }
@@ -34,7 +34,7 @@ struct AssistantToolTile: View {
                     Text(metadata).monospacedDigit().foregroundStyle(ReaderTheme.muted)
                 }
                 if let accessory {
-                    Image(systemName: accessory).readerSymbolInk().font(.caption2.weight(.semibold))
+                    ReaderActionSymbol(accessory).font(.caption2.weight(.semibold))
                         .rotationEffect(accessoryRotation)
                         .foregroundStyle(ReaderTheme.muted).accessibilityHidden(true)
                 }
@@ -102,7 +102,9 @@ struct AssistantToolButtonStyle: ButtonStyle {
                 }
             }
             .transformEnvironment(\.readerIconInteraction) {
-                if enabled && !reduceMotion && configuration.isPressed { $0 = .pressed }
+                if enabled && !reduceMotion {
+                    if configuration.isPressed { $0 = .pressed } else if hovered && $0 == .idle { $0 = .hovered }
+                }
             }
             .opacity(configuration.isPressed ? 0.78 : 1)
             .animation(ReaderMotion.feedback(reduceMotion), value: active)

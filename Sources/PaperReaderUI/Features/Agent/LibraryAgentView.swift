@@ -116,7 +116,7 @@ struct LibraryAgentView: View {
                         draft = ""
                         composerFocused = true
                     } label: {
-                        Image(systemName: "square.and.pencil").readerSymbolInk().frame(minWidth: 30, minHeight: 30)
+                        ReaderActionSymbol("square.and.pencil").frame(minWidth: 30, minHeight: 30)
                     }.readerIconButtonStyle(.plain).foregroundStyle(ReaderTheme.muted)
                         .help("新对话").accessibilityLabel("新对话")
                 }
@@ -124,7 +124,7 @@ struct LibraryAgentView: View {
                 Button {
                     if agent.isRunning { agent.cancel() } else { send() }
                 } label: {
-                    Image(systemName: agent.isRunning ? "stop.fill" : "arrow.up").readerSymbolInk()
+                    ReaderActionSymbol(agent.isRunning ? "stop.fill" : "arrow.up")
                         .font(agent.isRunning ? .system(size: 11) : .body.weight(.semibold))
                         .contentTransition(reduceMotion ? .identity : .opacity)
                         .animation(ReaderMotion.feedback(reduceMotion), value: agent.isRunning)
@@ -155,7 +155,7 @@ struct LibraryAgentView: View {
                         Text(option).font(.body)
                             .multilineTextAlignment(.leading).fixedSize(horizontal: false, vertical: true)
                         Spacer(minLength: 6)
-                        Image(systemName: "arrow.up.right").readerSymbolInk().font(.caption.weight(.semibold))
+                        ReaderActionSymbol("arrow.up.right").font(.caption.weight(.semibold))
                             .foregroundStyle(ReaderTheme.accent).accessibilityHidden(true)
                     }
                     .padding(.horizontal, 7).padding(.vertical, 6)

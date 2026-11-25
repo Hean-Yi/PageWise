@@ -159,7 +159,7 @@ private struct JumpToLatest: ViewModifier {
                     Label {
                         Text("前往最新消息")
                     } icon: {
-                        Image(systemName: "arrow.down").readerSymbolInk()
+                        ReaderActionSymbol("arrow.down")
                     }
                 }
                 .labelStyle(.iconOnly).readerFloatingButton(.circle)

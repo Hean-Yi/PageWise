@@ -29,7 +29,7 @@ struct CloseReadingControl: View {
                     Button {
                         model.closeReadingTask?.cancel()
                     } label: {
-                        Image(systemName: "stop.circle").readerSymbolInk()
+                        ReaderActionSymbol("stop.circle")
                     }
                     .help("停止精读").accessibilityLabel("停止精读")
                 } else {
@@ -44,14 +44,14 @@ struct CloseReadingControl: View {
                         Label(
                             model.existingCloseReading(for: id) == nil ? "AI 精读" : "查看精读",
                             systemImage: "text.magnifyingglass"
-                        ).labelStyle(ReaderSymbolLabelStyle())
+                        ).labelStyle(ReaderSymbolLabelStyle(motion: .lens))
                     }.disabled(model.busyAI)
                         .quickStartTarget(.assistant)
                     if model.existingCloseReading(for: id) != nil {
                         Button {
                             Task { await model.showCloseReading(id, regenerate: true) }
                         } label: {
-                            Image(systemName: "arrow.clockwise").readerSymbolInk()
+                            ReaderActionSymbol("arrow.clockwise")
                         }.disabled(model.busyAI).help("重新精读").accessibilityLabel("重新精读")
                     }
                     Spacer()
@@ -108,7 +108,7 @@ struct CloseReadingNoteList: View {
                                     .lineLimit(2)
                             }
                             Spacer()
-                            Image(systemName: "chevron.forward").readerSymbolInk().imageScale(.small)
+                            ReaderActionSymbol("chevron.forward").imageScale(.small)
                         }.contentShape(Rectangle()).padding(.vertical, 7)
                     }.readerIconButtonStyle(.plain)
                 }

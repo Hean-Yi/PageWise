@@ -268,18 +268,16 @@ struct AgentResultCard: View {
     @ViewBuilder private func importAction(for card: AgentCard) -> some View {
         switch card.importState {
         case .queued, .downloading, .importing:
-            if card.importState == .queued {
-                Label("等待导入", systemImage: "clock").foregroundStyle(ReaderTheme.muted)
-            } else {
-                ProgressView().controlSize(.mini)
-                Text(card.importState == .importing ? "正在入库" : (card.hasDownload ? "下载中" : "获取开放全文")).foregroundStyle(
-                    ReaderTheme.muted)
-            }
+            let status =
+                card.importState == .queued
+                ? "等待导入" : (card.importState == .importing ? "正在入库" : (card.hasDownload ? "下载中" : "获取开放全文"))
+            ReaderDownloadLabel(title: status, receiving: true).foregroundStyle(ReaderTheme.muted)
+            if card.importState != .queued { ProgressView().controlSize(.mini) }
             let cancelTitle = card.importState == .queued ? "取消排队" : "停止导入"
             Button {
                 agent.cancelImport(cardID: card.id)
             } label: {
-                Image(systemName: "stop.circle").readerSymbolInk()
+                ReaderActionSymbol("stop.circle")
             }
             .readerIconButtonStyle(.borderless).help(cancelTitle).accessibilityLabel("\(cancelTitle) \(card.title)")
         case .imported:
@@ -297,7 +295,7 @@ struct AgentResultCard: View {
                 Button {
                     agent.confirmImport(cardID: cardID)
                 } label: {
-                    Label(title, systemImage: "arrow.down.to.line").labelStyle(ReaderSymbolLabelStyle())
+                    ReaderDownloadLabel(title: title)
                 }
                 .readerIconButtonStyle(.borderedProminent).tint(ReaderTheme.accent).disabled(!card.canImport)
                 .help("下载并添加到书库").accessibilityHint(card.title)

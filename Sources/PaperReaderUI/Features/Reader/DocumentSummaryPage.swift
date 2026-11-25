@@ -40,7 +40,7 @@ struct DocumentSummaryPage: View {
     private var navigation: some View {
         HStack(spacing: 12) {
             Button(action: model.closeDocumentSummary) {
-                Label("返回正文", systemImage: "chevron.backward").labelStyle(ReaderSymbolLabelStyle())
+                Label("返回正文", systemImage: "chevron.backward").labelStyle(ReaderSymbolLabelStyle(motion: .left))
             }.readerIconButtonStyle(.borderless)
             Text("文末总结").font(ReaderTheme.editorial(titleSize, weight: .semibold))
                 .foregroundStyle(ReaderTheme.ink).accessibilityAddTraits(.isHeader)

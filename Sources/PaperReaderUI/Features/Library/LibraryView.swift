@@ -524,8 +524,10 @@ public struct LibraryView: View {
                 Button {
                     showSettings = true
                 } label: {
-                    Label("设置", systemImage: "gearshape").labelStyle(ReaderSymbolLabelStyle(iconOnly: true))
-                        .frame(width: 42, height: 42).contentShape(Rectangle())
+                    Label("设置", systemImage: "gearshape").labelStyle(
+                        ReaderSymbolLabelStyle(iconOnly: true, motion: .settings)
+                    )
+                    .frame(width: 42, height: 42).contentShape(Rectangle())
                 }.readerIconButtonStyle(.plain).help("设置").quickStartTarget(.modelSettings)
                     #if os(iOS)
                         .keyboardShortcut(",")

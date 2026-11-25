@@ -80,10 +80,10 @@ struct ReaderNotesView: View {
                             didNavigate()
                         } label: {
                             HStack(spacing: 8) {
-                                Image(systemName: "bookmark.fill").readerSymbolInk().foregroundStyle(ReaderTheme.accent)
+                                ReaderActionSymbol("bookmark.fill").foregroundStyle(ReaderTheme.accent)
                                 Text("\(readingModeTitle(mark.mode)) · 第 \(mark.pageIndex + 1) 页")
                                 Spacer()
-                                Image(systemName: "arrow.up.right").readerSymbolInk().foregroundStyle(ReaderTheme.muted)
+                                ReaderActionSymbol("arrow.up.right").foregroundStyle(ReaderTheme.muted)
                             }.contentShape(Rectangle())
                         }.readerIconButtonStyle(.plain)
                         Button {
@@ -118,7 +118,7 @@ struct ReaderNotesView: View {
                             HStack {
                                 Text("第 \(mark.pageIndex + 1) 页")
                                 Spacer()
-                                Image(systemName: "arrow.up.right").readerSymbolInk()
+                                ReaderActionSymbol("arrow.up.right")
                             }.font(.system(size: 10)).foregroundStyle(ReaderTheme.muted)
                         }
                     }.fixedSize(horizontal: false, vertical: true).padding(.vertical, 6).contentShape(Rectangle())

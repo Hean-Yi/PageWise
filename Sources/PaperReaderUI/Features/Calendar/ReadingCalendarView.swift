@@ -136,7 +136,7 @@ struct ReadingCalendarView: View {
                 Button {
                     model.select(paper.id)
                 } label: {
-                    Image(systemName: "arrow.up.right").readerSymbolInk()
+                    ReaderActionSymbol("arrow.up.right")
                 }
                 .readerIconButtonStyle(.borderless).accessibilityLabel("阅读\(title)").help("打开论文")
             }

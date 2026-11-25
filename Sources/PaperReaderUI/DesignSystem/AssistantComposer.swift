@@ -41,7 +41,6 @@ struct AssistantSendButtonStyle: ButtonStyle {
             .frame(width: 40, height: 40)
             .background(enabled ? ReaderTheme.accent : ReaderTheme.elevated, in: Circle())
             .contentShape(Circle())
-            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.94 : 1)
             .opacity(configuration.isPressed ? 0.75 : 1)
             .animation(ReaderMotion.feedback(reduceMotion), value: configuration.isPressed)
             .animation(ReaderMotion.feedback(reduceMotion), value: enabled)

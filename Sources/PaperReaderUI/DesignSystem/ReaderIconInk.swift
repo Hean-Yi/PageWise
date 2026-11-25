@@ -12,6 +12,16 @@ struct ReaderIconInkPose {
 }
 
 extension ReaderIcon.Glyph {
+    static let wastebasketRim: CGFloat = 9.1
+
+    static func secondQuotationPose(for state: ReaderIconInteraction) -> ReaderIconInkPose {
+        switch state {
+        case .idle: return ReaderIconInkPose()
+        case .hovered: return ReaderIconInkPose(x: 1.15)
+        case .pressed: return ReaderIconInkPose(x: -1.2, y: -1.3)
+        }
+    }
+
     func inkPose(for state: ReaderIconInteraction) -> ReaderIconInkPose {
         let motion = Self.inkMotions[rawValue]
         var pose: ReaderIconInkPose =
@@ -40,44 +50,48 @@ extension ReaderIcon.Glyph {
     private static let inkMotions = allCases.map { glyph -> InkMotion in
         switch glyph {
         case .library:
-            InkMotion(10, 18.5, hover: .init(y: -1.15, degrees: -8), press: .init(y: 0.9, degrees: 4))
+            InkMotion(10, 18.5, hover: .init(y: -1.8, degrees: -10), press: .init(y: 1.35, scaleY: 0.93))
         case .read:
-            InkMotion(7, 12, hover: .init(degrees: -6, scaleX: 1.1), press: .init(y: 1, degrees: 5, scaleX: 0.83))
+            InkMotion(11, 15, hover: .init(y: -2, degrees: -9), press: .init(y: 0.8, scaleX: 1.2, scaleY: 0.9))
         case .favorite:
             InkMotion(
                 12, 12.6, hover: .init(y: 0.3, degrees: -12, scaleX: 1.22, scaleY: 0.83),
                 press: .init(x: 0.4, degrees: 32, scaleX: 0.72, scaleY: 0.55))
         case .calendar:
-            InkMotion(12, 5, hover: .init(scaleY: 1.5), press: .init(y: 0.45, scaleY: 0.55))
+            InkMotion(12, 5, hover: .init(scaleY: 0.91), press: .init(scaleY: 1.06))
         case .notebook:
             InkMotion(7, 12, hover: .init(x: 0.5, degrees: -6, scaleX: 1.3), press: .init(scaleX: 0.65))
         case .paper:
-            InkMotion(6.9, 7.8, hover: .init(scaleX: 1.37), press: .init(y: 0.9, scaleX: 0.78, scaleY: 0.82))
+            InkMotion(6.9, 7.8, hover: .init(scaleX: 1.28), press: .init(y: 4.7, scaleX: 1.32, scaleY: 0.29))
         case .source:
-            InkMotion(12.4, 17.5, hover: .init(degrees: -6, scaleX: 1.26), press: .init(degrees: 6, scaleX: 0.55))
+            InkMotion(12.4, 17.5, hover: .init(y: -0.4, degrees: -5, scaleX: 0.68), press: .init(scaleX: -0.94))
         case .export:
-            InkMotion(9, 12, hover: .init(x: -1.2, scaleX: 0.94), press: .init(x: 3, scaleX: 0.87))
+            InkMotion(9, 12, hover: .init(x: -1.6, scaleX: 0.94), press: .init(x: 5.6, scaleX: 0.68))
         case .citation:
-            InkMotion(6, 17, hover: .init(x: -0.65, y: -1.35, degrees: -6), press: .init(x: 1.7, y: 1, degrees: 5))
+            InkMotion(6, 17, hover: .init(x: -0.9, y: -1.6, degrees: -6), press: .init(x: 1.9, y: 1.4, degrees: 3))
         case .delete:
             InkMotion(
-                11, 7, hover: .init(y: -0.9, degrees: -10), press: .init(x: 1.2, y: 5, degrees: 12, scaleX: 0.75))
+                11, 7, hover: .init(y: -1.1, degrees: -13), press: .init(x: 1, y: 6.8, degrees: 18, scaleX: 0.65))
         case .annotation:
-            InkMotion(16, 7, hover: .init(x: 1.1, y: -1.1, degrees: 5), press: .init(x: -1.3, y: 1.3, degrees: -3))
+            InkMotion(
+                2.5, 21.4, hover: .init(x: 1.3, y: -0.8, degrees: -5, scaleX: 0.91, scaleY: 0.91),
+                press: .init(x: 6.5, y: -0.6, degrees: -12, scaleX: 0.8, scaleY: 0.8))
         case .openNote:
-            InkMotion(13, 12, hover: .init(x: 1.3, scaleX: 0.93), press: .init(x: -1.5, scaleX: 0.8))
+            InkMotion(13, 12, hover: .init(x: -1.65, scaleX: 0.91), press: .init(x: 2.9, scaleX: 0.72))
         case .chevron:
-            InkMotion(15.4, 12.1, hover: .init(degrees: -12), press: .init(degrees: 12, scaleX: 0.85))
+            InkMotion(15.4, 12.1, hover: .init(x: 0.7, degrees: -9), press: .init(x: 2.4, degrees: 4))
         case .discussion:
-            InkMotion(15, 15, hover: .init(y: -1.4, degrees: -4), press: .init(x: -1.5, y: -2.3, scaleX: 0.85))
+            InkMotion(
+                16, 17, hover: .init(x: -1.1, y: -1.8, degrees: -4),
+                press: .init(x: -2.5, y: -3, scaleX: 1.16, scaleY: 1.14))
         case .close:
-            InkMotion(12, 12, hover: .init(degrees: 10, scaleX: 1.08), press: .init(degrees: -12, scaleY: 0.8))
+            InkMotion(12, 12, hover: .init(degrees: 8, scaleX: 1.12), press: .init(degrees: 45, scaleX: 0.85))
         case .add:
-            InkMotion(12, 12, hover: .init(degrees: -6, scaleY: 1.19), press: .init(scaleY: 0.64))
+            InkMotion(12, 12, hover: .init(y: -1.3, scaleY: 0.78), press: .init(scaleX: 1.4, scaleY: 1.08))
         case .play:
-            InkMotion(8, 12, hover: .init(x: 1.3, scaleX: 1.05), press: .init(x: -0.6, scaleX: 0.72))
+            InkMotion(8, 12, hover: .init(x: 0.7, scaleY: 1.12), press: .init(x: 2, scaleX: 1.1, scaleY: 1.23))
         case .pause:
-            InkMotion(16, 12, hover: .init(x: 1.2, scaleY: 1.07), press: .init(x: -1.6, scaleY: 0.86))
+            InkMotion(16, 12, hover: .init(x: 1.5, scaleY: 1.05), press: .init(x: -3.2, scaleY: 0.92))
         }
     }
 }
@@ -126,15 +140,51 @@ struct ReaderIconLayer: Shape {
         let moving = hover != 0 || press != 0
         var path = Path()
         if ink != .spot {
-            path = glyph.drawing
+            path = moving ? movingOutline(hover: hover, press: press) : glyph.drawing
         }
         if ink != .outline {
             let plate = glyph.inkPlate
-            path.addPath(moving ? plate.applying(plateTransform(hover: hover, press: press)) : plate)
+            var printed = moving ? plate.applying(plateTransform(hover: hover, press: press)) : plate
+            if glyph == .delete && press > 0 {
+                // Only the portion above the rim is visible as the paper drops inside.
+                printed = printed.intersection(
+                    Path(CGRect(x: 0, y: 0, width: 24, height: ReaderIcon.Glyph.wastebasketRim)))
+            }
+            path.addPath(printed)
         }
         return path.applying(
             CGAffineTransform(translationX: rect.minX, y: rect.minY)
                 .scaledBy(x: rect.width / 24, y: rect.height / 24))
+    }
+
+    private func movingOutline(hover: CGFloat, press: CGFloat) -> Path {
+        let outline = glyph.drawing
+        switch glyph {
+        case .annotation:
+            let transform = plateTransform(hover: hover, press: press)
+            var pen = outline.applying(transform)
+            let start = CGPoint(x: 2.5, y: 21.4)
+            pen.move(to: start)
+            pen.addQuadCurve(to: start.applying(transform), control: CGPoint(x: 3 + 1.8 * press, y: 22.1))
+            return pen
+        case .citation:
+            let spread = ReaderIcon.Glyph.secondQuotationPose(for: .hovered)
+            let set = ReaderIcon.Glyph.secondQuotationPose(for: .pressed)
+            return outline.applying(CGAffineTransform(translationX: spread.x * hover + set.x * press, y: set.y * press))
+        case .openNote, .chevron:
+            let advance = glyph == .openNote ? -1.65 * hover + 2.9 * press : 0.7 * hover + 2.4 * press
+            var shaft = Path()
+            shaft.move(to: glyph == .openNote ? CGPoint(x: 2.3, y: 9.8) : CGPoint(x: 8.6, y: 5.6))
+            if glyph == .openNote { shaft.addLine(to: CGPoint(x: 2.3, y: 12.1)) }
+            shaft.addLine(to: CGPoint(x: (glyph == .openNote ? 14.5 : 15.1) + advance, y: 12.1))
+            return shaft
+        case .close:
+            let transform = CGAffineTransform(translationX: 12, y: 12)
+                .rotated(by: -press * .pi / 4).translatedBy(x: -12, y: -12)
+            return outline.applying(transform)
+        default:
+            return outline
+        }
     }
 
     private func plateTransform(hover: CGFloat, press: CGFloat) -> CGAffineTransform {

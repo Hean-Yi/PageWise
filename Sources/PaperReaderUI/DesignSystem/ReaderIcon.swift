@@ -39,16 +39,15 @@ struct ReaderIcon: View {
                 }
                 outline.stroke(sidebarLineStyle, style: outlineStroke(weight: 1.7))
             }
-            if glyph == .notebook {
-                let turn: CGFloat = state == .hovered ? 1 : state == .pressed ? 0.42 : 0
-                NotebookLeaf(progress: turn).fill(ReaderTheme.surface)
-                NotebookLeaf(progress: turn).stroke(plateStyle, style: outlineStroke(weight: 1.35))
-                    .opacity(turn > 0 ? 1 : 0)
+            if glyph == .calendar || glyph == .notebook {
+                ReaderIconPageAction(glyph: glyph, progress: state == .idle ? 0 : state == .hovered ? 0.48 : 1)
+                    .foregroundStyle(sidebarLineStyle)
+                    .opacity(enabled ? 1 : 0.5)
             }
         }
         .frame(width: size, height: size)
         .animation(
-            reduceMotion ? nil : state == .pressed ? .easeOut(duration: 0.085) : .smooth(duration: 0.24),
+            reduceMotion ? nil : state == .pressed ? .easeOut(duration: 0.18) : .smooth(duration: 0.26),
             value: state
         )
         .accessibilityHidden(true)
@@ -155,7 +154,6 @@ extension ReaderIcon.Glyph {
             art.outline.line([(3, 5), (20.6, 5), (20.6, 15.9), (15.7, 21), (3, 21)], closed: true)
             art.outline.line([(7.3, 2.5), (7.3, 6.4)])
             art.outline.line([(16.3, 2.5), (16.3, 6.4)])
-            art.outline.line([(7.2, 12), (12.7, 12), (9.6, 17.5)])
         case .notebook:
             // Cloth quarter binding and the exposed edge of the page block.
             art.outline.line(
@@ -200,7 +198,7 @@ extension ReaderIcon.Glyph {
         case .delete:
             // A loose sheet falling into the open mouth of a wastepaper basket.
             art.spot.line([(5, 5), (13, 1.6), (16.8, 7.4), (7, 7.4)], closed: true)
-            art.outline.line([(3.1, 9.1), (21, 9.1)])
+            art.outline.line([(3.1, Self.wastebasketRim), (21, Self.wastebasketRim)])
             art.outline.line([(4.6, 9.3), (7.1, 20.8), (17, 20.8), (19.5, 9.3)])
             art.outline.line([(9.3, 12.6), (10.1, 17.4)])
             art.outline.line([(14.8, 12.6), (14, 17.4)])

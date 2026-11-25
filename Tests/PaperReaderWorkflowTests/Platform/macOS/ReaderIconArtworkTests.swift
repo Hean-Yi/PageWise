@@ -61,6 +61,50 @@
             }
         }
 
+        @Test func paperSlipsBehindTheBinAndTheReadingLeafTurnsAcrossItsBinding() {
+            let bounds = CGRect(x: 0, y: 0, width: 24, height: 24)
+            func ink(_ glyph: ReaderIcon.Glyph, _ pose: ReaderIconInteraction) -> CGRect {
+                ReaderIconLayer(glyph: glyph, ink: .spot, state: pose).path(in: bounds).boundingRect
+            }
+            let liftedSheet = ink(.delete, .hovered)
+            let droppedSheet = ink(.delete, .pressed)
+            #expect(liftedSheet.minY < ink(.delete, .idle).minY)
+            #expect(droppedSheet.maxY <= 9.11 && droppedSheet.minY > liftedSheet.minY)
+            #expect(droppedSheet.height < liftedSheet.height)
+            #expect(ink(.source, .hovered).minX > 11)
+            #expect(ink(.source, .pressed).maxX <= 12.41)
+        }
+
+        @Test func dateAndHandwritingChangeWithinThePageWithoutMovingItsBinding() throws {
+            // Inspect the printed area alone. Motion of the header or book spine cannot satisfy this check.
+            let printArea = CGRect(x: 16, y: 22, width: 22, height: 16)
+            for glyph in [ReaderIcon.Glyph.calendar, .notebook] {
+                let frames = try [CGFloat(0), 0.48, 1].map { progress in
+                    let detail = ReaderIconPageAction(glyph: glyph, progress: progress)
+                        .frame(width: 24, height: 24).foregroundStyle(.black).background(.white)
+                    let renderer = ImageRenderer(content: detail)
+                    renderer.scale = 2
+                    let crop = try #require(renderer.cgImage?.cropping(to: printArea))
+                    return try #require(crop.dataProvider?.data) as Data
+                }
+                #expect(Set(frames).count == 3, "printed area for \(glyph)")
+            }
+        }
+
+        @Test func notebookPencilStaysInsideTheGlyphAndLeavesALegibleLineOnHover() {
+            let frame = CGRect(x: 0, y: 0, width: 24, height: 24)
+            let penStroke = StrokeStyle(lineWidth: 1.2, lineCap: .round, lineJoin: .round)
+            let idle = ReaderIconPageAction.notebookInk(at: 0)
+            let hover = ReaderIconPageAction.notebookInk(at: 0.48)
+            let pressed = ReaderIconPageAction.notebookInk(at: 1)
+            #expect(!idle.pencil.isEmpty && !idle.nib.isEmpty && idle.line.currentPoint == nil)
+            #expect(hover.line.boundingRect.width >= pressed.line.boundingRect.width * 0.6)
+            for frameIndex in 0...100 {
+                let ink = ReaderIconPageAction.notebookInk(at: CGFloat(frameIndex) / 100)
+                #expect(frame.contains(ink.pencil.strokedPath(penStroke).boundingRect))
+            }
+        }
+
         @Test func sidebarInkPassesOverDifferentPartsOfEachDrawing() {
             let bounds = CGRect(x: 0, y: 0, width: 24, height: 24)
             for glyph in [ReaderIcon.Glyph.library, .read, .calendar, .notebook] {
@@ -78,6 +122,31 @@
                     if frame == 10 { #expect(!covered.isEmpty && covered.count < interior.count) }
                     if frame == 20 { #expect(covered.count == interior.count) }
                     previous = covered
+                }
+            }
+        }
+
+        @Test func downloadArrowLiftsOnceAndPressLandsInsideTheTray() {
+            let times = (0...100).map { CGFloat($0) / 100 }
+            let hover = times.map { ReaderActionGlyph.arrowOffset(.hovered, $0) }
+            #expect(abs(hover[0]) < 0.001 && abs(hover[100]) < 0.001)
+            #expect(hover[50] < -3 && hover[50] == hover.min())
+            #expect(Array(hover[0...50]) == hover[0...50].sorted(by: >))
+            #expect(Array(hover[50...100]) == hover[50...100].sorted())
+            let touchdown = ReaderActionGlyph.arrowOffset(.pressed, 0.64)
+            let settled = ReaderActionGlyph.arrowOffset(.pressed, 1)
+            #expect(touchdown > settled && settled > 2)
+            #expect(ReaderActionGlyph.arrowOffset(.idle, 0.5) == 0)
+        }
+
+        @Test func ellipsisInksItsThreeDotsInOrderAndSettles() {
+            let moments: [CGFloat] = [0.28, 0.5, 0.72]
+            for pose in [ReaderIconInteraction.hovered, .pressed] {
+                for (index, time) in moments.enumerated() {
+                    let dots = (0..<3).map { ReaderActionGlyph.dotPulse($0, pose, time) }
+                    #expect(dots[index] > 0.99 && dots[index] == dots.max())
+                    #expect(ReaderActionGlyph.dotPulse(index, pose, 1) < 0.001)
+                    #expect(ReaderActionGlyph.dotPulse(index, .idle, time) == 0)
                 }
             }
         }

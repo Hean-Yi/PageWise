@@ -22,7 +22,7 @@ struct ReadingMonthGrid: View {
                 Button {
                     moveMonth(-1)
                 } label: {
-                    Image(systemName: "chevron.left").readerSymbolInk()
+                    ReaderActionSymbol("chevron.left")
                 }
                 .accessibilityLabel("上个月")
                 Button {
@@ -35,7 +35,7 @@ struct ReadingMonthGrid: View {
                 Button {
                     moveMonth(1)
                 } label: {
-                    Image(systemName: "chevron.right").readerSymbolInk()
+                    ReaderActionSymbol("chevron.right")
                 }
                 .accessibilityLabel("下个月")
             }.readerIconButtonStyle(.plain).font(.caption).foregroundStyle(ReaderTheme.ink)

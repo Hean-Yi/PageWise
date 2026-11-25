@@ -30,12 +30,12 @@ enum HTMLNoteStyle {
           .reader-note-card button.note-icon-button,#reader-document-summary>header button.note-icon-button{display:inline-grid;place-items:center;width:28px;height:28px;padding:0;vertical-align:middle;flex:none}
           .note-icon-button .ink-plate{fill:light-dark(#9f503a,#e8a086)}
           @media(prefers-reduced-motion:no-preference){
-            .note-icon-button .ink-plate{transform-box:view-box;transform:var(--ink-rest,none);transition:transform .18s cubic-bezier(.2,.8,.3,1)}
-            .note-icon-button:enabled:focus-visible .ink-plate{--ink-rest:var(--ink-hover)}
-            .note-icon-button:enabled:is(:active,[data-key-press]) .ink-plate{transform:var(--ink-press);transition-duration:.07s}
+            .note-icon-button .ink-motion{transform-box:view-box;transform:var(--ink-rest,none);transition:transform .18s cubic-bezier(.2,.8,.3,1)}
+            .note-icon-button:enabled:focus-visible .ink-motion{--ink-rest:var(--ink-hover)}
+            .note-icon-button:enabled:is(:active,[data-key-press]) .ink-motion{transform:var(--ink-press);transition-duration:.07s}
           }
           @media(hover:hover) and (prefers-reduced-motion:no-preference){
-            .note-icon-button:enabled:hover .ink-plate{--ink-rest:var(--ink-hover)}
+            .note-icon-button:enabled:hover .ink-motion{--ink-rest:var(--ink-hover)}
           }
           @media(prefers-contrast:more){.note-icon-button .ink-plate{fill:currentColor}}
           @media(pointer:coarse){.reader-note-card button.note-icon-button,#reader-document-summary>header button.note-icon-button{width:44px;height:44px}}

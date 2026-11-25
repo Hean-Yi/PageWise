@@ -74,7 +74,7 @@ struct SearchView: View {
                         if let url = search.webSearchURL {
                             Link(destination: url) {
                                 Label("在 arXiv 网页查找", systemImage: "arrow.up.right.square")
-                                    .labelStyle(ReaderSymbolLabelStyle())
+                                    .labelStyle(ReaderSymbolLabelStyle(motion: .outward))
                             }.readerIconButtonStyle(.plain)
                         }
                     }
@@ -141,7 +141,7 @@ private struct OnlineCandidateCard: View {
                 Link(destination: url) {
                     HStack(alignment: .firstTextBaseline, spacing: 5) {
                         title
-                        Image(systemName: "arrow.up.right").font(.caption2).readerSymbolInk()
+                        ReaderActionSymbol("arrow.up.right").font(.caption2)
                             .foregroundStyle(ReaderTheme.muted).accessibilityHidden(true)
                     }
                     .multilineTextAlignment(.leading).contentShape(Rectangle())
@@ -162,7 +162,7 @@ private struct OnlineCandidateCard: View {
                 }
             }
             if search.importingID == item.id {
-                ProgressView { Text(search.importProgress).font(.caption) }.progressViewStyle(.linear)
+                ProgressView(search.importProgress).font(.caption).progressViewStyle(.linear)
             }
             if let error = search.importErrors[item.id] {
                 Text(error).font(.caption).foregroundStyle(ReaderTheme.accent)
@@ -215,13 +215,14 @@ private struct OnlineCandidateCard: View {
             }
             .readerIconButtonStyle(DiscoveryAction())
         } else if search.importingID == item.id {
-            Button("停止导入") { search.cancelImport() }.readerIconButtonStyle(DiscoveryAction())
+            Button(action: search.cancelImport) {
+                ReaderDownloadLabel(title: "停止导入", receiving: true)
+            }.readerIconButtonStyle(DiscoveryAction())
         } else if item.canAttemptDownload {
             Button {
                 search.confirmImport(item)
             } label: {
-                Label(search.importErrors[item.id] == nil ? "下载并导入" : "重试导入", systemImage: "arrow.down.to.line")
-                    .labelStyle(ReaderSymbolLabelStyle())
+                ReaderDownloadLabel(title: search.importErrors[item.id] == nil ? "下载并导入" : "重试导入")
             }
             .readerIconButtonStyle(DiscoveryAction()).disabled(search.importingID != nil)
         } else {

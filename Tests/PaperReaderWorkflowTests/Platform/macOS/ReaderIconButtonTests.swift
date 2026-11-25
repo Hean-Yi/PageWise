@@ -90,4 +90,34 @@
         }
         #expect(recorder.presses == 2)
     }
+
+    @Test @MainActor func navigationArrowsMoveInTheirOwnDirectionInsideAFixedButton() throws {
+        func inkCenter(_ symbol: String, _ state: ReaderIconInteraction, enabled: Bool = true) throws -> CGFloat {
+            let icon = ReaderActionSymbol(symbol).font(.system(size: 14))
+                .environment(\.readerIconInteraction, state)
+                .disabled(!enabled).frame(width: 32, height: 32)
+            let renderer = ImageRenderer(content: icon)
+            renderer.scale = 2
+            let image = try #require(renderer.cgImage)
+            #expect(image.width == 64 && image.height == 64)
+            let bitmap = NSBitmapImageRep(cgImage: image)
+            let columns = (0..<image.width).filter { x in
+                (0..<image.height).contains { y in (bitmap.colorAt(x: x, y: y)?.alphaComponent ?? 0) > 0.5 }
+            }
+            return CGFloat(try #require(columns.first) + #require(columns.last)) / 2
+        }
+
+        for (name, direction): (String, CGFloat) in [("chevron.left", -1), ("chevron.right", 1)] {
+            let idle = try inkCenter(name, .idle)
+            let hover = try inkCenter(name, .hovered)
+            let press = try inkCenter(name, .pressed)
+            if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+                #expect(hover == idle && press == idle)
+            } else {
+                #expect((hover - idle) * direction > 1)
+                #expect((press - hover) * direction > 1)
+            }
+            #expect(try inkCenter(name, .pressed, enabled: false) == inkCenter(name, .idle, enabled: false))
+        }
+    }
 #endif

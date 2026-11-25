@@ -7,7 +7,7 @@ struct PDFBilingualAppearanceMenu: View {
 
     var body: some View {
         ReaderPopupMenu("阅读外观", items: items) {
-            Image(systemName: "textformat.size").readerSymbolInk().readerIconTarget(macOS: 30)
+            ReaderActionSymbol("textformat.size").readerIconTarget(macOS: 30)
         }.fixedSize().help("阅读外观")
     }
 
@@ -56,8 +56,9 @@ struct PDFTranslationStatusControl: View {
                     }
                 } label: {
                     ViewThatFits(in: .horizontal) {
-                        Label(label, systemImage: symbol(status)).labelStyle(ReaderSymbolLabelStyle()).fixedSize()
-                        Image(systemName: symbol(status)).readerSymbolInk()
+                        Label(label, systemImage: symbol(status))
+                            .labelStyle(ReaderSymbolLabelStyle(motion: ReaderSymbolMotion(symbol(status)))).fixedSize()
+                        ReaderActionSymbol(symbol(status))
                     }
                 }
                 .readerIconButtonStyle(.borderless).accessibilityLabel(label).help(label)

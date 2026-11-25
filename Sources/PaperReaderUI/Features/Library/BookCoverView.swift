@@ -211,7 +211,7 @@ struct BookshelfItem: View {
                     Button {
                         showPreview(.pinned(paper.id))
                     } label: {
-                        Image(systemName: "eye").readerSymbolInk().readerIconTarget(macOS: 30)
+                        ReaderActionSymbol("eye").readerIconTarget(macOS: 30)
                     }
                     .readerIconButtonStyle(.plain).focused($focus, equals: .preview)
                     .foregroundStyle(ReaderTheme.muted).help("预览论文（按住空格）")
@@ -230,7 +230,7 @@ struct BookshelfItem: View {
                 .opacity(showsActions ? 1 : 0)
                 .allowsHitTesting(showsActions)
                 ReaderPopupMenu(paper.title + "的选项", items: actions, width: 174, isPresented: $menuOpen) {
-                    Image(systemName: "ellipsis").readerSymbolInk().font(.system(size: 16, weight: .semibold))
+                    ReaderActionGlyph(mark: .more, size: 17)
                         .readerIconTarget(macOS: 30)
                 }.fixedSize()
                     .foregroundStyle(ReaderTheme.muted.opacity(showsActions ? 1 : 0.72)).focused($focus, equals: .menu)

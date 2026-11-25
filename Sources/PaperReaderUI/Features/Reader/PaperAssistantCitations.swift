@@ -102,7 +102,7 @@ struct PaperAssistantCitations: View {
                     Text(source.id).monospacedDigit()
                     Text(source.title).foregroundStyle(ReaderTheme.ink).lineLimit(2)
                     Spacer(minLength: 0)
-                    Image(systemName: canNavigate ? "arrow.up.forward" : "chevron.down").readerSymbolInk()
+                    ReaderActionSymbol(canNavigate ? "arrow.up.forward" : "chevron.down")
                         .rotationEffect(.degrees(!canNavigate && expanded ? 180 : 0))
                         .imageScale(.small).accessibilityHidden(true)
                 }.contentShape(Rectangle())

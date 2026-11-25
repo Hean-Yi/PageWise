@@ -145,7 +145,7 @@ struct TopicShelvesView<SortMenu: View>: View {
                 .onSubmit { saveName() }.disabled(saving)
                 .frame(maxWidth: 280)
             Button(action: saveName) {
-                Image(systemName: "checkmark").readerSymbolInk().frame(width: 32, height: 32)
+                ReaderActionSymbol("checkmark").frame(width: 32, height: 32)
             }
             .foregroundStyle(ReaderTheme.accent)
             .readerIconButtonStyle(.plain).help("保存书架名称").accessibilityLabel("保存书架名称")
@@ -261,7 +261,7 @@ private struct TopicShelfItem: View {
     var body: some View {
         Button(action: select) {
             HStack(spacing: 7) {
-                if isUnclassified { Image(systemName: "tray").readerSymbolInk().font(.system(size: 11)) }
+                if isUnclassified { ReaderActionSymbol("tray").font(.system(size: 11)) }
                 Text(name).font(.system(size: 12, weight: .medium)).lineLimit(1)
                 Text("\(count)").font(.system(size: 10)).monospacedDigit().fixedSize().foregroundStyle(
                     ReaderTheme.muted)

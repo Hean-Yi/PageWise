@@ -145,7 +145,7 @@ struct SettingsView: View {
                     category = item
                 } label: {
                     HStack(spacing: 9) {
-                        Image(systemName: item.symbol).readerSymbolInk().frame(width: 18)
+                        ReaderActionSymbol(item.symbol).frame(width: 18)
                         Text(item.rawValue)
                     }
                     .font(.subheadline.weight(item == category ? .semibold : .regular))
@@ -241,11 +241,11 @@ struct SettingsView: View {
                     }, width: 250
                 ) {
                     HStack(spacing: 12) {
-                        Image(systemName: "network").readerSymbolInk().foregroundStyle(ReaderTheme.accent)
+                        ReaderActionSymbol("network").foregroundStyle(ReaderTheme.accent)
                             .accessibilityHidden(true)
                         Text(provider.displayName).font(.body.weight(.medium))
                         Spacer(minLength: 6)
-                        Image(systemName: "chevron.up.chevron.down").readerSymbolInk().font(.caption2.weight(.semibold))
+                        ReaderActionSymbol("chevron.up.chevron.down").font(.caption2.weight(.semibold))
                             .foregroundStyle(ReaderTheme.muted).accessibilityHidden(true)
                     }
                     .padding(.horizontal, 13).frame(minHeight: 42).contentShape(Rectangle())

@@ -79,7 +79,8 @@ struct ReaderNavigator: View {
                         model.returnFromReader()
                         didNavigate()
                     } label: {
-                        Label(model.readerOrigin.title, systemImage: "arrow.left").labelStyle(ReaderSymbolLabelStyle())
+                        Label(model.readerOrigin.title, systemImage: "arrow.left").labelStyle(
+                            ReaderSymbolLabelStyle(motion: .left))
                     }.readerIconButtonStyle(.plain).padding(.horizontal, 16).padding(.top, 12)
                 }
             #endif
@@ -93,7 +94,7 @@ struct ReaderNavigator: View {
                     Button {
                         withAnimation(ReaderMotion.disclosure(reduceMotion)) { expanded = allOpen ? [] : expandable }
                     } label: {
-                        Image(systemName: "chevron.down.2").readerSymbolInk()
+                        ReaderActionSymbol("chevron.down.2")
                             .rotationEffect(.degrees(allOpen ? 180 : 0))
                             .frame(minWidth: 28, minHeight: 32)
                     }
@@ -108,7 +109,8 @@ struct ReaderNavigator: View {
                     Label(
                         searching ? "返回目录" : "查找正文或译文",
                         systemImage: searching ? "list.bullet.indent" : "magnifyingglass"
-                    ).labelStyle(ReaderSymbolLabelStyle(iconOnly: true)).frame(minWidth: 32, minHeight: 32)
+                    ).labelStyle(ReaderSymbolLabelStyle(iconOnly: true, motion: searching ? .ink : .lens)).frame(
+                        minWidth: 32, minHeight: 32)
                 }
                 .readerIconButtonStyle(.borderless).foregroundStyle(ReaderTheme.muted)
                 .help(searching ? "返回目录" : "文内查找（⌘F）")
@@ -191,7 +193,7 @@ struct ReaderNavigator: View {
                                                 if open { expanded.remove(group.id) } else { expanded.insert(group.id) }
                                             }
                                         } label: {
-                                            Image(systemName: "chevron.forward").readerSymbolInk()
+                                            ReaderActionSymbol("chevron.forward")
                                                 .font(.system(size: 10, weight: .bold))
                                                 .rotationEffect(
                                                     .degrees(open ? (layoutDirection == .rightToLeft ? -90 : 90) : 0)

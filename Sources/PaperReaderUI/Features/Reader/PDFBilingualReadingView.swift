@@ -84,8 +84,10 @@ struct PDFBilingualReadingView: View {
                         Button {
                             peekingAtOriginal = false
                         } label: {
-                            Label("返回双语重排", systemImage: "arrow.uturn.backward").labelStyle(ReaderSymbolLabelStyle())
-                                .font(.callout.weight(.medium))
+                            Label("返回双语重排", systemImage: "arrow.uturn.backward").labelStyle(
+                                ReaderSymbolLabelStyle(motion: .left)
+                            )
+                            .font(.callout.weight(.medium))
                         }
                         .readerFloatingButton(.capsule).padding(16)
                         .transition(.opacity)

@@ -65,7 +65,7 @@ struct AgentProcessView: View {
 
     private func disclosureLabel(_ title: String, icon: String, expanded: Bool) -> some View {
         HStack(spacing: 7) {
-            Image(systemName: icon).readerSymbolInk().frame(width: 15)
+            ReaderActionSymbol(icon).frame(width: 15)
             Text(title).fontWeight(.medium).multilineTextAlignment(.leading)
             Spacer(minLength: 4)
             chevron(expanded: expanded)
@@ -74,7 +74,7 @@ struct AgentProcessView: View {
     }
 
     private func chevron(expanded: Bool) -> some View {
-        Image(systemName: "chevron.right").readerSymbolInk().font(.caption2)
+        ReaderActionSymbol("chevron.right").font(.caption2)
             .rotationEffect(.degrees(expanded ? 90 : 0))
             .flipsForRightToLeftLayoutDirection(true)
             .accessibilityHidden(true)

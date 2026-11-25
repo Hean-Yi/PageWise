@@ -64,7 +64,7 @@ private struct ReaderIconActionStyle<Styled: View>: PrimitiveButtonStyle {
             if !reduceMotion {
                 release?.cancel()
                 release = Task {
-                    do { try await Task.sleep(for: .milliseconds(120)) } catch { return }
+                    do { try await Task.sleep(for: .milliseconds(220)) } catch { return }
                     if !Task.isCancelled { release = nil }
                 }
             }

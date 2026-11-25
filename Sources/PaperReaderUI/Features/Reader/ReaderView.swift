@@ -136,7 +136,7 @@ struct ReaderView: View {
             Button(action: model.returnFromReader) {
                 Label("返回\(model.readerOrigin.title)", systemImage: "chevron.left")
             }
-            .readerIconButtonStyle(.borderless).labelStyle(ReaderSymbolLabelStyle(iconOnly: true)).help(
+            .readerIconButtonStyle(.borderless).labelStyle(ReaderSymbolLabelStyle(iconOnly: true, motion: .left)).help(
                 "返回\(model.readerOrigin.title)"
             )
             .keyboardShortcut("l", modifiers: [.command, .shift])
@@ -191,7 +191,7 @@ struct ReaderView: View {
             }
         }
         return ReaderPopupMenu("阅读状态", items: items, width: 160) {
-            Image(systemName: "ellipsis").readerSymbolInk().font(.body.weight(.semibold))
+            ReaderActionGlyph(mark: .more, size: 17)
                 .foregroundStyle(ReaderTheme.muted).readerIconTarget(macOS: 32)
         }
         .accessibilityValue(status.title).help("更改阅读状态")
@@ -238,7 +238,7 @@ struct ReaderView: View {
             Button {
                 showWarnings = true
             } label: {
-                Image(systemName: "info.circle").readerSymbolInk().readerIconTarget()
+                ReaderActionSymbol("info.circle").readerIconTarget()
             }.readerIconButtonStyle(.plain).accessibilityLabel("阅读提示").help("阅读提示")
                 .popover(isPresented: $showWarnings) {
                     let warnings = Text(paper.warnings.joined(separator: "\n\n"))
@@ -273,7 +273,7 @@ struct ReaderView: View {
                     Button {
                         model.navigateToPage(model.visiblePage - 1)
                     } label: {
-                        Image(systemName: "chevron.left").readerSymbolInk()
+                        ReaderActionSymbol("chevron.left")
                     }
                     .readerIconButtonStyle(.borderless).disabled(model.visiblePage <= 0).help("上一页").accessibilityLabel(
                         "上一页")
@@ -289,7 +289,7 @@ struct ReaderView: View {
                     Button {
                         model.navigateToPage(model.visiblePage + 1)
                     } label: {
-                        Image(systemName: "chevron.right").readerSymbolInk()
+                        ReaderActionSymbol("chevron.right")
                     }
                     .readerIconButtonStyle(.borderless).disabled(model.visiblePage >= pageCount - 1).help("下一页")
                     .accessibilityLabel("下一页")
@@ -303,7 +303,7 @@ struct ReaderView: View {
                 }.readerIconButtonStyle(.plain)
             }
             Button(action: model.toggleBookmark) {
-                Image(systemName: model.isCurrentPageBookmarked ? "bookmark.fill" : "bookmark").readerSymbolInk()
+                ReaderActionSymbol(model.isCurrentPageBookmarked ? "bookmark.fill" : "bookmark")
                     .foregroundStyle(model.isCurrentPageBookmarked ? ReaderTheme.accent : ReaderTheme.muted)
             }.readerIconButtonStyle(.borderless).disabled(pageCount == 0).help(
                 model.isCurrentPageBookmarked ? "移除书签" : "添加书签"
@@ -345,7 +345,7 @@ struct ReaderView: View {
                 }
                 if !model.usesHTMLReading {
                     Button(action: model.highlightSelection) {
-                        Label("高亮", systemImage: "highlighter").labelStyle(ReaderSymbolLabelStyle())
+                        Label("高亮", systemImage: "highlighter").labelStyle(ReaderSymbolLabelStyle(motion: .write))
                     }.readerIconButtonStyle(.borderless)
                 }
             }
@@ -364,7 +364,7 @@ struct ReaderView: View {
             }
             #if os(iOS)
                 if !model.usesHTMLReading && originalVisible {
-                    Toggle(isOn: $penEnabled) { Image(systemName: "pencil.tip.crop.circle").readerSymbolInk() }
+                    Toggle(isOn: $penEnabled) { ReaderActionSymbol("pencil.tip.crop.circle") }
                         .readerIconButtonStyle(.borderless).toggleStyle(.button).accessibilityLabel("手写批注")
                 }
             #endif
