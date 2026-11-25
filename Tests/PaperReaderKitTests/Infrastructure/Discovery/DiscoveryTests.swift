@@ -175,12 +175,16 @@ private final class UnfinishedDownloadProtocol: URLProtocol, @unchecked Sendable
 
     override func startLoading() {
         guard let url = request.url else { return }
-        let headers = url.path == "/declared" ? ["Content-Length": "50000000"] : [:]
+        var headers = ["Content-Type": "application/octet-stream"]
+        if url.path == "/declared" { headers["Content-Length"] = "50000000" }
         let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: headers)!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         if url.path == "/stream" {
             client?.urlProtocol(self, didLoad: Data(repeating: 1, count: 3_000))
             client?.urlProtocol(self, didLoad: Data(repeating: 1, count: 3_000))
+        } else {
+            // CFNetwork may buffer initial bytes before forwarding custom protocol response headers.
+            client?.urlProtocol(self, didLoad: Data(repeating: 1, count: 4_096))
         }
         // Deliberately never send a completion. Only early header/chunk checks can reject this file.
     }
