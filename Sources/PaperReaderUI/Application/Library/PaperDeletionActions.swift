@@ -48,6 +48,7 @@ extension ReaderModel {
     }
 
     func removeDeletedFiles(_ paper: Paper) async {
+        await paperSearchWarmup.discard(paper.id)
         let worker = translationTasks[paper.id]
         await previewReader.discard(paper: paper, root: root)
         if !state.papers.contains(where: { $0.digest == paper.digest }) {

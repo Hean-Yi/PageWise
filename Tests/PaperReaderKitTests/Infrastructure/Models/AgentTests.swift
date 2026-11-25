@@ -345,3 +345,24 @@ private actor AgentSaveGate {
         #expect(throws: (any Error).self) { try AgentToolArguments.parse(name: name, json: json, limits: .init()) }
     }
 }
+
+@Test func libraryAgentIndexTracksEditsDeletionTieOrderAndCancellation() async throws {
+    let index = LibraryAgentSearchIndex()
+    let first = TextBlock(sourcePage: 0, text: "RESEARCHING sparse data")
+    let next = TextBlock(sourcePage: 1, text: "Sparse reSéarchers")
+    var paper = Paper(
+        title: "A fixture", digest: "sample", originalPath: "sample.pdf", pageCount: 2,
+        blocks: [first, next], warnings: [], canReflow: false)
+    let initial = try await index.search("search sparse", papers: [paper])
+    #expect(initial.first?.blockID == first.id)
+    paper.blocks[0].text = "Another passage"
+    #expect(try await index.search("search sparse", papers: [paper]).first?.blockID == next.id)
+    paper.pageCount = 1
+    #expect(try await index.search("search", papers: [paper]).isEmpty)
+    #expect(try await index.search("fixture", papers: []).isEmpty)
+    let cancelled = Task {
+        withUnsafeCurrentTask { $0?.cancel() }
+        return try await index.search("fixture", papers: [paper])
+    }
+    await #expect(throws: CancellationError.self) { try await cancelled.value }
+}

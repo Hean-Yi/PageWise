@@ -158,8 +158,7 @@ extension LibraryAgent {
             onSubject(query)
             let limit = min(max(0, limits.maxResults), 20)
             let papers = reader.state.papers.filter { !reader.pendingImportIDs.contains($0.id) }
-            async let ranked = LibraryAgentSearch.search(query, papers: papers, limit: limit + 1)
-            let matches = await ranked
+            let matches = try await reader.paperSearchIndex.search(query, papers: papers, limit: limit + 1)
             try check(epoch)
             let pageCounts = Dictionary(
                 reader.state.papers.lazy.filter { !self.reader.pendingImportIDs.contains($0.id) }.map {
@@ -168,7 +167,8 @@ extension LibraryAgent {
                 uniquingKeysWith: { first, _ in first })
             let hits = matches.filter { pageCounts[$0.paperID] != nil }
             let pairs = hits.prefix(limit).map { hit -> (ToolRecord, AgentCard) in
-                var card = AgentCard(kind: hit.blockID == nil ? .localPaper : .evidence, title: hit.title)
+                var card = AgentCard(
+                    kind: hit.blockID == nil && hit.sourcePage == nil ? .localPaper : .evidence, title: hit.title)
                 card.searchQuery = query
                 card.paperID = hit.paperID
                 card.blockID = hit.blockID

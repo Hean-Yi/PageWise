@@ -39,6 +39,8 @@ public final class ReaderModel {
     public var noteRevision = 0
     public var savedNoteRevision = 0
     public var noteSaveFailed = false
+    let paperSearchWarmup: PaperSearchWarmup
+    var paperSearchIndex: LibraryAgentSearchIndex { paperSearchWarmup.index }
     let readingNoteIndex = ReadingNoteMemoryIndex()
     @ObservationIgnored var noteSaveTask: Task<Void, Never>?
     public var htmlSelection: [HTMLTextSelection] = []
@@ -133,6 +135,7 @@ public final class ReaderModel {
         self.root = location
         pdfTranslations = PDFSentenceTranslationStore(root: location)
         self.translationValidation = translationValidation ?? PDFTranslationValidationConfiguration.load(root: location)
+        self.paperSearchWarmup = PaperSearchWarmup(root: location)
         store = try LibraryStore(directory: location)
         importer = PDFImporter(root: location)
         vault = VaultService(root: location)
@@ -195,6 +198,7 @@ public final class ReaderModel {
             if let folder = try? await vault.directory() { vaultName = folder.lastPathComponent }
             loaded = true
             backfillLibraryAbstracts()
+            paperSearchWarmup.enqueue(state.papers)
         } catch {
             loadFailure = error.localizedDescription
             message = error.localizedDescription
@@ -372,7 +376,10 @@ public final class ReaderModel {
                 if !noteMarks.isEmpty { self.state.highlights.append(contentsOf: noteMarks) }
                 if let report { self.state.chats.append(report) }
                 obsidianBinding?.apply(to: &self.state)
-                if let importedPaper { self.state.papers.insert(importedPaper, at: 0) }
+                if let importedPaper {
+                    self.state.papers.insert(importedPaper, at: 0)
+                    self.paperSearchWarmup.enqueue([importedPaper])
+                }
                 fillingSourceAbstract?.apply(to: &self.state)
                 if let link, let index = self.state.papers.firstIndex(where: { $0.id == link.paperID }) {
                     self.state.papers[index].linkedPublicationURLs =
