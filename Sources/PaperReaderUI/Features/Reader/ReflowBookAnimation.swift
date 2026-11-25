@@ -75,8 +75,7 @@ struct ReflowBookAnimation: View {
 
     var body: some View {
         TimelineView(.animation(minimumInterval: 1.0 / 30, paused: motion.isStill)) { timeline in
-            let pose = motion.pose(at: timeline.date)
-            Canvas { context, size in draw(pose, in: context, size: size) }
+            ReflowBookIllustration(pose: motion.pose(at: timeline.date))
         }
         .task(id: playback) {
             let now = Date()
@@ -94,34 +93,76 @@ struct ReflowBookAnimation: View {
             }
         }
     }
+}
 
-    private func draw(_ pose: ReflowBookPose, in context: GraphicsContext, size: CGSize) {
-        let w = Double(size.width)
-        let h = Double(size.height)
+struct ReflowBookIllustration: View {
+    let pose: ReflowBookPose
+
+    var body: some View {
+        Canvas(opaque: true) { context, size in
+            // Draw on a single artboard so stroke weights, cover lettering and sheet edges scale together.
+            let scale = min(size.width / 224, size.height / 168)
+            guard scale > 0 else { return }
+            // The covers and leaf share one presentation frame, including when an outer view is transitioning.
+            context.withCGContext { drawing in
+                drawing.setFillColor(ReaderTheme.canvas.resolve(in: context.environment).cgColor)
+                drawing.fill(CGRect(origin: .zero, size: size))
+                drawing.translateBy(x: (size.width - 224 * scale) / 2, y: (size.height - 168 * scale) / 2)
+                drawing.scaleBy(x: scale, y: scale)
+                draw(
+                    in: drawing, ink: ReaderTheme.accent.resolve(in: context.environment).cgColor,
+                    paper: ReaderTheme.surface.resolve(in: context.environment).cgColor)
+            }
+        }
+        .transaction { $0.animation = nil }
+    }
+
+    private func draw(in drawing: CGContext, ink: CGColor, paper: CGColor) {
         let spread = min(1, (pose.front - pose.back) * 3)
-        let halfWidth = w * 0.43
+        let halfWidth = 99.0
         let left = min(0, cos(.pi * pose.front))
         let right = max(0, cos(.pi * pose.back))
-        let spine = (w - halfWidth * (left + right)) / 2
-        let top = h * 0.34
-        let bottom = h * 0.88
-        let ink = ReaderTheme.accent
-        let outline = StrokeStyle(lineWidth: 1.7, lineCap: .round, lineJoin: .round)
+        let spine = 112 - halfWidth * (left + right) / 2
+        let top = 23.0
+        let bottom = 142.0
+        drawing.setLineCap(.round)
+        drawing.setLineJoin(.round)
+        func stroke(_ path: Path, opacity: Double = 1, width: Double = 2.2) {
+            drawing.setStrokeColor(ink)
+            drawing.setAlpha(opacity)
+            drawing.setLineWidth(width)
+            drawing.addPath(path.cgPath)
+            drawing.strokePath()
+        }
+        func fill(_ path: Path, color: CGColor, opacity: Double = 1) {
+            drawing.setFillColor(color)
+            drawing.setAlpha(opacity)
+            drawing.addPath(path.cgPath)
+            drawing.fillPath()
+        }
         func lift(_ angle: Double) -> Double {
-            h * (0.045 + 0.235 * spread) * sin(.pi * angle)
+            (2 + 14 * spread) * sin(.pi * angle)
         }
         func page(_ angle: Double, curl: Double) -> Path {
-            let reach = halfWidth * cos(.pi * angle)
+            let face = cos(.pi * angle)
+            let reach = halfWidth * face
             let rise = lift(angle)
+            let edge = spine + reach
+            let cornerX = 4 * face
+            let cornerY = 4.0
+            let flex = (curl + rise * 0.65)
             return Path { path in
                 path.move(to: CGPoint(x: spine, y: top))
                 path.addQuadCurve(
-                    to: CGPoint(x: spine + reach, y: top - 5 - rise),
-                    control: CGPoint(x: spine + reach * 0.55, y: top - 4 - curl - rise * 0.7))
-                path.addLine(to: CGPoint(x: spine + reach, y: bottom - 5 - rise))
+                    to: CGPoint(x: edge - cornerX, y: top - rise),
+                    control: CGPoint(x: spine + reach * 0.52, y: top - flex))
                 path.addQuadCurve(
-                    to: CGPoint(x: spine, y: bottom),
-                    control: CGPoint(x: spine + reach * 0.55, y: bottom - 4 - curl - rise * 0.7))
+                    to: CGPoint(x: edge, y: top - rise + cornerY), control: CGPoint(x: edge, y: top - rise))
+                path.addLine(to: CGPoint(x: edge, y: bottom - rise - cornerY))
+                path.addQuadCurve(
+                    to: CGPoint(x: edge - cornerX, y: bottom - rise), control: CGPoint(x: edge, y: bottom - rise))
+                path.addQuadCurve(
+                    to: CGPoint(x: spine, y: bottom), control: CGPoint(x: spine + reach * 0.52, y: bottom - flex))
                 path.closeSubpath()
             }
         }
@@ -130,44 +171,41 @@ struct ReflowBookAnimation: View {
             let angle = front ? pose.front : pose.back
             let face = cos(.pi * angle)
             let outside = front ? face : -face
-            let surface = page(angle, curl: spread * 3)
-            context.stroke(surface.offsetBy(dx: 0, dy: 2.8), with: .color(ink.opacity(0.55)), style: outline)
-            context.fill(surface, with: .color(ReaderTheme.surface))
+            let surface = page(angle, curl: spread * 4)
+            stroke(surface.offsetBy(dx: 0, dy: 3.4), opacity: 0.5)
+            fill(surface, color: paper)
             if outside > 0 {
-                context.fill(surface, with: .color(ink.opacity((front ? 0.11 : 0.19) * outside)))
+                fill(surface, color: ink, opacity: (front ? 0.11 : 0.19) * outside)
             }
-            context.stroke(surface, with: .color(ink), style: outline)
+            stroke(surface)
             func point(_ x: Double, _ y: Double) -> CGPoint {
-                CGPoint(x: spine + x * face, y: y - (5 + lift(angle)) * x / halfWidth)
+                CGPoint(x: spine + x * face, y: y - lift(angle) * x / halfWidth)
             }
             var print = Path()
             if outside > 0, front {
-                print.move(to: point(4, top + 1))
-                print.addLine(to: point(4, bottom - 1))
-                for (offset, length) in [(11.0, 26.0), (15.0, 21.0)] {
-                    print.move(to: point(10, top + offset))
-                    print.addLine(to: point(length, top + offset))
+                print.move(to: point(9, top + 1.5))
+                print.addLine(to: point(9, bottom - 1.5))
+                for (offset, end) in [(26.0, 70.0), (34.0, 55.0)] {
+                    print.move(to: point(22, top + offset))
+                    print.addLine(to: point(end, top + offset))
                 }
             } else if outside > 0 {
-                // The small press mark belongs to the back; the front carries the title rules.
-                print.move(to: point(19, bottom - 6))
-                print.addLine(to: point(22, bottom - 8))
-                print.addLine(to: point(25, bottom - 6))
-                print.addLine(to: point(22, bottom - 4))
+                // The press mark identifies the back even after the cover comes to rest.
+                print.move(to: point(44, bottom - 15))
+                print.addLine(to: point(50, bottom - 19))
+                print.addLine(to: point(56, bottom - 15))
+                print.addLine(to: point(50, bottom - 11))
                 print.closeSubpath()
             } else {
-                // Sheet edges visibly transfer from the right-hand stack to the left.
                 let stack = front ? pose.readFraction : 1 - pose.readFraction
                 if stack > 0 {
-                    print.move(to: point(3, bottom - 1.8 * stack))
+                    print.move(to: point(3, bottom - 2.4 * stack))
                     print.addQuadCurve(
-                        to: point(halfWidth - 1, bottom - 2.6 * stack),
-                        control: point(halfWidth / 2, bottom - 3 * stack - 1))
+                        to: point(halfWidth - 4, bottom - 2.4 * stack),
+                        control: point(halfWidth / 2, bottom - 3 * stack - 3))
                 }
             }
-            context.stroke(
-                print, with: .color(ink.opacity(abs(face) * 0.74)),
-                style: StrokeStyle(lineWidth: 1.15, lineCap: .round, lineJoin: .round))
+            stroke(print, opacity: abs(face) * 0.78, width: 1.55)
         }
 
         // Once the back faces the reader it must occlude the finished pages and the front cover.
@@ -175,16 +213,16 @@ struct ReflowBookAnimation: View {
         cover(front: backFacesReader)
         cover(front: !backFacesReader)
         if pose.leaf > pose.back + 0.001 && pose.front - pose.leaf > 0.001 {
-            let sheet = page(pose.leaf, curl: 6 * sin(.pi * pose.leaf) + 3)
-            context.fill(sheet, with: .color(ReaderTheme.surface))
-            context.stroke(sheet, with: .color(ink), style: outline)
+            let sheet = page(pose.leaf, curl: 8 * sin(.pi * pose.leaf) + 4)
+            fill(sheet, color: paper)
+            stroke(sheet)
         }
         let edge = (1 - spread) * sin(.pi * pose.back)
         if edge > 0.01 {
             var binding = Path()
             binding.move(to: CGPoint(x: spine, y: top))
             binding.addLine(to: CGPoint(x: spine, y: bottom + 1))
-            context.stroke(binding, with: .color(ink), style: StrokeStyle(lineWidth: 1.6 + 2.2 * edge, lineCap: .round))
+            stroke(binding, width: 2.2 + 3 * edge)
         }
     }
 }

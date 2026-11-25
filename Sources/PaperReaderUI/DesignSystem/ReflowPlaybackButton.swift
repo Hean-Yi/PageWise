@@ -2,17 +2,19 @@ import SwiftUI
 
 struct ReflowPlaybackButton: View {
     let running: Bool
+    var prominent = false
     let action: () -> Void
 
     var body: some View {
         let title: LocalizedStringKey = running ? "暂停生成" : "继续生成"
+        let diameter: CGFloat = prominent ? 48 : 30
         Button(action: action) {
-            ReaderIcon(running ? .pause : .play, size: 17)
+            ReaderIcon(running ? .pause : .play, size: prominent ? 24 : 17)
                 .foregroundStyle(ReaderTheme.ink)
-                .readerIconTarget(macOS: 30)
-                .readerGlassSurface(in: Circle(), fallback: ReaderTheme.elevated)
+                .readerIconTarget(macOS: diameter)
+                .readerGlassSurface(in: Circle(), fallback: ReaderTheme.elevated, bordered: prominent)
         }
-        .readerPlainButton(cornerRadius: ReaderTheme.iconTarget(30) / 2)
+        .readerPlainButton(cornerRadius: ReaderTheme.iconTarget(diameter) / 2)
         .accessibilityLabel(title)
         .help(title)
     }
