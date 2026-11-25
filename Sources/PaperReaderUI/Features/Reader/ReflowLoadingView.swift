@@ -3,49 +3,39 @@ import SwiftUI
 
 struct ReflowLoadingView: View {
     let model: ReaderModel
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     var body: some View {
-        TimelineView(.periodic(from: .now, by: 1)) { context in
-            let id = model.selectedPaperID ?? UUID()
-            let running = model.translating.contains(id)
-            let elapsed = context.date.timeIntervalSince(model.reflowStartedAt[id] ?? context.date)
-            VStack(spacing: 26) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 20).fill(ReaderTheme.accent.opacity(0.08)).frame(
-                        width: 88, height: 108)
-                    Image(systemName: running ? "text.book.closed" : "pause.circle")
-                        .font(.system(size: 35, weight: .light)).foregroundStyle(ReaderTheme.accent)
-                }
-                VStack(spacing: 10) {
-                    Text(running ? "正在准备双语阅读" : (model.paper?.reflowJob?.finished == true ? "未找到可翻译正文" : "重排已暂停"))
-                        .font(.system(size: 25, weight: .medium, design: .serif))
-                }
-                VStack(spacing: 13) {
-                    if running { ProgressView().controlSize(.small) }
-                    Text(model.reflowStages[id] ?? model.paper?.reflowJob?.failure ?? "准备论文")
-                        .font(.callout).foregroundStyle(ReaderTheme.muted).multilineTextAlignment(.center).frame(
-                            maxWidth: 420)
-                    if let count = model.paper?.blocks.count, count > 0 {
-                        Text("已准备 \(count) 个内容块").font(.caption).foregroundStyle(ReaderTheme.muted)
+        if let paper = model.paper {
+            let running = model.isReflowPlaying(paper.id)
+            let finished = paper.reflowJob?.finished == true
+            let stage = model.reflowStages[paper.id]
+            VStack(spacing: 18) {
+                ReflowBookAnimation(running: running)
+                    .frame(width: 98, height: 76).accessibilityHidden(true)
+                VStack(spacing: 8) {
+                    Text(running ? stage ?? "准备双语版" : (finished ? "未找到可翻译正文" : "双语重排"))
+                        .font(ReaderTheme.editorial(22)).foregroundStyle(ReaderTheme.ink)
+                    if !running, let failure = model.reflowFailure(for: paper) {
+                        Text(failure).font(.callout).foregroundStyle(ReaderTheme.muted)
                     }
                 }
-                HStack(spacing: 14) {
-                    Button("查看原版", action: model.readOriginal).buttonStyle(.bordered)
-                    if running {
-                        Button("暂停", action: model.pauseTranslation).buttonStyle(.bordered)
-                    } else if model.paper?.reflowJob?.finished != true {
-                        Button("继续重排") { model.startAIReflow() }.buttonStyle(.borderedProminent)
+                .multilineTextAlignment(.center).frame(maxWidth: 420)
+                HStack(spacing: 18) {
+                    Button("查看原版", action: model.readOriginal)
+                    if running || !finished {
+                        ReflowPlaybackButton(running: running) {
+                            if running { model.pauseTranslation() } else { model.startAIReflow() }
+                        }
+                        .disabled(!running && model.translating.contains(paper.id))
                     }
-                }.controlSize(.large)
-                if model.reflowBodyCount > 0 && (!running || elapsed >= 20) {
-                    Button("先开始阅读", action: model.presentReflowContent).buttonStyle(.plain)
-                        .font(.callout).foregroundStyle(ReaderTheme.accent)
+                    if model.reflowBodyCount > 0 {
+                        Button("先开始阅读", action: model.presentReflowContent)
+                            .foregroundStyle(ReaderTheme.accent)
+                    }
                 }
-                Text("首批内容就绪后进入正文，其余内容会继续生成")
-                    .font(.caption).foregroundStyle(ReaderTheme.muted)
+                .buttonStyle(.borderless).font(.callout).tint(ReaderTheme.muted)
             }
-            .padding(36).frame(maxWidth: .infinity, maxHeight: .infinity).background(ReaderTheme.canvas)
-            .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: running)
+            .padding(30).frame(maxWidth: .infinity, maxHeight: .infinity).background(ReaderTheme.canvas)
         }
     }
 }

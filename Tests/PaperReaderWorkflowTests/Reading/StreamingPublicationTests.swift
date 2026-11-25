@@ -42,7 +42,11 @@ private actor NoRequestTransport: HTTPTransport {
         blocks: [TextBlock(sourcePage: 0, text: "Evidence")], warnings: [], canReflow: true)
     paper.reflowJob = ReflowJob(sources: paper.blocks)
     paper.reflowJob?.evidenceRoute = "html"
-    model.state.papers = [paper]
+    var other = Paper(
+        title: "Other", digest: "other", originalPath: "other.pdf", pageCount: 1,
+        blocks: [], warnings: [], canReflow: true)
+    other.reflowJob = paper.reflowJob
+    model.state.papers = [paper, other]
     model.select(paper.id)
     var settings = model.modelSettings
     settings.model = "fixture"
@@ -54,13 +58,24 @@ private actor NoRequestTransport: HTTPTransport {
     }
     #expect(credentials.waiting)
     model.touch()
+    model.select(other.id)
+    model.startAIReflow()
     model.pauseTranslation()
+    #expect(!model.isReflowPlaying(other.id))
+    #expect(model.isReflowPlaying(paper.id))
+    await model.translationTasks[other.id]?.value
+    model.select(paper.id)
+    model.openRetainedReading(nil)
+    let originalTask = try #require(model.translationTasks[paper.id])
+    model.pauseTranslation()
+    #expect(model.showingReflowLoading && !model.isReflowPlaying(paper.id))
+    model.startAIReflow()
+    #expect(model.translationTasks[paper.id] == originalTask)
     credentials.continuation?.resume(returning: "fixture-key")
     credentials.continuation = nil
-    for _ in 0..<100 {
-        if model.translating.isEmpty { break }
-        try await Task.sleep(for: .milliseconds(10))
-    }
+    await originalTask.value
+    #expect(model.translating.isEmpty && model.showingReflowLoading)
+    #expect(model.translationPauseReason == nil && model.paper?.reflowJob?.failure == nil)
     #expect(await transport.calls == 0)
     #expect(model.paper?.translatedBlockCount == 0)
 }

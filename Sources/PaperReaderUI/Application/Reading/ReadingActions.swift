@@ -41,7 +41,7 @@ extension ReaderModel {
             }
             if suspendTranslation, !translationTasks.isEmpty {
                 translationPauseReason = "应用进入后台，翻译已暂停"
-                for task in translationTasks.values { task.cancel() }
+                for id in translationTasks.keys { pauseReflow(id) }
             }
         }
     }

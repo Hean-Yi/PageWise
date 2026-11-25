@@ -5,6 +5,7 @@ struct ReaderIcon: View {
     enum Glyph: Int, CaseIterable {
         case library, read, favorite, calendar, notebook, paper, source
         case export, citation, delete, annotation, openNote, chevron, discussion, close, add
+        case play, pause
     }
 
     let glyph: Glyph
@@ -232,6 +233,12 @@ extension ReaderIcon.Glyph {
         case .add:
             art.outline.line([(4, 12), (20, 12)])
             art.spot.line([(11, 3.3), (13, 3.3), (13, 20.7), (11, 20.7)], closed: true)
+        case .play:
+            art.outline.line([(6, 3.8), (20.2, 12), (6, 20.2)], closed: true)
+            art.spot.line([(8.3, 12.7), (16.4, 11.8), (8.3, 16.7)], closed: true)
+        case .pause:
+            art.outline.line([(6.1, 4.6), (8.9, 4.6), (8.9, 19.4), (6.1, 19.4)], closed: true)
+            art.spot.line([(14, 4.2), (18.4, 4.2), (18.4, 19.2), (14, 19.8)], closed: true)
         }
         return art
     }

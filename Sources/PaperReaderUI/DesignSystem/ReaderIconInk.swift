@@ -74,6 +74,10 @@ extension ReaderIcon.Glyph {
             InkMotion(12, 12, hover: .init(degrees: 10, scaleX: 1.08), press: .init(degrees: -12, scaleY: 0.8))
         case .add:
             InkMotion(12, 12, hover: .init(degrees: -6, scaleY: 1.19), press: .init(scaleY: 0.64))
+        case .play:
+            InkMotion(8, 12, hover: .init(x: 1.3, scaleX: 1.05), press: .init(x: -0.6, scaleX: 0.72))
+        case .pause:
+            InkMotion(16, 12, hover: .init(x: 1.2, scaleY: 1.07), press: .init(x: -1.6, scaleY: 0.86))
         }
     }
 }

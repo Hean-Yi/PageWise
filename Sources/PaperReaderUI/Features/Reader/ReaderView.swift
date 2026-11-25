@@ -320,14 +320,15 @@ struct ReaderView: View {
             } else if model.mode == "translated", model.retainedReadingID == nil, let paper = model.currentEdition,
                 paper.usesSourceReflow
             {
-                if model.translating.contains(paper.id) {
+                if model.isReflowPlaying(paper.id) {
                     ProgressView().controlSize(.small)
-                    Button("暂停生成", action: model.pauseTranslation)
+                    ReflowPlaybackButton(running: true, action: model.pauseTranslation)
                 } else if let job = paper.reflowJob, job.supportsContinuation && !job.finished {
-                    if let reason = job.failure {
+                    if let reason = model.reflowFailure(for: paper) {
                         Text(reason).lineLimit(1).foregroundStyle(ReaderTheme.muted).help(reason)
                     }
-                    Button("继续生成") { translate() }
+                    ReflowPlaybackButton(running: false) { translate() }
+                        .disabled(model.translating.contains(paper.id))
                 }
             }
             if !model.selectionText.isEmpty && originalVisible {

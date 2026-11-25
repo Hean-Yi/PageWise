@@ -47,7 +47,6 @@ public final class ReaderModel {
     public var translationPauseReason: String?
     public var retainedReadingID: UUID?
     public var reflowStages: [UUID: String] = [:]
-    public var reflowStartedAt: [UUID: Date] = [:]
     public var reflowBodyCount = 0
     @ObservationIgnored var reflowPresenting: Set<UUID> = []
     public var assistantDraft: ChatTurn?
@@ -56,6 +55,7 @@ public final class ReaderModel {
     var closeReadingProgress = ""
     @ObservationIgnored var closeReadingTask: Task<ChatTurn, Error>?
     public var translating: Set<UUID> = []
+    var pausedReflows: Set<UUID> = []
     public private(set) var pendingArtifactIDs: Set<UUID> = []
     var pendingImportIDs: Set<UUID> = []
     @ObservationIgnored var lastPaperDeletion: [UUID: Date] = [:]
@@ -155,7 +155,7 @@ public final class ReaderModel {
     public var showingReflowLoading: Bool {
         mode == "translated" && retainedReadingID == nil
             && (paper?.reflowJob?.supportsContinuation == true
-                || selectedPaperID.map { translating.contains($0) } == true)
+                || selectedPaperID.map { translating.contains($0) || pausedReflows.contains($0) } == true)
             && paper?.reflowJob?.hasPresentedContent != true
     }
     var showsPDFCanvas: Bool {
@@ -494,7 +494,7 @@ public final class ReaderModel {
         modelSettings = result.settings
         if changed {
             pdfBilingual.settingsChanged(self, previous: previous, credentialRemoved: removeKey)
-            for task in translationTasks.values { task.cancel() }
+            for id in translationTasks.keys { pauseReflow(id) }
         }
         status = result.warning ?? "模型设置已保存，下次模型请求将使用新配置"
         return result.warning

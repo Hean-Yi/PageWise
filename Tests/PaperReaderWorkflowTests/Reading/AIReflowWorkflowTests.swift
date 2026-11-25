@@ -205,14 +205,33 @@ private actor JointReflowTransport: HTTPTransport {
     var paper = Paper(
         title: "Loading", digest: "fixture", originalPath: "unused.pdf", pageCount: 1,
         blocks: [], warnings: [], canReflow: true)
+    var legacy = paper
+    legacy.reflowJob = ReflowJob(sources: [])
+    legacy.reflowJob?.failure = "已暂停，可从已保存进度继续。"
+    #expect(model.reflowFailure(for: legacy) == nil)
+    legacy.reflowJob?.failure = "网络连接失败，重排已暂停。"
+    #expect(model.reflowFailure(for: legacy) == legacy.reflowJob?.failure)
     paper.onlineSource = OnlinePaperSource(candidateID: "https://arxiv.org/abs/0000.00000v1")
     model.state.papers = [paper]
     model.select(paper.id)
     model.startAIReflow()
     #expect(model.paper?.reflowJob == nil)
     #expect(model.showingReflowLoading)
+    #expect(model.isReflowPlaying(paper.id))
     model.pauseTranslation()
-    for _ in 0..<100 where !model.translating.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
+    #expect(!model.isReflowPlaying(paper.id))
+    #expect(model.translating.contains(paper.id))
+    await model.translationTasks[paper.id]?.value
+    #expect(!model.translating.contains(paper.id))
+    #expect(model.currentEdition?.reflowJob == nil && model.showingReflowLoading)
+    #expect(model.translationPauseReason == nil && model.message == nil)
+    model.readOriginal()
+    #expect(model.openBilingualReading(translatingDocument: true))
+    #expect(model.showingReflowLoading && !model.isReflowPlaying(paper.id))
+    model.startAIReflow()
+    #expect(model.isReflowPlaying(paper.id))
+    model.pauseTranslation()
+    await model.translationTasks[paper.id]?.value
 }
 
 @Test @MainActor func jointReflowResumesCommittedPrefixWithoutDuplicatingOrChangingIt() async throws {

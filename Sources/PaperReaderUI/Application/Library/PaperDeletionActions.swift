@@ -32,6 +32,8 @@ extension ReaderModel {
             deletedPublications[link] = date
         }
         translationTasks[id]?.cancel()
+        pausedReflows.remove(id)
+        reflowStages[id] = nil
         pdfDocumentTranslation.discard(id)
         if closeReadingPaperID == id { closeReadingTask?.cancel() }
         if assistantDraft?.paperID == id { assistantDraft = nil }

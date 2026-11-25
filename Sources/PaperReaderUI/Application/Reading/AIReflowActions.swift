@@ -45,7 +45,7 @@ extension ReaderModel {
             pdfBilingual.open(self, translatingDocument: translatingDocument)
             return true
         }
-        if current.hasPublishedSourceReading || translating.contains(current.id)
+        if current.hasPublishedSourceReading || translating.contains(current.id) || pausedReflows.contains(current.id)
             || (current.reflowJob?.supportsContinuation == true && current.reflowJob?.finished == true)
         {
             openRetainedReading(nil)
@@ -58,6 +58,29 @@ extension ReaderModel {
         guard (try? modelSettings.normalized()) != nil else { return false }
         startAIReflow(regenerate: current.reflowJob.map { !$0.supportsContinuation } ?? false)
         return true
+    }
+
+    func isReflowPlaying(_ id: UUID) -> Bool {
+        translating.contains(id) && !pausedReflows.contains(id)
+    }
+
+    func reflowFailure(for paper: Paper) -> String? {
+        guard !pausedReflows.contains(paper.id), let failure = paper.reflowJob?.failure else { return nil }
+        switch failure.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines.union(.punctuationCharacters)) {
+        case "重排已暂停", "已暂停，可从已保存进度继续": return nil
+        default: return failure
+        }
+    }
+
+    public func pauseTranslation() {
+        if let id = selectedPaperID { pauseReflow(id) }
+    }
+
+    func pauseReflow(_ id: UUID) {
+        guard let task = translationTasks[id] else { return }
+        pausedReflows.insert(id)
+        reflowStages[id] = nil
+        task.cancel()
     }
 
     public func startAIReflow(regenerate: Bool = false) {
@@ -90,9 +113,9 @@ extension ReaderModel {
         translationPauseReason = nil
         reflowBodyCount = 0
         mode = "translated"
+        pausedReflows.remove(id)
         translating.insert(id)
-        reflowStartedAt[id] = Date()
-        reflowStages[id] = "准备论文"
+        reflowStages[id] = "准备双语版"
         translationTasks[id] = Task { [weak self] in
             guard let self else { return }
             defer {
@@ -101,6 +124,7 @@ extension ReaderModel {
                 if self.translationDraft?.paperID == id { self.translationDraft = nil }
             }
             do {
+                try Task.checkCancellation()
                 let settings = self.modelSettings
                 let key = try await self.modelKey(for: settings)
                 try Task.checkCancellation()
@@ -151,7 +175,7 @@ extension ReaderModel {
                     try Task.checkCancellation()
                     guard self.modelSettings == settings else { throw CancellationError() }
                     if job.evidenceRoute == "preparing" {
-                        self.reflowStages[id] = "解析 TeX 源码与图件"
+                        self.reflowStages[id] = "正在解析源码"
                         let evidence = try await OnlineSourceStore().prepare(paper: current, root: self.root)
                         try Task.checkCancellation()
                         guard self.modelSettings == settings,
@@ -209,9 +233,7 @@ extension ReaderModel {
                         }
                         window = chosen
                     }
-                    let sourceLabel =
-                        job.evidenceRoute == "tex" ? "TeX · " : "HTML · "
-                    self.reflowStages[id] = sourceLabel + (current.blocks.isEmpty ? "整理结构与生成首段内容" : "继续生成双语内容")
+                    self.reflowStages[id] = current.blocks.isEmpty ? "正在翻译首段" : "正在翻译正文"
                     do {
                         if usingRecovery {
                             try await self.client.recoverReflowAndTranslate(
@@ -268,7 +290,7 @@ extension ReaderModel {
                             throw ReaderError.message("模型连续未能完成当前段落，已保留阅读位置与内容。请稍后继续或更换模型。")
                         }
                         if self.translationDraft?.paperID == id { self.translationDraft = nil }
-                        self.reflowStages[id] = "继续生成双语内容"
+                        self.reflowStages[id] = "正在翻译正文"
                         continue
                     } catch AIReflowFailure.invalidStructure where structureRetries < 2 {
                         try Task.checkCancellation()
@@ -278,7 +300,7 @@ extension ReaderModel {
                             self.state.papers.first(where: { $0.id == id })?.reflowJob?.completedSourceIDs.count ?? 0
                         structureRetries = completed > job.completedSourceIDs.count ? 0 : structureRetries + 1
                         if self.translationDraft?.paperID == id { self.translationDraft = nil }
-                        self.reflowStages[id] = "正在逐段生成，已完成内容可继续阅读"
+                        self.reflowStages[id] = "正在整理段落"
                         continue
                     }
                     try Task.checkCancellation()
@@ -303,11 +325,15 @@ extension ReaderModel {
                 guard self.lastPaperDeletion[id] == deletion,
                     var publication = self.state.papers.first(where: { $0.id == id })
                 else { return }
+                // A manual pause may precede creation of the first checkpoint.
+                // Keep the reader available to resume without publishing a failure.
+                guard !self.pausedReflows.contains(id) else { return }
                 let cancelled =
                     error is CancellationError || Task.isCancelled || (error as? URLError)?.code == .cancelled
-                let reason = cancelled ? "已暂停，可从已保存进度继续" : error.localizedDescription
+                let reason = cancelled ? "重排已暂停" : error.localizedDescription
                 publication.reflowJob?.failure = reason
                 _ = await self.save(publishingReflow: publication)
+                guard !self.pausedReflows.contains(id), self.lastPaperDeletion[id] == deletion else { return }
                 self.reflowStages[id] = reason
                 guard self.selectedPaperID == id, self.mode == "translated", self.retainedReadingID == nil else {
                     return

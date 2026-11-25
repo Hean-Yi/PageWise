@@ -265,5 +265,4 @@ extension ReaderModel {
         }
     }
 
-    public func pauseTranslation() { if let id = selectedPaperID { translationTasks[id]?.cancel() } }
 }
