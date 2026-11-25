@@ -114,10 +114,10 @@ public actor ResearchBriefIndex {
 
     public func brief(
         matching query: String?, limit: Int, state: LibraryState, excluding pending: Set<UUID>,
-        noteHits: [Evidence], noteHitsQuery: String? = nil
+        noteHits: [Evidence], noteHitsQuery: String? = nil, scope: ResearchBrief.Scope = .library
     ) async throws -> ResearchBrief {
         try await open()
-        let basis = BriefInputs(state, excluding: pending)
+        let basis = BriefInputs(state, excluding: pending, scope: scope)
         let index = try resolve(basis)
         let broad = query == nil || query == "*"
         let terms = broad ? Set<String>() : Self.words(String((query ?? "").prefix(512)))
@@ -219,7 +219,7 @@ public actor ResearchBriefIndex {
                 discussedPapers: group.ids.filter(basis.discussed.contains).count, sources: sources)
         }
         return ResearchBrief(
-            topics: topics, inputs: basis, versions: versions,
+            topics: topics, scope: scope, inputs: basis, versions: versions,
             researchRevision: indexState?.lastResearchRevision, coveredAt: indexState?.lastAuditAt)
     }
 

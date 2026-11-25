@@ -99,21 +99,35 @@ import PaperReaderKit
 }
 
 extension ReaderModel {
-    func researchBrief(matching query: String?, limit: Int = 4) async throws -> ResearchBrief {
+    func researchBrief(
+        matching query: String?, limit: Int = 4, scope: ResearchBrief.Scope = .library
+    ) async throws -> ResearchBrief {
         let revision = stateRevision
         let snapshot = state
         let pending = pendingImportIDs
         let term = query?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let searchPaperID: UUID?
+        if case .paper(let id) = scope {
+            searchPaperID = id
+        } else {
+            searchPaperID = nil
+        }
         let hits: [Evidence]
         if let term, !term.isEmpty {
             hits = try await readingNoteIndex.search(
                 query: term == "*" ? "" : term, state: snapshot, pending: pending,
-                excluding: nil, paperID: nil, limit: 32, includeArchived: false)
+                excluding: nil, paperID: searchPaperID, limit: 32, includeArchived: false)
         } else {
             hits = []
         }
+        let scopedHits = hits.filter { hit in
+            guard let paperID = hit.paperID else { return scope == .library }
+            return scope.includes(
+                paperID: paperID, shelfID: snapshot.paperShelfIDs[paperID.uuidString])
+        }
         let brief = try await researchBriefMaintenance.index.brief(
-            matching: term, limit: limit, state: snapshot, excluding: pending, noteHits: hits, noteHitsQuery: term)
+            matching: term, limit: limit, state: snapshot, excluding: pending, noteHits: scopedHits,
+            noteHitsQuery: term, scope: scope)
         if revision == stateRevision, pending == pendingImportIDs {
             researchBriefMaintenance.verification = (brief.id, revision, pending, true)
         }

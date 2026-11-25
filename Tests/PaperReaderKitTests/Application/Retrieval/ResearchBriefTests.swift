@@ -138,3 +138,47 @@ private func briefPaper(_ title: String) -> Paper {
     let revised = try await index.brief(matching: "cobalt", limit: 4, state: state, excluding: [], noteHits: hits)
     #expect(revised.topics.isEmpty)
 }
+
+@Test func researchBriefRespectsShelfAndPaperScope() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let store = try LibraryStore(directory: root)
+    let index = ResearchBriefIndex(store: store)
+    let a = briefPaper("Quartz Distillation")
+    let b = briefPaper("Crystal Growth")
+    let measurement = try Shelf(name: "Measurement")
+    let materials = try Shelf(name: "Materials")
+    var state = LibraryState()
+    state.papers = [a, b]
+    state.shelves = [measurement, materials]
+    state.paperShelfIDs[a.id.uuidString] = measurement.id
+    state.paperShelfIDs[b.id.uuidString] = materials.id
+    state.readingNotes = [
+        ReadingNote(paperID: a.id, contentVersion: "v", anchors: [], markdown: "Budget matched."),
+        ReadingNote(paperID: b.id, contentVersion: "v", anchors: [], markdown: "Crystal growth is separate."),
+    ]
+    try await store.save(state)
+    try await index.maintain()
+    let hits = try await ReadingNoteMemoryIndex().search(
+        query: "", state: state, pending: [], excluding: nil, paperID: nil, limit: 32,
+        includeArchived: false)
+
+    let shelfBrief = try await index.brief(
+        matching: nil, limit: 4, state: state, excluding: [], noteHits: hits, scope: .shelf(measurement.id))
+    #expect(shelfBrief.scope == .shelf(measurement.id))
+    #expect(shelfBrief.topics.flatMap(\.sources).allSatisfy { $0.paperID == a.id })
+    #expect(!shelfBrief.topics.contains { $0.label == "Materials" })
+    #expect(shelfBrief.isCurrent(in: state, excluding: []))
+
+    let paperBrief = try await index.brief(
+        matching: nil, limit: 4, state: state, excluding: [], noteHits: hits, scope: .paper(b.id))
+    #expect(paperBrief.scope == .paper(b.id))
+    #expect(paperBrief.topics.flatMap(\.sources).allSatisfy { $0.paperID == b.id })
+    #expect(paperBrief.isCurrent(in: state, excluding: []))
+
+    state.paperShelfIDs[a.id.uuidString] = materials.id
+    let moved = try await index.brief(
+        matching: nil, limit: 4, state: state, excluding: [], noteHits: hits, scope: .shelf(measurement.id))
+    #expect(moved.topics.flatMap(\.sources).isEmpty)
+    #expect(!shelfBrief.isCurrent(in: state, excluding: []))
+}

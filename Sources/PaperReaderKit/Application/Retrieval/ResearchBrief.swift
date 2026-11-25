@@ -2,6 +2,20 @@ import Foundation
 
 /// A bounded selection from the local library. The prompts receive only the public topics.
 public struct ResearchBrief: Encodable, Sendable {
+    public enum Scope: Equatable, Sendable {
+        case library
+        case shelf(UUID)
+        case paper(UUID)
+
+        public func includes(paperID: UUID, shelfID: UUID?) -> Bool {
+            switch self {
+            case .library: true
+            case .shelf(let id): shelfID == id
+            case .paper(let id): paperID == id
+            }
+        }
+    }
+
     public let id = UUID()
     public struct Source: Encodable, Sendable, Equatable {
         public let paperID: UUID
@@ -44,6 +58,7 @@ public struct ResearchBrief: Encodable, Sendable {
     }
 
     public let topics: [Topic]
+    public let scope: Scope
     /// The source generation and time the persisted index had covered when this brief was read.
     public let researchRevision: Int64?
     public let coveredAt: Date?
@@ -52,10 +67,11 @@ public struct ResearchBrief: Encodable, Sendable {
     enum CodingKeys: String, CodingKey { case topics }
 
     init(
-        topics: [Topic], inputs: BriefInputs, versions: ChatSourceVersions, researchRevision: Int64? = nil,
-        coveredAt: Date? = nil
+        topics: [Topic], scope: Scope = .library, inputs: BriefInputs, versions: ChatSourceVersions,
+        researchRevision: Int64? = nil, coveredAt: Date? = nil
     ) {
         self.topics = topics
+        self.scope = scope
         self.inputs = inputs
         self.versions = versions
         self.researchRevision = researchRevision
@@ -63,7 +79,9 @@ public struct ResearchBrief: Encodable, Sendable {
     }
 
     public func isCurrent(in state: LibraryState, excluding pending: Set<UUID>) -> Bool {
-        guard inputs == BriefInputs(state, excluding: pending), versions.isCurrent(in: state, excluding: pending) else {
+        guard inputs == BriefInputs(state, excluding: pending, scope: scope),
+            versions.isCurrent(in: state, excluding: pending)
+        else {
             return false
         }
         let quoted = topics.flatMap(\.sources).compactMap { source -> (UUID, String)? in
@@ -89,17 +107,26 @@ struct BriefInputs: Equatable, Sendable {
         let title: String
         let shelf: UUID?
     }
+    let scope: ResearchBrief.Scope
     let papers: [UUID: PaperInfo]
     let shelves: [UUID: String]
     let noted: Set<UUID>
     let discussed: Set<UUID>
 
-    init(_ state: LibraryState, excluding pending: Set<UUID>) {
+    init(_ state: LibraryState, excluding pending: Set<UUID>, scope: ResearchBrief.Scope = .library) {
+        self.scope = scope
         papers = Dictionary(
-            state.papers.lazy.filter { !pending.contains($0.id) }.map {
+            state.papers.lazy.filter {
+                !pending.contains($0.id)
+                    && scope.includes(
+                        paperID: $0.id, shelfID: state.paperShelfIDs[$0.id.uuidString])
+            }.map {
                 ($0.id, PaperInfo(title: $0.title, shelf: state.paperShelfIDs[$0.id.uuidString]))
             }, uniquingKeysWith: { first, _ in first })
-        shelves = Dictionary(state.shelves.map { ($0.id, $0.name) }, uniquingKeysWith: { first, _ in first })
+        let scopedShelves = Set(papers.values.compactMap(\.shelf))
+        shelves = Dictionary(
+            state.shelves.lazy.filter { scopedShelves.contains($0.id) }.map { ($0.id, $0.name) },
+            uniquingKeysWith: { first, _ in first })
         let live = Set(papers.keys)
         let withdrawn = ChatSourceVersions.withdrawnNoteIDs(in: state, excluding: pending)
         noted = Set(
