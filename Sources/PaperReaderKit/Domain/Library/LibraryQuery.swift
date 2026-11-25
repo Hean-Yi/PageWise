@@ -43,6 +43,17 @@ public enum LibrarySort: String, CaseIterable, Identifiable, Codable, Sendable {
 }
 
 public enum LibraryQuery {
+    /// Keep meaningful punctuation (e.g. C vs. C++) when comparing titles across the entire library.
+    public static func paper(named title: String, in state: LibraryState) -> Paper? {
+        func titleKey(_ value: String) -> String {
+            value.folding(options: [.caseInsensitive, .widthInsensitive], locale: Locale(identifier: "en_US_POSIX"))
+                .split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        }
+        let key = titleKey(title)
+        guard !key.isEmpty else { return nil }
+        return state.papers.first { titleKey($0.title) == key }
+    }
+
     public static func lastOpenedPaper(in state: LibraryState) -> Paper? {
         state.papers.lazy.compactMap { paper -> (paper: Paper, opened: Date)? in
             state.workspace[paper.id.uuidString]?.lastOpenedAt.map { (paper, $0) }

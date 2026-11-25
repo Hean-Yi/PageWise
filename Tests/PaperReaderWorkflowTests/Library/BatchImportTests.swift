@@ -122,6 +122,39 @@ func repeatedDownloadFillsMissingSameEditionAbstractAndKeepsIt(hasArchive: Bool)
     #expect(reopened.state.papers.map(\.id) == [id])
 }
 
+@MainActor @Test func importChecksNormalizedTitlesForLocalAndOnlinePDFsAndContinuesTheBatch() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let reader = try ReaderModel(root: root)
+    await reader.load()
+    let first = try batchFixture(named: "C++ Methods.pdf", in: root)
+    let duplicate = try batchFixture(named: "Ｃ++   METHODS.pdf", in: root)
+    let distinct = try batchFixture(named: "C Methods.pdf", in: root)
+    let ids = await reader.importURLs([first, duplicate, distinct], selectAfterImport: false)
+    #expect(ids.count == 2)
+    #expect(reader.message?.contains("同名论文") == true)
+    let record = PaperCandidate(
+        id: "https://doi.org/10.18653/v1/2025.acl-long.12", title: "c++ methods", authors: "", year: "2025",
+        source: .crossref)
+    #expect(await reader.importURLs([duplicate], selectAfterImport: false, metadata: record).isEmpty)
+    #expect(reader.importedPaperID(for: record) == nil)
+    #expect(Set(reader.state.papers.map(\.title)) == ["C++ Methods", "C Methods"])
+    #expect(reader.state.papers.allSatisfy { $0.onlineSource == nil })
+}
+
+@MainActor @Test func walkthroughOpensItsOwnPDFWhenAnotherPaperSharesTheTitle() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let reader = try ReaderModel(root: root)
+    await reader.load()
+    let other = try batchFixture(named: DemoPaper.title + ".pdf", in: root)
+    let otherID = try #require(await reader.importURLs([other]).first)
+    let sample = try #require(await reader.openBundledSample())
+    #expect(sample != otherID && reader.paper?.title == DemoPaper.title + "（内置示例）")
+    #expect(await reader.openBundledSample() == sample)
+    #expect(reader.state.papers.count == 2)
+}
+
 /// Distinct metadata gives each original teaching fixture a distinct digest, without network material.
 @MainActor private func batchFixture(named name: String, in root: URL) throws -> URL {
     let url = root.appendingPathComponent(name)

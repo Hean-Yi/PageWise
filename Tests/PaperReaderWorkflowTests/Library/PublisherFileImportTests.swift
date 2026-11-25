@@ -106,7 +106,7 @@ import Testing
         #expect(try Data(contentsOf: root.appendingPathComponent(paper.originalPath)) == Data(contentsOf: url))
     }
 
-    @Test func distinctBytesWithEqualNamesSizesAndBibliographyStaySeparate() async throws {
+    @Test func differentPDFWithTheSamePublicationTitleIsRejectedAcrossShelves() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let reader = try ReaderModel(root: root, credentials: WorkflowCredentials())
@@ -114,28 +114,23 @@ import Testing
         let url = root.appendingPathComponent("download.pdf")
         try AttentionFixture.write(to: url)
         let bytes = try Data(contentsOf: url)
-        let endings = ["\n% A\n", "\n% B\n"]
-        let shelves = [
-            try #require(await reader.createShelf(name: "First")),
-            try #require(await reader.createShelf(name: "Second")),
-        ]
-        var ids: [UUID] = []
-        for (ending, shelf) in zip(endings, shelves) {
-            try (bytes + Data(ending.utf8)).write(to: url)
-            ids.append(try await reader.importPublisherPDF(url, for: citation, shelfID: shelf))
-        }
-        #expect(Set(ids).count == 2)
-        for (id, ending) in zip(ids, endings) {
-            let paper = try #require(reader.state.papers.first { $0.id == id })
-            #expect(try Data(contentsOf: root.appendingPathComponent(paper.originalPath)) == bytes + Data(ending.utf8))
+        let first = try #require(await reader.createShelf(name: "First"))
+        let second = try #require(await reader.createShelf(name: "Second"))
+        let id = try await reader.importPublisherPDF(url, for: citation, shelfID: first)
+        try (bytes + Data("\n% different edition".utf8)).write(to: url)
+        await #expect(throws: ReaderError.self) {
+            try await reader.importPublisherPDF(url, for: citation, shelfID: second)
         }
         let restored = try ReaderModel(root: root, credentials: WorkflowCredentials())
         await restored.load()
-        let search = OnlinePaperSearch(reader: restored)
-        for (id, shelf) in zip(ids, shelves) {
-            search.open(shelfID: shelf)
-            #expect(search.importedPaperID(for: citation) == id)
-        }
+        #expect(restored.state.papers.map(\.id) == [id])
+        #expect(restored.state.shelfID(for: id) == first)
+        let paper = try #require(restored.state.papers.first)
+        #expect(try Data(contentsOf: root.appendingPathComponent(paper.originalPath)) == bytes)
+        #expect(
+            try FileManager.default.contentsOfDirectory(atPath: root.appendingPathComponent("Papers").path) == [
+                id.uuidString
+            ])
     }
 
     @Test func downloadedResultCanUpgradeUserLinkedCopyAndReopenAfterRestart() async throws {

@@ -6,11 +6,11 @@ private enum PDFImportOrigin {
     case downloaded(DownloadedPublication)
     case selectedForPublication(PaperCandidate)
 
-    var publicationID: String? {
+    var candidate: PaperCandidate? {
         switch self {
         case .local: nil
-        case .downloaded(let download): download.candidate.id
-        case .selectedForPublication(let candidate): candidate.id
+        case .downloaded(let download): download.candidate
+        case .selectedForPublication(let candidate): candidate
         }
     }
 }
@@ -153,7 +153,7 @@ extension ReaderModel {
         var retained = false
         defer { if !retained { try? FileManager.default.removeItem(at: importedDirectory) } }
         try Task.checkCancellation()
-        guard !wasPaperDeleted(since: requestedAt, digest: imported.digest, publicationID: origin.publicationID) else {
+        guard !wasPaperDeleted(since: requestedAt, digest: imported.digest, publicationID: origin.candidate?.id) else {
             throw ReaderError.message("导入期间这篇论文已被删除。")
         }
         if let existing = state.papers.first(where: { $0.digest == imported.digest }) {
@@ -201,12 +201,26 @@ extension ReaderModel {
             status = "论文已在书库中"
             return existing.id
         }
+        imported.title = origin.candidate?.title ?? imported.title
+        if let existing = LibraryQuery.paper(named: imported.title, in: state) {
+            // The walkthrough always opens its bundled bytes, even if an unrelated PDF uses the example title.
+            if case .local = origin, url == (try? DemoPaper.fileURL()) {
+                let base = imported.title + "（内置示例）"
+                imported.title = base
+                var number = 2
+                while LibraryQuery.paper(named: imported.title, in: state) != nil {
+                    imported.title = base + " " + String(number)
+                    number += 1
+                }
+            } else {
+                let shelf = state.shelfID(for: existing.id).flatMap { id in state.shelves.first { $0.id == id }?.name }
+                throw ReaderError.message("「\(shelf ?? "未分类论文")」已有同名论文《\(existing.title)》，已跳过这份不同的 PDF。")
+            }
+        }
         switch origin {
         case .selectedForPublication(let candidate):
-            imported.title = candidate.title
             imported.linkedPublicationURLs = [candidate.id]
         case .downloaded(let publication):
-            imported.title = publication.candidate.title
             imported.sourceURL = publication.candidate.id
             imported = try await OnlineSourceStore().attach(publication, to: imported, root: root)
         case .local:
@@ -218,7 +232,7 @@ extension ReaderModel {
         defer { pendingImportIDs.remove(id) }
         try requireImportCommit(
             await save(
-                cancellable: true, adding: imported, requestedAt: requestedAt, publicationID: origin.publicationID,
+                cancellable: true, adding: imported, requestedAt: requestedAt, publicationID: origin.candidate?.id,
                 importShelfID: shelfID))
         retained = true
         status = "已加入书库"
