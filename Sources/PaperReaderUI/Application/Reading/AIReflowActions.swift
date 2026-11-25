@@ -382,7 +382,16 @@ extension ReaderModel {
         guard Set(sourceIDs).isDisjoint(with: job.completedSourceIDs) else {
             throw ReaderError.message("来源内容重复，已停止发布。")
         }
+        try await HTMLReadingStore.withPublication(root: root, paperID: paperID) {
+            try await commitBlock(pair, sourceIDs: sourceIDs, current: current, jobID: jobID, settings: settings)
+        }
+    }
+
+    private func commitBlock(
+        _ pair: BilingualBlock, sourceIDs: [UUID], current: Paper, jobID: UUID, settings: ModelSettings
+    ) async throws {
         let excluded = pair.block.excludedFromReading == true
+        let paperID = current.id
         let artifact: HTMLReadingArtifact?
         if excluded {
             artifact = current.htmlReading
@@ -412,7 +421,12 @@ extension ReaderModel {
         publication.reflowJob?.committedBlockIDs.insert(pair.block.id)
         guard await save(publishingReflow: publication) else { throw ReaderError.message("双语内容未能保存，已暂停。") }
         if translationDraft?.paperID == paperID { translationDraft = nil }
-        try? HTMLReadingStore.cleanup(root: root, paper: publication)
+        if let prior = current.htmlReading, prior.relativePath != artifact?.relativePath,
+            let committed = state.papers.first(where: { $0.id == paperID })
+        {
+            HTMLReadingStore.removeSupersededDocument(
+                root.appendingPathComponent(prior.relativePath), root: root, paper: committed)
+        }
     }
 
     public func reportReflowReadiness(

@@ -152,7 +152,7 @@ final class HTMLCoordinator: NSObject, WKNavigationDelegate, WKScriptMessageHand
         if let leasedURL {
             HTMLReadingStore.releaseOpenDocument(leasedURL)
             if let paper = model.state.papers.first(where: { $0.id == paperID }) {
-                try? HTMLReadingStore.cleanup(root: model.root, paper: paper)
+                HTMLReadingStore.removeSupersededDocument(leasedURL, root: model.root, paper: paper)
             }
             self.leasedURL = nil
         }

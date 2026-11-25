@@ -104,3 +104,38 @@ import Testing
     #expect(migrated.papers[0].id == paper.id)
     #expect(migrated.papers[0].htmlReading == nil)
 }
+
+@Test func closingOldReaderDuringCheckpointPreservesStagedFileAndAssetsOnReopen() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    var paper = Paper(
+        title: "Checkpoint", digest: "fixture", originalPath: "original.pdf", pageCount: 1,
+        blocks: [], warnings: [], canReflow: true)
+    let store = HTMLReadingStore()
+    let original = TextBlock(sourcePage: 0, text: "Existing evidence")
+    let prior = try await store.append([.init(block: original, translation: nil)], to: nil, paper: paper, root: root)
+    paper.htmlReading = prior
+    let oldURL = root.appendingPathComponent(prior.relativePath)
+    HTMLReadingStore.retainOpenDocument(oldURL)
+    let next = try await HTMLReadingStore.withPublication(root: root, paperID: paper.id) {
+        var figure = TextBlock(sourcePage: 1, text: "New image")
+        let svg = Data("<svg xmlns='http://www.w3.org/2000/svg'/>".utf8).base64EncodedString()
+        figure.richContent = RichContent(
+            html: "<img src='data:image/svg+xml;base64,\(svg)'>",
+            translationInput: "", mathematics: [:], mathDescriptions: [:])
+        let staged = try await store.append(
+            [.init(block: figure, translation: nil)], to: prior, paper: paper, root: root)
+        HTMLReadingStore.releaseOpenDocument(oldURL)
+        HTMLReadingStore.removeSupersededDocument(oldURL, root: root, paper: paper)
+        try HTMLReadingStore.cleanup(root: root, paper: paper)
+        return staged
+    }
+    paper.htmlReading = next
+    HTMLReadingStore.removeSupersededDocument(oldURL, root: root, paper: paper)
+    try HTMLReadingStore.cleanup(root: root, paper: paper)
+    #expect(!FileManager.default.fileExists(atPath: oldURL.path))
+    #expect(
+        try String(contentsOf: root.appendingPathComponent(next.relativePath), encoding: .utf8).contains(original.text))
+    let image = try #require(next.assets.first)
+    #expect(FileManager.default.fileExists(atPath: root.appendingPathComponent(image).path))
+}

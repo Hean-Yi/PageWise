@@ -6,7 +6,42 @@ import Synchronization
 /// Produces final reading files, not a cache. Callers publish references before removing old versions.
 public actor HTMLReadingStore {
     private static let openDocuments = Mutex<[URL: Int]>([:])
+    private static let publishingDirectories = Mutex<[URL: Int]>([:])
     public init() {}
+
+    /// Includes the interval between staging bytes and committing the reference in the database.
+    public static func withPublication<T: Sendable>(
+        root: URL, paperID: UUID, isolation: isolated (any Actor)? = #isolation,
+        _ operation: () async throws -> T
+    ) async rethrows -> T {
+        let directory = readingDirectory(root: root, paperID: paperID)
+        publishingDirectories.withLock { $0[directory, default: 0] += 1 }
+        defer {
+            publishingDirectories.withLock { counts in
+                let remaining = (counts[directory] ?? 1) - 1
+                counts[directory] = remaining == 0 ? nil : remaining
+            }
+        }
+        return try await operation()
+    }
+
+    private static func readingDirectory(root: URL, paperID: UUID) -> URL {
+        root.appendingPathComponent("Papers/\(paperID.uuidString)/reading", isDirectory: true).standardizedFileURL
+    }
+
+    /// The reader may close while another version is staged. Only the known retired file is eligible.
+    public static func removeSupersededDocument(_ url: URL, root: URL, paper: Paper) {
+        let file = url.standardizedFileURL
+        guard file.deletingLastPathComponent().standardizedFileURL == readingDirectory(root: root, paperID: paper.id),
+            file.lastPathComponent.range(of: #"^document-[0-9A-Fa-f-]{36}\.html$"#, options: .regularExpression) != nil,
+            !([paper.htmlReading] + (paper.retainedReadings ?? []).map(\.html)).compactMap({ $0 }).contains(where: {
+                root.appendingPathComponent($0.relativePath).standardizedFileURL == file
+            })
+        else { return }
+        openDocuments.withLock { references in
+            if references[file] == nil { try? FileManager.default.removeItem(at: file) }
+        }
+    }
 
     public static func retainOpenDocument(_ url: URL) {
         openDocuments.withLock { $0[url.standardizedFileURL, default: 0] += 1 }
@@ -117,10 +152,17 @@ public actor HTMLReadingStore {
         return artifact
     }
 
-    /// Removes only application-owned unreferenced files. Safe at startup or after a commit.
+    /// Startup recovery for files abandoned before a durable commit.
     public static func cleanup(root: URL, paper: Paper) throws {
+        let directory = readingDirectory(root: root, paperID: paper.id)
+        try publishingDirectories.withLock { publishing in
+            guard publishing[directory] == nil else { return }
+            try removeOrphans(in: directory, paper: paper)
+        }
+    }
+
+    private static func removeOrphans(in directory: URL, paper: Paper) throws {
         let prefix = "Papers/\(paper.id.uuidString)/reading/"
-        let directory = root.appendingPathComponent(prefix)
         guard FileManager.default.fileExists(atPath: directory.path) else { return }
         let retained = (paper.retainedReadings ?? []).compactMap(\.html)
         let kept = Set(
