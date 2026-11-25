@@ -87,6 +87,35 @@ private func eventPaper(_ title: String) -> Paper {
     #expect(try await reopened.pendingResearchEvents() == events)
 }
 
+@Test func removingAPaperEmitsRemovalEventsForItsDependentSources() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let store = try LibraryStore(directory: root)
+    var state = try await store.load()
+    let paper = eventPaper("Removed source")
+    let chat = ChatTurn(
+        paperID: paper.id, question: "What changed?", selection: "", answer: "A result.", evidence: [])
+    let note = ReadingNote(
+        paperID: paper.id, contentVersion: paper.digest + ":original-0", anchors: [],
+        markdown: "A dependent observation.")
+    let memory = MemoryItem(text: "Remember the comparison.", sourceID: chat.id)
+    state.papers = [paper]
+    state.chats = [chat]
+    state.readingNotes = [note]
+    state.memories = [memory]
+    try await store.save(state)
+
+    var removed = state
+    let deleted = try removed.removePaper(paper.id)
+    try await store.save(removed, deleting: deleted)
+    let events = try await store.pendingResearchEvents()
+    #expect(events.contains { $0.event.kind == .paperRemoved && $0.event.recordID == paper.id })
+    #expect(events.contains { $0.event.kind == .noteRemoved && $0.event.recordID == note.id })
+    #expect(events.contains { $0.event.kind == .discussionRemoved && $0.event.recordID == chat.id })
+    #expect(events.contains { $0.event.kind == .memoryRemoved && $0.event.recordID == memory.id })
+    #expect(try await store.researchEventCounts().pending == events.count)
+}
+
 @Test func researchEventSchemaMigratesFromVersionTwoWithoutLosingTheLibrary() async throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: root) }
