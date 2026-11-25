@@ -1,5 +1,4 @@
 import Foundation
-import NaturalLanguage
 import PaperReaderKit
 
 extension ReaderModel {
@@ -48,44 +47,6 @@ extension ReaderModel {
             && note.dimension == .thesis
         {
             if let sentence = PreviewTakeaway.firstSentence(in: note.markdown) { return sentence }
-        }
-        return nil
-    }
-}
-
-private enum PreviewTakeaway {
-    static func fromNotebook(_ markdown: String) -> String? {
-        var heading = ""
-        var legacy: String?
-        for line in markdown.prefix(40_000).split(whereSeparator: \.isNewline) {
-            let text = line.trimmingCharacters(in: .whitespaces)
-            if text.hasPrefix("#") {
-                heading = text.drop(while: { $0 == "#" }).trimmingCharacters(in: .whitespaces)
-                continue
-            }
-            if heading == "一句话概括", let value = firstSentence(in: text) { return value }
-            if legacy == nil, ["论点", "结论", "核心论点", "核心结论", "主要发现", "作者主张"].contains(heading) {
-                legacy = firstSentence(in: text)
-            }
-        }
-        return legacy
-    }
-
-    static func firstSentence(in markdown: String) -> String? {
-        for raw in markdown.prefix(1_200).split(whereSeparator: \.isNewline) {
-            let line = raw.trimmingCharacters(in: .whitespaces)
-            guard !line.hasPrefix("#"), !line.hasPrefix("["), !line.hasPrefix(">"), !line.hasPrefix("!"),
-                !line.hasPrefix("$$"), !line.hasPrefix("\u{60}\u{60}\u{60}"), !line.contains("paperreader://")
-            else { continue }
-            var value = (try? AttributedString(markdown: line)).map { String($0.characters) } ?? line
-            value = value.replacingOccurrences(
-                of: #"^(?:段落作用|通俗解释|核心论点|一句话概括)[\s:：]+"#, with: "", options: .regularExpression)
-            guard !value.isEmpty else { continue }
-            let tokenizer = NLTokenizer(unit: .sentence)
-            tokenizer.string = value
-            let first = value[tokenizer.tokenRange(at: value.startIndex)].trimmingCharacters(
-                in: .whitespacesAndNewlines)
-            if (6...280).contains(first.count) { return first }
         }
         return nil
     }

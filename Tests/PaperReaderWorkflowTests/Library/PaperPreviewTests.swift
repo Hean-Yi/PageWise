@@ -34,6 +34,12 @@ import Testing
         reader.state.readingNotes[0].markdown =
             "## 一句话概括\n**查询**决定检索时各个值的组合权重。\n\n[原文](paperreader://passage/fixture)\n\n## 实验\n还有其他内容。"
         #expect(await reader.previewContent(for: id).oneSentence == "查询决定检索时各个值的组合权重。")
+        reader.state.readingNotes[0].markdown = "## 核心论点\n这是全文的核心设计问题。查询与键的内积决定权重。"
+        #expect(await reader.previewContent(for: id).oneSentence == "查询与键的内积决定权重。")
+        reader.state.readingNotes[0].markdown = "## 一句话概括\n这是全文的核心设计问题。"
+        #expect(await reader.previewContent(for: id).oneSentence == nil)
+        reader.state.readingNotes[0].markdown = "## 一句话概括\n作者在此处阐述了本文的关键贡献。匹配预算后原有排序反转。"
+        #expect(await reader.previewContent(for: id).oneSentence == "匹配预算后原有排序反转。")
         reader.state.readingNotes[0].deletedAt = .now
         #expect(await reader.previewContent(for: id).oneSentence == nil)
     }
