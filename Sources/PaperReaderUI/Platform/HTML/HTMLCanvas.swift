@@ -91,7 +91,8 @@ final class HTMLCoordinator: NSObject, WKNavigationDelegate, WKScriptMessageHand
         let version = artifact.readingNoteVersion(digest: paper.digest)
         if paperID != paper.id || editionVersion != version || retainedID != model.retainedReadingID
             || loadedPath == nil
-            || !artifact.sections.map({ $0.id.uuidString }).starts(with: keys)
+            || (loadedPath != artifact.relativePath
+                && !artifact.sections.lazy.map({ $0.id.uuidString }).starts(with: keys))
         {
             appendTask?.cancel()
             view.stopLoading()
@@ -116,17 +117,25 @@ final class HTMLCoordinator: NSObject, WKNavigationDelegate, WKScriptMessageHand
         }
         guard ready else { return }
         if loadedPath != artifact.relativePath, appendTask == nil {
-            let oldKeys = Set(keys)
+            let oldCount = keys.count
             let expectedID = paper.id
             let url = model.root.appendingPathComponent(artifact.relativePath).standardizedFileURL
+            HTMLReadingStore.retainOpenDocument(url)
             appendTask = Task { [weak self, weak view] in
+                defer {
+                    HTMLReadingStore.releaseOpenDocument(url)
+                    if let self, let committed = self.model.state.papers.first(where: { $0.id == expectedID }) {
+                        HTMLReadingStore.removeSupersededDocument(url, root: self.model.root, paper: committed)
+                    }
+                }
                 guard let self, let view else { return }
                 defer {
                     self.appendTask = nil
                     if self.model.paper?.htmlReading?.relativePath != artifact.relativePath { self.update(view) }
                 }
                 do {
-                    let html = try await HTMLReadingStore().appendedContent(at: url, excluding: oldKeys)
+                    let html = try await HTMLReadingStore().appendedContent(
+                        at: url, artifact: artifact, paperID: expectedID, afterSectionCount: oldCount)
                     try Task.checkCancellation()
                     guard self.paperID == expectedID else { return }
                     _ = try await view.callAsyncJavaScript(

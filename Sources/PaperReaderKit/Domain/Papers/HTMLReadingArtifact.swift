@@ -8,6 +8,8 @@ public struct HTMLReadingArtifact: Codable, Sendable, Equatable {
         (editionID ?? sections.first?.id).map { digest + ":" + $0.uuidString }
     }
 
+    // Missing in earlier editions. Its absence never changes a saved page or its anchors.
+    var sectionIndex: HTMLSectionIndex?
     public var relativePath: String
     public var sections: [PageArtifact]
     public var assets: [String]
@@ -16,4 +18,12 @@ public struct HTMLReadingArtifact: Codable, Sendable, Equatable {
         self.sections = sections
         self.assets = assets
     }
+}
+
+/// UTF-8 boundaries in an immutable, standalone reading document. The DOM still owns selection offsets.
+struct HTMLSectionIndex: Codable, Sendable, Equatable {
+    let start: UInt64
+    var ends: [UInt64]
+    var end: UInt64 { ends.last ?? start }
+
 }

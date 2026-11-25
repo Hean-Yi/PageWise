@@ -35,7 +35,7 @@ import Testing
     #expect(next.sections.map(\.id) == [first.id, second.id])
     #expect(try Data(contentsOf: initialURL) == originalBytes)
     let append = try await store.appendedContent(
-        at: root.appendingPathComponent(next.relativePath), excluding: [first.id.uuidString])
+        at: root.appendingPathComponent(next.relativePath), artifact: next, paperID: paper.id, afterSectionCount: 1)
     #expect(!append.contains("First original"))
     #expect(append.contains("Second original"))
     let finalHTML = try String(contentsOf: root.appendingPathComponent(next.relativePath), encoding: .utf8)
@@ -138,4 +138,41 @@ import Testing
         try String(contentsOf: root.appendingPathComponent(next.relativePath), encoding: .utf8).contains(original.text))
     let image = try #require(next.assets.first)
     #expect(FileManager.default.fileExists(atPath: root.appendingPathComponent(image).path))
+}
+
+@Test func htmlSnapshotsUpgradeOldManifestOnceAndReadOnlyRequestedSections() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let paper = Paper(
+        title: "Byte boundaries", digest: "fixture", originalPath: "original.pdf", pageCount: 1,
+        blocks: [], warnings: [], canReflow: true)
+    let store = HTMLReadingStore()
+    func pairs(_ text: [String]) -> [BilingualBlock] {
+        text.map { .init(block: .init(sourcePage: 0, text: $0), translation: "翻译🧪") }
+    }
+    let first = try await store.append(pairs(["First ä", "Second 🧪"]), to: nil, paper: paper, root: root)
+    let oldURL = root.appendingPathComponent(first.relativePath)
+    let oldBytes = try Data(contentsOf: oldURL)
+    var legacy = first
+    legacy.sectionIndex = nil
+    let decoded = try JSONDecoder().decode(HTMLReadingArtifact.self, from: JSONEncoder().encode(legacy))
+    let next = try await store.append(pairs(["Third 论", "Fourth β"]), to: decoded, paper: paper, root: root)
+    #expect(try Data(contentsOf: oldURL) == oldBytes)
+    #expect(first.sections.map(\.id) == Array(next.sections.prefix(2)).map(\.id))
+    #expect(next.readingNoteVersion(digest: paper.digest) == first.readingNoteVersion(digest: paper.digest))
+    let url = root.appendingPathComponent(next.relativePath)
+    let suffix = try await store.appendedContent(at: url, artifact: next, paperID: paper.id, afterSectionCount: 2)
+    #expect(
+        !suffix.contains("First") && !suffix.contains("Second") && suffix.contains("Third 论")
+            && suffix.contains("Fourth β"))
+    #expect(suffix.contains("翻译🧪"))
+    #expect(try await store.appendedContent(at: url, artifact: next, paperID: paper.id, afterSectionCount: 4).isEmpty)
+    await #expect(throws: ReaderError.self) {
+        try await store.appendedContent(at: url, artifact: next, paperID: UUID(), afterSectionCount: 2)
+    }
+    var damaged = next
+    damaged.sectionIndex?.ends[3] = UInt64.max
+    await #expect(throws: ReaderError.self) {
+        try await store.append(pairs(["No write"]), to: damaged, paper: paper, root: root)
+    }
 }

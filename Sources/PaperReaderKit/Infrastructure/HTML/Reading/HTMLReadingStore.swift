@@ -63,15 +63,25 @@ public actor HTMLReadingStore {
         let prefix = "Papers/\(paper.id.uuidString)/reading/"
         let folder = root.appendingPathComponent(prefix)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        var content = ""
-        if let previous {
-            let old = try String(contentsOf: root.appendingPathComponent(previous.relativePath), encoding: .utf8)
-            guard let start = old.range(of: Self.start), let end = old.range(of: Self.end, options: .backwards),
-                start.upperBound <= end.lowerBound
-            else { throw ReaderError.message("已保存的阅读内容无法完整读取，未覆盖。") }
-            content = String(old[start.upperBound..<end.lowerBound])
+        let previousURL = previous.map { root.appendingPathComponent($0.relativePath) }
+        var index: HTMLSectionIndex
+        var header = ""
+        if let previous, let previousURL {
+            index =
+                try previous.sectionIndex
+                ?? HTMLSectionIndex.recover(
+                    from: previousURL, paperID: paper.id, sections: previous.sections)
+            let file = try FileHandle(forReadingFrom: previousURL)
+            defer { try? file.close() }
+            try index.validate(file: file, paperID: paper.id, count: previous.sections.count)
+        } else {
+            header = Self.header(title: paper.displayTitle, paperID: paper.id)
+            index = .init(start: UInt64(header.utf8.count), ends: [])
         }
+        let appendOffset = index.end
+        var additions = Data()
         var sections = previous?.sections ?? []
+        var publishedIDs = Set(sections.flatMap(\.blockIDs))
         var assets = Set(previous?.assets ?? [])
         var created: [URL] = []
         var retained = false
@@ -89,7 +99,7 @@ public actor HTMLReadingStore {
         }
         for pair in pairs {
             try Task.checkCancellation()
-            guard !sections.contains(where: { $0.blockIDs.contains(pair.block.id) }) else {
+            guard publishedIDs.insert(pair.block.id).inserted else {
                 throw ReaderError.message("内容块已发布，拒绝重复追加。")
             }
             var translationTag = "div"
@@ -129,18 +139,26 @@ public actor HTMLReadingStore {
             let id = pair.block.id
             let section =
                 "<section id='block-\(id.uuidString)' data-key='\(id.uuidString)' data-source='\(pair.block.sourcePage)'>\(html)</section>"
-            content += section
+            additions.append(contentsOf: section.utf8)
+            index.ends.append(appendOffset + UInt64(additions.count))
             sections.append(PageArtifact(id: id, blockIDs: [id], sourcePage: pair.block.sourcePage, relativePath: ""))
         }
         let path = prefix + "document-\(UUID().uuidString).html"
         let destination = root.appendingPathComponent(path)
-        try Data(Self.document(content: content, title: paper.displayTitle, paperID: paper.id).utf8).write(
-            to: destination, options: .withoutOverwriting)
+        if let previousURL {
+            try HTMLSectionIndex.append(additions, replacingTailAt: appendOffset, from: previousURL, to: destination)
+        } else {
+            var document = Data(header.utf8)
+            document.append(additions)
+            document.append(contentsOf: HTMLSectionIndex.closing.utf8)
+            try document.write(to: destination, options: .withoutOverwriting)
+        }
         created.append(destination)
         try Task.checkCancellation()
         for index in sections.indices { sections[index].relativePath = path }
         retained = true
         var artifact = HTMLReadingArtifact(relativePath: path, sections: sections, assets: assets.sorted())
+        artifact.sectionIndex = index
         artifact.editionID = previous?.editionID
         if previous?.sections.isEmpty != false, let first = sections.first?.id,
             ([paper.htmlReading] + (paper.retainedReadings ?? []).map(\.html)).contains(where: {
@@ -182,21 +200,25 @@ public actor HTMLReadingStore {
         }
     }
 
-    public func appendedContent(at url: URL, excluding keys: Set<String>) throws -> String {
-        let document = try SwiftSoup.parse(String(contentsOf: url, encoding: .utf8))
-        // Inject the same text nodes as a full reload, including whitespace counted by selection anchors.
-        document.outputSettings().prettyPrint(pretty: false)
-        return try document.select("#reader > section").filter { !keys.contains(try $0.attr("data-key")) }
-            .map { try $0.outerHtml() }.joined()
+    public func appendedContent(
+        at url: URL, artifact: HTMLReadingArtifact, paperID: UUID, afterSectionCount: Int
+    ) throws -> String {
+        guard (0...artifact.sections.count).contains(afterSectionCount) else { throw HTMLSectionIndex.invalidDocument }
+        let index =
+            try artifact.sectionIndex
+            ?? HTMLSectionIndex.recover(
+                from: url, paperID: paperID, sections: artifact.sections)
+        let file = try FileHandle(forReadingFrom: url)
+        defer { try? file.close() }
+        try index.validate(file: file, paperID: paperID, count: artifact.sections.count)
+        return try index.read(afterSectionCount..<artifact.sections.count, file: file)
     }
 
-    private static let start = "<!--paperreader-content-start-->"
-    private static let end = "<!--paperreader-content-end-->"
     private static func escape(_ text: String) -> String {
         HTMLPaperParser.escape(text).replacingOccurrences(of: "\n", with: "<br>")
     }
 
-    private static func document(content: String, title: String, paperID: UUID) -> String {
+    private static func header(title: String, paperID: UUID) -> String {
         """
         <!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
         <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src 'self' file:; style-src 'unsafe-inline'; script-src 'none'; base-uri 'none'; form-action 'none'">
@@ -207,7 +229,7 @@ public actor HTMLReadingStore {
         h1,h2,h3,h4,h5,h6{font:650 1.25em/1.45 system-ui;margin:24px 0 12px}h1{font-size:1.8em;line-height:1.3;margin-top:0}h2{font-size:1.45em}.paper-authors{font:14px/1.7 system-ui;color:#706b62;margin:12px 0 28px}.paper-authors details{margin-top:8px}.paper-authors summary{cursor:pointer;color:#a34c33}.paper-authors details p{margin:8px 0}.paper-equation,.paper-equation td{border:0;padding:4px}.paper-equation{margin:24px auto;width:max-content;max-width:100%}#translation-draft{margin-top:24px}img{display:block;max-width:100%;max-height:min(45vh,320px);width:auto;height:auto;object-fit:contain;margin:auto;cursor:zoom-in}dialog{border:0;background:#faf9f5;padding:20px;max-width:96vw;max-height:96vh}dialog::backdrop{background:#0009}dialog img{max-width:90vw;max-height:82vh}dialog button{float:right;font:16px system-ui;border:0;background:transparent;cursor:pointer}a{color:#a34c33;text-decoration:underline;text-underline-offset:3px}table{display:block;overflow:auto;border-collapse:collapse;max-width:100%}td,th{padding:6px;border:1px solid #aaa}
         pre{overflow:auto;font:14px/1.6 monospace}math[display=block]{display:block;text-align:center;overflow-x:auto;max-width:100%;margin:24px 0}figcaption,.image-notice{font:14px/1.6 system-ui;color:#71572e}.translation{color:inherit;font-family:\(ReadingPageTypography.sourceChinese);margin-top:12px;border-top:1px solid #d9d4ca;border-left:1px solid #b9ac98;padding:12px 0 0 14px}h1.translation,h2.translation,h3.translation,h4.translation,h5.translation,h6.translation{font-family:system-ui;margin-bottom:28px}
         ::highlight(saved){background:#f2d36b;color:#292e2e}@media(prefers-color-scheme:dark){body{background:#24221f;color:#e4e1da}.translation{color:inherit}figcaption,.image-notice{color:#d0b784}}
-        </style></head><body data-paper-id="\(paperID.uuidString)"><main id="reader">\(start)\(content)\(end)</main></body></html>
+        </style></head><body data-paper-id="\(paperID.uuidString)"><main id="reader">\(HTMLSectionIndex.opening)
         """
     }
 
