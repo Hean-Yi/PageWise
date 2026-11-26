@@ -211,34 +211,33 @@ Anthropic 的 Memory tool 把读写交给客户端执行，模型按需请求上
 
 Letta 的记忆块可以跨 Agent 共享或设为只读。下一阶段拟让助读和书库 Agent 共享一份研究方向简报，读者亲自更正的陈述作为受保护的数据，每个 Agent 的临时工作记录单独保存。[Letta 源码](https://github.com/letta-ai/letta) · [Letta 记忆块](https://docs.letta.com/v1-sdk/memory/memory-blocks)
 
-## 后续演进设计：阶段二与阶段三（规划中）
+## 后续演进设计：阶段二与阶段三（核心底座已实现，扩展项规划中）
 
-> 本节内容为后续设计方案与拟定验收门槛，尚未落地为代码实现；已上线能力以上文各节与 [验证记录](mvp-status.md) 为准。
+> 本节区分**已实现能力**与**后续规划**，不把规划项描述为已上线功能；实测结果以 [验证记录](mvp-status.md) 为准。
 
 ### 阶段二：记忆生命周期去正则化与设备端检索底座升级
 
-1. **声明式记忆维护替代重正则门控（参考 `mem0ai/mem0` 与 `langchain-ai/langmem`）**
-   - 保留 PageWise 的硬不变量（`userEdited` 受保护、删除墓碑与抑制指纹防复活、来源归属可核对、未授权不得改写笔记/书库），逐步弱化前端对自然语言措辞的硬正则拦截（如显式修订/遗忘关键词依赖）。
-   - 在首轮上下文或检索结果中向模型提供 Top-K 语义相关的候选记忆（含 `memory_id`、当前状态与修订摘要），由模型发起 `propose_memory` / `revise_memory` / `forget_memory` 或保持 `noop`。
-   - `revise_memory` 工具参数拟新增 `expected_revision`（或内容指纹），应用层在 SQLite 提交事务内校验版本匹配、非用户手改与作用域一致，再决定是否落盘。
+1. **声明式记忆维护与乐观修订校验（已实现，参考 `mem0ai/mem0` 与 `langchain-ai/langmem`）**
+   - 保留 PageWise 的硬不变量（`userEdited` 受保护、删除墓碑与抑制指纹防复活、来源归属可核对、未授权不得改写笔记/书库），已放宽前端对 `revise_memory` / `forget_memory` 的关键词正则门控；
+   - 首轮个人背景与 `research_overview` 返回每条记忆的 `revision`（`MemoryItem.revisionFingerprint`），`revise_memory` / `forget_memory` 支持传入 `expected_revision`，在 SQLite 提交事务内执行乐观并发校验；若静默记忆工具失败（如版本过期或命中受保护的用户手改记忆），循环不再误判“已更新”，而是把错误回传给模型继续恢复或说明。
 
-2. **双时态记忆模型与显著性衰减（参考 `getzep/graphiti` 与 `letta-ai/letta`）**
-   - 为 `MemoryItem` 规划轻量双时态字段：`validFrom`（事实生效时间）、`invalidAt`（事实失效或被替代时间）、`supersededBy: UUID?`（替代它的新记录 ID），与系统记录时间 `createdAt` 分离。
-   - 检索默认过滤 `invalidAt == nil` 的活跃记录，历史追查仍可回溯旧判断；`superseded` 关系不再只存在于派生的 `memory_sleep` 视图中，减少重排与失效逻辑耦合。
-   - 为自动提取的长期记忆引入轻量显著性/访问时间衰减（Salience Decay），长期未被召回或关联的旧自动线索自动降权，读者手动修订与明确偏好免于衰减。
-   - `MemorySleep` 在已有 E5 语义锚点组批基础上，规划支持跨论文主题归纳与可回滚版本历史。
+2. **双时态记忆模型与显著性衰减（基础模型已实现，Sleep 跨作用域归并规划中，参考 `getzep/graphiti` 与 `letta-ai/letta`）**
+   - `MemoryItem` 已新增向后兼容的双时态字段：`validFrom`、`invalidAt`、`supersededBy: UUID?`，以及轻量召回计数与 `salienceWeight(at:)`（自动记忆 60 天半衰期、下限 0.35；读者手改与明确偏好免衰减）；
+   - `ResearchMemory.relevant`、`MemorySleepEdition.eligible` 与 `MemoryView` 默认只读取 `isActive`（未删除且 `invalidAt == nil`）记录；`ChatSourceVersions` 已纳入 `invalidAt` 指纹，替代旧记忆后立即失效陈旧重放。
+   - 规划中：`MemorySleep` 跨论文主题归纳与可回滚版本历史界面。
 
-3. **设备端混合检索底座升级（参考 `asg017/sqlite-vec`）**
-   - 用 SQLite `FTS5`（BM25 排序与位置权重）替换 `LibraryAgentSearch` 中逐词全词表子串扫描，改善中大型文献库（百篇以上论文、千条以上笔记）的词项查询延迟。
-   - 修复 `SemanticPassageIndex` 冷启动“部分预热子集参与 RRF”导致的排序漂移：跟踪语料向量覆盖度，仅在完整覆盖（`coverage == 1.0`）时将语义通道并入 RRF，未完成前保持纯词项返回并继续后台预热。
-   - 当千级以上段落的常驻内存占用成为 iPad 瓶颈时，在同一检索协议后评估静态集成 `sqlite-vec`（`vec0` 虚拟表 + Apple Silicon NEON SIMD），以单条 SQL CTE 完成 `FTS5 + vec0` 的 RRF 融合。
+3. **设备端混合检索底座升级（FTS5 与覆盖度门控已实现，`sqlite-vec` 规划中，参考 `asg017/sqlite-vec`）**
+   - `LibraryFTSIndex` 已基于系统自带 SQLite `FTS5`（`unicode61` + `bm25(paper_fts, 0, 0, 0, 5.0, 1.0)`）为 `LibraryAgentSearchIndex` 提供拉丁/混合词项的 BM25 检索，中文表意词与精确标识符沿用原有精确路径。
+   - `SemanticPassageIndex` 已新增 `coverage()` 与冷启动覆盖度门控：语料大于 4 段且尚未完成全量预热时，后台继续预热并先返回空语义结果，避免半截向量子集扭曲 RRF 排序。
+   - 规划中：当千级以上段落的常驻内存占用成为 iPad 瓶颈时，在同一检索协议后评估静态集成 `sqlite-vec`（`vec0` 虚拟表 + Apple Silicon NEON SIMD）。
 
 ### 阶段三：离线可回归轨迹与多轮记忆评测 Harness
 
-1. **HTTP Record/Replay Cassettes（参考 `langchain-ai/agentevals` 与 `UKGovernmentBEIS/inspect_ai`）**
-   - 在 `HTTPTransport` 层增加脱敏录制与离线回放夹具，将多轮工具调用、上下文压缩、预算耗尽降级、并发只读调度、工具参数越权与文档内 Prompt Injection 场景固化为可重复的轨迹回归测试（支持严格顺序、子集与无序轨迹断言）。
-2. **双语多轮记忆回归集（参考 `xiaowu0162/LongMemEval`）**
-   - 构建 30–50 条原创合成学术场景的双语多轮样本，覆盖：作用域与单轮偏好覆盖、自然转折修订与遗忘、Sleep 跨语言合并与冲突并存、无答案克制与引文忠实度、工具轨迹效率。
+1. **HTTP Record/Replay Cassettes 与轨迹断言（已实现，参考 `langchain-ai/agentevals` 与 `UKGovernmentBEIS/inspect_ai`）**
+   - `Tests/PaperReaderWorkflowTests/Support/AgentHarnessSupport.swift` 提供脱敏录制/离线回放的 `CassetteTransport`（不写入 `Authorization` 等凭据头）与 `TrajectoryAssertion`（精确序列、子集、禁用工具、跨轮前缀逐字节稳定性、密钥零泄漏断言）；
+   - `Tests/PaperReaderWorkflowTests/Assistant/AgentTrajectoryEvalTests.swift` 已覆盖录制回放闭环、过期 `expected_revision` 拒绝、用户手改保护、论文正文内 Prompt Injection 防御、细节偏好不误停写与伪造 `[S99]` 引用清洗。
+2. **扩充双语多轮记忆基准集（规划中，参考 `xiaowu0162/LongMemEval`）**
+   - 规划在现有轨迹测试基础上扩充至 30–50 条原创合成学术场景的双语多轮样本，结合定期真模型盲评验证偏好作用域、自然改口、Sleep 跨语言合并与无答案克制。
 
 ### 拟定验收目标与发布门槛
 
