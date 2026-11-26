@@ -20,9 +20,13 @@ public struct ModelClient: Sendable {
         var attempt = 0
         while true {
             do {
-                return try await completeOnce(request: request, jsonOutput: jsonOutput)
+                return try await completeOnce(
+                    request: request, jsonOutput: jsonOutput, canRetry: attempt < maxRetries)
             } catch let retry as RetrySignal {
                 attempt += 1
+                guard attempt <= maxRetries else {
+                    throw ReaderError.message("模型服务暂时不可用，重试后仍未恢复。")
+                }
                 try Task.checkCancellation()
                 try await Task.sleep(for: .milliseconds(retry.delayMilliseconds))
             }
@@ -33,14 +37,14 @@ public struct ModelClient: Sendable {
         let delayMilliseconds: Int
     }
 
-    private func completeOnce(request: URLRequest, jsonOutput: Bool) async throws -> String {
+    private func completeOnce(request: URLRequest, jsonOutput: Bool, canRetry: Bool) async throws -> String {
         let data: Data
         let response: HTTPURLResponse
         do {
             (data, response) = try await transport.data(for: request)
         } catch let urlError as URLError {
             try Task.checkCancellation()
-            if Self.isTransientNetworkError(urlError) {
+            if canRetry, Self.isTransientNetworkError(urlError) {
                 throw RetrySignal(delayMilliseconds: 300)
             }
             throw ReaderError.message("模型网络请求未完成，请检查连接后重试。")
@@ -49,12 +53,12 @@ public struct ModelClient: Sendable {
         case 200...299: break
         case 401, 403: throw ReaderError.message("模型服务拒绝访问，请检查密钥、模型权限和 API 地址。")
         case 408, 425, 429:
-            if let delay = Self.retryAfterMilliseconds(response, fallback: 500) {
+            if canRetry, let delay = Self.retryAfterMilliseconds(response, fallback: 500) {
                 throw RetrySignal(delayMilliseconds: delay)
             }
             throw ReaderError.message("模型服务限流或额度不足，请稍后重试。已完成内容已保留。")
         case 500...599:
-            if let delay = Self.retryAfterMilliseconds(response, fallback: 400) {
+            if canRetry, let delay = Self.retryAfterMilliseconds(response, fallback: 400) {
                 throw RetrySignal(delayMilliseconds: delay)
             }
             throw ReaderError.message("模型请求失败（HTTP \(response.statusCode)）；重试后仍未恢复。")

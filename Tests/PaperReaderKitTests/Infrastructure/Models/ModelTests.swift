@@ -116,3 +116,18 @@ private actor SequencedTransport: HTTPTransport {
     }
     #expect(await transport.callCount() == 1)
 }
+
+@Test func modelStopsAfterBoundedTransientRetries() async throws {
+    var settings = ModelSettings()
+    settings.baseURL = "https://example.invalid/v4"
+    settings.model = "test"
+    let transport = SequencedTransport([
+        (503, "unavailable", "0"), (503, "unavailable", "0"), (503, "unavailable", "0"),
+    ])
+    let client = ModelClient(transport: transport)
+    await #expect(throws: (any Error).self) {
+        try await client.complete(
+            settings: settings, key: "test-only", system: "translate", user: "input", maxTransientRetries: 1)
+    }
+    #expect(await transport.callCount() == 2)
+}
