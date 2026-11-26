@@ -91,6 +91,7 @@ public enum Retriever {
     public static func expandedTokens(_ value: String) -> Set<String> {
         let base = tokens(value)
         var result = base
+        result.formUnion(LocalSemanticLexicon.phraseConcepts(in: value))
         for token in base {
             result.formUnion(LocalSemanticLexicon.concepts(for: token))
         }

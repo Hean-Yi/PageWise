@@ -93,6 +93,12 @@ func measureInstalledSemanticRetrieval() async throws {
             timings.append(ms(now))
             let rank = hits.firstIndex { $0.readingNoteID == notes[i].id }.map { $0 + 1 } ?? 0
             ranks[examples[i].category, default: []].append(rank)
+            if env["PAGEWISE_BENCH_DETAIL"] == "1", publicSet == nil {
+                print(
+                    "QUALITY_DETAIL", label, i, "rank", rank,
+                    "query", examples[i].query,
+                    "top", hits.prefix(3).map { String($0.text.prefix(60)) })
+            }
         }
         for key in ranks.keys.sorted() {
             let r = ranks[key]!

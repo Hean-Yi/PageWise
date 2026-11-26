@@ -102,7 +102,8 @@ public actor ReadingNoteMemoryIndex {
             guard let indexed = postings[term] else { continue }
             let matches = unavailable.isEmpty ? indexed : indexed.subtracting(unavailable)
             guard !matches.isEmpty else { continue }
-            weights[term] = log(1 + Double(eligibleCount) / Double(matches.count))
+            let idf = log(1 + Double(eligibleCount) / Double(matches.count))
+            weights[term] = term.hasPrefix("concept:") || term.hasPrefix("phrase:") ? idf * 1.8 : idf
             candidates.formUnion(matches)
         }
         func weight(_ terms: Set<String>) -> Double {
