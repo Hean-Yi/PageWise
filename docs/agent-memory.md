@@ -65,7 +65,7 @@ new or changed records + prior edition
 | 发现论文与交付结果 | `search_online`、`recommend_related`、`present_results`、`prepare_import`、`open_paper` | 下载与跳转生成可点击卡片。搜索失败和零结果分别报告。 |
 | 精读与讨论 | `close_read_paper`、`create_reading_note`、`ask_user` | 精读、写笔记由本轮委托触发，引用须通过本地定位。 |
 | 记录回答习惯 | `remember_preference` | 保存读者当轮明确表达的长期习惯及作用范围。一次性要求只影响本轮。 |
-| 静默维护记忆 | `propose_memory`、`revise_memory`、`forget_memory` | 有来源依据时静默新增、修订或删除研究记忆；不要求读者逐条确认，仍受来源、删除和用户修订保护。 |
+| 静默维护记忆 | `propose_memory`、`revise_memory`、`forget_memory` | 有来源依据时静默新增、修订或删除研究记忆；不要求读者逐条确认，仍受来源、删除、唯一目标校验和用户修订保护；本地审计记录触发哈希。 |
 | 提议研究问题 | `propose_research_question` | 书库助理可以从本轮读者的原话，或已经检索并核实版本的读者手记，提出待追查的问题。应用核对原句、参与者、来源和重复记录；用户可在研究记忆中打开出处、修订或删除。 |
 | 整理书库 | `list_library`、`prepare_local_import`、`create_shelf`、`rename_shelf`、`move_papers`、`prepare_delete_paper`、`prepare_delete_shelf` | 写操作按意图开放。永久删除论文需由读者在窗口确认。 |
 
@@ -144,7 +144,7 @@ PAGEWISE_BENCH_CORPUS="$corpus_dir" swift test --skip-build --filter measureInst
 - 输入预算约 6,000 tokens，输出上限约 800 tokens；没有变化的笔记不重发；
 - 模型只输出完整的新正文；提示词要求只做局部修订，保留原文句子、顺序、语气和 Markdown 结构，字符改动通常不超过 25%，长度保持在 70%–140%；
 - 程序校验目标笔记的当前修订时间和长度，并用字符前后缀比例拒绝大幅度重写；数字、否定和条件的语义复核仍依赖模型并使用确定性提示约束；
-- 相似/冲突近邻按来源笔记修订缓存到 `note_relations`，目标笔记变化才重算；每条边保存目标笔记修订，目标被改动后旧边不会继续使用。
+- 相似/冲突近邻先用 E5 语义候选（模型未安装时回退词项），再用数字/否定做确定性冲突标记；按来源笔记修订缓存到 `note_relations`，目标笔记变化才重算，目标被改动后旧边不会继续使用。
 
 每次静默写入直接把新文本作为笔记正文，并更新 `modifiedAt`；旧正文保留在数据历史中用于追溯，但产品不提供回退界面或“建议/接受”流程。修订会把实际使用的关系笔记 ID 与修订时间写入 `backgroundSources`；关系笔记被修改或删除后，该修订不再进入检索。Obsidian 仍只在读者主动导出时写入。关联和冲突关系可以只读展示给 Agent，用于回答“哪些笔记在讲同一件事、哪些判断互相冲突”；不把完整笔记正文重复塞进每次请求。
 
