@@ -99,7 +99,16 @@ public actor SemanticPassageIndex {
     }
 
     public func isWarm() -> Bool {
-        !keys.isEmpty && vectors.count >= keys.count
+        !keys.isEmpty && keys.values.allSatisfy { vectors[$0] != nil }
+    }
+
+    /// Fraction of the current corpus whose semantic vectors are ready in memory (`0.0 ... 1.0`).
+    public func coverage() -> Double {
+        guard !keys.isEmpty else { return 1.0 }
+        let ready = keys.values.reduce(into: 0) { count, key in
+            if vectors[key] != nil { count += 1 }
+        }
+        return Double(ready) / Double(keys.count)
     }
 
     public func removeSources(_ ids: Set<UUID>) {
@@ -164,12 +173,19 @@ public actor SemanticPassageIndex {
             return []
         }
         do {
-            if vectors.count < keys.count {
-                // Never make the first lexical result wait for model loading. Start the warmup
-                // and serve the current lexical result; later queries see the semantic vectors.
-                _ = warmup(encoder, version: version)
+            if !isWarm() {
+                if keys.count <= 4 {
+                    // A tiny corpus finishes within a single encoding batch; await it so cold
+                    // small libraries do not race with background warmup.
+                    try await warmup(encoder, version: version).value
+                } else {
+                    // Never mix a partially warmed vector subset into RRF. Warm in the background
+                    // and let callers serve a consistent lexical ranking until full coverage is ready.
+                    _ = warmup(encoder, version: version)
+                    return []
+                }
             }
-            guard !vectors.isEmpty, version == generation,
+            guard isWarm(), version == generation,
                 let encoded = try await encoder.retrievalQuery(String(query.prefix(1_600))),
                 let queryVector = Self.unit(encoded.vector), version == generation
             else { return [] }

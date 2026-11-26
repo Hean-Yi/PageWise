@@ -186,3 +186,80 @@ func calibratedSemanticDevelopmentExamples() async throws {
         }
     }
 }
+
+private actor GatedEncoder: SemanticTextEncoder {
+    nonisolated let identifier = "gated-v1"
+    private var calls = 0
+    private var continuation: CheckedContinuation<Void, Never>?
+
+    func encode(_ texts: [String], as role: SemanticTextRole) async -> [[Float]] {
+        if role == .passage {
+            calls += 1
+            if calls == 2 {
+                await withCheckedContinuation { continuation = $0 }
+            }
+        }
+        return texts.map { text in
+            text.contains("对齐") || text.contains("equal budgets") ? [1, 0, 0] : [0, 0, 1]
+        }
+    }
+
+    func waitForPause() async {
+        while continuation == nil { await Task.yield() }
+    }
+
+    func resume() {
+        continuation?.resume()
+        continuation = nil
+    }
+}
+
+@Test func semanticIndexGatesPartialCoverageUntilFullCorpusIsWarm() async throws {
+    let encoder = GatedEncoder()
+    let index = SemanticPassageIndex(encoder: encoder)
+    let passages = (0..<8).map { offset in
+        SemanticPassage(
+            sourceID: UUID(),
+            text: offset == 0 ? "equal budgets hold in trial 0" : "unrelated trial \(offset)")
+    }
+    let allowed = Set(passages.map(\.sourceID))
+
+    // First query on >4 passages starts background warmup and returns empty without blocking.
+    let initial = try await index.matches("对齐", passages: passages, allowed: allowed, limit: 3)
+    #expect(initial.isEmpty)
+    await encoder.waitForPause()
+    let partialCoverage = await index.coverage()
+    #expect(partialCoverage > 0 && partialCoverage < 1.0)
+    // While only half the corpus is warm, semantic matches stay gated so partial vectors cannot distort RRF.
+    let partial = try await index.matches("对齐", passages: passages, allowed: allowed, limit: 3)
+    #expect(partial.isEmpty)
+
+    await encoder.resume()
+    for _ in 0..<200 where !(await index.isWarm()) {
+        try await Task.sleep(for: .milliseconds(10))
+    }
+    #expect(await index.coverage() == 1.0)
+    let warm = try await index.matches("对齐", passages: passages, allowed: allowed, limit: 3)
+    #expect(warm.first?.passage.sourceID == passages[0].sourceID)
+}
+
+@Test func libraryFTSIndexRanksExactTitleAndBodyMatchesWithBM25AndClearsDeletedPapers() async throws {
+    let index = LibraryAgentSearchIndex()
+    let strongBlock = TextBlock(
+        sourcePage: 0, text: "Distillation under matched compute budget improves student calibration.")
+    let weakBlock = TextBlock(
+        sourcePage: 1, text: "A brief mention of budget in related work without calibration details.")
+    let strong = Paper(
+        title: "Matched Compute Budget Distillation", digest: "fts-strong", originalPath: "s.pdf", pageCount: 1,
+        blocks: [strongBlock], warnings: [], canReflow: true)
+    let weak = Paper(
+        title: "General Survey", digest: "fts-weak", originalPath: "w.pdf", pageCount: 2,
+        blocks: [weakBlock], warnings: [], canReflow: true)
+
+    let hits = try await index.search("compute budget distillation", papers: [weak, strong])
+    #expect(hits.first?.paperID == strong.id)
+    #expect(hits.first?.blockID == strongBlock.id)
+
+    let afterRemoval = try await index.search("distillation", papers: [weak])
+    #expect(afterRemoval.isEmpty)
+}

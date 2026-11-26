@@ -117,6 +117,7 @@ public actor LibraryAgentSearchIndex {
 
     private let root: URL?
 
+    private let fts = LibraryFTSIndex()
     private let semantic: SemanticPassageIndex
     private var passages: [SemanticPassage]?
     private var generation: UInt64 = 0
@@ -160,11 +161,15 @@ public actor LibraryAgentSearchIndex {
         let entry = try IndexedPaper(paper, root: root)
         try Task.checkCancellation()
         entries[paper.id] = entry
+        fts.replace(
+            paperID: paper.id, title: entry.title,
+            passages: entry.body.passages.map { ($0.blockID, $0.sourcePage, $0.text) })
         changed()
     }
 
     public func discard(_ id: UUID) async {
         entries[id] = nil
+        fts.remove(paperID: id)
         changed()
         await semantic.removeSources([id])
     }
@@ -177,12 +182,17 @@ public actor LibraryAgentSearchIndex {
         let live = Set(papers.map(\.id))
         for id in entries.keys where !live.contains(id) {
             entries[id] = nil
+            fts.remove(paperID: id)
             changed()
         }
         for paper in papers {
             try Task.checkCancellation()
             if entries[paper.id]?.matches(paper) != true {
-                entries[paper.id] = try IndexedPaper(paper, root: root)
+                let entry = try IndexedPaper(paper, root: root)
+                entries[paper.id] = entry
+                fts.replace(
+                    paperID: paper.id, title: entry.title,
+                    passages: entry.body.passages.map { ($0.blockID, $0.sourcePage, $0.text) })
                 changed()
             }
         }
@@ -195,7 +205,21 @@ public actor LibraryAgentSearchIndex {
         let bounded = min(limit, 64)
         let key = query.trimmingCharacters(in: .whitespacesAndNewlines)
         let identifier = SearchTermMatches.isIdentifierQuery(key) ? key : nil
-        let lexical = try LibraryAgentSearch.rank(terms, in: entries, limit: bounded * 2, identifier: identifier)
+        let hasIdeograph = terms.contains { $0.unicodeScalars.contains { $0.properties.isIdeographic } }
+        let lexical: [AgentSearchHit]
+        if identifier == nil, !hasIdeograph, fts.isAvailable {
+            let ftsHits = fts.search(terms: terms, limit: bounded * 2).map { hit in
+                AgentSearchHit(
+                    paperID: hit.paperID, title: hit.title, blockID: hit.blockID,
+                    sourcePage: hit.sourcePage, excerpt: hit.excerpt, score: hit.score)
+            }
+            lexical =
+                ftsHits.isEmpty
+                ? try LibraryAgentSearch.rank(terms, in: entries, limit: bounded * 2, identifier: nil)
+                : ftsHits
+        } else {
+            lexical = try LibraryAgentSearch.rank(terms, in: entries, limit: bounded * 2, identifier: identifier)
+        }
         let revision = generation
         guard identifier == nil, await semantic.isAvailable() else {
             guard revision == generation else { throw CancellationError() }
