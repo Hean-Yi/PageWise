@@ -17,16 +17,12 @@ enum ChatCompletionRequest {
         guard !key.isEmpty else { throw ReaderError.message("请先在设置中保存 API Key。") }
         guard !key.contains(where: \.isWhitespace) else { throw ReaderError.message("API Key 中不能包含空格或换行。") }
 
-        let provider = ModelServicePreset.matching(settings)
-        let model = settings.model.lowercased()
-        // Newer GPT and Claude families reject non-default sampling. Kimi's presets also fix sampling by model.
-        let fixedSampling =
-            provider == .anthropic || (provider == .kimi && model.hasPrefix("kimi-k"))
-            || (provider == .openAI && (model.hasPrefix("gpt-5") || model.hasPrefix("gpt-6") || model.first == "o"))
-        let usesCompletionLimit = provider == .openAI || provider == .kimi
+        let capabilities = ModelCapabilities.resolve(settings)
+        let fixedSampling = capabilities.fixedSampling
+        let usesCompletionLimit = capabilities.usesCompletionTokenLimit
         let disableThinking =
-            (reflow && provider == .glm && model == "glm-5.3-flash")
-            || ((jsonOutput || reflow) && provider == .deepSeek && model == "deepseek-flash")
+            (jsonOutput || reflow) && capabilities.disablesThinkingForStructuredOutput
+            && capabilities.supportsThinkingToggle
         let tools =
             toolChoice == nil
             ? []
@@ -47,7 +43,7 @@ enum ChatCompletionRequest {
             maxTokens: usesCompletionLimit ? nil : maxOutputTokens,
             maxCompletionTokens: usesCompletionLimit ? maxOutputTokens : nil,
             // Claude's compatibility API rejects json_object. The prompts and local schema checks still require JSON.
-            responseFormat: jsonOutput && provider != .anthropic ? ["type": "json_object"] : nil,
+            responseFormat: jsonOutput && !capabilities.rejectsJSONObjectResponseFormat ? ["type": "json_object"] : nil,
             thinking: disableThinking ? ["type": "disabled"] : nil,
             tools: tools.isEmpty ? nil : tools, toolChoice: tools.isEmpty ? nil : toolChoice?.rawValue)
         var request = URLRequest(url: try settings.endpointURL())

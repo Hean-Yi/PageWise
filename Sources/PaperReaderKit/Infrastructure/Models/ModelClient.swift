@@ -74,10 +74,9 @@ public struct ModelClient: Sendable {
             throw ReaderError.message("模型未返回完整文本，结果未保存；可调整模型或重试。")
         }
         guard jsonOutput else { return raw }
-        guard let json = ModelJSON.extractObject(from: raw) else {
-            throw ReaderError.message("模型未返回可解析的 JSON，结果未保存；可重试或更换模型。")
-        }
-        return json
+        // Fences and reasoning tags are stripped when present. Callers still validate their own
+        // schema; returning the raw text preserves the previous diagnostic path for plain replies.
+        return ModelJSON.extractObject(from: raw) ?? raw
     }
 
     static let maximumResponseBytes = 2_000_000

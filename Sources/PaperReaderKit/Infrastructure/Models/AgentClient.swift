@@ -36,9 +36,10 @@ public struct AgentClient: AgentCompleting {
         try Self.validateHistory(messages)
         // Keeping definitions preserves DeepSeek's tool-mode reasoning history. Other compatible
         // endpoints can disable tools simply by omitting them, including those that only accept auto.
-        let endpoint = try settings.endpointURL()
+        _ = try settings.endpointURL()
+        let capabilities = ModelCapabilities.resolve(settings)
         let finalToolChoice: ChatCompletionRequest.ToolChoice? =
-            endpoint.host == "api.deepseek.com" && endpoint.port == nil ? .disabled : nil
+            capabilities.keepsToolsWhenDisabled ? .disabled : nil
         let includesTools = limits.maxToolCalls > 0 || finalToolChoice != nil
         let toolBytes = includesTools ? Self.toolPayloadBytes(for: limits.availableToolNames) : 0
         guard try JSONEncoder().encode(messages).count + toolBytes <= limits.maxContextBytes else {

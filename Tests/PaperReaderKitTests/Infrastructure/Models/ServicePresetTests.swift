@@ -88,3 +88,48 @@ func modelServicesUseTheirWireFormatForTextReflowAndTools(_ preset: ModelService
         #expect(ModelServicePreset.matching(settings) == .custom)
     }
 }
+
+@Test func compatibleGatewayInfersProviderCapabilitiesFromTheModelName() {
+    var settings = ModelSettings()
+    settings.baseURL = "https://openrouter.ai/api/v1"
+    settings.model = "anthropic/claude-3.7-sonnet"
+    var capabilities = ModelCapabilities.resolve(settings)
+    #expect(capabilities.family == .anthropic)
+    #expect(capabilities.fixedSampling)
+    #expect(capabilities.rejectsJSONObjectResponseFormat)
+    #expect(!capabilities.usesCompletionTokenLimit)
+
+    settings.model = "openai/gpt-5-mini"
+    capabilities = ModelCapabilities.resolve(settings)
+    #expect(capabilities.family == .openAI)
+    #expect(capabilities.usesCompletionTokenLimit)
+    #expect(capabilities.fixedSampling)
+    #expect(!capabilities.rejectsJSONObjectResponseFormat)
+
+    settings.model = "deepseek/deepseek-chat"
+    capabilities = ModelCapabilities.resolve(settings)
+    #expect(capabilities.family == .deepSeek)
+    #expect(!capabilities.keepsToolsWhenDisabled)
+    #expect(!capabilities.supportsThinkingToggle)
+    #expect(!capabilities.disablesThinkingForStructuredOutput)
+}
+
+@Test func officialFamiliesKeepTheirDocumentedStructuredOutputQuirks() {
+    var settings = ModelSettings()
+    settings.baseURL = ModelServicePreset.deepSeek.baseURL
+    settings.model = "deepseek-flash"
+    var capabilities = ModelCapabilities.resolve(settings)
+    #expect(capabilities.keepsToolsWhenDisabled)
+    #expect(capabilities.supportsThinkingToggle)
+    #expect(capabilities.disablesThinkingForStructuredOutput)
+
+    settings.baseURL = ModelServicePreset.glm.baseURL
+    settings.model = "glm-5.3-flash"
+    capabilities = ModelCapabilities.resolve(settings)
+    #expect(!capabilities.keepsToolsWhenDisabled)
+    #expect(capabilities.supportsThinkingToggle)
+    #expect(capabilities.disablesThinkingForStructuredOutput)
+
+    settings.model = "glm-5.3"
+    #expect(!ModelCapabilities.resolve(settings).disablesThinkingForStructuredOutput)
+}
