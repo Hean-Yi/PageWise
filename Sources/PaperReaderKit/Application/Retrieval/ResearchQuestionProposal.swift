@@ -114,14 +114,25 @@ public struct ResearchQuestionProposal: Sendable {
         }
         let attribution =
             #"(?i)(?:作者|论文|原文|他们|她|他)(?:说|写|表示|认为|宣称)|(?:the |a )?(?:author|paper)s? (?:say|claim|state)s?\b"#
+        let exactRange = ownWords.range(of: statement)
+        let matchesSource =
+            exactRange.map { range in
+                boundary(ownWords[..<range.lowerBound].trimmingCharacters(in: .whitespaces).last)
+                    && (boundary(statement.last)
+                        || boundary(ownWords[range.upperBound...].trimmingCharacters(in: .whitespaces).first))
+            } ?? ResearchMemory.containsEvidence(statement, in: String(ownWords))
+        let attributionBeforeQuote: Bool
+        if let range = exactRange {
+            attributionBeforeQuote =
+                ownWords[..<range.lowerBound].components(separatedBy: CharacterSet(charactersIn: "。!！?？;.\n"))
+                .last?.range(of: attribution, options: .regularExpression) == nil
+        } else {
+            attributionBeforeQuote = true
+        }
         guard ResearchMemory.permitsAutomaticWrite(for: readerMessage), (6...240).contains(statement.count),
-            !statement.contains("■"), !Self.isOperational(statement), let range = ownWords.range(of: statement),
-            boundary(ownWords[..<range.lowerBound].trimmingCharacters(in: .whitespaces).last),
-            boundary(statement.last)
-                || boundary(ownWords[range.upperBound...].trimmingCharacters(in: .whitespaces).first),
+            !statement.contains("■"), !Self.isOperational(statement), matchesSource,
             statement.range(of: attribution, options: .regularExpression) == nil,
-            ownWords[..<range.lowerBound].components(separatedBy: CharacterSet(charactersIn: "。!！?？;.\n")).last?.range(
-                of: attribution, options: .regularExpression) == nil
+            attributionBeforeQuote
         else { throw ReaderError.message("请引用读者本轮表达的完整研究问题或想法。") }
         item = try Self.make(
             question, evidence: statement, id: readerTurnID, source: .reader(quote: statement), sourceOnly: sourceOnly)
@@ -131,8 +142,8 @@ public struct ResearchQuestionProposal: Sendable {
         throws
     {
         guard note.deletedAt == nil, note.backgroundSources == nil,
-            (6...240).contains(quote.count), registeredExcerpt.contains(quote),
-            ReadingNoteMemoryIndex.searchableBody(note.markdown).contains(quote)
+            (6...240).contains(quote.count), ResearchMemory.containsEvidence(quote, in: registeredExcerpt),
+            ResearchMemory.containsEvidence(quote, in: ReadingNoteMemoryIndex.searchableBody(note.markdown))
         else { throw ReaderError.message("需引用当前笔记结果中可核对的原句。") }
         item = try Self.make(
             question, evidence: quote, id: note.id, source: .note(paperID: note.paperID, modifiedAt: note.modifiedAt),

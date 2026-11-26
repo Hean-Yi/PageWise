@@ -89,3 +89,17 @@ import Testing
     #expect(change.apply(to: &state))
     #expect(state.memories.contains { $0.id == item.id })
 }
+
+@Test func detailOnlyNonRetentionIsReadAsAPreferenceNotAMemoryVeto() {
+    #expect(ResearchMemory.permitsAutomaticWrite(for: "以后不要记录太多细节，只写结论。"))
+    #expect(ReaderPreference.permitsExtraction("以后不要记录太多细节，只写结论。"))
+    #expect(!ResearchMemory.permitsAutomaticWrite(for: "以后不要记录太多细节，也不要保存记忆。"))
+    #expect(!ResearchMemory.permitsAutomaticWrite(for: "这段别记。"))
+}
+
+@Test func evidenceMatchingToleratesPunctuationAndLineBreaksWithoutInventingWords() {
+    #expect(
+        ResearchMemory.containsEvidence(
+            "默认用中文\n回答", in: "以后默认用中文回答，可以吗？"))
+    #expect(!ResearchMemory.containsEvidence("完全无关的原句", in: "以后默认用中文回答，可以吗？"))
+}

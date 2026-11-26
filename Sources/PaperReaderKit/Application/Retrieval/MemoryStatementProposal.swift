@@ -24,7 +24,8 @@ public struct MemoryStatementProposal: Sendable {
         let value = statement.trimmingCharacters(in: .whitespacesAndNewlines)
         let evidence = quote.trimmingCharacters(in: .whitespacesAndNewlines)
         guard (6...240).contains(value.count), (6...240).contains(evidence.count),
-            readerMessage.contains(evidence), ResearchMemory.permitsAutomaticWrite(for: readerMessage),
+            ResearchMemory.containsEvidence(evidence, in: readerMessage),
+            ResearchMemory.permitsAutomaticWrite(for: readerMessage),
             !ResearchQuestionProposal.isOperational(value)
         else { throw ReaderError.message("需要一个可核对来源的具体记忆陈述。") }
         item = MemoryItem(
@@ -36,8 +37,8 @@ public struct MemoryStatementProposal: Sendable {
         let evidence = quote.trimmingCharacters(in: .whitespacesAndNewlines)
         guard note.deletedAt == nil, note.backgroundSources == nil,
             (6...240).contains(value.count), (6...240).contains(evidence.count),
-            registeredExcerpt.contains(evidence),
-            ReadingNoteMemoryIndex.searchableBody(note.markdown).contains(evidence),
+            ResearchMemory.containsEvidence(evidence, in: registeredExcerpt),
+            ResearchMemory.containsEvidence(evidence, in: ReadingNoteMemoryIndex.searchableBody(note.markdown)),
             !ResearchQuestionProposal.isOperational(value)
         else { throw ReaderError.message("需要一个可核对来源的具体笔记陈述。") }
         item = MemoryItem(

@@ -868,7 +868,8 @@ public final class LibraryAgent {
         }
         if let turn = activeTurn, ReaderPreference.permitsRecall(turn.question),
             turn.question.range(
-                of: #"(?i)忘掉|忘记|删除|移除|撤回|forget|remove|delete"#, options: .regularExpression) != nil
+                of: #"(?i)忘掉|忘记|删除|移除|撤回|不用再|无需再|不再|停止|取消|forget|remove|delete|stop|drop|no longer"#,
+                options: .regularExpression) != nil
         {
             names.insert("forget_memory")
         }

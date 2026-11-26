@@ -196,7 +196,8 @@ extension LibraryAgent {
         case .forgetMemory(let memoryID):
             guard let turn = activeTurn, ReaderPreference.permitsRecall(turn.question),
                 turn.question.range(
-                    of: #"(?i)忘掉|忘记|删除|移除|撤回|forget|remove|delete"#, options: .regularExpression) != nil,
+                    of: #"(?i)忘掉|忘记|删除|移除|撤回|不用再|无需再|不再|停止|取消|forget|remove|delete|stop|drop|no longer"#,
+                    options: .regularExpression) != nil,
                 limits.availableToolNames?.contains(call.function.name) != false,
                 let target = reader.state.memories.first(where: { $0.id == memoryID }),
                 !target.deleted, !target.userEdited
@@ -210,8 +211,9 @@ extension LibraryAgent {
             }.sorted { $0.1 > $1.1 }
             let topOverlap = scored.first?.1 ?? 0
             let uniqueTop = scored.filter { $0.1 == topOverlap }
+            let recalledThisTurn = recalledSources?.memoryIDs.contains(target.id) == true
             guard
-                turn.question.localizedCaseInsensitiveContains(target.text)
+                recalledThisTurn || turn.question.localizedCaseInsensitiveContains(target.text)
                     || (topOverlap > 0 && uniqueTop.count == 1 && uniqueTop.first?.0.id == target.id)
             else { throw ReaderError.message("记忆删除目标不唯一或与请求不匹配。") }
             let mutation = MemoryRecordMutation(operation: .forget(id: target.id), auditTrigger: turn.question)
@@ -486,7 +488,7 @@ extension LibraryAgent {
     static func hasExplicitRevisionIntent(_ question: String) -> Bool {
         question.range(
             of:
-                #"(?i)更正|改正|纠正|修正|修改|改成|改为|更新|调整|记错|写错|说错|不是|而是|不再|correct|change|update|instead|no longer|replace"#,
+                #"(?i)更正|改正|纠正|修正|修改|改成|改为|更新|调整|记错|写错|说错|不是|而是|不再|改变主意|改主意|不用再|无需再|停止追踪|取消追踪|correct|change|update|instead|no longer|replace|changed my mind|stop tracking"#,
             options: .regularExpression) != nil
     }
 

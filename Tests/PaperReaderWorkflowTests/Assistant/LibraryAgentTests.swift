@@ -2457,3 +2457,25 @@ private func libraryPayload(_ messages: [AgentMessage], _ call: String) throws -
     #expect(agent.turns.last?.activities.first?.status == .succeeded)
     #expect(reader.state.memories.first?.text == "新记录")
 }
+
+@Test @MainActor func implicitChangeOfMindCanForgetAMemoryTheReaderNoLongerTracks() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let reader = try await makeAgentReader(root)
+    let item = MemoryItem(text: "继续追踪蒸馏延迟", sourceID: UUID())
+    reader.state.memories = [item]
+    #expect(await reader.save())
+    let client = ScriptedLibraryModel { _, count in
+        switch count {
+        case 1: return tool("research_overview", "{}", id: "overview")
+        case 2:
+            return tool("forget_memory", "{\"memory_id\":\"\(item.id.uuidString)\"}", id: "forget-implicit")
+        default: return .init(role: "assistant", content: "蒸馏延迟不再追踪。")
+        }
+    }
+    let agent = LibraryAgent(reader: reader, client: client, discovery: AgentDiscoveryFixture())
+    agent.send("我改变主意了，蒸馏延迟那条不用再追踪了。")
+    try await eventually { !agent.isRunning }
+    #expect(agent.turns.last?.error == nil)
+    #expect(reader.state.memories.first { $0.id == item.id }?.deleted == true)
+}

@@ -69,9 +69,29 @@ public actor ResearchMemory {
     }
 
     public static func permitsAutomaticWrite(for message: String) -> Bool {
+        // “不要记录太多细节，只写结论” is a durable preference about answer detail, not a
+        // request to stop persisting memory. Remove that clause before the denial check so a
+        // separate “也不要保存记忆” still wins.
+        let detailOnly =
+            #"(?i)(?:不要|不用|别|不必|无需).{0,6}(?:记录|写|保存|记).{0,8}(?:太多|太详细|太细|过多|啰嗦|冗长)|(?:don['’]t|do not|no need to)\s+(?:record|write|save)\s+(?:too much|too many details|in too much detail)"#
+        let remaining = message.replacingOccurrences(of: detailOnly, with: "。", options: .regularExpression)
         let denied =
             #"(?i)(?:不要|不用|别|不必|无需|不许|禁止|暂不|不想).{0,10}(?:记|记录|保存|存储|留存)|(?:删除|撤回|清除|忘掉|忘记).{0,12}(?:记忆|记录|这段|这句|我刚)|(?:don['’]t|do not|never|without)\s+(?:ever\s+)?(?:save|remember|store|retain|record|write.{0,24}memory)|(?:forget|erase|withdraw)\s+(?:this|that|my)|off the record"#
-        return message.range(of: denied, options: .regularExpression) == nil
+        return remaining.range(of: denied, options: .regularExpression) == nil
+    }
+
+    /// Source quotes are verified after removing whitespace, case and punctuation so a model
+    /// echoing a reader clause across a line break or with different punctuation still resolves
+    /// to the reader's own words. The caller still validates an origin and deduplication.
+    public static func containsEvidence(_ quote: String, in message: String) -> Bool {
+        if message.contains(quote) { return true }
+        let normalizedQuote = normalizedEvidence(quote)
+        return normalizedQuote.count >= 4 && normalizedEvidence(message).contains(normalizedQuote)
+    }
+
+    public static func normalizedEvidence(_ text: String) -> String {
+        text.folding(options: [.caseInsensitive, .widthInsensitive], locale: nil)
+            .filter { $0.isLetter || $0.isNumber }
     }
 
     /// Deferring an annotation leaves the discussion available for a later reader-authorized note.

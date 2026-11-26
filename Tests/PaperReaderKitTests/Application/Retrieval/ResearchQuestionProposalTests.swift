@@ -62,3 +62,19 @@ import Testing
     state.readingNotes[0].modifiedAt = note.modifiedAt.addingTimeInterval(1)
     #expect(!proposal.isEligible(in: state, excluding: []))
 }
+
+@Test func researchQuestionQuoteToleratesRewrittenPunctuationButKeepsTheSourceWords() throws {
+    let proposal = try ResearchQuestionProposal(
+        question: "训练预算是否公平？",
+        readerTurnID: UUID(),
+        readerMessage: "我一直在追这个问题：训练预算，是否公平？\n请继续。",
+        quote: "训练预算是否公平")
+    #expect(proposal.item.originalFingerprint != nil)
+    #expect(throws: (any Error).self) {
+        try ResearchQuestionProposal(
+            question: "训练预算是否公平？",
+            readerTurnID: UUID(),
+            readerMessage: "我一直在追这个问题：训练预算，是否公平？",
+            quote: "完全不同的结论")
+    }
+}
