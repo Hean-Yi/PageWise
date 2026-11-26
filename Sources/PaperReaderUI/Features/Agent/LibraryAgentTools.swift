@@ -173,10 +173,11 @@ extension LibraryAgent {
                 cards: [], truncated: false, message: nil)
         case .reviseMemory(let memoryID, let statement):
             guard let turn = activeTurn, ReaderPreference.permitsRecall(turn.question),
+                Self.hasExplicitRevisionIntent(turn.question),
                 limits.availableToolNames?.contains(call.function.name) != false,
                 let current = reader.state.memories.first(where: { $0.id == memoryID }),
                 !current.deleted, !current.userEdited
-            else { throw ReaderError.message("这条记忆当前不可由 Agent 修改。") }
+            else { throw ReaderError.message("本轮没有明确要求更正已有记忆。") }
             var probe = current
             guard probe.correct(to: statement) else {
                 throw ReaderError.message("新的记忆措辞没有变化。")
@@ -478,6 +479,15 @@ extension LibraryAgent {
             card.subtitle = page.map { "前往原文第 \($0) 页" } ?? "打开论文"
             return try result([(ToolRecord(card: card, pageCount: paper.pageCount), card)])
         }
+    }
+
+    /// A new research statement belongs in `propose_memory`; an existing memory may only be
+    /// overwritten when the reader explicitly asks to correct or replace it.
+    static func hasExplicitRevisionIntent(_ question: String) -> Bool {
+        question.range(
+            of:
+                #"(?i)更正|改正|纠正|修正|修改|改成|改为|更新|调整|记错|写错|说错|不是|而是|不再|correct|change|update|instead|no longer|replace"#,
+            options: .regularExpression) != nil
     }
 
     func registeredPaper(_ id: String, page: Int?) throws -> Paper {

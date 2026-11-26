@@ -69,3 +69,23 @@ import Testing
         #expect(!ResearchMemory.permitsConversationHistory(for: text))
     }
 }
+
+@Test func chatSourcedPreferenceRequiresAPersistedOriginatingTurn() throws {
+    var state = LibraryState()
+    let text = "以后默认用中文回答。"
+    let metadata = try #require(ReaderPreference.classify(text, paperID: nil, shelfID: nil))
+    let sourceID = UUID()
+    let item = MemoryItem(preference: metadata, statement: text, sourceID: sourceID, libraryTurn: false)
+    let change = ReaderPreferenceChange(previous: [], insertions: [item])
+    #expect(!change.apply(to: &state))
+
+    let paper = Paper(
+        title: "Preference source", digest: "preference", originalPath: "unused.pdf", pageCount: 1,
+        blocks: [], warnings: [], canReflow: false)
+    var turn = ChatTurn(paperID: paper.id, question: text, selection: "", answer: "", evidence: [])
+    turn.id = sourceID
+    state.papers = [paper]
+    state.chats = [turn]
+    #expect(change.apply(to: &state))
+    #expect(state.memories.contains { $0.id == item.id })
+}

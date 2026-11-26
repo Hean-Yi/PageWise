@@ -402,10 +402,12 @@ public final class LibraryAgent {
             return
         }
         // A private turn temporarily detaches the replay buffer. Its completion or cancellation
-        // cannot erase the reader’s earlier conversation or inject this exchange into later turns.
+        // must not erase the reader’s earlier conversation or inject this exchange into later turns.
+        // `reset()` advances the session, while `cancel()` leaves it intact so cancellation restores.
         let detached = useMemory ? nil : (history, historySettings, recalledSources, lastResearchBrief)
+        let session = sessionID
         defer {
-            if let detached, epoch == self.epoch {
+            if let detached, session == self.sessionID {
                 (history, historySettings, recalledSources, lastResearchBrief) = detached
                 _ = forgetStaleSourceContext()
             }

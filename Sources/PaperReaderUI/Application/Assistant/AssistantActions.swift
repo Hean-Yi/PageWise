@@ -238,13 +238,15 @@ extension ReaderModel {
                     }
                 },
                 onAssistantResponse: { @MainActor response, isToolRound in
+                    if let finalThought = response.reasoningContent?.trimmingCharacters(
+                        in: .whitespacesAndNewlines), !finalThought.isEmpty
+                    {
+                        // The complete response is authoritative when streaming stopped early.
+                        roundReasoning = finalThought
+                    }
                     if !roundReasoning.isEmpty {
                         collectedReasoning.append(roundReasoning)
                         roundReasoning = ""
-                    } else if let thought = response.reasoningContent?.trimmingCharacters(
-                        in: .whitespacesAndNewlines), !thought.isEmpty, collectedReasoning.last != thought
-                    {
-                        collectedReasoning.append(thought)
                     }
                     if isToolRound, var draft = self.assistantDraft, draft.id == turnID, !draft.answer.isEmpty {
                         draft.answer = ""
@@ -423,15 +425,12 @@ extension ReaderModel {
                 guard let declared = declarations.first(where: { ReaderPreference.sameStatement($0, quote) }) else {
                     throw ReaderError.message("请仅引用读者本轮明确表达的长期偏好。")
                 }
-                if let change = try preferenceChange(
+                // The final answer path saves declared preferences only after the ChatTurn is
+                // persisted. Saving here would leave a memory whose source turn never exists if
+                // the request fails or is cancelled before the answer is stored.
+                _ = try preferenceChange(
                     for: declared, turnID: turnID, paperID: paper.id, paperTurn: true)
-                {
-                    guard await save(cancellable: true, preferenceChange: change) else {
-                        throw ReaderError.message("偏好发生变化，请重新查看。")
-                    }
-                    for saved in change.insertions { sources.include(saved) }
-                }
-                return #"{"ok":true}"#
+                return #"{"ok":true,"status":"pending_turn"}"#
             default:
                 throw ReaderError.message("论文助读当前未开放此工具。")
             }

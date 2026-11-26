@@ -99,7 +99,9 @@ public enum AgentLoopRunner {
             if !personalContext.isEmpty, let index = messages.lastIndex(where: { $0.role == "user" }) {
                 let ordinary = messages[index].content
                 messages[index].content = personalContext + "\n本轮问题：\n" + (messages[index].content ?? "")
-                if try JSONEncoder().encode(messages).count <= limits.maxContextBytes {
+                let messageBytes = try JSONEncoder().encode(messages).count
+                let toolBytes = AgentClient.toolPayloadBytes(for: nil)
+                if messageBytes + toolBytes <= limits.maxContextBytes {
                     try await onPersonalContextIncluded()
                 } else {
                     messages[index].content = ordinary

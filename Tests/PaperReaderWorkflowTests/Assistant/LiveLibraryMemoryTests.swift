@@ -158,6 +158,39 @@ import Testing
         activities.contains { $0.toolName == "propose_memory" && $0.status == .succeeded })
     #expect(
         activities.contains { $0.toolName == "revise_memory" && $0.status == .succeeded })
+    // An unambiguous forget command is handled by the local fast path before any model round.
     #expect(
-        activities.contains { $0.toolName == "forget_memory" && $0.status == .succeeded })
+        activities.contains { $0.toolName == "forget_memory" && $0.status == .succeeded }
+            || reader.state.memories.contains { $0.deleted && $0.text.isEmpty })
+}
+
+/// Opt-in real-model probe for the read-only batch path. Both tools run against a copied library.
+@Test(.enabled(if: ProcessInfo.processInfo.environment["PAGEWISE_TEST_LIBRARY_READONLY"] == "1"))
+@MainActor func liveModelRunsAReadOnlyToolBatchOnACopiedLibrary() async throws {
+    let environment = ProcessInfo.processInfo.environment
+    let source = try #require(environment["PAGEWISE_TEST_LIBRARY"])
+    let key = try #require(environment["PAGEWISE_TEST_SLEEP_KEY"])
+    let sourceRoot = URL(fileURLWithPath: source, isDirectory: true)
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    try FileManager.default.copyItem(
+        at: sourceRoot.appendingPathComponent("library.sqlite"), to: root.appendingPathComponent("library.sqlite"))
+    let reader = try ReaderModel(root: root, credentials: WorkflowCredentials())
+    await reader.load()
+    var settings = ModelSettings()
+    settings.baseURL = "https://api.deepseek.com"
+    settings.model = "deepseek-flash"
+    _ = try reader.saveSettings(settings, key: key)
+    var limits = AgentLimits()
+    limits.availableToolNames = ["search_library", "search_reading_notes"]
+    let agent = LibraryAgent(reader: reader, client: AgentClient(), limits: limits)
+    agent.send(
+        "请在同一轮分别调用 search_library 和 search_reading_notes 各一次：先搜索书库中与注意力或方法有关的论文，再搜索我以前关于同一主题的阅读笔记；只使用这两个工具，然后简短总结。"
+    )
+    for _ in 0..<240 where agent.isRunning { try await Task.sleep(for: .milliseconds(250)) }
+    let activities = agent.turns.last?.activities ?? []
+    print("LIVE_READONLY_BATCH", activities.map { "\($0.toolName):\($0.status)" }, agent.turns.last?.answer ?? "")
+    #expect(activities.contains { $0.toolName == "search_library" && $0.status == .succeeded })
+    #expect(activities.contains { $0.toolName == "search_reading_notes" && $0.status == .succeeded })
 }

@@ -153,6 +153,7 @@ private func sleepSource(_ statement: String) throws -> MemoryItem {
     isolated.state.memories = [a, b]
     await isolated.save()
     isolated.lastInteraction = Date().addingTimeInterval(-180)
+    isolated.memorySleep.isLowPowerModeEnabled = { false }
     isolated.tick()
     let clock = ContinuousClock()
     let deadline = clock.now.advanced(by: .seconds(160))

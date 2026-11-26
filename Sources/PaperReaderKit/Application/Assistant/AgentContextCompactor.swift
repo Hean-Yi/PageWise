@@ -98,8 +98,10 @@ public enum AgentContextCompactor {
         if let results = object["results"] as? [[String: Any]] {
             let slimRows: [[String: Any]] = results.prefix(6).map { row in
                 var item: [String: Any] = [:]
-                for key in ["result_id", "paper_id", "candidate_id", "reading_note_id", "source_page", "import_status"]
-                {
+                for key in [
+                    "result_id", "paper_id", "candidate_id", "reading_note_id", "source_page", "import_status",
+                    "citation_id", "memory_id",
+                ] {
                     if let value = row[key] { item[key] = value }
                 }
                 if let title = row["title"] as? String { item["title"] = String(title.prefix(120)) }

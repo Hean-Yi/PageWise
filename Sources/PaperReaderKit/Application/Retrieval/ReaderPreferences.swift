@@ -291,6 +291,18 @@ public struct ReaderPreferenceChange: Sendable {
             guard insertions.allSatisfy({ item in state.chats.contains { $0.id == item.sourceID } }) else {
                 return false
             }
+        } else if let turn = originatingTurn {
+            // The originating turn is appended below, so chat-sourced memories may point at it.
+            guard insertions.allSatisfy({ $0.librarySource != nil || $0.sourceID == turn.id }) else {
+                return false
+            }
+        } else {
+            // A reader-preference memory without a library source must resolve to a real turn.
+            guard
+                insertions.allSatisfy({ item in
+                    item.librarySource != nil || state.chats.contains { $0.id == item.sourceID }
+                })
+            else { return false }
         }
         if let turn = originatingTurn {
             guard state.papers.contains(where: { $0.id == turn.paperID }),

@@ -2421,3 +2421,34 @@ private func libraryPayload(_ messages: [AgentMessage], _ call: String) throws -
     #expect(agent.turns.last?.error == nil)
     #expect(reader.state.memories.first(where: { $0.id == forgottenID })?.deleted == true)
 }
+
+@Test @MainActor func reviseMemoryRequiresAnExplicitCorrectionInsteadOfOverwritingANewStatement() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let reader = try await makeAgentReader(root)
+    let old = MemoryItem(text: "旧的吞吐量比较记录", sourceID: UUID())
+    reader.state.memories = [old]
+    #expect(await reader.save())
+    let client = ScriptedLibraryModel { _, count in
+        if count == 1 || count == 2 {
+            return tool(
+                "revise_memory",
+                "{\"memory_id\":\"\(old.id.uuidString)\",\"statement\":\"新记录\"}",
+                id: count == 1 ? "revise-1" : "revise-2")
+        }
+        return .init(role: "assistant", content: "完成")
+    }
+    var limits = AgentLimits()
+    limits.availableToolNames = ["revise_memory"]
+    let agent = LibraryAgent(
+        reader: reader, client: client, discovery: AgentDiscoveryFixture(), limits: limits)
+    agent.send("这条研究记忆请维护一下。")
+    try await eventually { !agent.isRunning }
+    #expect(agent.turns.last?.activities.first?.status == .failed)
+    #expect(reader.state.memories.first?.text == "旧的吞吐量比较记录")
+
+    agent.send("请把这条记忆的内容更新成新记录。")
+    try await eventually { !agent.isRunning }
+    #expect(agent.turns.last?.activities.first?.status == .succeeded)
+    #expect(reader.state.memories.first?.text == "新记录")
+}

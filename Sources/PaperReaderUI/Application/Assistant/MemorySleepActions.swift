@@ -29,6 +29,10 @@ final class MemorySleepSession {
     func restore() async { edition = (try? await index.load()) ?? MemorySleepEdition() }
 
     private var foregroundWork = 0
+    /// Test seam: hosts or CI may themselves be in Low Power Mode.
+    @ObservationIgnored var isLowPowerModeEnabled: @MainActor () -> Bool = {
+        ProcessInfo.processInfo.isLowPowerModeEnabled
+    }
 
     func beginForegroundWork() {
         foregroundWork += 1
@@ -51,7 +55,7 @@ final class MemorySleepSession {
                 return
             }
             guard foregroundWork == 0, Date() >= nextCheck, !reader.busyAI, !reader.isImporting,
-                !ProcessInfo.processInfo.isLowPowerModeEnabled,
+                !isLowPowerModeEnabled(),
                 Date().timeIntervalSince(reader.lastInteraction) >= 120
             else { return }
         }
