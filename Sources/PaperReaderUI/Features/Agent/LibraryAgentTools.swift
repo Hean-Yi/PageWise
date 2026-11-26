@@ -169,7 +169,8 @@ extension LibraryAgent {
             remember(versions)
             onSubject("待核实的研究记忆")
             return AgentToolOutcome(
-                content: #"{"ok":true,"status":"ai_unverified"}"#, cards: [], truncated: false, message: nil)
+                content: "{\"ok\":true,\"status\":\"ai_unverified\",\"memory_id\":\"\(proposal.item.id.uuidString)\"}",
+                cards: [], truncated: false, message: nil)
         case .reviseMemory(let memoryID, let statement):
             guard let turn = activeTurn, ReaderPreference.permitsRecall(turn.question),
                 limits.availableToolNames?.contains(call.function.name) != false,
@@ -185,7 +186,9 @@ extension LibraryAgent {
             }
             try check(epoch)
             onSubject("研究记忆已静默修订")
-            return AgentToolOutcome(content: #"{"ok":true}"#, cards: [], truncated: false, message: nil)
+            return AgentToolOutcome(
+                content: "{\"ok\":true,\"memory_id\":\"\(memoryID.uuidString)\"}", cards: [], truncated: false,
+                message: nil)
         case .forgetMemory(let memoryID):
             guard let turn = activeTurn, ReaderPreference.permitsRecall(turn.question),
                 turn.question.range(
@@ -203,7 +206,9 @@ extension LibraryAgent {
             }
             try check(epoch)
             onSubject("研究记忆已静默删除")
-            return AgentToolOutcome(content: #"{"ok":true}"#, cards: [], truncated: false, message: nil)
+            return AgentToolOutcome(
+                content: "{\"ok\":true,\"memory_id\":\"\(memoryID.uuidString)\"}", cards: [], truncated: false,
+                message: nil)
         case .library(let operation):
             guard call.function.name == "list_library" || organization.contains(call.function.name),
                 limits.availableToolNames?.contains(call.function.name) != false

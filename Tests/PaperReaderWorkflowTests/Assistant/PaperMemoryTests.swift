@@ -39,12 +39,19 @@ import Testing
         revisions: [
             .init(
                 noteID: note.id, modifiedAt: note.modifiedAt,
-                markdown: "Reader original with a new cross-paper relation.")
+                markdown: "Reader original. Cross-paper relation noted.")
         ])
     let changed = try await reader.applyNoteReview(report)
     #expect(changed == 1)
     note = try #require(reader.state.readingNotes.first)
-    #expect(note.markdown.contains("cross-paper relation"))
+    #expect(note.markdown.contains("Cross-paper relation"))
     #expect(note.revisions?.first?.markdown == "Reader original.")
     #expect(try await LibraryStore(directory: root).load().readingNotes.first?.markdown == note.markdown)
+}
+
+@MainActor @Test func noteReviewOnlyAllowsSmallAppendOrLocalEdit() {
+    let original = "匹配计算预算后，方法 A 的准确率更高。"
+    #expect(ReaderModel.isSmallNoteRevision(from: original, to: original + " 该结论只在验证集上成立。"))
+    #expect(ReaderModel.isSmallNoteRevision(from: original, to: "匹配计算预算后，方法 A 的准确率更高（验证集）。"))
+    #expect(!ReaderModel.isSmallNoteRevision(from: original, to: "这是一段完全重写的笔记，讨论另一组实验、另一个数据集和完全不同的结论。"))
 }

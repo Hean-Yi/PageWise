@@ -78,7 +78,7 @@ final class NoteReviewSession {
                 let changed = try await reader.applyNoteReview(report)
                 UserDefaults.standard.set(Date().timeIntervalSinceReferenceDate, forKey: defaultsKey + ".lastRun")
                 if changed > 0 {
-                    message = "已静默更新 \(changed) 条笔记的修订"
+                    message = "已静默更新 \(changed) 条笔记正文"
                 }
                 nextCheck = Date().addingTimeInterval(interval)
             } catch {
@@ -173,11 +173,15 @@ extension ReaderModel {
         return try await client.complete(
             settings: config, key: key,
             system: """
-                你是笔记维护员。targets 是读者已有笔记和新近阅读材料的关系图，excerpt 是唯一可引用的摘录。
+                你是读者笔记的静默维护员。targets 是读者已有笔记和少量关系摘录，excerpt 是唯一可引用的新证据。
                 只输出 JSON {"revisions":[{"note_id":"UUID","modified_at":"ISO8601","markdown":"完整的新笔记正文"}]}。
-                只在新增阅读、笔记或关系证据支持时才更新；无变化返回 {"revisions":[]}。
-                保留读者的原话、限定词、数字、否定和适用范围；相似内容可互相补充，冲突内容必须并列保留，不得静默选边。
-                新正文必须是完整 Markdown，不引用未提供的原文和外部链接；没有把握时保持原样。
+                这是“局部修订”，不是重写：
+                - 保留原文的句子、顺序、语气、标题和 Markdown 结构；只改直接受新证据影响的词句，最多调整一两处；
+                - 新正文与原文的字符改动通常不超过 25%，长度保持在原文的 70%–140%；
+                - 可以补一句限定条件、更正一个数字/否定、指出相似或冲突，但不得大段扩写、重排、换标题或改写成更“漂亮”的文章；
+                - 原话、数字、否定、条件、引用和适用范围必须保留；冲突必须并列，不得静默选边；
+                - 只有新增阅读/笔记或关系证据确实支持时才更新；没有明确的小改动、需要大改、或不确定时返回 {"revisions":[]}。
+                不引用未提供的原文和外部链接；不写模型自己的建议口吻，直接写成读者笔记正文。
                 """, user: payload, jsonOutput: true, maxOutputTokens: 1_200)
     }
 
@@ -193,6 +197,7 @@ extension ReaderModel {
             else { continue }
             let sources = ChatSourceVersions()
             var note = state.readingNotes[index]
+            guard Self.isSmallNoteRevision(from: note.markdown, to: revision.markdown) else { continue }
             if note.applyAIRevision(revision.markdown, sources: sources) {
                 changed += 1
                 state.readingNotes[index] = note
@@ -202,5 +207,34 @@ extension ReaderModel {
             throw ReaderError.message("笔记修订未能保存。")
         }
         return changed
+    }
+
+    /// A silent pass may add or correct a clause, but it must not rewrite the reader's note.
+    /// Append-only edits are allowed; otherwise require substantial shared prefix/suffix and a
+    /// bounded length change.
+    static func isSmallNoteRevision(from old: String, to new: String) -> Bool {
+        guard old != new, !new.isEmpty else { return false }
+        let oldCount = old.count
+        let newCount = new.count
+        // Appending a bounded clarification is always a local edit; a replacement must stay close.
+        if new.contains(old) { return newCount <= oldCount + 400 }
+        guard newCount >= max(1, oldCount * 7 / 10), newCount <= max(oldCount, 1) * 14 / 10 else {
+            return false
+        }
+        let oldChars = Array(old)
+        let newChars = Array(new)
+        var prefix = 0
+        while prefix < oldChars.count, prefix < newChars.count, oldChars[prefix] == newChars[prefix] {
+            prefix += 1
+        }
+        var suffix = 0
+        while suffix < oldChars.count - prefix, suffix < newChars.count - prefix,
+            oldChars[oldChars.count - 1 - suffix] == newChars[newChars.count - 1 - suffix]
+        {
+            suffix += 1
+        }
+        let shared = prefix + suffix
+        let changedFraction = 1 - Double(shared) / Double(max(oldCount, newCount))
+        return changedFraction <= 0.30
     }
 }
