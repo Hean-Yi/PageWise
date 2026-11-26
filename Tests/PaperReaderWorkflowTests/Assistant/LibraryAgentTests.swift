@@ -2435,7 +2435,7 @@ private func libraryPayload(_ messages: [AgentMessage], _ call: String) throws -
     reader.state.memories = [old]
     #expect(await reader.save())
     let client = ScriptedLibraryModel { _, count in
-        if count == 1 || count == 2 {
+        if count == 1 || count == 3 {
             return tool(
                 "revise_memory",
                 "{\"memory_id\":\"\(old.id.uuidString)\",\"statement\":\"新记录\"}",
