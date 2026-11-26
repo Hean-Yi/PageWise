@@ -35,8 +35,11 @@ extension ModelClient {
             """
         try Task.checkCancellation()
         let feedback = corrective ? "\n核对每句的 id、数字、单位、数学变量及引用编号，保持原样。" : ""
+        // The caller resumes completed batches itself; retrying a failed batch here would bill the
+        // same paragraphs again without adding a new recovery path.
         let response = try await complete(
-            settings: settings, key: key, system: instructions + feedback, user: payload, jsonOutput: true)
+            settings: settings, key: key, system: instructions + feedback, user: payload, jsonOutput: true,
+            maxTransientRetries: 0)
         guard let result = try? JSONDecoder().decode(Output.self, from: Data(response.utf8)),
             result.sentences.map(\.id) == input.map(\.id)
         else { return [:] }
