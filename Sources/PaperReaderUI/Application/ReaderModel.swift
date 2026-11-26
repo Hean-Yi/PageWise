@@ -145,7 +145,7 @@ public final class ReaderModel {
         self.paperSearchWarmup = PaperSearchWarmup(root: location)
         store = try LibraryStore(directory: location)
         memorySleep = MemorySleepSession(store: store, root: location)
-        noteReview = NoteReviewSession(root: location)
+        noteReview = NoteReviewSession(store: store, root: location)
         let indexDirectory = location.appendingPathComponent("DerivedIndexes", isDirectory: true)
         readingNoteIndex = ReadingNoteMemoryIndex(
             encoder: DeviceSemanticEncoder.shared, cacheURL: indexDirectory.appendingPathComponent("notes.sqlite"))

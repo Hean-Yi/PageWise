@@ -6,6 +6,7 @@ struct NoteReviewInput: Encodable {
     struct Relation: Encodable {
         let noteID: UUID
         let title: String
+        let modifiedAt: Date
         let kind: String
         let overlap: Int
         let excerpt: String
@@ -24,6 +25,7 @@ struct NoteReviewInput: Encodable {
 final class NoteReviewSession {
     private(set) var running = false
     var message: String?
+    private let store: LibraryStore
     private let defaultsKey: String
     private var job: Task<Void, Never>?
     private var nextCheck = Date.distantPast
@@ -36,7 +38,8 @@ final class NoteReviewSession {
         didSet { UserDefaults.standard.set(interval, forKey: defaultsKey + ".interval") }
     }
 
-    init(root: URL) {
+    init(store: LibraryStore, root: URL) {
+        self.store = store
         defaultsKey = "pagewise.noteReview." + root.standardizedFileURL.path
         enabled = UserDefaults.standard.object(forKey: defaultsKey + ".enabled") as? Bool ?? false
         interval = UserDefaults.standard.object(forKey: defaultsKey + ".interval") as? TimeInterval ?? 6 * 3600
@@ -51,14 +54,9 @@ final class NoteReviewSession {
                 Date() >= nextCheck, !withModel || !reader.modelSettings.model.isEmpty
             else { return }
         }
+        guard withModel else { return }
         let lastRun = UserDefaults.standard.object(forKey: defaultsKey + ".lastRun") as? TimeInterval ?? 0
         let since = Date(timeIntervalSinceReferenceDate: lastRun)
-        let targets = reviewTargets(reader: reader, since: since)
-        guard !targets.isEmpty else {
-            nextCheck = Date().addingTimeInterval(interval)
-            return
-        }
-        guard withModel else { return }
         running = true
         message = nil
         job = Task(priority: .utility) { [weak self, weak reader] in
@@ -68,6 +66,11 @@ final class NoteReviewSession {
                 job = nil
             }
             do {
+                let targets = try await self.reviewTargets(reader: reader, since: since)
+                guard !targets.isEmpty else {
+                    self.nextCheck = Date().addingTimeInterval(self.interval)
+                    return
+                }
                 let input = NoteReviewInput(targets: targets)
                 let encoder = JSONEncoder()
                 encoder.dateEncodingStrategy = .iso8601
@@ -75,7 +78,7 @@ final class NoteReviewSession {
                 let decoder = JSONDecoder()
                 decoder.dateDecodingStrategy = .iso8601
                 let report = try decoder.decode(NoteReviewReport.self, from: Data(response.utf8))
-                let changed = try await reader.applyNoteReview(report)
+                let changed = try await reader.applyNoteReview(report, contexts: targets)
                 UserDefaults.standard.set(Date().timeIntervalSinceReferenceDate, forKey: defaultsKey + ".lastRun")
                 if changed > 0 {
                     message = "已静默更新 \(changed) 条笔记正文"
@@ -88,7 +91,7 @@ final class NoteReviewSession {
         }
     }
 
-    private func reviewTargets(reader: ReaderModel, since: Date) -> [NoteReviewInput.Target] {
+    private func reviewTargets(reader: ReaderModel, since: Date) async throws -> [NoteReviewInput.Target] {
         let notes = reader.state.readingNotes.filter { $0.deletedAt == nil }
         let changed = notes.filter { $0.modifiedAt > since || $0.createdAt > since }
         let recentPaperIDs = Set(
@@ -101,36 +104,72 @@ final class NoteReviewSession {
             .prefix(8)
         let titles = Dictionary(
             reader.state.papers.map { ($0.id, $0.title) }, uniquingKeysWith: { first, _ in first })
-        let targets = selected.map { note -> NoteReviewInput.Target in
-            let terms = Retriever.tokens(note.markdown)
-            let relations =
-                notes
-                .filter { $0.id != note.id }
-                .compactMap { other -> (ReadingNote, Int, String)? in
-                    let otherTerms = Retriever.tokens(other.markdown)
-                    let overlap = terms.intersection(otherTerms).count
-                    guard overlap >= 2 else { return nil }
-                    let kind = Self.relationKind(note.markdown, other.markdown) ?? "similar"
-                    return (other, overlap, kind)
+        let byID = Dictionary(notes.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        var targets: [NoteReviewInput.Target] = []
+        for note in selected {
+            let cached = try? await store.noteRelations(sourceID: note.id, sourceModifiedAt: note.modifiedAt)
+            let cachedRelations: [(note: ReadingNote, overlap: Int, kind: NoteRelation.Kind)]?
+            if let cached {
+                let valid = cached.compactMap { relation -> (ReadingNote, Int, NoteRelation.Kind)? in
+                    guard let other = byID[relation.targetID], other.deletedAt == nil,
+                        abs(other.modifiedAt.timeIntervalSince(relation.targetModifiedAt)) < 0.001
+                    else { return nil }
+                    return (other, relation.overlap, relation.kind)
                 }
-                .sorted { $0.1 > $1.1 }
-                .prefix(4)
-                .map { other, overlap, kind in
-                    NoteReviewInput.Relation(
-                        noteID: other.id,
-                        title: String(PaperTitle.display(titles[other.paperID] ?? "论文").prefix(160)),
-                        kind: kind,
-                        overlap: overlap,
-                        excerpt: String(ReadingNoteMemoryIndex.searchableBody(other.markdown).prefix(120)))
-                }
-            return NoteReviewInput.Target(
-                noteID: note.id,
-                title: String(PaperTitle.display(titles[note.paperID] ?? "论文").prefix(160)),
-                modifiedAt: note.modifiedAt,
-                markdown: String(note.markdown.prefix(900)),
-                relations: Array(relations))
+                cachedRelations = valid.count == cached.count ? valid : nil
+            } else {
+                cachedRelations = nil
+            }
+            let relations: [(note: ReadingNote, overlap: Int, kind: NoteRelation.Kind)]
+            if let cachedRelations {
+                relations = cachedRelations
+            } else {
+                relations = Self.computeRelations(for: note, notes: notes)
+                try? await store.saveNoteRelations(
+                    relations.map {
+                        NoteRelation(
+                            sourceID: note.id, targetID: $0.note.id, kind: $0.kind, overlap: $0.overlap,
+                            targetModifiedAt: $0.note.modifiedAt)
+                    }, sourceID: note.id, sourceModifiedAt: note.modifiedAt)
+            }
+            let inputRelations = relations.prefix(4).map { other, overlap, kind in
+                NoteReviewInput.Relation(
+                    noteID: other.id,
+                    title: String(PaperTitle.display(titles[other.paperID] ?? "论文").prefix(160)),
+                    modifiedAt: other.modifiedAt,
+                    kind: kind.rawValue,
+                    overlap: overlap,
+                    excerpt: String(ReadingNoteMemoryIndex.searchableBody(other.markdown).prefix(120)))
+            }
+            targets.append(
+                NoteReviewInput.Target(
+                    noteID: note.id,
+                    title: String(PaperTitle.display(titles[note.paperID] ?? "论文").prefix(160)),
+                    modifiedAt: note.modifiedAt,
+                    markdown: String(note.markdown.prefix(900)),
+                    relations: Array(inputRelations)))
         }
         return Array(targets)
+    }
+
+    private static func computeRelations(
+        for note: ReadingNote, notes: [ReadingNote]
+    ) -> [(note: ReadingNote, overlap: Int, kind: NoteRelation.Kind)] {
+        let terms = Retriever.tokens(note.markdown)
+        return
+            notes
+            .filter { $0.id != note.id }
+            .compactMap { other -> (ReadingNote, Int, String)? in
+                let overlap = terms.intersection(Retriever.tokens(other.markdown)).count
+                guard overlap >= 2 else { return nil }
+                return (other, overlap, relationKind(note.markdown, other.markdown) ?? "similar")
+            }
+            .sorted { $0.1 > $1.1 }
+            .prefix(8)
+            .compactMap { other, overlap, kind in
+                guard let kind = NoteRelation.Kind(rawValue: kind) else { return nil }
+                return (other, overlap, kind)
+            }
     }
 
     private static func relationKind(_ lhs: String, _ rhs: String) -> String? {
@@ -185,7 +224,9 @@ extension ReaderModel {
                 """, user: payload, jsonOutput: true, maxOutputTokens: 800)
     }
 
-    func applyNoteReview(_ report: NoteReviewReport) async throws -> Int {
+    func applyNoteReview(
+        _ report: NoteReviewReport, contexts: [NoteReviewInput.Target] = []
+    ) async throws -> Int {
         var changed = 0
         for revision in report.revisions.prefix(8) {
             guard let index = state.readingNotes.firstIndex(where: { $0.id == revision.noteID }),
@@ -195,7 +236,21 @@ extension ReaderModel {
                 revision.modifiedAt == nil
                     || abs(revision.modifiedAt!.timeIntervalSince(state.readingNotes[index].modifiedAt)) < 0.001
             else { continue }
-            let sources = ChatSourceVersions()
+            var sources = ChatSourceVersions()
+            var sourceStillValid = true
+            if let context = contexts.first(where: { $0.noteID == revision.noteID }) {
+                for relation in context.relations {
+                    guard let source = state.readingNotes.first(where: { $0.id == relation.noteID }),
+                        source.deletedAt == nil,
+                        abs(source.modifiedAt.timeIntervalSince(relation.modifiedAt)) < 0.001
+                    else {
+                        sourceStillValid = false
+                        break
+                    }
+                    sources.include(source)
+                }
+            }
+            guard sourceStillValid else { continue }
             var note = state.readingNotes[index]
             guard Self.isSmallNoteRevision(from: note.markdown, to: revision.markdown) else { continue }
             if note.applyAIRevision(revision.markdown, sources: sources) {

@@ -120,6 +120,11 @@ public final class LibraryAgent {
             return
         }
         var turn = AgentTurn(question: question)
+        if cardID == nil, let response = reader.respondToMemoryCommand(question) {
+            turn.answer = response
+            turns.append(turn)
+            return
+        }
         turn.referencedCardID = cardID
         turn.referencedCardTitle = reference?.displayTitle
         if let clarificationID { updateTurn(clarificationID) { $0.clarification?.reply = question } }

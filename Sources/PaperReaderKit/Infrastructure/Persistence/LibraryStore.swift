@@ -445,6 +445,13 @@ public actor LibraryStore {
                 id INTEGER PRIMARY KEY CHECK(id=1), owner TEXT NOT NULL, expires_at REAL NOT NULL
             )
             """)
+        try execute(
+            db,
+            """
+            CREATE TABLE IF NOT EXISTS note_relations(
+                source_id TEXT PRIMARY KEY, source_modified REAL NOT NULL, payload BLOB NOT NULL
+            )
+            """)
     }
 
     private static func appendResearchEvents(
@@ -476,6 +483,42 @@ public actor LibraryStore {
     /// The derived index never needs the complete processed history to rebuild; the main library
     /// is authoritative. Keep a bounded recent tail so diagnostics stay useful without growing
     /// the event table for the lifetime of the library.
+    /// Derived note-neighbour cache. The source note revision is the cache key; target revisions
+    /// are checked by the caller before using an edge. The authoritative notes remain in
+    /// `library_records`.
+    public func noteRelations(sourceID: UUID, sourceModifiedAt: Date) throws -> [NoteRelation]? {
+        try Self.database(at: databaseURL) { db in
+            try LibraryRecords.statement(
+                db, "SELECT source_modified,payload FROM note_relations WHERE source_id=?"
+            ) { stmt in
+                try Self.bindResearchText(sourceID.uuidString, to: 1, in: stmt)
+                guard sqlite3_step(stmt) == SQLITE_ROW else { return nil }
+                guard abs(sqlite3_column_double(stmt, 0) - sourceModifiedAt.timeIntervalSinceReferenceDate) < 0.001
+                else { return nil }
+                guard let data = try? LibraryRecords.blob(stmt, column: 1),
+                    data.count <= 256 * 1024,
+                    let relations = try? JSONDecoder().decode([NoteRelation].self, from: data)
+                else { return nil }
+                return relations
+            }
+        }
+    }
+
+    public func saveNoteRelations(_ relations: [NoteRelation], sourceID: UUID, sourceModifiedAt: Date) throws {
+        let data = try JSONEncoder().encode(relations)
+        guard data.count <= 256 * 1024 else { return }
+        try Self.database(at: databaseURL) { db in
+            try LibraryRecords.statement(
+                db, "INSERT OR REPLACE INTO note_relations(source_id,source_modified,payload) VALUES(?,?,?)"
+            ) { stmt in
+                try Self.bindResearchText(sourceID.uuidString, to: 1, in: stmt)
+                sqlite3_bind_double(stmt, 2, sourceModifiedAt.timeIntervalSinceReferenceDate)
+                try LibraryRecords.bind(data, to: 3, in: stmt)
+                guard sqlite3_step(stmt) == SQLITE_DONE else { throw LibraryRecords.writeFailure }
+            }
+        }
+    }
+
     static let retainedProcessedEvents = 4_096
 
     static func pruneProcessedResearchEvents(
