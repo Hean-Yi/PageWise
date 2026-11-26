@@ -314,16 +314,25 @@ public struct AgentClient: AgentCompleting {
                 ], ["statement", "quote"]),
             make(
                 "revise_memory",
-                "Silently correct an existing research memory when the current reader turn or a registered source clearly supersedes it. Preserve conditions, negation and numbers.",
+                "Silently correct an existing research memory when the current reader turn or a registered source clearly supersedes it. Preserve conditions, negation and numbers. Pass expected_revision when known to prevent stale overwrites.",
                 [
                     "memory_id": memoryID,
                     "statement": .init(type: "string", description: "Replacement memory statement"),
+                    "expected_revision": .init(
+                        type: "string",
+                        description: "Optional revision token returned with memory_id for optimistic concurrency"),
                 ],
                 ["memory_id", "statement"]),
             make(
                 "forget_memory",
-                "Silently remove an existing research memory when the reader explicitly asks to forget it or a revoked source leaves it unsupported. Do not use for ambiguous references.",
-                ["memory_id": memoryID], ["memory_id"]),
+                "Silently remove an existing research memory when the reader explicitly asks to forget or stop tracking it, or a revoked source leaves it unsupported. Do not use for ambiguous references.",
+                [
+                    "memory_id": memoryID,
+                    "expected_revision": .init(
+                        type: "string",
+                        description: "Optional revision token returned with memory_id for optimistic concurrency"),
+                ],
+                ["memory_id"]),
             make(
                 "research_overview",
                 "Read a bounded research brief with local sources as internal research-direction context. Do not present its cards to the reader unless the reader explicitly asks to see the overview or sources. Query a specific topic for relevant notes and provisional or reader-edited memories. Optionally limit the brief to one registered shelf or paper. Reuse a successful result until its source changes.",

@@ -461,10 +461,12 @@ public final class LibraryAgent {
             if !effective.sources.isEmpty { versions.sleepRevision = reader.memorySleep.edition.revision }
             for source in effective.sources { versions.include(source) }
             if !effective.text.isEmpty { personalContext += "\n个人研究背景（仅供参考）：\n" + effective.text }
-            let memoryIDs = effective.sources.prefix(5).map(\.id.uuidString)
+            let memoryIDs = effective.sources.prefix(5).map {
+                "\($0.id.uuidString) (revision=\($0.revisionFingerprint))"
+            }
             if !memoryIDs.isEmpty {
                 personalContext +=
-                    "\n可用研究记忆 ID（可直接用于 revise_memory/forget_memory，无需先取概览；正文见上方背景）：\n"
+                    "\n可用研究记忆 ID（可直接用于 revise_memory/forget_memory，建议附带 expected_revision；正文见上方背景）：\n"
                     + memoryIDs.joined(separator: "\n")
             }
         }
@@ -867,9 +869,11 @@ public final class LibraryAgent {
             names.insert("propose_research_question")
         }
         if let turn = activeTurn, ReaderPreference.permitsRecall(turn.question),
-            turn.question.range(
-                of: #"(?i)忘掉|忘记|删除|移除|撤回|不用再|无需再|不再|停止|取消|forget|remove|delete|stop|drop|no longer"#,
-                options: .regularExpression) != nil
+            !ResearchQuestionProposal.isRecallRequest(turn.question),
+            reader.state.memories.contains(where: { $0.isActive && !$0.isResponsePreference })
+                || turn.question.range(
+                    of: #"(?i)忘掉|忘记|删除|移除|撤回|不用再|无需再|不再|停止|取消|forget|remove|delete|stop|drop|no longer"#,
+                    options: .regularExpression) != nil
         {
             names.insert("forget_memory")
         }

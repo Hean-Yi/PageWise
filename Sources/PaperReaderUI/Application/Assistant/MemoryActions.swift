@@ -3,8 +3,8 @@ import PaperReaderKit
 
 struct MemoryRecordMutation {
     enum Operation {
-        case revise(id: UUID, statement: String)
-        case forget(id: UUID)
+        case revise(id: UUID, statement: String, expectedRevision: String? = nil)
+        case forget(id: UUID, expectedRevision: String? = nil)
     }
 
     let operation: Operation
@@ -12,7 +12,7 @@ struct MemoryRecordMutation {
 
     var memoryID: UUID {
         switch operation {
-        case .revise(let id, _), .forget(let id): id
+        case .revise(let id, _, _), .forget(let id, _): id
         }
     }
 
@@ -25,14 +25,16 @@ struct MemoryRecordMutation {
 
     func apply(to state: inout LibraryState) -> Bool {
         switch operation {
-        case .revise(let id, let statement):
+        case .revise(let id, let statement, let expectedRevision):
             guard let index = state.memories.firstIndex(where: { $0.id == id }),
-                !state.memories[index].deleted, !state.memories[index].userEdited
+                state.memories[index].isActive, !state.memories[index].userEdited,
+                expectedRevision == nil || state.memories[index].matchesRevision(expectedRevision!)
             else { return false }
             return state.memories[index].correct(to: statement)
-        case .forget(let id):
+        case .forget(let id, let expectedRevision):
             guard let index = state.memories.firstIndex(where: { $0.id == id }),
-                !state.memories[index].deleted, !state.memories[index].userEdited
+                state.memories[index].isActive, !state.memories[index].userEdited,
+                expectedRevision == nil || state.memories[index].matchesRevision(expectedRevision!)
             else { return false }
             return state.memories[index].forget()
         }
