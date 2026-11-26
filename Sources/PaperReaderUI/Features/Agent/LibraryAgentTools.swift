@@ -180,11 +180,14 @@ extension LibraryAgent {
             guard reader.state.memories[index].correct(to: statement) else {
                 throw ReaderError.message("新的记忆措辞没有变化。")
             }
+            let revisedID = reader.state.memories[index].id
             guard await reader.save(cancellable: true) else {
                 try check(epoch)
                 throw ReaderError.message("来源已变化或保存失败，此次未修改记忆。")
             }
             try check(epoch)
+            try? await reader.store.recordMemoryAudit(
+                memoryID: revisedID, action: "revise", trigger: turn.question)
             onSubject("研究记忆已静默修订")
             return AgentToolOutcome(
                 content: "{\"ok\":true,\"memory_id\":\"\(memoryID.uuidString)\"}", cards: [], truncated: false,
@@ -197,6 +200,20 @@ extension LibraryAgent {
                 let index = reader.state.memories.firstIndex(where: { $0.id == memoryID }),
                 !reader.state.memories[index].deleted, !reader.state.memories[index].userEdited
             else { throw ReaderError.message("本轮没有明确要求删除这条记忆。") }
+            let target = reader.state.memories[index]
+            let ignored: Set<String> = ["的", "了", "在", "和", "与", "及", "这", "那", "个", "记录", "记忆", "旧", "新"]
+            let questionTerms = Retriever.tokens(turn.question).subtracting(ignored)
+            let scored = reader.state.memories.compactMap { item -> (MemoryItem, Int)? in
+                guard !item.deleted, !item.isResponsePreference else { return nil }
+                let overlap = Retriever.tokens(item.text).subtracting(ignored).intersection(questionTerms).count
+                return overlap > 0 ? (item, overlap) : nil
+            }.sorted { $0.1 > $1.1 }
+            let topOverlap = scored.first?.1 ?? 0
+            let uniqueTop = scored.filter { $0.1 == topOverlap }
+            guard
+                turn.question.localizedCaseInsensitiveContains(target.text)
+                    || (topOverlap > 0 && uniqueTop.count == 1 && uniqueTop.first?.0.id == target.id)
+            else { throw ReaderError.message("记忆删除目标不唯一或与请求不匹配。") }
             guard reader.state.memories[index].forget() else {
                 throw ReaderError.message("这条记忆已经删除。")
             }
@@ -205,6 +222,8 @@ extension LibraryAgent {
                 throw ReaderError.message("来源已变化或保存失败，此次未删除记忆。")
             }
             try check(epoch)
+            try? await reader.store.recordMemoryAudit(
+                memoryID: target.id, action: "forget", trigger: turn.question)
             onSubject("研究记忆已静默删除")
             return AgentToolOutcome(
                 content: "{\"ok\":true,\"memory_id\":\"\(memoryID.uuidString)\"}", cards: [], truncated: false,

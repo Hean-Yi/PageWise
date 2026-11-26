@@ -2415,7 +2415,7 @@ private func libraryPayload(_ messages: [AgentMessage], _ call: String) throws -
     #expect(agent.turns.last?.error == nil)
     #expect(reader.state.memories.first(where: { $0.id == existing.id })?.text == "只比较匹配预算的实验。")
 
-    agent.send("忘掉旧的火山学记录。")
+    agent.send("忘掉旧的 volcanology 记录。")
     try await eventually { !agent.isRunning }
     #expect(agent.turns.last?.error == nil)
     #expect(reader.state.memories.first(where: { $0.id == forgottenID })?.deleted == true)

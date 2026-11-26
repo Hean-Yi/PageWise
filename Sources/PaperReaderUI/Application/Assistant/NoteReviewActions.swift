@@ -26,6 +26,7 @@ final class NoteReviewSession {
     private(set) var running = false
     var message: String?
     private let store: LibraryStore
+    private let semantic: SemanticPassageIndex
     private let defaultsKey: String
     private var job: Task<Void, Never>?
     private var nextCheck = Date.distantPast
@@ -40,6 +41,10 @@ final class NoteReviewSession {
 
     init(store: LibraryStore, root: URL) {
         self.store = store
+        semantic = SemanticPassageIndex(
+            encoder: DeviceSemanticEncoder.shared,
+            cacheURL: root.appendingPathComponent("DerivedIndexes", isDirectory: true)
+                .appendingPathComponent("note-relations.sqlite"))
         defaultsKey = "pagewise.noteReview." + root.standardizedFileURL.path
         enabled = UserDefaults.standard.object(forKey: defaultsKey + ".enabled") as? Bool ?? false
         interval = UserDefaults.standard.object(forKey: defaultsKey + ".interval") as? TimeInterval ?? 6 * 3600
@@ -124,7 +129,7 @@ final class NoteReviewSession {
             if let cachedRelations {
                 relations = cachedRelations
             } else {
-                relations = Self.computeRelations(for: note, notes: notes)
+                relations = await computeRelations(for: note, notes: notes)
                 try? await store.saveNoteRelations(
                     relations.map {
                         NoteRelation(
@@ -152,36 +157,48 @@ final class NoteReviewSession {
         return Array(targets)
     }
 
-    private static func computeRelations(
+    private func computeRelations(
         for note: ReadingNote, notes: [ReadingNote]
-    ) -> [(note: ReadingNote, overlap: Int, kind: NoteRelation.Kind)] {
+    ) async -> [(note: ReadingNote, overlap: Int, kind: NoteRelation.Kind)] {
         let terms = Retriever.tokens(note.markdown)
+        let others = notes.filter { $0.id != note.id }
+        let byID = Dictionary(others.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let passages = others.map { SemanticPassage(sourceID: $0.id, text: String($0.markdown.prefix(900))) }
+        if !passages.isEmpty {
+            if let matches = try? await semantic.matches(
+                note.markdown, passages: passages, allowed: Set(passages.map(\.sourceID)), limit: 8),
+                !matches.isEmpty
+            {
+                return matches.compactMap { match -> (ReadingNote, Int, NoteRelation.Kind)? in
+                    guard let other = byID[match.passage.sourceID] else { return nil }
+                    let overlap = terms.intersection(Retriever.tokens(other.markdown)).count
+                    let kind = Self.relationKind(note.markdown, other.markdown)
+                    return (other, overlap, kind)
+                }
+            }
+        }
         return
-            notes
-            .filter { $0.id != note.id }
-            .compactMap { other -> (ReadingNote, Int, String)? in
+            others
+            .compactMap { other -> (ReadingNote, Int, NoteRelation.Kind)? in
                 let overlap = terms.intersection(Retriever.tokens(other.markdown)).count
                 guard overlap >= 2 else { return nil }
-                return (other, overlap, relationKind(note.markdown, other.markdown) ?? "similar")
+                return (other, overlap, Self.relationKind(note.markdown, other.markdown))
             }
             .sorted { $0.1 > $1.1 }
             .prefix(8)
-            .compactMap { other, overlap, kind in
-                guard let kind = NoteRelation.Kind(rawValue: kind) else { return nil }
-                return (other, overlap, kind)
-            }
+            .map { $0 }
     }
 
-    private static func relationKind(_ lhs: String, _ rhs: String) -> String? {
+    private static func relationKind(_ lhs: String, _ rhs: String) -> NoteRelation.Kind {
         let numbers = { (text: String) -> Set<String> in
             Set(text.matches(of: /\d+(?:\.\d+)?/).map { String($0.output) })
         }
         let negated = { (text: String) -> Bool in
             text.range(of: #"(?i)\b(?:not|no|never|without)\b|不|没有|未|并非|无法"#, options: .regularExpression) != nil
         }
-        if negated(lhs) != negated(rhs) { return "conflict" }
-        if !numbers(lhs).isEmpty, !numbers(rhs).isEmpty, numbers(lhs) != numbers(rhs) { return "conflict" }
-        return nil
+        if negated(lhs) != negated(rhs) { return .conflict }
+        if !numbers(lhs).isEmpty, !numbers(rhs).isEmpty, numbers(lhs) != numbers(rhs) { return .conflict }
+        return .similar
     }
 
 }

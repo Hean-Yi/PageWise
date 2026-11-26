@@ -1,4 +1,5 @@
 import CSQLite
+import CryptoKit
 import Foundation
 
 public actor LibraryStore {
@@ -452,6 +453,14 @@ public actor LibraryStore {
                 source_id TEXT PRIMARY KEY, source_modified REAL NOT NULL, payload BLOB NOT NULL
             )
             """)
+        try execute(
+            db,
+            """
+            CREATE TABLE IF NOT EXISTS memory_audit(
+                id INTEGER PRIMARY KEY AUTOINCREMENT, memory_id TEXT NOT NULL,
+                action TEXT NOT NULL, trigger_hash TEXT NOT NULL, occurred_at REAL NOT NULL
+            )
+            """)
     }
 
     private static func appendResearchEvents(
@@ -483,6 +492,29 @@ public actor LibraryStore {
     /// The derived index never needs the complete processed history to rebuild; the main library
     /// is authoritative. Keep a bounded recent tail so diagnostics stay useful without growing
     /// the event table for the lifetime of the library.
+    /// Local audit for silent memory changes. The trigger is hashed; no prose is retained.
+    public func recordMemoryAudit(memoryID: UUID, action: String, trigger: String) throws {
+        let hash = SHA256.hash(data: Data(trigger.utf8)).map { String(format: "%02x", $0) }.joined()
+        try Self.database(at: databaseURL) { db in
+            try LibraryRecords.statement(
+                db,
+                "INSERT INTO memory_audit(memory_id,action,trigger_hash,occurred_at) VALUES(?,?,?,?)"
+            ) { stmt in
+                try Self.bindResearchText(memoryID.uuidString, to: 1, in: stmt)
+                try Self.bindResearchText(action, to: 2, in: stmt)
+                try Self.bindResearchText(hash, to: 3, in: stmt)
+                sqlite3_bind_double(stmt, 4, Date().timeIntervalSinceReferenceDate)
+                guard sqlite3_step(stmt) == SQLITE_DONE else { throw LibraryRecords.writeFailure }
+            }
+        }
+    }
+
+    func memoryAuditCount() throws -> Int {
+        try Self.database(at: databaseURL) { db in
+            Int(try Self.integer(db, "SELECT count(*) FROM memory_audit"))
+        }
+    }
+
     /// Derived note-neighbour cache. The source note revision is the cache key; target revisions
     /// are checked by the caller before using an edge. The authoritative notes remain in
     /// `library_records`.

@@ -127,3 +127,16 @@ import Testing
         try await store.noteRelations(
             sourceID: a.id, sourceModifiedAt: a.modifiedAt.addingTimeInterval(1)) == nil)
 }
+
+@Test @MainActor func localMemoryCommandsLeaveAnInternalAudit() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let reader = try ReaderModel(root: root)
+    await reader.load()
+    reader.state.memories = [MemoryItem(text: "旧的吞吐量比较记录", sourceID: UUID())]
+    #expect(reader.respondToMemoryCommand("请忘掉旧的吞吐量比较记录。") != nil)
+    for _ in 0..<100 where (try? await reader.store.memoryAuditCount()) != 1 {
+        try await Task.sleep(for: .milliseconds(10))
+    }
+    #expect(try await reader.store.memoryAuditCount() == 1)
+}

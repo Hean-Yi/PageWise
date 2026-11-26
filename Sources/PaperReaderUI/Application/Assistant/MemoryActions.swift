@@ -73,7 +73,10 @@ extension ReaderModel {
         if let groups = capture(memoryPattern), let target = groups.first, let memory = match(target),
             let index = state.memories.firstIndex(where: { $0.id == memory.id }), state.memories[index].forget()
         {
-            Task { await save() }
+            Task {
+                try? await store.recordMemoryAudit(memoryID: memory.id, action: "forget", trigger: question)
+                await save()
+            }
             return "已忘掉这条研究记忆。"
         }
         func replacement(_ value: String) -> String {
@@ -83,14 +86,20 @@ extension ReaderModel {
             let index = state.memories.firstIndex(where: { $0.id == memory.id }),
             state.memories[index].correct(to: replacement(groups[1]))
         {
-            Task { await save() }
+            Task {
+                try? await store.recordMemoryAudit(memoryID: memory.id, action: "revise", trigger: question)
+                await save()
+            }
             return "已更正这条研究记忆。"
         }
         if let groups = capture(revisePattern), groups.count == 2, let memory = match(groups[0]),
             let index = state.memories.firstIndex(where: { $0.id == memory.id }),
             state.memories[index].correct(to: replacement(groups[1]))
         {
-            Task { await save() }
+            Task {
+                try? await store.recordMemoryAudit(memoryID: memory.id, action: "revise", trigger: question)
+                await save()
+            }
             return "已更正这条研究记忆。"
         }
         return nil

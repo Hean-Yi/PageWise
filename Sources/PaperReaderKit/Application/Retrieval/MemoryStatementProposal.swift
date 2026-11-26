@@ -8,7 +8,9 @@ public struct MemoryStatementProposal: Sendable {
     public static func isEligible(_ item: MemoryItem, in state: LibraryState, excluding pending: Set<UUID>) -> Bool {
         guard !item.deleted, item.text.count <= 300,
             !state.memories.contains(where: {
-                $0.id == item.id || ($0.sourceID == item.sourceID && $0.text == item.text)
+                !$0.deleted
+                    && ($0.id == item.id || $0.deduplicationKey == item.deduplicationKey
+                        || ($0.sourceID == item.sourceID && $0.text == item.text))
             })
         else { return false }
         if let fingerprint = item.originalFingerprint, state.suppressedMemoryFingerprints.contains(fingerprint) {

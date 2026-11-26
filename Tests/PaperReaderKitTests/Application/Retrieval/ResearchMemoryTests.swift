@@ -145,3 +145,30 @@ import Testing
     #expect(topic.papersRead == 1)
     #expect(topic.lastReadAt == second.addingTimeInterval(60))
 }
+
+@Test func memoryDedupKeyCanonicalizesCommonResearchPhrasingWithoutLosingNumbers() {
+    let a = MemoryDedupKey.key("匹配训练算力后，方法 A 的准确率更高。")
+    let b = MemoryDedupKey.key("在相同 compute budget 下，方法 A 的准确率更高。")
+    #expect(a != b)  // 训练算力仍是条件的一部分，不能把两个不同实验问题合并
+    #expect(MemoryDedupKey.key("匹配计算预算后，方法 A 的准确率更高。") == MemoryDedupKey.key("在相同 compute budget 下，方法 A 的准确率更高。"))
+    #expect(MemoryDedupKey.key("提升 3.2 个点。") != MemoryDedupKey.key("提升 5.0 个点。"))
+    #expect(MemoryDedupKey.key("没有提升。") != MemoryDedupKey.key("有提升。"))
+}
+
+@Test func memoryStatementProposalRejectsAParaphrasedActiveMemory() throws {
+    let turn = ChatTurn(paperID: UUID(), question: "记住匹配预算的比较", selection: "", answer: "", evidence: [])
+    var state = LibraryState()
+    state.papers = [
+        Paper(
+            id: turn.paperID, title: "Budget", digest: "d", originalPath: "unused.pdf", pageCount: 1, blocks: [],
+            warnings: [], canReflow: false)
+    ]
+    state.chats = [turn]
+    let existing = MemoryItem(
+        agentStatement: "匹配计算预算后比较方法。", sourceID: turn.id, source: .reader(quote: "记住匹配预算的比较"))
+    state.memories = [existing]
+    let proposal = try MemoryStatementProposal(
+        statement: "在相同 compute budget 下比较方法。", readerTurnID: turn.id,
+        readerMessage: turn.question, quote: "记住匹配预算的比较")
+    #expect(!MemoryStatementProposal.isEligible(proposal.item, in: state, excluding: []))
+}

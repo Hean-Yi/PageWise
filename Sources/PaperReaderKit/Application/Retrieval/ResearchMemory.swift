@@ -97,7 +97,8 @@ public actor ResearchMemory {
             state.chats.lazy.filter { $0.paperID == turn.paperID && normalized($0.question) == key }.map(\.id))
         guard
             !state.memories.contains(where: {
-                $0.sourceID == turn.id || (($0.deleted || $0.userEdited) && earlier.contains($0.sourceID))
+                (!$0.deleted && $0.deduplicationKey == candidate.deduplicationKey)
+                    || $0.sourceID == turn.id || (($0.deleted || $0.userEdited) && earlier.contains($0.sourceID))
                     || $0.suppressesAutomaticProposition(fingerprint)
             })
         else { return nil }
