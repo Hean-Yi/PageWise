@@ -111,7 +111,7 @@ private actor DiscussionTransport: HTTPTransport {
     func stream(for request: URLRequest, onData: @Sendable (Data) async throws -> Void) async throws -> HTTPURLResponse
     {
         let messages = try JSONDecoder().decode(Request.self, from: request.httpBody ?? Data()).messages
-        let prompt = messages.last?.content ?? ""
+        let prompt = messages.compactMap(\.content).joined(separator: "\n")
         ordinaryPrompts.append(prompt)
         let noteID = prompt.firstMatch(of: /\[(S[0-9]+)\] [^\n]*书库阅读笔记/)?.1
         let answer = noteID.map { "先前笔记指出蓝鲸偏差需要控制 [\($0)]。" } ?? "语境改变了检索所需的证据 [S1]。"

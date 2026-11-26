@@ -21,7 +21,8 @@ private actor RevocationTransport: HTTPTransport {
     private func prompt(_ request: URLRequest) throws -> (String, String) {
         let json = try #require(JSONSerialization.jsonObject(with: request.httpBody ?? Data()) as? [String: Any])
         let messages = try #require(json["messages"] as? [[String: Any]])
-        return (messages.first?["content"] as? String ?? "", messages.last?["content"] as? String ?? "")
+        let joined = messages.compactMap { $0["content"] as? String }.joined(separator: "\n")
+        return (messages.first?["content"] as? String ?? "", joined)
     }
 
     func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) {
