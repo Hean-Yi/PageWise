@@ -148,6 +148,9 @@ public struct ChatSourceVersions: Codable, Sendable, Equatable {
     private static func fingerprint(_ memory: MemoryItem) -> String {
         var content = memory.sourceID.uuidString + (memory.userEdited ? "|1|" : "|0|") + memory.text.prefix(400)
         if let revision = memory.correctionRevision { content += "|revision|" + revision.uuidString }
+        if let invalidAt = memory.invalidAt {
+            content += "|invalid|" + String(invalidAt.timeIntervalSinceReferenceDate.bitPattern)
+        }
         switch memory.librarySource {
         case .reader(let quote): content += "|reader|" + quote
         case .note(let paperID, let modifiedAt):

@@ -127,13 +127,13 @@ public actor ResearchMemory {
 
     public func relevant(
         to query: String, paperID: UUID? = nil, shelfID: UUID? = nil, scope: ResearchBrief.Scope = .library,
-        state: LibraryState, excluding pending: Set<UUID> = []
+        state: LibraryState, excluding pending: Set<UUID> = [], now: Date = Date()
     )
         async throws -> [MemoryItem]
     {
         let hasModel = usesVectors ? await semantic.isAvailable() : false
         try Task.checkCancellation()
-        let active = state.memories.filter { !$0.deleted && !$0.text.isEmpty && !$0.isResponsePreference }
+        let active = state.memories.filter { $0.isActive && !$0.isResponsePreference }
         let live = Set(active.map(\.id))
         for id in indexedTerms.keys where !live.contains(id) { indexedTerms[id] = nil }
         let words = Retriever.expandedTokens(String(query.prefix(1_000))).subtracting(Self.stopWords)
@@ -152,7 +152,7 @@ public actor ResearchMemory {
         let origins = ResearchMemoryOrigins(state: state, excluding: pending)
         var scopedActive: [MemoryItem] = []
         var passages: [SemanticPassage] = []
-        var matches: [(item: MemoryItem, score: Int)] = []
+        var matches: [(item: MemoryItem, score: Double)] = []
         for memory in active {
             try Task.checkCancellation()
             guard let origin = origins.resolve(memory),
@@ -164,7 +164,8 @@ public actor ResearchMemory {
                 passages.append(Self.passage(memory))
             }
             if broad {
-                matches.append((memory, memory.userEdited ? 1 : 0))
+                let base = memory.userEdited ? 2.0 : 1.0
+                matches.append((memory, base * memory.salienceWeight(at: now)))
                 continue
             }
             let text = String(memory.text.prefix(400))
@@ -177,11 +178,11 @@ public actor ResearchMemory {
             }
             let overlap = terms.intersection(words).count
             guard overlap > 0 else { continue }
-            matches.append(
-                (
-                    memory,
-                    overlap * 4 + (memory.userEdited ? 2 : 0) + (paperID.map { origin == .paper($0) } == true ? 1 : 0)
-                ))
+            let rawScore =
+                Double(
+                    overlap * 4 + (memory.userEdited ? 2 : 0)
+                        + (paperID.map { origin == .paper($0) } == true ? 1 : 0))
+            matches.append((memory, rawScore * memory.salienceWeight(at: now)))
         }
         let lexical = matches.sorted {
             if $0.score != $1.score { return $0.score > $1.score }
@@ -216,7 +217,7 @@ public actor ResearchMemory {
         guard usesVectors, await semantic.isAvailable() else { return }
         let origins = ResearchMemoryOrigins(state: state, excluding: [])
         let passages = state.memories.filter {
-            !$0.deleted && !$0.text.isEmpty && !$0.isResponsePreference && origins.resolve($0) != nil
+            $0.isActive && !$0.isResponsePreference && origins.resolve($0) != nil
         }.map(Self.passage)
         try await semantic.prepare(passages)
     }

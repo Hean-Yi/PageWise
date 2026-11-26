@@ -6,7 +6,7 @@ struct MemoryView: View {
     var onlyID: UUID?
     let openPaper: (UUID) -> Void
     private var memories: [MemoryItem] {
-        model.state.memories.filter { !$0.deleted && (onlyID == nil || $0.id == onlyID) }
+        model.state.memories.filter { $0.isActive && (onlyID == nil || $0.id == onlyID) }
     }
 
     var body: some View {

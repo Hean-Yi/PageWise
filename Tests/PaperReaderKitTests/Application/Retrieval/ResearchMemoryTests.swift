@@ -205,3 +205,67 @@ import Testing
     let libraryHits = try await index.relevant(to: "预算", scope: .library, state: state)
     #expect(libraryHits.count == 5)
 }
+
+@Test func bitemporalSupersedingExcludesObsoleteMemoriesAndInvalidatesSourceVersions() async throws {
+    let paper = Paper(
+        title: "Temporal", digest: "temp", originalPath: "unused.pdf", pageCount: 1, blocks: [], warnings: [],
+        canReflow: false)
+    let turn = ChatTurn(paperID: paper.id, question: "预算实验", selection: "", answer: "", evidence: [])
+    var old = MemoryItem(agentStatement: "优先比较吞吐量", sourceID: turn.id, source: .reader(quote: "优先比较吞吐量"))
+    let newer = MemoryItem(
+        agentStatement: "改为优先比较等算力下的准确率", sourceID: turn.id, source: .reader(quote: "改为优先比较等算力下的准确率"))
+    let oldRevision = old.revisionFingerprint
+    #expect(old.matchesRevision(oldRevision))
+    #expect(old.matchesRevision(String(oldRevision.prefix(8))))
+    #expect(!old.matchesRevision("deadbeef"))
+
+    var versions = ChatSourceVersions()
+    versions.include(old)
+    var state = LibraryState()
+    state.papers = [paper]
+    state.chats = [turn]
+    state.memories = [old, newer]
+    #expect(versions.isCurrent(in: state, excluding: []))
+
+    let superseded = old.supersede(by: newer.id, at: Date(timeIntervalSinceReferenceDate: 2_000))
+    #expect(superseded)
+    #expect(!old.isActive)
+    #expect(old.supersededBy == newer.id)
+    #expect(!old.matchesRevision(oldRevision))
+    state.memories = [old, newer]
+    #expect(!versions.isCurrent(in: state, excluding: []))
+
+    let index = ResearchMemory()
+    let hits = try await index.relevant(to: "比较", state: state)
+    #expect(hits.map(\.id) == [newer.id])
+    #expect(MemorySleepEdition.eligible(state).map(\.id) == [newer.id])
+
+    // User-edited memories cannot be superseded automatically.
+    var protected = newer
+    let didEdit = protected.correct(to: "读者手改结论")
+    let blockedSupersede = protected.supersede(by: UUID())
+    #expect(didEdit)
+    #expect(!blockedSupersede)
+}
+
+@Test func salienceDecayRanksFreshAndProtectedMemoriesAboveStaleAutomaticClues() async throws {
+    let now = Date(timeIntervalSinceReferenceDate: 10_000_000)
+    var stale = MemoryItem(agentStatement: "比较等算力蒸馏效果", sourceID: UUID(), source: .reader(quote: "比较等算力蒸馏效果"))
+    stale.createdAt = now.addingTimeInterval(-180 * 86_400)
+    var fresh = MemoryItem(agentStatement: "比较等算力蒸馏效果（新）", sourceID: UUID(), source: .reader(quote: "比较等算力蒸馏效果（新）"))
+    fresh.createdAt = now.addingTimeInterval(-2 * 86_400)
+    var edited = MemoryItem(agentStatement: "比较等算力蒸馏效果（手改）", sourceID: UUID(), source: .reader(quote: "比较等算力蒸馏效果（手改）"))
+    edited.createdAt = now.addingTimeInterval(-240 * 86_400)
+    let didEdit = edited.correct(to: "比较等算力蒸馏效果（手改）")
+    #expect(didEdit)
+
+    #expect(stale.salienceWeight(at: now) < 0.5)
+    #expect(fresh.salienceWeight(at: now) > 0.9)
+    #expect(edited.salienceWeight(at: now) == 1.0)
+
+    var state = LibraryState()
+    state.memories = [stale, fresh, edited]
+    let hits = try await ResearchMemory().relevant(to: "等算力 蒸馏", state: state, now: now)
+    #expect(hits.first?.id == edited.id)
+    #expect(hits.last?.id == stale.id)
+}

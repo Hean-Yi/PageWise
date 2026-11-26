@@ -27,10 +27,52 @@ public struct MemoryItem: Identifiable, Codable, Sendable, Equatable {
     public var userEdited = false
     public var deleted = false
     public var createdAt = Date()
+    /// Bi-temporal validity window for real-world fact evolution, separate from system `createdAt`.
+    public var validFrom: Date?
+    public var invalidAt: Date?
+    public var supersededBy: UUID?
+    /// Lightweight salience tracking for automatic memories; user-edited items and explicit
+    /// preferences are immune to decay.
+    public var lastRecalledAt: Date?
+    public var recallCount: Int?
     /// Older rows have no fingerprint. Capture a still-visible original before its first edit or deletion.
     public private(set) var originalFingerprint: String?
     /// When deleting a correction, suppress the last visible wording as well as the automatic original.
     private var forgottenFingerprint: String?
+
+    public var isActive: Bool { !deleted && invalidAt == nil && !text.isEmpty }
+
+    public var revisionFingerprint: String {
+        let payload =
+            "\(id.uuidString)|\(deleted ? 1 : 0)|\(userEdited ? 1 : 0)|\(correctionRevision?.uuidString ?? "")|"
+            + "\(invalidAt.map { String($0.timeIntervalSinceReferenceDate.bitPattern) } ?? "")|\(text)"
+        return SHA256.hash(data: Data(payload.utf8)).prefix(8).map { String(format: "%02x", $0) }.joined()
+    }
+
+    public func matchesRevision(_ expected: String) -> Bool {
+        let normalized = expected.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard normalized.count >= 8 else { return false }
+        return revisionFingerprint == normalized || revisionFingerprint.hasPrefix(normalized)
+    }
+
+    /// Mark an automatic memory as superseded by a newer statement without erasing its history.
+    @discardableResult public mutating func supersede(by replacementID: UUID, at date: Date = Date()) -> Bool {
+        guard !deleted, !userEdited, invalidAt == nil, replacementID != id else { return false }
+        invalidAt = date
+        supersededBy = replacementID
+        return true
+    }
+
+    /// Salience multiplier in `[0.35, 1.15]`. User-edited memories and explicit preferences never decay.
+    public func salienceWeight(at now: Date = Date()) -> Double {
+        if userEdited || isResponsePreference { return 1.0 }
+        let anchor = max(validFrom ?? createdAt, lastRecalledAt ?? createdAt)
+        let ageDays = max(0, now.timeIntervalSince(anchor) / 86_400)
+        // 60-day half-life with a floor so older relevant research clues remain retrievable.
+        let decayed = max(0.35, pow(0.5, ageDays / 60.0))
+        let boost = min(0.15, Double(max(0, recallCount ?? 0)) * 0.03)
+        return min(1.15, decayed + boost)
+    }
 
     static let automaticPrefix = "AI 整理（待核实）："
     public static let paperObservationPrefix = "AI 阅读记录："

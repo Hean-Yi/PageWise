@@ -88,7 +88,7 @@ public struct MemorySleepEdition: Codable, Equatable, Sendable {
             case .shelf(let id): return "s" + id.uuidString
             }
         }
-        return state.memories.filter { !$0.isResponsePreference && origins.resolve($0) != nil }.sorted {
+        return state.memories.filter { $0.isActive && !$0.isResponsePreference && origins.resolve($0) != nil }.sorted {
             let left = order($0)
             let right = order($1)
             if left != right { return left < right }
