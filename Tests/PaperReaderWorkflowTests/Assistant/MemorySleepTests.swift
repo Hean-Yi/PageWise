@@ -1,7 +1,7 @@
 import Foundation
-import PaperReaderKit
 import Testing
 
+@testable import PaperReaderKit
 @testable import PaperReaderUI
 
 private func sleepSource(_ statement: String) throws -> MemoryItem {
@@ -214,4 +214,14 @@ private func sleepSource(_ statement: String) throws -> MemoryItem {
     let libraryScoped = try await reader.effectiveSleepMemory(
         question: "scope", paperID: nil, recalled: [itemA, itemB], scope: .library)
     #expect(Set(libraryScoped.originals.map(\.id)) == [itemA.id, itemB.id])
+}
+
+@Test func sleepAnchorOrderPrefersSemanticNeighbourOverLiteralOverlap() {
+    let changed = MemoryItem(text: "预算对齐后比较方法？", sourceID: UUID())
+    let english = MemoryItem(text: "Compare methods under a matched budget.", sourceID: UUID())
+    let literal = MemoryItem(text: "预算对齐后比较方法？", sourceID: UUID())
+    let ordered = MemorySleepEdition.anchorOrder(
+        changed: [changed], earlier: [literal, english], semanticScores: [english.id: 0.9])
+    #expect(ordered.first?.id == english.id)
+    #expect(ordered.contains { $0.id == literal.id })
 }

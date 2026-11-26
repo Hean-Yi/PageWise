@@ -20,7 +20,8 @@ final class MemorySleepSession {
     }
 
     init(store: LibraryStore, root: URL, encoder: (any SemanticTextEncoder)? = nil, minimumScore: Float? = nil) {
-        index = MemorySleepStore(store: store)
+        let batchSearch = SemanticPassageIndex(encoder: encoder, minimumScore: minimumScore)
+        index = MemorySleepStore(store: store, semantic: batchSearch)
         defaultsKey = "pagewise.memorySleep." + root.standardizedFileURL.path
         enabled = UserDefaults.standard.object(forKey: defaultsKey) as? Bool ?? true
         search = SemanticPassageIndex(encoder: encoder, minimumScore: minimumScore)

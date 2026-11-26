@@ -114,21 +114,27 @@ public struct MemorySleepEdition: Codable, Equatable, Sendable {
         versions = next
     }
 
-    func batch(_ items: [MemoryItem], state: LibraryState) -> [Candidate] {
+    func batch(_ items: [MemoryItem], state: LibraryState, semantic: SemanticPassageIndex? = nil) async -> [Candidate] {
         guard hasPendingReview else { return [] }
         let remaining = items.filter { !reviewed.contains($0.id) }
         guard let first = remaining.first else { return [] }
         let changed = Array(remaining.filter { $0.preference?.scope == first.preference?.scope }.prefix(20))
-        let terms = changed.reduce(into: Set<String>()) { $0.formUnion(Retriever.tokens($1.text)) }
         let earlier = items.filter { reviewed.contains($0.id) && $0.preference?.scope == first.preference?.scope }
-        let scored: [(item: MemoryItem, overlap: Int)] = earlier.map { item in
-            (item, Retriever.tokens(item.text).intersection(terms).count)
+        var semanticScores: [UUID: Double] = [:]
+        if let semantic, !changed.isEmpty, !earlier.isEmpty {
+            let passages = earlier.map {
+                SemanticPassage(sourceID: $0.id, text: String($0.text.prefix(400)))
+            }
+            let query = String(changed.map(\.text).joined(separator: " ").prefix(1_600))
+            let matches =
+                (try? await semantic.matches(
+                    query, passages: passages, allowed: Set(passages.map(\.sourceID)), limit: 16)) ?? []
+            for (rank, match) in matches.enumerated() {
+                semanticScores[match.passage.sourceID] = Double(matches.count - rank) / Double(max(1, matches.count))
+            }
         }
-        let anchors = scored.sorted { left, right in
-            if left.overlap == right.overlap { return left.item.createdAt > right.item.createdAt }
-            return left.overlap > right.overlap
-        }
-        let selected = changed + anchors.prefix(8).map { $0.item }
+        let anchors = Self.anchorOrder(changed: changed, earlier: earlier, semanticScores: semanticScores)
+        let selected = changed + anchors
         let origins = ResearchMemoryOrigins(state: state, for: selected)
         return selected.map { item in
             let source: String
@@ -141,6 +147,27 @@ public struct MemorySleepEdition: Codable, Equatable, Sendable {
                 id: item.id, text: String(item.text.prefix(400)), preference: item.preference,
                 protected: item.userEdited || item.isResponsePreference, source: source, recorded: item.createdAt)
         }
+    }
+
+    /// Lexical and semantic recall both nominate anchors. Semantic neighbours come first so a
+    /// Chinese memory can meet its English paraphrase during idle consolidation.
+    static func anchorOrder(
+        changed: [MemoryItem], earlier: [MemoryItem], semanticScores: [UUID: Double]
+    ) -> [MemoryItem] {
+        let terms = changed.reduce(into: Set<String>()) { $0.formUnion(Retriever.expandedTokens($1.text)) }
+        let scored = earlier.map { item -> (item: MemoryItem, semantic: Double, overlap: Int) in
+            (
+                item, semanticScores[item.id] ?? 0,
+                Retriever.expandedTokens(item.text).intersection(terms).count
+            )
+        }
+        return scored.sorted { left, right in
+            if (left.semantic > 0) != (right.semantic > 0) { return left.semantic > 0 }
+            if left.semantic != right.semantic { return left.semantic > right.semantic }
+            if left.overlap != right.overlap { return left.overlap > right.overlap }
+            if left.item.createdAt != right.item.createdAt { return left.item.createdAt > right.item.createdAt }
+            return left.item.id.uuidString < right.item.id.uuidString
+        }.prefix(8).map(\.item)
     }
 
     /// A service may return a malformed response or suggest only nonexistent records.
@@ -236,7 +263,11 @@ public actor MemorySleepStore {
     }
 
     private let store: LibraryStore
-    public init(store: LibraryStore) { self.store = store }
+    private let semantic: SemanticPassageIndex?
+    public init(store: LibraryStore, semantic: SemanticPassageIndex? = nil) {
+        self.store = store
+        self.semantic = semantic
+    }
     public typealias Review = @Sendable (ReviewInput) async throws -> String
 
     public func load() async throws -> MemorySleepEdition {
@@ -255,7 +286,7 @@ public actor MemorySleepStore {
         var edition = previous
         let items = MemorySleepEdition.eligible(state)
         try edition.reconcile(items)
-        let batch = edition.batch(items, state: state)
+        let batch = await edition.batch(items, state: state, semantic: semantic)
         if let review, !batch.isEmpty {
             try Task.checkCancellation()
             struct Input: Encodable {
