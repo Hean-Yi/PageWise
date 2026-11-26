@@ -351,6 +351,9 @@ public final class ReaderModel {
                             proposingMemory.item, in: snapshot, excluding: self.pendingImportIDs)
                     else { return false }
                     snapshot.memories.append(proposingMemory.item)
+                    if let chatIndex = snapshot.chats.firstIndex(where: { $0.id == proposingMemory.item.sourceID }) {
+                        snapshot.chats[chatIndex].backgroundSources?.include(proposingMemory.item)
+                    }
                 }
                 let removed = try deletingPaper.map { try snapshot.removePaper($0) }
                 if let importedPaper {
@@ -473,6 +476,10 @@ public final class ReaderModel {
                         proposingMemory.item, in: self.state, excluding: self.pendingImportIDs)
                     {
                         self.state.memories.append(proposingMemory.item)
+                        if let chatIndex = self.state.chats.firstIndex(where: { $0.id == proposingMemory.item.sourceID }
+                        ) {
+                            self.state.chats[chatIndex].backgroundSources?.include(proposingMemory.item)
+                        }
                     } else {
                         try await store.save(self.state)
                         return false
