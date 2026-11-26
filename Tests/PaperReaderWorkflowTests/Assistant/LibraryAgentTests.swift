@@ -2393,17 +2393,15 @@ private func libraryPayload(_ messages: [AgentMessage], _ call: String) throws -
             return tool(
                 "propose_memory",
                 #"{"statement":"关注匹配预算","quote":"请记住我长期关注匹配预算"}"#, id: "propose")
-        case 3: return .init(role: "assistant", content: "已记住。")
-        case 4: return tool("research_overview", "{}", id: "overview-2")
-        case 5:
+        case 3: return tool("research_overview", "{}", id: "overview-2")
+        case 4:
             return tool(
                 "revise_memory",
                 #"{"memory_id":"\#(existing.id)","statement":"只比较匹配预算的实验。"}"#, id: "revise")
-        case 6: return .init(role: "assistant", content: "已修订。")
-        case 7:
+        case 5:
             return tool(
                 "forget_memory", #"{"memory_id":"\#(forgottenID)"}"#, id: "forget")
-        default: return .init(role: "assistant", content: "已忘记。")
+        default: return .init(role: "assistant", content: "研究记忆已更新。")
         }
     }
     let agent = LibraryAgent(reader: reader, client: client, discovery: AgentDiscoveryFixture())

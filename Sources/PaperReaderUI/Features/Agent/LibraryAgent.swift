@@ -620,7 +620,7 @@ public final class LibraryAgent {
                     }
                     if [
                         "ask_user", "create_reading_note", "close_read_paper", "propose_research_question",
-                        "remember_preference",
+                        "remember_preference", "propose_memory", "revise_memory", "forget_memory",
                     ].contains(
                         call.function.name),
                         calls.count != 1
@@ -730,6 +730,18 @@ public final class LibraryAgent {
                 }
                 let result = AgentMessage(role: "tool", content: content, toolCallID: call.id)
                 current.append(result)
+            }
+            // A silent memory write has no further model decision to make. Checkpoint and finish
+            // immediately instead of spending another model round on an empty acknowledgement.
+            let silentMemoryTools: Set<String> = ["propose_memory", "revise_memory", "forget_memory"]
+            if names.isSubset(of: silentMemoryTools) {
+                updateTurn(turnID) { turn in
+                    if turn.answer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        turn.answer = "研究记忆已更新。"
+                    }
+                }
+                try retainCompletedHistory(current, after: prior, system: system, epoch: epoch)
+                return
             }
             // Checkpoint only after every tool reply matches this assistant message. Later
             // request failures must not discard the evidence already shown in result cards.
