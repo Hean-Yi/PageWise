@@ -23,7 +23,7 @@ final class MemorySleepSession {
         index = MemorySleepStore(store: store)
         defaultsKey = "pagewise.memorySleep." + root.standardizedFileURL.path
         enabled = UserDefaults.standard.object(forKey: defaultsKey) as? Bool ?? true
-        search = SemanticPassageIndex(encoder: DeviceSemanticEncoder.shared)
+        search = SemanticPassageIndex(encoder: nil)
     }
 
     func restore() async { edition = (try? await index.load()) ?? MemorySleepEdition() }

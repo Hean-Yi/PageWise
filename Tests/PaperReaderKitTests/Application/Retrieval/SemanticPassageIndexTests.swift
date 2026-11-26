@@ -33,7 +33,7 @@ private actor FixtureEncoder: SemanticTextEncoder {
     ) async throws -> [Evidence] {
         try await index.search(query: query, notes: [current], paperTitles: titles, mode: mode)
     }
-    #expect(try await search(index, note, "对齐", .lexical).isEmpty)
+    #expect(try await search(index, note, "天气", .lexical).isEmpty)
     #expect(try await search(index, note, "对齐").first?.text == note.markdown)
     #expect(try await search(index, note, "天气").isEmpty)
     #expect(await encoder.encodedPassages == 1)

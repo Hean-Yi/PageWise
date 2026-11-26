@@ -148,9 +148,9 @@ public final class ReaderModel {
         noteReview = NoteReviewSession(store: store, root: location)
         let indexDirectory = location.appendingPathComponent("DerivedIndexes", isDirectory: true)
         readingNoteIndex = ReadingNoteMemoryIndex(
-            encoder: DeviceSemanticEncoder.shared, cacheURL: indexDirectory.appendingPathComponent("notes.sqlite"))
+            encoder: nil, cacheURL: indexDirectory.appendingPathComponent("notes.sqlite"))
         researchMemory = ResearchMemory(
-            encoder: DeviceSemanticEncoder.shared, cacheURL: indexDirectory.appendingPathComponent("memories.sqlite"))
+            encoder: nil, cacheURL: indexDirectory.appendingPathComponent("memories.sqlite"))
         researchBriefMaintenance = ResearchBriefMaintenance(
             store: store, notes: readingNoteIndex, memories: researchMemory)
         importer = PDFImporter(root: location)

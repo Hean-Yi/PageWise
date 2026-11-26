@@ -4,19 +4,28 @@ import PaperReaderKit
 import Testing
 
 /// Optional device benchmark. Supply the installed model directory; ordinary CI stays offline.
-@Test(.enabled(if: ProcessInfo.processInfo.environment["PAGEWISE_BENCH_MODEL"] != nil))
+@Test(
+    .enabled(
+        if: ProcessInfo.processInfo.environment["PAGEWISE_BENCH_MODEL"] != nil
+            || ProcessInfo.processInfo.environment["PAGEWISE_BENCH_LOCAL"] == "1"))
 func measureInstalledSemanticRetrieval() async throws {
     let env = ProcessInfo.processInfo.environment
-    let encoder = DeviceSemanticEncoder(directory: URL(fileURLWithPath: try #require(env["PAGEWISE_BENCH_MODEL"])))
-    #expect(await encoder.isInstalled())
+    let local = env["PAGEWISE_BENCH_LOCAL"] == "1"
+    let encoder: DeviceSemanticEncoder? =
+        local
+        ? nil
+        : DeviceSemanticEncoder(directory: URL(fileURLWithPath: try #require(env["PAGEWISE_BENCH_MODEL"])))
+    if let encoder { #expect(await encoder.isInstalled()) }
     let clock = ContinuousClock()
     func ms(_ start: ContinuousClock.Instant) -> Double {
         let d = (clock.now - start).components
         return Double(d.seconds) * 1000 + Double(d.attoseconds) / 1e15
     }
     let start = clock.now
-    #expect(try await encoder.encode(["首次启动。"], as: .query).first?.count == 384)
-    print("QUALITY cold_model_and_first_query_ms", ms(start))
+    if let encoder {
+        #expect(try await encoder.encode(["首次启动。"], as: .query).first?.count == 384)
+        print("QUALITY cold_model_and_first_query_ms", ms(start))
+    }
     var examples: [(text: String, query: String, category: String)] = [
         ("The diffusion sampler uses fewer denoising steps to generate each image.", "图像从噪点变清晰要迭代几次", "cross"),
         ("A smaller calibration error means confidence matches observed correctness.", "输出的把握程度是否符合实际答对的比例", "cross"),

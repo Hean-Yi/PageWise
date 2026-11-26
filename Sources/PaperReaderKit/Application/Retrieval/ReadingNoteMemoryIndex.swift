@@ -215,7 +215,9 @@ public actor ReadingNoteMemoryIndex {
     ]
 
     private static func terms(in text: String) -> Set<String> {
-        Retriever.tokens(text).filter { $0.contains(where: { $0.isLetter || $0.isNumber }) && !stopWords.contains($0) }
+        Retriever.expandedTokens(text).filter {
+            $0.contains(where: { $0.isLetter || $0.isNumber }) && !stopWords.contains($0)
+        }
     }
 
     /// Chunk long Markdown so an observation near the end of a note remains citable verbatim.

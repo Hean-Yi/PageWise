@@ -113,7 +113,7 @@ public actor ResearchMemory {
         let active = state.memories.filter { !$0.deleted && !$0.text.isEmpty && !$0.isResponsePreference }
         let live = Set(active.map(\.id))
         for id in indexedTerms.keys where !live.contains(id) { indexedTerms[id] = nil }
-        let words = Retriever.tokens(String(query.prefix(1_000))).subtracting(Self.stopWords)
+        let words = Retriever.expandedTokens(String(query.prefix(1_000))).subtracting(Self.stopWords)
         let broad = paperID == nil && query == "*"
         guard !words.isEmpty || broad else { return [] }
         let origins = ResearchMemoryOrigins(state: state, excluding: pending)
@@ -134,7 +134,7 @@ public actor ResearchMemory {
             if let entry = indexedTerms[memory.id], entry.text == text {
                 terms = entry.words
             } else {
-                terms = Retriever.tokens(text)
+                terms = Retriever.expandedTokens(text)
                 indexedTerms[memory.id] = (text, terms)
             }
             let overlap = terms.intersection(words).count
