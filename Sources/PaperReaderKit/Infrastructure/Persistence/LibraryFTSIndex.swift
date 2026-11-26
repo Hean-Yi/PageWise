@@ -92,7 +92,7 @@ final class LibraryFTSIndex {
         _ = sqlite3_exec(db, "COMMIT", nil, nil, nil)
     }
 
-    func search(terms: Set<String>, limit: Int) -> [Hit] {
+    func search(terms: Set<String>, requireAllTerms: Bool = true, limit: Int) -> [Hit] {
         guard let db, limit > 0 else { return [] }
         let sanitized = terms.compactMap { raw -> String? in
             let clean = raw.filter { $0.isLetter || $0.isNumber }
@@ -100,12 +100,12 @@ final class LibraryFTSIndex {
             return "\"\(clean)\"*"
         }.sorted()
         guard !sanitized.isEmpty else { return [] }
-        let matchQuery = sanitized.joined(separator: " OR ")
+        let matchQuery = sanitized.joined(separator: requireAllTerms ? " AND " : " OR ")
         let sql = """
             SELECT paper_id, block_id, source_page, title, body, bm25(paper_fts, 0.0, 0.0, 0.0, 5.0, 1.0) AS rank
             FROM paper_fts
             WHERE paper_fts MATCH ?
-            ORDER BY rank ASC
+            ORDER BY rank ASC, paper_id ASC, rowid ASC
             LIMIT ?
             """
         var stmt: OpaquePointer?

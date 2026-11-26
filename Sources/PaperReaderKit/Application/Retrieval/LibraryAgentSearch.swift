@@ -208,15 +208,24 @@ public actor LibraryAgentSearchIndex {
         let hasIdeograph = terms.contains { $0.unicodeScalars.contains { $0.properties.isIdeographic } }
         let lexical: [AgentSearchHit]
         if identifier == nil, !hasIdeograph, fts.isAvailable {
-            let ftsHits = fts.search(terms: terms, limit: bounded * 2).map { hit in
+            let ftsHits = fts.search(terms: terms, requireAllTerms: true, limit: bounded * 2).map { hit in
                 AgentSearchHit(
                     paperID: hit.paperID, title: hit.title, blockID: hit.blockID,
                     sourcePage: hit.sourcePage, excerpt: hit.excerpt, score: hit.score)
             }
-            lexical =
-                ftsHits.isEmpty
-                ? try LibraryAgentSearch.rank(terms, in: entries, limit: bounded * 2, identifier: nil)
-                : ftsHits
+            if !ftsHits.isEmpty {
+                lexical = ftsHits
+            } else {
+                let fallback = try LibraryAgentSearch.rank(terms, in: entries, limit: bounded * 2, identifier: nil)
+                lexical =
+                    fallback.isEmpty
+                    ? fts.search(terms: terms, requireAllTerms: false, limit: bounded * 2).map { hit in
+                        AgentSearchHit(
+                            paperID: hit.paperID, title: hit.title, blockID: hit.blockID,
+                            sourcePage: hit.sourcePage, excerpt: hit.excerpt, score: hit.score)
+                    }
+                    : fallback
+            }
         } else {
             lexical = try LibraryAgentSearch.rank(terms, in: entries, limit: bounded * 2, identifier: identifier)
         }
