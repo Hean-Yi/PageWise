@@ -110,3 +110,54 @@ import Testing
     #expect(reader.state.memories.contains { $0.text.contains("训练时长") && !$0.deleted })
     #expect(reader.state.memories.contains { $0.deleted && $0.text.isEmpty })
 }
+
+/// Opt-in natural tool-selection probe with the full catalog. It reports what the model chose;
+/// it intentionally does not force a particular tool.
+@Test(.enabled(if: ProcessInfo.processInfo.environment["PAGEWISE_TEST_LIBRARY_UNCONSTRAINED"] == "1"))
+@MainActor func liveModelChoosesMemoryToolsWithoutAForcedCatalog() async throws {
+    let environment = ProcessInfo.processInfo.environment
+    let source = try #require(environment["PAGEWISE_TEST_LIBRARY"])
+    let key = try #require(environment["PAGEWISE_TEST_SLEEP_KEY"])
+    let sourceRoot = URL(fileURLWithPath: source, isDirectory: true)
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    try FileManager.default.copyItem(
+        at: sourceRoot.appendingPathComponent("library.sqlite"), to: root.appendingPathComponent("library.sqlite"))
+    let reader = try ReaderModel(root: root, credentials: WorkflowCredentials())
+    await reader.load()
+    var settings = ModelSettings()
+    settings.baseURL = "https://api.deepseek.com"
+    settings.model = "deepseek-flash"
+    _ = try reader.saveSettings(settings, key: key)
+    if let chat = reader.state.chats.first {
+        reader.state.memories = [
+            MemoryItem(text: MemoryItem.automaticPrefix + "旧的吞吐量比较记录", sourceID: chat.id)
+        ]
+        _ = await reader.save()
+    }
+    let agent = LibraryAgent(reader: reader, client: AgentClient())
+    let questions = [
+        "我在研究等计算预算下的方法比较，请记住这个研究方向。",
+        "更正一下：我现在只关注匹配训练时长，而不是只看预算。",
+        "忘掉之前关于吞吐量的旧记录。",
+    ]
+    for question in questions {
+        agent.send(question)
+        for _ in 0..<240 where agent.isRunning {
+            try await Task.sleep(for: .milliseconds(250))
+        }
+        print(
+            "LIVE_UNCONSTRAINED",
+            agent.turns.last?.activities.map { "\($0.toolName):\($0.status):\($0.message ?? "")" } ?? [],
+            "answer", agent.turns.last?.answer ?? "")
+    }
+    #expect(agent.turns.count == questions.count)
+    let activities = agent.turns.flatMap(\.activities)
+    #expect(
+        activities.contains { $0.toolName == "propose_memory" && $0.status == .succeeded })
+    #expect(
+        activities.contains { $0.toolName == "revise_memory" && $0.status == .succeeded })
+    #expect(
+        activities.contains { $0.toolName == "forget_memory" && $0.status == .succeeded })
+}

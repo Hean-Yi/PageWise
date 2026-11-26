@@ -182,7 +182,7 @@ extension ReaderModel {
                 - 原话、数字、否定、条件、引用和适用范围必须保留；冲突必须并列，不得静默选边；
                 - 只有新增阅读/笔记或关系证据确实支持时才更新；没有明确的小改动、需要大改、或不确定时返回 {"revisions":[]}。
                 不引用未提供的原文和外部链接；不写模型自己的建议口吻，直接写成读者笔记正文。
-                """, user: payload, jsonOutput: true, maxOutputTokens: 1_200)
+                """, user: payload, jsonOutput: true, maxOutputTokens: 800)
     }
 
     func applyNoteReview(_ report: NoteReviewReport) async throws -> Int {

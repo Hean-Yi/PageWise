@@ -444,6 +444,12 @@ public final class LibraryAgent {
             if !effective.sources.isEmpty { versions.sleepRevision = reader.memorySleep.edition.revision }
             for source in effective.sources { versions.include(source) }
             if !effective.text.isEmpty { personalContext += "\n个人研究背景（仅供参考）：\n" + effective.text }
+            let memoryIDs = effective.sources.prefix(5).map(\.id.uuidString)
+            if !memoryIDs.isEmpty {
+                personalContext +=
+                    "\n可用研究记忆 ID（可直接用于 revise_memory/forget_memory，无需先取概览；正文见上方背景）：\n"
+                    + memoryIDs.joined(separator: "\n")
+            }
         }
         var instructions = Self.instructions
         if !ReaderPreference.declaredClauses(in: ownQuestion).isEmpty {
