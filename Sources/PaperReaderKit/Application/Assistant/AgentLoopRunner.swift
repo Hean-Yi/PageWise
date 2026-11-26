@@ -84,6 +84,7 @@ public enum AgentLoopRunner {
             }
         }
         var current = [AgentMessage(role: "user", content: userQuestion)]
+        var roundBudgetNotes: [Int: String] = [:]
         var finalReason: String?
         var callIDs = Set(prior.flatMap { $0 }.flatMap { $0.toolCalls ?? [] }.map(\.id))
 
@@ -96,28 +97,36 @@ public enum AgentLoopRunner {
                 : "当前剩余 \(remainingRounds) 轮工具、\(remainingCalls) 次调用（含本轮）。"
             let system = AgentMessage(role: "system", content: baseInstructions)
             let toolNames = await availableTools()
-            let needsTrailingBudget = answerOnly || current.contains(where: { $0.role == "tool" })
-            let trailing = needsTrailingBudget ? AgentMessage(role: "user", content: "（系统状态）" + budget) : nil
+            if let lastAssistant = current.lastIndex(where: {
+                $0.role == "assistant" && $0.toolCalls?.isEmpty == false
+            }) {
+                // Stamp each completed tool round once so earlier assistant messages never mutate
+                // on later rounds; only an answer-only transition updates the latest carrier.
+                if answerOnly || roundBudgetNotes[lastAssistant] == nil {
+                    roundBudgetNotes[lastAssistant] = "（系统状态）" + budget
+                }
+            }
+            let budgetNoteBytes = roundBudgetNotes.values.reduce(0) { $0 + $1.utf8.count + 8 }
             // Only the tool definitions actually advertised are sent, so reserve their real size.
-            // The dynamic per-round budget travels in a trailing ephemeral message so neither the
-            // system prompt nor completed assistant/tool messages ever mutate across rounds.
             let fitted = try AgentContextCompactor.fit(
                 system: system, prior: prior, current: current, maxContextBytes: limits.maxContextBytes,
-                reservedBytes: answerOnly ? 0 : AgentClient.toolPayloadBytes(for: toolNames),
-                personalContext: personalContext, trailing: trailing)
+                reservedBytes: (answerOnly ? 0 : AgentClient.toolPayloadBytes(for: toolNames)) + budgetNoteBytes,
+                personalContext: personalContext)
             prior = fitted.prior
             current = fitted.current
+            roundBudgetNotes = roundBudgetNotes.filter { $0.key < current.count }
             if let reason = fitted.finalReason {
                 finalReason = reason
                 continue toolLoop
             }
-            var messages =
-                [system] + prior.flatMap { $0 }
-                + (fitted.includedPersonalContext
-                    ? AgentContextCompactor.applyingPersonalContext(personalContext, to: current) : current)
-            if let trailing {
-                messages.append(trailing)
+            var currentWithNotes =
+                fitted.includedPersonalContext
+                ? AgentContextCompactor.applyingPersonalContext(personalContext, to: current) : current
+            for (index, note) in roundBudgetNotes where currentWithNotes.indices.contains(index) {
+                let existing = currentWithNotes[index].content ?? ""
+                currentWithNotes[index].content = existing + (existing.isEmpty ? "" : "\n") + note
             }
+            let messages = [system] + prior.flatMap { $0 } + currentWithNotes
             if fitted.includedPersonalContext, !personalContext.isEmpty {
                 try await onPersonalContextIncluded()
             }
