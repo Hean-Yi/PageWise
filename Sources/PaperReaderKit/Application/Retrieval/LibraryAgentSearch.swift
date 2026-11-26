@@ -121,10 +121,13 @@ public actor LibraryAgentSearchIndex {
     private var passages: [SemanticPassage]?
     private var generation: UInt64 = 0
 
-    public init(root: URL? = nil, encoder: (any SemanticTextEncoder)? = nil) {
+    public init(
+        root: URL? = nil, encoder: (any SemanticTextEncoder)? = nil, minimumScore: Float? = nil
+    ) {
         self.root = root
         semantic = SemanticPassageIndex(
-            encoder: encoder, cacheURL: root?.appendingPathComponent("DerivedIndexes/papers.sqlite"))
+            encoder: encoder, cacheURL: root?.appendingPathComponent("DerivedIndexes/papers.sqlite"),
+            minimumScore: minimumScore)
     }
 
     private func corpus() -> [SemanticPassage] {

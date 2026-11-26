@@ -97,6 +97,24 @@
 - 量化模型仍需要托管 61 MB 资源并更新校验和，当前分支尚未接入下载服务，只完成离线量化与运行验证；
 - `per_tensor` 4-bit 明显优于线性 int4（后者 dev 纯语义 6/16、混合 10/14，且无关误召回 5/5）。
 
+## 正式 App 接入
+
+- 4-bit 模型已放入 `Sources/PaperReaderKit/Resources/Embeddings/e5-int4/`，随 App 资源打包；
+- `DeviceSemanticEncoder.shared` 优先使用包内模型，不再依赖用户下载；
+- 正式 App 的 `ReaderModel` 通过 `useSemanticModel: true` 启用；单元测试默认不加载，避免测试环境被模型初始化影响；
+- app 包中模型资源约 61 MB；本次本地 Mac 构建 App 总大小约 120 MB（未压缩），包含模型；
+- 阅读、笔记、记忆和论文搜索使用同一个 4-bit encoder，阈值统一为 0.15；
+- App 启动后后台预热笔记/记忆索引，不阻塞界面；首查仍先返回 A，warm 后切换语义；
+- 明确“忘掉/更正/记住”命令走本地路径，不进入模型工具回合；`remember` 也写入内部审计。
+
+## Memory 工具调用优化
+
+- 首轮上下文预置记忆 ID，修订/删除不需要先用 `research_overview`；
+- 静默记忆写入成功后直接结束回合，不再额外请求一次模型确认；
+- 明确的 forget/revise/remember 由本地解析执行，模型只在对象含糊或需要语义提取时介入；
+- 启动预 warm 笔记和记忆索引，减少用户第一次语义查询的等待；
+- 首查渐进式返回 A，4-bit 在后台完成后再参与后续查询。
+
 ## 复现
 
 本机实验使用 `.local/qvenv` 的 coremltools 8.3.0。源模型和 tokenizer 均来自已固定的 Hugging Face revision；量化脚本不进入 App 运行时，也不依赖 Python 服务。

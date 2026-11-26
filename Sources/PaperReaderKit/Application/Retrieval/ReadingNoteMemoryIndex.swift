@@ -35,6 +35,12 @@ public actor ReadingNoteMemoryIndex {
         await semantic.isWarm()
     }
 
+    /// Idle prewarm. A missing model or an empty corpus is a no-op.
+    public func warm(notes: [ReadingNote], paperTitles: [UUID: String]) async {
+        _ = try? await search(
+            query: "", notes: notes, paperTitles: paperTitles, limit: 0, mode: .hybrid)
+    }
+
     public func search(
         query: String, state: LibraryState, pending: Set<UUID>, excluding: UUID?, paperID: UUID?, limit: Int,
         includeArchived: Bool, mode: RetrievalMode = .hybrid

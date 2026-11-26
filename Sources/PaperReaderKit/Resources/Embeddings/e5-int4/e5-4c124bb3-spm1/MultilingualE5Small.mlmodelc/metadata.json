@@ -1,0 +1,95 @@
+[
+  {
+    "shortDescription" : "Multilingual E5 Small embedding model for semantic search",
+    "metadataOutputVersion" : "3.0",
+    "outputSchema" : [
+      {
+        "hasShapeFlexibility" : "0",
+        "isOptional" : "0",
+        "dataType" : "Float16",
+        "formattedType" : "MultiArray (Float16 1 × 384)",
+        "shortDescription" : "",
+        "shape" : "[1, 384]",
+        "name" : "embeddings",
+        "type" : "MultiArray"
+      }
+    ],
+    "version" : "1.0",
+    "modelParameters" : [
+
+    ],
+    "author" : "ReadMD",
+    "specificationVersion" : 9,
+    "storagePrecision" : "Mixed (Float16, Palettized (4 bits), UInt4)",
+    "mlProgramOperationTypeHistogram" : {
+      "Ios18.expandDims" : 3,
+      "Ios18.softmax" : 12,
+      "Ios18.mul" : 13,
+      "Ios18.matmul" : 24,
+      "Ios18.realDiv" : 2,
+      "Ios18.greaterEqual" : 1,
+      "Select" : 2,
+      "Tile" : 3,
+      "Ios18.gather" : 1,
+      "Ios18.add" : 39,
+      "Ios18.layerNorm" : 25,
+      "Ios16.reduceSum" : 2,
+      "Ios18.reshape" : 48,
+      "Ios18.constexprLutToDense" : 75,
+      "Ios18.maximum" : 1,
+      "Ios18.linear" : 72,
+      "Ios18.gelu" : 12,
+      "Ios18.clip" : 1,
+      "Ios18.sub" : 1,
+      "Ios18.cast" : 3,
+      "Ios18.transpose" : 48,
+      "Ios16.reduceL2Norm" : 1
+    },
+    "computePrecision" : "Mixed (Float16, Int32)",
+    "stateSchema" : [
+
+    ],
+    "isUpdatable" : "0",
+    "availability" : {
+      "macOS" : "15.0",
+      "tvOS" : "18.0",
+      "visionOS" : "2.0",
+      "watchOS" : "11.0",
+      "iOS" : "18.0",
+      "macCatalyst" : "18.0"
+    },
+    "modelType" : {
+      "name" : "MLModelType_mlProgram"
+    },
+    "inputSchema" : [
+      {
+        "hasShapeFlexibility" : "0",
+        "isOptional" : "0",
+        "dataType" : "Int32",
+        "formattedType" : "MultiArray (Int32 1 × 256)",
+        "shortDescription" : "",
+        "shape" : "[1, 256]",
+        "name" : "input_ids",
+        "type" : "MultiArray"
+      },
+      {
+        "hasShapeFlexibility" : "0",
+        "isOptional" : "0",
+        "dataType" : "Int32",
+        "formattedType" : "MultiArray (Int32 1 × 256)",
+        "shortDescription" : "",
+        "shape" : "[1, 256]",
+        "name" : "attention_mask",
+        "type" : "MultiArray"
+      }
+    ],
+    "userDefinedMetadata" : {
+      "com.github.apple.coremltools.conversion_date" : "2026-02-09",
+      "com.github.apple.coremltools.source" : "torch==2.8.0",
+      "com.github.apple.coremltools.version" : "9.0",
+      "com.github.apple.coremltools.source_dialect" : "TorchScript"
+    },
+    "generatedClassName" : "MultilingualE5Small_int4_palette_tensor",
+    "method" : "predict"
+  }
+]

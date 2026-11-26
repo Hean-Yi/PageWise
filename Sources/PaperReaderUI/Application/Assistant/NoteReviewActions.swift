@@ -39,12 +39,13 @@ final class NoteReviewSession {
         didSet { UserDefaults.standard.set(interval, forKey: defaultsKey + ".interval") }
     }
 
-    init(store: LibraryStore, root: URL) {
+    init(store: LibraryStore, root: URL, encoder: (any SemanticTextEncoder)? = nil, minimumScore: Float? = nil) {
         self.store = store
         semantic = SemanticPassageIndex(
-            encoder: nil,
+            encoder: encoder,
             cacheURL: root.appendingPathComponent("DerivedIndexes", isDirectory: true)
-                .appendingPathComponent("note-relations.sqlite"))
+                .appendingPathComponent("note-relations.sqlite"),
+            minimumScore: minimumScore)
         defaultsKey = "pagewise.noteReview." + root.standardizedFileURL.path
         enabled = UserDefaults.standard.object(forKey: defaultsKey + ".enabled") as? Bool ?? false
         interval = UserDefaults.standard.object(forKey: defaultsKey + ".interval") as? TimeInterval ?? 6 * 3600

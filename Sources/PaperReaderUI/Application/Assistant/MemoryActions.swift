@@ -105,3 +105,34 @@ extension ReaderModel {
         return nil
     }
 }
+
+extension ReaderModel {
+    /// Explicit "remember this" commands do not need a model round. Source validation and dedup
+    /// still run before the item is written; ambiguous or question-like wording falls back to the
+    /// normal tool path.
+    func respondToRememberCommand(_ question: String) -> String? {
+        guard !question.contains("?"), !question.contains("？") else { return nil }
+        let pattern =
+            #"(?i)^\s*(?:请|帮我|麻烦你?)?\s*(?:记住|记下|记录|remember|save)\s*(?:一下|这个|这条)?\s*[：:，,\s]*(.{6,240})\s*[。.!！]?\s*$"#
+        guard let regex = try? NSRegularExpression(pattern: pattern),
+            let match = regex.firstMatch(in: question, range: NSRange(question.startIndex..., in: question)),
+            let range = Range(match.range(at: 1), in: question)
+        else { return nil }
+        let statement = String(question[range]).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !statement.isEmpty, !ResearchQuestionProposal.isOperational(statement),
+            ResearchMemory.permitsAutomaticWrite(for: question)
+        else { return nil }
+        let item = MemoryItem(
+            agentStatement: statement, sourceID: UUID(), source: .reader(quote: statement))
+        guard
+            MemoryStatementProposal.isEligible(
+                item, in: state, excluding: pendingImportIDs)
+        else { return nil }
+        state.memories.append(item)
+        Task {
+            try? await store.recordMemoryAudit(memoryID: item.id, action: "remember", trigger: question)
+            await save()
+        }
+        return "已记住这条研究记忆。"
+    }
+}

@@ -9,7 +9,7 @@ struct PaperReaderApp: App {
     init() {
         do {
             let root = ProcessInfo.processInfo.environment["PAPERREADER_DATA_DIR"].map { URL(fileURLWithPath: $0) }
-            _model = State(initialValue: try ReaderModel(root: root))
+            _model = State(initialValue: try ReaderModel(root: root, useSemanticModel: true))
             startupError = nil
         } catch {
             _model = State(initialValue: nil)

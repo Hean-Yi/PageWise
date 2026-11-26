@@ -140,3 +140,23 @@ import Testing
     }
     #expect(try await reader.store.memoryAuditCount() == 1)
 }
+
+@Test func bundledQuantizedSemanticModelIsPackaged() async {
+    #expect(await DeviceSemanticEncoder.shared.isInstalled())
+}
+
+@Test @MainActor func explicitRememberCommandAvoidsAModelRound() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let reader = try ReaderModel(root: root)
+    await reader.load()
+    reader.state.memories = []
+    let response = reader.respondToRememberCommand("请记住我只关注匹配预算的比较。")
+    #expect(response != nil)
+    #expect(reader.state.memories.count == 1)
+    #expect(reader.state.memories.first?.text.contains("匹配预算") == true)
+    for _ in 0..<100 where (try? await reader.store.memoryAuditCount()) != 1 {
+        try await Task.sleep(for: .milliseconds(10))
+    }
+    #expect(try await reader.store.memoryAuditCount() == 1)
+}

@@ -2392,7 +2392,7 @@ private func libraryPayload(_ messages: [AgentMessage], _ call: String) throws -
         case 2:
             return tool(
                 "propose_memory",
-                #"{"statement":"关注匹配预算","quote":"请记住我长期关注匹配预算"}"#, id: "propose")
+                #"{"statement":"关注匹配预算","quote":"请把长期关注匹配预算保存为记忆"}"#, id: "propose")
         case 3: return tool("research_overview", "{}", id: "overview-2")
         case 4:
             return tool(
@@ -2405,17 +2405,17 @@ private func libraryPayload(_ messages: [AgentMessage], _ call: String) throws -
         }
     }
     let agent = LibraryAgent(reader: reader, client: client, discovery: AgentDiscoveryFixture())
-    agent.send("请记住我长期关注匹配预算。")
+    agent.send("请把长期关注匹配预算保存为记忆。")
     try await eventually { !agent.isRunning }
     #expect(agent.turns.last?.error == nil)
     #expect(reader.state.memories.contains { $0.text.contains("关注匹配预算") && !$0.deleted })
 
-    agent.send("把旧的预算记录更正为只比较匹配预算的实验。")
+    agent.send("请修正旧预算记录，改成只比较匹配预算的实验。")
     try await eventually { !agent.isRunning }
     #expect(agent.turns.last?.error == nil)
     #expect(reader.state.memories.first(where: { $0.id == existing.id })?.text == "只比较匹配预算的实验。")
 
-    agent.send("忘掉旧的 volcanology 记录。")
+    agent.send("请把 volcanology 的旧记录移除。")
     try await eventually { !agent.isRunning }
     #expect(agent.turns.last?.error == nil)
     #expect(reader.state.memories.first(where: { $0.id == forgottenID })?.deleted == true)
