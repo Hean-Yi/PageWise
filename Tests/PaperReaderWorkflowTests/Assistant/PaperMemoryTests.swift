@@ -233,3 +233,82 @@ private final class NoteReviewProbe {
     #expect(reader.state.memories.first?.text == "读者自己改的记录")
     #expect(try await LibraryStore(directory: root).load().memories.first?.text == "读者自己改的记录")
 }
+
+@Test func noteReviewCursorDoesNotSkipTheTailBeyondOnePage() {
+    let base = Date(timeIntervalSinceReferenceDate: 1_000)
+    let notes = (0..<10).map { offset in
+        var note = ReadingNote(
+            paperID: UUID(), contentVersion: "v", anchors: [], markdown: "Note \(offset).")
+        note.modifiedAt = base.addingTimeInterval(Double(offset))
+        note.createdAt = note.modifiedAt
+        return note
+    }
+    var cursor = NoteReviewCursor(date: base.addingTimeInterval(-1))
+    let pending = notes.filter { cursor.needsReview($0, at: NoteReviewCursor.stamp($0)) }
+    #expect(pending.count == 10)
+    let firstPage = Array(pending.prefix(8))
+    let targets = firstPage.map {
+        NoteReviewInput.Target(
+            noteID: $0.id, title: "Paper", modifiedAt: $0.modifiedAt, markdown: $0.markdown, relations: [])
+    }
+    cursor = NoteReviewCursor.advanced(
+        cursor, processed: targets, startedAt: base.addingTimeInterval(100), hasMore: true)
+    #expect(cursor.date == firstPage.last?.modifiedAt)
+    let remaining = notes.filter { cursor.needsReview($0, at: NoteReviewCursor.stamp($0)) }
+    #expect(remaining.map(\.id) == [notes[8].id, notes[9].id])
+}
+
+@Test func noteReviewCursorDisambiguatesEqualTimestamps() {
+    let base = Date(timeIntervalSinceReferenceDate: 2_000)
+    let notes = (0..<3).map { _ in
+        var note = ReadingNote(paperID: UUID(), contentVersion: "v", anchors: [], markdown: "Same instant.")
+        note.modifiedAt = base
+        note.createdAt = base
+        return note
+    }
+    var cursor = NoteReviewCursor(date: base.addingTimeInterval(-1))
+    let firstPage = Array(notes.prefix(2))
+    let targets = firstPage.map {
+        NoteReviewInput.Target(
+            noteID: $0.id, title: "Paper", modifiedAt: $0.modifiedAt, markdown: $0.markdown, relations: [])
+    }
+    cursor = NoteReviewCursor.advanced(
+        cursor, processed: targets, startedAt: base.addingTimeInterval(100), hasMore: true)
+    let remaining = notes.filter { cursor.needsReview($0, at: NoteReviewCursor.stamp($0)) }
+    #expect(remaining.map(\.id) == [notes[2].id])
+}
+
+@Test func noteReviewCursorMovesToRunStartAfterACompletePass() {
+    let base = Date(timeIntervalSinceReferenceDate: 3_000)
+    let startedAt = base.addingTimeInterval(50)
+    var note = ReadingNote(paperID: UUID(), contentVersion: "v", anchors: [], markdown: "Only note.")
+    note.modifiedAt = base
+    note.createdAt = base
+    let target = NoteReviewInput.Target(
+        noteID: note.id, title: "Paper", modifiedAt: note.modifiedAt, markdown: note.markdown, relations: [])
+    let cursor = NoteReviewCursor.advanced(
+        NoteReviewCursor(date: base.addingTimeInterval(-1)), processed: [target], startedAt: startedAt,
+        hasMore: false)
+    #expect(cursor.date == startedAt)
+    #expect(!cursor.needsReview(note, at: NoteReviewCursor.stamp(note)))
+    var editedLater = note
+    editedLater.modifiedAt = startedAt.addingTimeInterval(1)
+    #expect(cursor.needsReview(editedLater, at: NoteReviewCursor.stamp(editedLater)))
+}
+
+@Test @MainActor func noteRevisionUsesARealDiffInsteadOfMatchingPrefixes() {
+    let original = "方法 A 在验证集上取得了更好的结果，并且训练预算保持一致。"
+    let localEdit = "方法 B 在验证集上取得了更好的结果，并且训练预算保持一致。仅在验证集。"
+    #expect(ReaderModel.isSmallNoteRevision(from: original, to: localEdit))
+}
+
+@Test @MainActor func noteRelationsDoNotTreatDifferentNumbersAsConflicts() {
+    #expect(
+        NoteReviewSession.relationKind(
+            "Table 2 reports 32.1% accuracy for the baseline.",
+            "Table 3 reports 41.7% accuracy for the same baseline.") == .similar)
+    #expect(
+        NoteReviewSession.relationKind(
+            "The method improves accuracy on the held-out split.",
+            "The method does not improve accuracy on the held-out split.") == .conflict)
+}

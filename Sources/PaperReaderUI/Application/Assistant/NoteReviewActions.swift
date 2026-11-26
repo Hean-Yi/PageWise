@@ -2,6 +2,32 @@ import Foundation
 import Observation
 import PaperReaderKit
 
+/// A monotonic review watermark. A limited pass records the timestamp of the last processed note
+/// plus the IDs sharing that timestamp, so the unprocessed tail is never skipped when more than
+/// one page of notes changed.
+struct NoteReviewCursor: Codable, Equatable, Sendable {
+    var date: Date
+    var processedIDs: Set<UUID> = []
+
+    static func stamp(_ note: ReadingNote) -> Date { max(note.modifiedAt, note.createdAt) }
+
+    func needsReview(_ note: ReadingNote, at stamp: Date) -> Bool {
+        if stamp > date.addingTimeInterval(0.001) { return true }
+        return abs(stamp.timeIntervalSince(date)) <= 0.001 && !processedIDs.contains(note.id)
+    }
+
+    static func advanced(
+        _ cursor: NoteReviewCursor, processed: [NoteReviewInput.Target], startedAt: Date, hasMore: Bool
+    ) -> NoteReviewCursor {
+        guard hasMore,
+            let boundary = processed.map(\.modifiedAt).max()
+        else { return NoteReviewCursor(date: startedAt) }
+        let ids = Set(
+            processed.filter { abs($0.modifiedAt.timeIntervalSince(boundary)) <= 0.001 }.map(\.noteID))
+        return NoteReviewCursor(date: max(cursor.date, boundary), processedIDs: ids)
+    }
+}
+
 struct NoteReviewInput: Encodable {
     struct Relation: Encodable {
         let noteID: UUID
@@ -21,6 +47,11 @@ struct NoteReviewInput: Encodable {
     let targets: [Target]
 }
 
+struct NoteReviewPage {
+    let targets: [NoteReviewInput.Target]
+    let hasMore: Bool
+}
+
 @MainActor @Observable
 final class NoteReviewSession {
     private(set) var running = false
@@ -30,7 +61,9 @@ final class NoteReviewSession {
     private let defaultsKey: String
     private var job: Task<Void, Never>?
     private var nextCheck = Date.distantPast
+    private var cursor: NoteReviewCursor
     private var foregroundWork = 0
+    private static let pageSize = 8
     /// Test seam: production uses the configured model service.
     @ObservationIgnored var reviewOverride: (@MainActor (ReaderModel, NoteReviewInput) async throws -> String)?
     /// Test seam: hosts or CI may themselves be in Low Power Mode.
@@ -62,6 +95,15 @@ final class NoteReviewSession {
         defaultsKey = "pagewise.noteReview." + root.standardizedFileURL.path
         enabled = UserDefaults.standard.object(forKey: defaultsKey + ".enabled") as? Bool ?? false
         interval = UserDefaults.standard.object(forKey: defaultsKey + ".interval") as? TimeInterval ?? 6 * 3600
+        if let data = UserDefaults.standard.data(forKey: defaultsKey + ".cursor"),
+            let saved = try? JSONDecoder().decode(NoteReviewCursor.self, from: data)
+        {
+            cursor = saved
+        } else {
+            // Migrate the pre-cursor watermark. A legacy value of zero reviews the whole backlog once.
+            let legacy = UserDefaults.standard.object(forKey: defaultsKey + ".lastRun") as? TimeInterval ?? 0
+            cursor = NoteReviewCursor(date: Date(timeIntervalSinceReferenceDate: legacy))
+        }
     }
 
     func beginForegroundWork() {
@@ -90,8 +132,7 @@ final class NoteReviewSession {
             else { return }
         }
         guard withModel else { return }
-        let lastRun = UserDefaults.standard.object(forKey: defaultsKey + ".lastRun") as? TimeInterval ?? 0
-        let since = Date(timeIntervalSinceReferenceDate: lastRun)
+        let startedAt = Date()
         running = true
         message = nil
         job = Task(priority: .utility) { [weak self, weak reader] in
@@ -101,12 +142,12 @@ final class NoteReviewSession {
                 job = nil
             }
             do {
-                let targets = try await self.reviewTargets(reader: reader, since: since)
-                guard !targets.isEmpty else {
+                let page = try await self.reviewTargets(reader: reader, cursor: self.cursor)
+                guard !page.targets.isEmpty else {
                     self.nextCheck = Date().addingTimeInterval(self.interval)
                     return
                 }
-                let input = NoteReviewInput(targets: targets)
+                let input = NoteReviewInput(targets: page.targets)
                 let encoder = JSONEncoder()
                 encoder.dateEncodingStrategy = .iso8601
                 let response =
@@ -118,8 +159,8 @@ final class NoteReviewSession {
                 let decoder = JSONDecoder()
                 decoder.dateDecodingStrategy = .iso8601
                 let report = try decoder.decode(NoteReviewReport.self, from: Data(response.utf8))
-                let changed = try await reader.applyNoteReview(report, contexts: targets)
-                UserDefaults.standard.set(Date().timeIntervalSinceReferenceDate, forKey: defaultsKey + ".lastRun")
+                let changed = try await reader.applyNoteReview(report, contexts: page.targets)
+                self.advanceCursor(page: page, startedAt: startedAt)
                 if changed > 0 {
                     message = "已静默更新 \(changed) 条笔记正文"
                 }
@@ -131,17 +172,45 @@ final class NoteReviewSession {
         }
     }
 
-    private func reviewTargets(reader: ReaderModel, since: Date) async throws -> [NoteReviewInput.Target] {
+    private func advanceCursor(page: NoteReviewPage, startedAt: Date) {
+        cursor = NoteReviewCursor.advanced(
+            cursor, processed: page.targets, startedAt: startedAt, hasMore: page.hasMore)
+        if let data = try? JSONEncoder().encode(cursor) {
+            UserDefaults.standard.set(data, forKey: defaultsKey + ".cursor")
+        }
+    }
+
+    private func reviewTargets(reader: ReaderModel, cursor: NoteReviewCursor) async throws -> NoteReviewPage {
         let notes = reader.state.readingNotes.filter { $0.deletedAt == nil }
-        let changed = notes.filter { $0.modifiedAt > since || $0.createdAt > since }
+        let stamps = Dictionary(uniqueKeysWithValues: notes.map { ($0.id, NoteReviewCursor.stamp($0)) })
+        let pending = notes.filter { note in
+            guard let stamp = stamps[note.id] else { return false }
+            return cursor.needsReview(note, at: stamp)
+        }.sorted {
+            let left = stamps[$0.id] ?? $0.modifiedAt
+            let right = stamps[$1.id] ?? $1.modifiedAt
+            if left != right { return left < right }
+            return $0.id.uuidString < $1.id.uuidString
+        }
+        // Recently active papers can refresh context, but only after every genuine pending note
+        // had a chance to run. Otherwise a large recent set could starve the cursor forever.
         let recentPaperIDs = Set(
-            reader.state.papers.filter { $0.addedAt > since }.map(\.id)
-                + reader.state.reading.filter { $0.end > since }.map(\.paperID))
-        let selected = (changed + notes.filter { recentPaperIDs.contains($0.paperID) })
-            .reduce(into: [ReadingNote]()) { result, note in
-                if !result.contains(where: { $0.id == note.id }) { result.append(note) }
+            reader.state.papers.filter { $0.addedAt > cursor.date }.map(\.id)
+                + reader.state.reading.filter { $0.end > cursor.date }.map(\.paperID))
+        var selected = Array(pending.prefix(Self.pageSize))
+        if selected.count < Self.pageSize {
+            let existing = Set(selected.map(\.id))
+            let pendingIDs = Set(pending.map(\.id))
+            let extras = notes.filter {
+                recentPaperIDs.contains($0.paperID) && !existing.contains($0.id)
+                    && !pendingIDs.contains($0.id)
+            }.sorted {
+                let left = stamps[$0.id] ?? $0.modifiedAt
+                let right = stamps[$1.id] ?? $1.modifiedAt
+                return left > right
             }
-            .prefix(8)
+            selected += extras.prefix(Self.pageSize - selected.count)
+        }
         let titles = Dictionary(
             reader.state.papers.map { ($0.id, $0.title) }, uniquingKeysWith: { first, _ in first })
         let byID = Dictionary(notes.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
@@ -189,7 +258,7 @@ final class NoteReviewSession {
                     markdown: String(note.markdown.prefix(900)),
                     relations: Array(inputRelations)))
         }
-        return Array(targets)
+        return NoteReviewPage(targets: targets, hasMore: pending.count > Self.pageSize)
     }
 
     private func computeRelations(
@@ -224,15 +293,14 @@ final class NoteReviewSession {
             .map { $0 }
     }
 
-    private static func relationKind(_ lhs: String, _ rhs: String) -> NoteRelation.Kind {
-        let numbers = { (text: String) -> Set<String> in
-            Set(text.matches(of: /\d+(?:\.\d+)?/).map { String($0.output) })
-        }
+    static func relationKind(_ lhs: String, _ rhs: String) -> NoteRelation.Kind {
+        // Numbers alone do not establish a conflict: different tables, seeds, years and
+        // hyperparameters legitimately use different values. The model receives the excerpts
+        // and decides whether two notes disagree; the local cache only records a coarse hint.
         let negated = { (text: String) -> Bool in
             text.range(of: #"(?i)\b(?:not|no|never|without)\b|不|没有|未|并非|无法"#, options: .regularExpression) != nil
         }
         if negated(lhs) != negated(rhs) { return .conflict }
-        if !numbers(lhs).isEmpty, !numbers(rhs).isEmpty, numbers(lhs) != numbers(rhs) { return .conflict }
         return .similar
     }
 
@@ -366,8 +434,8 @@ extension ReaderModel {
     }
 
     /// A silent pass may add or correct a clause, but it must not rewrite the reader's note.
-    /// Append-only edits are allowed; otherwise require substantial shared prefix/suffix and a
-    /// bounded length change.
+    /// Append-only edits are allowed; otherwise compare a real Myers diff so a typo at the
+    /// start and a clarification at the end do not cancel each other out.
     static func isSmallNoteRevision(from old: String, to new: String) -> Bool {
         guard old != new, !new.isEmpty else { return false }
         let oldCount = old.count
@@ -377,20 +445,9 @@ extension ReaderModel {
         guard newCount >= max(1, oldCount * 7 / 10), newCount <= max(oldCount, 1) * 14 / 10 else {
             return false
         }
-        let oldChars = Array(old)
-        let newChars = Array(new)
-        var prefix = 0
-        while prefix < oldChars.count, prefix < newChars.count, oldChars[prefix] == newChars[prefix] {
-            prefix += 1
-        }
-        var suffix = 0
-        while suffix < oldChars.count - prefix, suffix < newChars.count - prefix,
-            oldChars[oldChars.count - 1 - suffix] == newChars[newChars.count - 1 - suffix]
-        {
-            suffix += 1
-        }
-        let shared = prefix + suffix
-        let changedFraction = 1 - Double(shared) / Double(max(oldCount, newCount))
-        return changedFraction <= 0.30
+        let difference = new.difference(from: old)
+        let changed = difference.count
+        guard changed > 0 else { return false }
+        return Double(changed) / Double(max(oldCount, newCount)) <= 0.30
     }
 }
