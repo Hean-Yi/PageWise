@@ -236,7 +236,9 @@ extension ReaderModel {
                 - 新正文与原文的字符改动通常不超过 25%，长度保持在原文的 70%–140%；
                 - 可以补一句限定条件、更正一个数字/否定、指出相似或冲突，但不得大段扩写、重排、换标题或改写成更“漂亮”的文章；
                 - 原话、数字、否定、条件、引用和适用范围必须保留；冲突必须并列，不得静默选边；
-                - 只有新增阅读/笔记或关系证据确实支持时才更新；没有明确的小改动、需要大改、或不确定时返回 {"revisions":[]}。
+                - 只有新增阅读/笔记或关系证据确实支持时才更新；没有明确的小改动、需要大改、或不确定时返回 {"revisions":[]}；
+                - 若 target 与 relation 的条件相同但数字/否定不同，且 relation.modified_at 晚于 target.modified_at，优先在较旧的笔记末尾追加一句简短的“新近复现/冲突：…（保留旧值）”或补上样本量/条件，不要删除旧数字，也不要把两个数字合并成新的确定结论；
+                - 如果 target 本身已经是较新、更具体的一方，则不要为了“对称”强行改写它。
                 不引用未提供的原文和外部链接；不写模型自己的建议口吻，直接写成读者笔记正文。
                 """, user: payload, jsonOutput: true, maxOutputTokens: 800)
     }
@@ -249,10 +251,16 @@ extension ReaderModel {
             guard let index = state.readingNotes.firstIndex(where: { $0.id == revision.noteID }),
                 state.readingNotes[index].deletedAt == nil,
                 revision.markdown.count <= 20_000,
-                !revision.markdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-                revision.modifiedAt == nil
-                    || abs(revision.modifiedAt!.timeIntervalSince(state.readingNotes[index].modifiedAt)) < 0.001
+                !revision.markdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             else { continue }
+            // The model often echoes a related note's date. The runtime context, not the model's
+            // date, is authoritative for detecting edits while the request was in flight.
+            let expectedDate = contexts.first(where: { $0.noteID == revision.noteID })?.modifiedAt
+            if let expectedDate,
+                abs(expectedDate.timeIntervalSince(state.readingNotes[index].modifiedAt)) >= 0.001
+            {
+                continue
+            }
             var sources = ChatSourceVersions()
             var sourceStillValid = true
             if let context = contexts.first(where: { $0.noteID == revision.noteID }) {
