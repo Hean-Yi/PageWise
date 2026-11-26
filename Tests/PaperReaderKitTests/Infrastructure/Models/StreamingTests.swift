@@ -130,3 +130,44 @@ private actor ReasoningCapture {
     #expect(message.reasoningContent == "内部推理")
     #expect(message.content == "正文")
 }
+
+@Test func streamRecognizesThoughtTagVariantsWithoutLeakingThemIntoTheAnswer() async throws {
+    let capture = ReasoningCapture()
+    let decoder = ChatCompletionStreamDecoder(
+        onPartial: { await capture.partial($0) },
+        onReasoning: { await capture.thought($0) })
+    let deltas = ["<thou", "ght>先检查", "表格单位</thou", "ght>正文"]
+    for delta in deltas {
+        let event = String(
+            decoding: try JSONSerialization.data(withJSONObject: [
+                "choices": [["delta": ["content": delta]]]
+            ]), as: UTF8.self)
+        try await decoder.consume(Data(("data: " + event + "\n\n").utf8))
+    }
+    let stop = #"{"choices":[{"delta":{},"finish_reason":"stop"}]}"#
+    try await decoder.consume(Data(("data: " + stop + "\n\ndata: [DONE]\n\n").utf8))
+    let (message, _) = try await decoder.finishMessage()
+    #expect(message.content == "正文")
+    #expect(message.reasoningContent == "先检查表格单位")
+}
+
+@Test func streamCoalescesLongCumulativeSnapshotsButKeepsTheFirstToken() async throws {
+    let capture = StreamCapture()
+    let decoder = ChatCompletionStreamDecoder(emissionStride: 128) { await capture.partial($0) }
+    let chunks = (0..<20).map { _ in String(repeating: "字", count: 32) }
+    for chunk in chunks {
+        let event = String(
+            decoding: try JSONSerialization.data(withJSONObject: [
+                "choices": [["delta": ["content": chunk]]]
+            ]), as: UTF8.self)
+        try await decoder.consume(Data(("data: " + event + "\n\n").utf8))
+    }
+    let stop = #"{"choices":[{"delta":{},"finish_reason":"stop"}]}"#
+    try await decoder.consume(Data(("data: " + stop + "\n\ndata: [DONE]\n\n").utf8))
+    _ = try await decoder.finish()
+    let snapshots = await capture.text
+    #expect(snapshots.first == chunks[0])
+    #expect(snapshots.last == chunks.joined())
+    #expect(snapshots.count < chunks.count)
+    #expect(snapshots.dropFirst().allSatisfy { $0.hasPrefix(chunks[0]) })
+}

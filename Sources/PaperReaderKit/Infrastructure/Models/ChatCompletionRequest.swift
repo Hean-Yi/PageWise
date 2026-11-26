@@ -33,8 +33,16 @@ enum ChatCompletionRequest {
             : AgentClient.Tool.definitions.filter { tool in
                 availableToolNames?.contains(tool.function.name) ?? true
             }
+        // A completed assistant answer has no tool round to continue. Its private reasoning is
+        // not part of the conversation and some OpenAI-compatible gateways reject the field.
+        let requestMessages = messages.map { message -> AgentMessage in
+            guard message.role == "assistant", message.toolCalls?.isEmpty != false else { return message }
+            var clean = message
+            clean.reasoningContent = nil
+            return clean
+        }
         let body = Body(
-            model: settings.model, messages: messages, stream: stream,
+            model: settings.model, messages: requestMessages, stream: stream,
             temperature: fixedSampling ? nil : settings.temperature,
             maxTokens: usesCompletionLimit ? nil : maxOutputTokens,
             maxCompletionTokens: usesCompletionLimit ? maxOutputTokens : nil,

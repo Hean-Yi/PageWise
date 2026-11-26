@@ -63,3 +63,102 @@ private func searchTurn(_ payload: String) -> [AgentMessage] {
     #expect(fitted.finalReason?.contains("未纳入本次总结") == true)
     #expect(fitted.current == userOnly)
 }
+
+@Test func compactorReclaimsHistoryBeforeDroppingPersonalContext() throws {
+    let system = AgentMessage(role: "system", content: "rules")
+    let prior = (0..<3).map { index in
+        [
+            AgentMessage(role: "user", content: "turn \(index)"),
+            AgentMessage(role: "assistant", content: String(repeating: "history \(index) ", count: 80)),
+        ]
+    }
+    var current = [AgentMessage(role: "user", content: "current question")]
+    let personal = "读者偏好：先用结论，再给证据。"
+    let trailing = AgentMessage(role: "user", content: "（系统状态）剩余 2 轮")
+    func encoded(prior: [[AgentMessage]], includePersonal: Bool) throws -> Int {
+        var messages = [system] + prior.flatMap { $0 }
+        messages +=
+            includePersonal
+            ? AgentContextCompactor.applyingPersonalContext(personal, to: current) : current
+        messages.append(trailing)
+        return try JSONEncoder().encode(messages).count
+    }
+    let compactedSize = try encoded(prior: Array(prior.suffix(1)), includePersonal: true)
+    let fitted = try AgentContextCompactor.fit(
+        system: system, prior: prior, current: current,
+        maxContextBytes: compactedSize + 20, personalContext: personal, trailing: trailing)
+    #expect(fitted.includedPersonalContext)
+    #expect(fitted.prior.count < prior.count)
+    #expect(fitted.current == current)
+    #expect(!fitted.current.contains { $0.content?.contains("读者偏好") == true })
+    var messages = [system] + fitted.prior.flatMap { $0 } + fitted.current
+    messages = AgentContextCompactor.applyingPersonalContext(personal, to: messages)
+    #expect(messages[messages.count - 1].content?.contains("读者偏好") == true)
+}
+
+@Test func compactorPreservesResearchOverviewAnchorsInsteadOfAnEmptyShell() throws {
+    let system = AgentMessage(role: "system", content: "rules")
+    let topics = (0..<6).map { index in
+        [
+            "shelf": "Topic \(index)", "papers": index + 1, "papers_with_notes": index,
+            "papers_with_discussions": 0, "papers_read": index,
+            "sources": (0..<4).map {
+                [
+                    "paper_id": UUID().uuidString, "title": "Paper \($0)",
+                    "excerpt": String(repeating: "excerpt", count: 20),
+                ]
+            },
+        ] as [String: Any]
+    }
+    let memories = (0..<6).map { index in
+        [
+            "memory_id": UUID().uuidString, "status": "user_edited", "origin": "paper_reading",
+            "text": String(repeating: "memory \(index) ", count: 20),
+        ]
+    }
+    let overview: [String: Any] = [
+        "paperCount": 12, "unfiledCount": 2, "shelfCount": 3,
+        "topics": [["shelf": "Topic 1", "papers": 4]],
+    ]
+    let payload = String(
+        decoding: try JSONSerialization.data(withJSONObject: [
+            "ok": true, "overview": overview, "topics": topics, "memories": memories,
+            "connections": [["kind": "related", "summary": "关联", "members": [UUID().uuidString]]],
+            "sources": [["paper_id": UUID().uuidString, "title": "Paper", "excerpt": "evidence"]],
+        ]), as: UTF8.self)
+    let turn = [
+        AgentMessage(role: "user", content: "overview"),
+        AgentMessage(
+            role: "assistant", toolCalls: [AgentToolCall(id: "c1", name: "research_overview", arguments: "{}")]),
+        AgentMessage(role: "tool", content: payload, toolCallID: "c1"),
+    ]
+    let current = [AgentMessage(role: "user", content: "continue")]
+    let full = try JSONEncoder().encode([system] + turn + current).count
+    let fitted = try AgentContextCompactor.fit(
+        system: system, prior: [turn], current: current, maxContextBytes: full - 1_000)
+    #expect(fitted.compacted)
+    let slim = try #require(fitted.prior.first?.last?.content)
+    #expect(slim.contains("total_topics"))
+    #expect(slim.contains("total_memories"))
+    #expect(slim.contains("Topic 0"))
+    #expect(slim.utf8.count < payload.utf8.count)
+}
+
+@Test func compactorTrimsHistoricalReasoningWithoutBreakingToolPairing() throws {
+    let system = AgentMessage(role: "system", content: "rules")
+    let call = AgentToolCall(id: "call_r", name: "search_library", arguments: "{}")
+    let reasoning = String(repeating: "推理过程 ", count: 300)
+    let turn = [
+        AgentMessage(role: "user", content: "find"),
+        AgentMessage(role: "assistant", toolCalls: [call], reasoningContent: reasoning),
+        AgentMessage(role: "tool", content: #"{"ok":true,"results":[]}"#, toolCallID: call.id),
+    ]
+    let followup = [AgentMessage(role: "user", content: "next")]
+    let full = try JSONEncoder().encode([system] + turn + followup).count
+    let fitted = try AgentContextCompactor.fit(
+        system: system, prior: [turn], current: followup, maxContextBytes: full - 1_500)
+    let assistant = try #require(fitted.prior.first?.dropFirst().first)
+    #expect(assistant.toolCalls?.first?.id == "call_r")
+    #expect(assistant.reasoningContent?.contains("已压缩") == true)
+    #expect((assistant.reasoningContent?.count ?? .max) < reasoning.count)
+}

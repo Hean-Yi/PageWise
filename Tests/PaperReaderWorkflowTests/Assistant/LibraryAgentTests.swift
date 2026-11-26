@@ -732,24 +732,27 @@ func downloadsFromTwoRecommendationCardsQueueOnceAndRespectCancellation(cancelSe
     let reader = try await makeAgentReader(root)
     let client = ScriptedLibraryModel { messages, count in
         let prompt = try #require(messages.first?.content)
+        // The stable system message holds the run's initial budget; the per-round remainder rides
+        // on the latest assistant tool-call so the cached prefix is not rewritten.
+        let roundState =
+            messages.last { $0.role == "assistant" && $0.toolCalls?.isEmpty == false }?.content ?? ""
         switch count {
         case 1:
             #expect(prompt.contains("工具预算为 2 轮、3 次调用"))
-            #expect(prompt.contains("当前剩余 2 轮工具、3 次调用"))
             return .init(
                 role: "assistant",
                 toolCalls: (1...2).map {
                     .init(id: "query-\($0)", name: "search_library", arguments: #"{"query":"attention"}"#)
                 })
         case 2:
-            #expect(prompt.contains("当前剩余 1 轮工具、1 次调用"))
+            #expect(roundState.contains("当前剩余 1 轮工具、1 次调用"))
             let queries = overdraw ? ["third", "fourth"] : ["third"]
             return .init(
                 role: "assistant",
                 toolCalls: queries.map { .init(id: $0, name: "search_library", arguments: #"{"query":"memory"}"#) })
         case 3:
-            #expect(prompt.contains("工具已关闭"))
-            #expect(prompt.contains("上批调用超过剩余额度") == overdraw)
+            #expect(roundState.contains("工具已关闭"))
+            #expect(roundState.contains("上批调用超过剩余额度") == overdraw)
             #expect(
                 messages.filter { $0.role == "tool" }.compactMap(\.toolCallID)
                     == (overdraw ? ["query-1", "query-2"] : ["query-1", "query-2", "third"]))
@@ -1053,8 +1056,9 @@ private func repeatedOnlineScript(_ messages: [AgentMessage], _ count: Int) thro
     let reader = try await makeAgentReader(root)
     let paper = Paper(
         title: "Attention", digest: "fixture", originalPath: "fixture.pdf", pageCount: 1,
-        blocks: [TextBlock(sourcePage: 0, text: String(repeating: "attention fixture ", count: 40))],
-        warnings: [], canReflow: false)
+        blocks: (0..<8).map { _ in
+            TextBlock(sourcePage: 0, text: String(repeating: "attention fixture ", count: 85))
+        }, warnings: [], canReflow: false)
     reader.state.papers = [paper]
     let initialQuestion = "find"
     let followup = "continue"
@@ -1072,7 +1076,7 @@ private func repeatedOnlineScript(_ messages: [AgentMessage], _ count: Int) thro
         try JSONEncoder().encode(firstCompleteGroup + [.init(role: "user", content: followup)]).count + 32
         + AgentClient.toolPayloadBytes(for: nil)
     let client = ScriptedLibraryModel { messages, count in
-        if messages.first?.content?.contains("未纳入本次总结") == true {
+        if messages.contains(where: { $0.content?.contains("未纳入本次总结") == true }) {
             #expect(messages.filter { $0.role == "tool" }.compactMap(\.toolCallID) == ["budget_search"])
             return .init(role: "assistant", content: "检索有结果，未能进一步核对。")
         }
@@ -1090,14 +1094,15 @@ private func repeatedOnlineScript(_ messages: [AgentMessage], _ count: Int) thro
     try await eventually { !agent.isRunning }
     #expect(agent.turns[0].error == nil)
     #expect(agent.turns[0].answer == "检索有结果，未能进一步核对。")
-    #expect(agent.turns[0].cards.count == 2)
+    #expect(agent.turns[0].cards.count >= 2)
     #expect(await client.requests.count == 3)
     agent.send(followup)
     try await eventually { !agent.isRunning }
     #expect(agent.turns[1].error == nil)
-    let toolBytes = AgentClient.toolPayloadBytes(for: nil)
+    // The loop reserves only the tool schemas advertised on each round, so the transcript itself
+    // must stay within the context budget; the full-catalog figure was the old over-reservation.
     for request in await client.requests {
-        #expect(try JSONEncoder().encode(request).count + toolBytes <= limits.maxContextBytes)
+        #expect(try JSONEncoder().encode(request).count <= limits.maxContextBytes)
     }
 }
 

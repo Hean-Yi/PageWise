@@ -480,3 +480,108 @@ private actor TransientFailureTransport: HTTPTransport {
             .init(id: "a", name: "search_library", arguments: "{}")
         ]))
 }
+
+private actor ScriptedAgentLoopClient: AgentCompleting {
+    private var responses: [AgentMessage]
+    private(set) var requests: [[AgentMessage]] = []
+    init(_ responses: [AgentMessage]) { self.responses = responses }
+
+    func respond(settings: ModelSettings, key: String, messages: [AgentMessage], limits: AgentLimits) async throws
+        -> AgentMessage
+    {
+        requests.append(messages)
+        return responses.removeFirst()
+    }
+
+    func respondStreaming(
+        settings: ModelSettings, key: String, messages: [AgentMessage], limits: AgentLimits,
+        onPartial: @escaping @Sendable (String) async throws -> Void
+    ) async throws -> AgentMessage {
+        try await respond(settings: settings, key: key, messages: messages, limits: limits)
+    }
+
+    func respondStreaming(
+        settings: ModelSettings, key: String, messages: [AgentMessage], limits: AgentLimits,
+        onPartial: @escaping @Sendable (String) async throws -> Void,
+        onReasoning: (@Sendable (String) async throws -> Void)?
+    ) async throws -> AgentMessage {
+        try await respond(settings: settings, key: key, messages: messages, limits: limits)
+    }
+}
+
+@Test @MainActor func agentLoopKeepsAStableSystemPrefixAndBudgetAtTheTail() async throws {
+    let call = AgentToolCall(id: "call_1", name: "search_library", arguments: "{}")
+    let client = ScriptedAgentLoopClient([
+        AgentMessage(role: "assistant", content: "working", toolCalls: [call]),
+        AgentMessage(role: "assistant", content: "done"),
+    ])
+    var limits = AgentLimits()
+    limits.maxRounds = 2
+    limits.maxToolCalls = 2
+    limits.maxHistoryTurns = 4
+    var personalIncluded = false
+    var checkpoints: [[AgentMessage]] = []
+    var finalText = ""
+    try await AgentLoopRunner.run(
+        client: client, settings: agentSettings(), key: "fixture", limits: limits,
+        instructions: "STABLE RULES", userQuestion: "current question",
+        personalContext: "PERSONAL CONTEXT",
+        priorHistory: [
+            [
+                AgentMessage(role: "user", content: "old question"),
+                AgentMessage(role: "assistant", content: "old answer", reasoningContent: "old private thought"),
+            ]
+        ],
+        availableTools: { ["search_library"] },
+        beforeRequest: {},
+        onPersonalContextIncluded: { personalIncluded = true },
+        onPartialText: { _ in },
+        onPartialReasoning: nil,
+        onAssistantResponse: { _, _ in },
+        executeBatch: { _, _ in
+            .init(toolMessages: [AgentMessage(role: "tool", content: #"{"ok":true}"#, toolCallID: call.id)])
+        },
+        onCheckpoint: { current, _, _ in checkpoints.append(current) },
+        onFinalAnswer: { response, _, _, _ in finalText = response.content ?? "" }
+    )
+    #expect(finalText == "done")
+    #expect(personalIncluded)
+    let requests = await client.requests
+    #expect(requests.count == 2)
+    let systems = requests.compactMap { request in request.first(where: { $0.role == "system" })?.content }
+    #expect(Set(systems).count == 1)
+    #expect(systems.allSatisfy { $0.hasPrefix("STABLE RULES") && $0.contains("工具预算为 2 轮") })
+    #expect(!systems.contains { $0.contains("当前剩余") })
+    // Personal context travels with the current question, and prior reasoning is not replayed.
+    #expect(requests[0].last?.role == "user")
+    #expect(requests[0].last?.content?.contains("PERSONAL CONTEXT") == true)
+    #expect(!requests[0].contains { $0.content == "old private thought" })
+    #expect(!requests[0].contains { $0.reasoningContent == "old private thought" })
+    // Only the dynamic remaining budget rides on the latest assistant tool-call, keeping the
+    // stable system prompt and the natural tail message untouched.
+    let carrier = requests[1].last { $0.role == "assistant" && $0.toolCalls?.isEmpty == false }
+    #expect(carrier?.content?.contains("当前剩余 1 轮") == true)
+    #expect(requests[1].last?.role == "tool")
+    // The ephemeral budget note is never persisted into the transcript.
+    #expect(checkpoints.count == 1)
+    #expect(!checkpoints[0].contains { $0.content?.contains("系统状态") == true })
+    #expect(!checkpoints[0].contains { $0.content?.contains("PERSONAL CONTEXT") == true })
+}
+
+@Test func completedAssistantReasoningIsNotReplayedInLaterTurns() async throws {
+    let transport = AgentWireTransport([
+        #"{"choices":[{"message":{"role":"assistant","content":"done"},"finish_reason":"stop"}]}"#
+    ])
+    let messages: [AgentMessage] = [
+        .init(role: "user", content: "first"),
+        .init(role: "assistant", content: "answer", reasoningContent: "private chain"),
+        .init(role: "user", content: "second"),
+    ]
+    _ = try await AgentClient(transport: transport).respond(
+        settings: agentSettings(), key: "fixture", messages: messages, limits: .init())
+    let body = try #require(await transport.requests.first?.httpBody)
+    let wire = try #require(JSONSerialization.jsonObject(with: body) as? [String: Any])
+    let wireMessages = try #require(wire["messages"] as? [[String: Any]])
+    #expect(wireMessages[1]["reasoning_content"] == nil)
+    #expect(wireMessages[1]["content"] as? String == "answer")
+}

@@ -949,13 +949,19 @@ public final class LibraryAgent {
         }
         // Use this turn's original prior, replacing its checkpoint instead of appending it again.
         var retained = Array((prior + [current]).suffix(maxTurns))
+        // Keep the retained transcript safe even if the next turn advertises the whole catalog.
+        let reserve = AgentClient.toolPayloadBytes(for: nil)
         while retained.count > 1,
-            try JSONEncoder().encode([system] + retained.flatMap { $0 }).count > limits.maxContextBytes
+            try JSONEncoder().encode([system] + retained.flatMap { $0 }).count + reserve
+                > limits.maxContextBytes
         {
             retained.removeFirst()
         }
         // An oversized extension must not erase this turn's earlier, complete usable prefix.
-        guard try JSONEncoder().encode([system] + retained.flatMap { $0 }).count <= limits.maxContextBytes else {
+        guard
+            try JSONEncoder().encode([system] + retained.flatMap { $0 }).count + reserve
+                <= limits.maxContextBytes
+        else {
             return
         }
         history = retained

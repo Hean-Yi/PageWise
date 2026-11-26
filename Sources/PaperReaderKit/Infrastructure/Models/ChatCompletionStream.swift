@@ -43,7 +43,11 @@ actor ChatCompletionStreamDecoder {
     private var calls: [Int: AgentToolCall] = [:]
     private var reasoning = ""
     private var inlineThinkState: InlineThinkState = .initial
+    private var inlineCloseTag = "</think>"
     private var finishReason: String?
+    private var lastEmittedTextBytes = 0
+    private var lastEmittedReasoningBytes = 0
+    private let emissionStride: Int
     private let maxToolCalls: Int?
     private let onPartial: @Sendable (String) async throws -> Void
     private let onReasoning: (@Sendable (String) async throws -> Void)?
@@ -56,13 +60,40 @@ actor ChatCompletionStreamDecoder {
     }
 
     init(
-        maxToolCalls: Int? = nil,
+        maxToolCalls: Int? = nil, emissionStride: Int = 128,
         onPartial: @escaping @Sendable (String) async throws -> Void,
         onReasoning: (@Sendable (String) async throws -> Void)? = nil
     ) {
         self.maxToolCalls = maxToolCalls
+        self.emissionStride = max(0, emissionStride)
         self.onPartial = onPartial
         self.onReasoning = onReasoning
+    }
+
+    /// Coalesce cumulative snapshots. Callers receive the same full-text contract, but SwiftUI
+    /// is not asked to re-layout the entire answer for every SSE token.
+    private func emitReasoning(force: Bool) async throws {
+        guard let onReasoning else { return }
+        let bytes = reasoning.utf8.count
+        guard bytes > lastEmittedReasoningBytes,
+            force || lastEmittedReasoningBytes == 0 || bytes - lastEmittedReasoningBytes >= emissionStride
+        else { return }
+        lastEmittedReasoningBytes = bytes
+        try await onReasoning(reasoning)
+    }
+
+    private func emitText(force: Bool) async throws {
+        let bytes = text.utf8.count
+        guard bytes > lastEmittedTextBytes,
+            force || lastEmittedTextBytes == 0 || bytes - lastEmittedTextBytes >= emissionStride
+        else { return }
+        lastEmittedTextBytes = bytes
+        try await onPartial(text)
+    }
+
+    private func flush() async throws {
+        try await emitReasoning(force: true)
+        try await emitText(force: true)
     }
 
     private var thinkCarry = ""
@@ -80,13 +111,16 @@ actor ChatCompletionStreamDecoder {
             if trimmed.isEmpty {
                 return ("", "")
             }
-            let openTag = "<think>"
-            if openTag.hasPrefix(trimmed) && trimmed.count < openTag.count {
+            let lower = trimmed.lowercased()
+            let tags = [("<think>", "</think>"), ("<thought>", "</thought>"), ("<thinking>", "</thinking>")]
+            if let partial = tags.first(where: { $0.0.hasPrefix(lower) && lower.count < $0.0.count }) {
+                _ = partial
                 return ("", "")
             }
-            if trimmed.hasPrefix(openTag) {
+            if let tag = tags.first(where: { lower.hasPrefix($0.0) }) {
                 inlineThinkState = .insideThink
-                let afterTag = String(trimmed.dropFirst(openTag.count))
+                inlineCloseTag = tag.1
+                let afterTag = String(trimmed.dropFirst(tag.0.count))
                 thinkCarry = ""
                 return try await routeInlineContent(afterTag)
             }
@@ -96,8 +130,8 @@ actor ChatCompletionStreamDecoder {
             return (flushed, "")
         case .insideThink:
             thinkCarry += chunk
-            let closeTag = "</think>"
-            if let range = thinkCarry.range(of: closeTag) {
+            let closeTag = inlineCloseTag
+            if let range = thinkCarry.range(of: closeTag, options: .caseInsensitive) {
                 let thoughtPart = String(thinkCarry[..<range.lowerBound])
                 let remainder = String(thinkCarry[range.upperBound...]).replacingOccurrences(
                     of: #"^\s+"#, with: "", options: .regularExpression)
@@ -132,10 +166,10 @@ actor ChatCompletionStreamDecoder {
                     switch inlineThinkState {
                     case .insideThink:
                         reasoning += thinkCarry
-                        if !reasoning.isEmpty { try await onReasoning?(reasoning) }
+                        try await emitReasoning(force: true)
                     case .initial:
                         text += thinkCarry
-                        try await onPartial(text)
+                        try await emitText(force: true)
                     case .plainText, .finishedThink:
                         break
                     }
@@ -150,7 +184,7 @@ actor ChatCompletionStreamDecoder {
             guard let choice = event.choices.first(where: { ($0.index ?? 0) == 0 }) else { continue }
             if let value = choice.delta?.reasoningContent, !value.isEmpty {
                 reasoning += value
-                try await onReasoning?(reasoning)
+                try await emitReasoning(force: false)
             }
             for part in choice.delta?.toolCalls ?? [] {
                 guard let maxToolCalls, !stopped, part.index >= 0 else {
@@ -172,11 +206,11 @@ actor ChatCompletionStreamDecoder {
                 let routed = try await routeInlineContent(content)
                 if !routed.reasoningDelta.isEmpty {
                     reasoning += routed.reasoningDelta
-                    try await onReasoning?(reasoning)
+                    try await emitReasoning(force: false)
                 }
                 if !routed.textDelta.isEmpty {
                     text += routed.textDelta
-                    try await onPartial(text)
+                    try await emitText(force: false)
                 }
             }
             if let reason = choice.finishReason {
@@ -187,6 +221,7 @@ actor ChatCompletionStreamDecoder {
                 }
                 stopped = true
                 finishReason = reason
+                try await flush()
             }
         }
     }
