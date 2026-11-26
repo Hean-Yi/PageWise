@@ -160,3 +160,76 @@ import Testing
     }
     #expect(try await reader.store.memoryAuditCount() == 1)
 }
+
+private final class NoteReviewProbe {
+    var count = 0
+}
+
+@Test @MainActor func readerTickSchedulesNoteReviewOnlyWhenEnabledAndIdle() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let reader = try ReaderModel(root: root)
+    await reader.load()
+    var settings = reader.modelSettings
+    settings.baseURL = ModelServicePreset.deepSeek.baseURL
+    settings.model = ModelServicePreset.deepSeek.defaultModel
+    try reader.saveSettings(settings, key: "fixture-only")
+    let paper = Paper(
+        title: "Scheduled review", digest: "review", originalPath: "unused.pdf", pageCount: 1, blocks: [],
+        warnings: [], canReflow: false)
+    let note = ReadingNote(paperID: paper.id, contentVersion: "v", anchors: [], markdown: "Reader note.")
+    reader.state.papers = [paper]
+    reader.state.readingNotes = [note]
+    #expect(await reader.save())
+    reader.lastInteraction = Date().addingTimeInterval(-200)
+    let probe = NoteReviewProbe()
+    reader.noteReview.isLowPowerModeEnabled = { false }
+    reader.noteReview.reviewOverride = { _, _ in
+        probe.count += 1
+        return #"{"revisions":[]}"#
+    }
+
+    reader.noteReview.enabled = false
+    reader.tick()
+    try await Task.sleep(for: .milliseconds(80))
+    #expect(probe.count == 0)
+
+    reader.noteReview.enabled = true
+    reader.tick()
+    for _ in 0..<300 where probe.count == 0 || reader.noteReview.running {
+        try await Task.sleep(for: .milliseconds(10))
+    }
+    #expect(probe.count == 1)
+    #expect(!reader.noteReview.running)
+
+    // A completed pass schedules the next check; a plain tick must not start another model round.
+    reader.tick()
+    try await Task.sleep(for: .milliseconds(80))
+    #expect(probe.count == 1)
+}
+
+@Test @MainActor func memoryMutationPersistsBeforeChangingLiveStateAndRejectsUserAuthoredTargets() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let reader = try ReaderModel(root: root)
+    await reader.load()
+    let item = MemoryItem(text: "旧记录", sourceID: UUID())
+    reader.state.memories = [item]
+    #expect(await reader.save())
+
+    let revise = MemoryRecordMutation(
+        operation: .revise(id: item.id, statement: "新记录"), auditTrigger: "更正记忆")
+    #expect(await reader.save(cancellable: true, memoryMutation: revise))
+    #expect(reader.state.memories.first?.text == "新记录")
+    #expect(try await LibraryStore(directory: root).load().memories.first?.text == "新记录")
+
+    var edited = try #require(reader.state.memories.first)
+    let corrected = edited.correct(to: "读者自己改的记录")
+    #expect(corrected)
+    reader.state.memories = [edited]
+    #expect(await reader.save())
+    let rejected = MemoryRecordMutation(operation: .forget(id: edited.id), auditTrigger: "删除记忆")
+    #expect(!(await reader.save(cancellable: true, memoryMutation: rejected)))
+    #expect(reader.state.memories.first?.text == "读者自己改的记录")
+    #expect(try await LibraryStore(directory: root).load().memories.first?.text == "读者自己改的记录")
+}

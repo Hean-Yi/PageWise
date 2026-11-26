@@ -37,13 +37,13 @@ public enum CloseReadingStage: String, CaseIterable, Codable, Sendable {
     }
 }
 
-public struct CloseReadingReference: Sendable {
+public struct CloseReadingReference: Codable, Sendable, Equatable {
     public let evidence: Evidence
     public let quote: String
     public let label: String
 }
 
-public struct CloseReadingAnnotation: Sendable {
+public struct CloseReadingAnnotation: Codable, Sendable, Equatable {
     public let dimension: CloseReadingDimension
     public let source: Evidence
     public let quote: String
@@ -51,10 +51,10 @@ public struct CloseReadingAnnotation: Sendable {
     public let references: [CloseReadingReference]
 }
 
-struct CloseReadingOutlineItem: Sendable {
-    public let stage: CloseReadingStage
-    public let text: String
-    public let references: [CloseReadingReference]
+struct CloseReadingOutlineItem: Codable, Sendable, Equatable {
+    let stage: CloseReadingStage
+    let text: String
+    let references: [CloseReadingReference]
 }
 
 public struct CloseReadingNotebookSection: Sendable {

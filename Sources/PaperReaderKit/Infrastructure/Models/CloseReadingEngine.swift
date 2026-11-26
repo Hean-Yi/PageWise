@@ -1,5 +1,21 @@
 import Foundation
 
+public struct CloseReadingCheckpoint: Codable, Sendable {
+    public let version: String
+    public let focus: String
+    let totalWindows: Int
+    let coverage: String
+    var completedWindows: Int
+    var notes: [CloseReadingAnnotation]
+    var seenAnalyses: [String]
+    var stages: [CloseReadingOutlineItem]
+    var supplementaryWindows: Int
+    var missedSupplement: Int
+    var annotatedSources: [String]
+    var rejected: Int
+    var skippedWindows: [String: [Int]]
+}
+
 public enum CloseReadingEngine {
     private struct Quotation: Decodable {
         let source: String
@@ -33,7 +49,7 @@ public enum CloseReadingEngine {
         let outline: [Record<Stage>]?
     }
 
-    enum ResponseIssue: Error, CaseIterable {
+    enum ResponseIssue: String, Error, CaseIterable {
         case format, outputLimit
 
         var description: String {
@@ -73,25 +89,41 @@ public enum CloseReadingEngine {
     }
 
     public static func run(
-        paper: Paper, root: URL, focus: String = "",
+        paper: Paper, root: URL, focus: String = "", version: String = "",
+        checkpoint: CloseReadingCheckpoint? = nil,
+        onCheckpoint: (@Sendable (CloseReadingCheckpoint) async -> Void)? = nil,
         retrieveNotes: @Sendable (String) async throws -> [Evidence] = { _ in [] },
         progress: @Sendable (String) async -> Void,
         complete: @Sendable (_ system: String, _ user: String) async throws -> String
     ) async throws -> CloseReadingAnalysis {
         let corpus = try await CloseReadingCorpus.read(paper: paper, root: root, progress: progress)
         guard !corpus.windows.isEmpty else { throw ReaderError.message("这篇论文缺少可定位的本地原文，无法精读。") }
-        var notes = [CloseReadingAnnotation]()
-        var seenAnalyses = Set<String>()
-        var stages = [CloseReadingOutlineItem]()
-        var supplementaryWindows = 0
-        var missedSupplement = 0
-        var annotatedSources = Set<String>()
-        var rejected = 0
-        var skippedWindows: [ResponseIssue: [Int]] = [:]
-        var fallbackReason: ResponseIssue?
         let name = String(paper.title.prefix(360))
         let focus = String(focus.prefix(1_600))
-        for (index, passages) in corpus.windows.enumerated() {
+        let resumable =
+            checkpoint.flatMap { saved in
+                saved.version == version && saved.focus == focus
+                    && saved.totalWindows == corpus.windows.count
+                    && saved.coverage == corpus.coverage
+                    && (0...corpus.windows.count).contains(saved.completedWindows) ? saved : nil
+            }
+        var notes = resumable?.notes ?? [CloseReadingAnnotation]()
+        var seenAnalyses = Set(resumable?.seenAnalyses ?? [])
+        var stages = resumable?.stages ?? [CloseReadingOutlineItem]()
+        var supplementaryWindows = resumable?.supplementaryWindows ?? 0
+        var missedSupplement = resumable?.missedSupplement ?? 0
+        var annotatedSources = Set(resumable?.annotatedSources ?? [])
+        var rejected = resumable?.rejected ?? 0
+        var skippedWindows: [ResponseIssue: [Int]] = [:]
+        if let savedSkips = resumable?.skippedWindows {
+            for (raw, list) in savedSkips {
+                if let issue = ResponseIssue(rawValue: raw) { skippedWindows[issue] = list }
+            }
+        }
+        var fallbackReason: ResponseIssue?
+        let startWindow = resumable?.completedWindows ?? 0
+        for index in startWindow..<corpus.windows.count {
+            let passages = corpus.windows[index]
             try Task.checkCancellation()
             await progress("正在精读第 \(index + 1) / \(corpus.windows.count) 组原文")
             let stride = max(1, passages.count / 5)
@@ -124,6 +156,17 @@ public enum CloseReadingEngine {
                     })
             } catch let issue as ResponseIssue {
                 skippedWindows[issue, default: []].append(index + 1)
+                if let onCheckpoint {
+                    let nextCheckpoint = CloseReadingCheckpoint(
+                        version: version, focus: focus, totalWindows: corpus.windows.count,
+                        coverage: corpus.coverage, completedWindows: index + 1, notes: notes,
+                        seenAnalyses: Array(seenAnalyses), stages: stages,
+                        supplementaryWindows: supplementaryWindows, missedSupplement: missedSupplement,
+                        annotatedSources: Array(annotatedSources), rejected: rejected,
+                        skippedWindows: Dictionary(
+                            uniqueKeysWithValues: skippedWindows.map { ($0.key.rawValue, $0.value) }))
+                    await onCheckpoint(nextCheckpoint)
+                }
                 continue
             }
             let registry = Dictionary(uniqueKeysWithValues: (passages + memory).map { ($0.evidence.id, $0) })
@@ -212,6 +255,17 @@ public enum CloseReadingEngine {
                 guard numbersAreGrounded(text, in: proof) else { continue }
                 stages.append(
                     .init(stage: item.stage, text: readerProse(text, citing: refs.map(\.evidence)), references: refs))
+            }
+            if let onCheckpoint {
+                let nextCheckpoint = CloseReadingCheckpoint(
+                    version: version, focus: focus, totalWindows: corpus.windows.count,
+                    coverage: corpus.coverage, completedWindows: index + 1, notes: notes,
+                    seenAnalyses: Array(seenAnalyses), stages: stages,
+                    supplementaryWindows: supplementaryWindows, missedSupplement: missedSupplement,
+                    annotatedSources: Array(annotatedSources), rejected: rejected,
+                    skippedWindows: Dictionary(
+                        uniqueKeysWithValues: skippedWindows.map { ($0.key.rawValue, $0.value) }))
+                await onCheckpoint(nextCheckpoint)
             }
         }
         let incomplete = ResponseIssue.allCases.compactMap { issue -> String? in
@@ -509,13 +563,56 @@ public enum CloseReadingEngine {
             }
             try Task.checkCancellation()
             issue = .format
-            if raw.utf8.count <= 180_000, let start = raw.firstIndex(of: "{"), let end = raw.lastIndex(of: "}"),
-                start <= end, let decoded = try? JSONDecoder().decode(T.self, from: Data(raw[start...end].utf8)),
+            if raw.utf8.count <= 180_000, let jsonSlice = extractJSONObject(from: raw),
+                let decoded = try? JSONDecoder().decode(T.self, from: Data(jsonSlice.utf8)),
                 let result = accept(decoded)
             {
                 return result
             }
         }
         throw issue
+    }
+
+    static func extractJSONObject(from raw: String) -> Substring? {
+        var source = raw[...]
+        if let fenceStart = source.range(of: "```"),
+            let lineEnd = source[fenceStart.upperBound...].firstIndex(of: "\n"),
+            let fenceEnd = source[lineEnd...].range(of: "```")
+        {
+            source = source[source.index(after: lineEnd)..<fenceEnd.lowerBound]
+        }
+        guard let start = source.firstIndex(of: "{") else { return nil }
+        var depth = 0
+        var inString = false
+        var escaped = false
+        var index = start
+        while index < source.endIndex {
+            let ch = source[index]
+            if inString {
+                if escaped {
+                    escaped = false
+                } else if ch == "\\" {
+                    escaped = true
+                } else if ch == "\"" {
+                    inString = false
+                }
+            } else {
+                if ch == "\"" {
+                    inString = true
+                } else if ch == "{" {
+                    depth += 1
+                } else if ch == "}" {
+                    depth -= 1
+                    if depth == 0 {
+                        return source[start...index]
+                    }
+                }
+            }
+            index = source.index(after: index)
+        }
+        if let end = source.lastIndex(of: "}"), start <= end {
+            return source[start...end]
+        }
+        return nil
     }
 }

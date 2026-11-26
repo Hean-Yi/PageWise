@@ -1,18 +1,71 @@
 import Foundation
 import PaperReaderKit
 
+struct MemoryRecordMutation {
+    enum Operation {
+        case revise(id: UUID, statement: String)
+        case forget(id: UUID)
+    }
+
+    let operation: Operation
+    let auditTrigger: String?
+
+    var memoryID: UUID {
+        switch operation {
+        case .revise(let id, _), .forget(let id): id
+        }
+    }
+
+    var auditAction: String {
+        switch operation {
+        case .revise: "revise"
+        case .forget: "forget"
+        }
+    }
+
+    func apply(to state: inout LibraryState) -> Bool {
+        switch operation {
+        case .revise(let id, let statement):
+            guard let index = state.memories.firstIndex(where: { $0.id == id }),
+                !state.memories[index].deleted, !state.memories[index].userEdited
+            else { return false }
+            return state.memories[index].correct(to: statement)
+        case .forget(let id):
+            guard let index = state.memories.firstIndex(where: { $0.id == id }),
+                !state.memories[index].deleted, !state.memories[index].userEdited
+            else { return false }
+            return state.memories[index].forget()
+        }
+    }
+}
+
 extension ReaderModel {
     public func updateMemory(id: UUID, text: String) {
-        guard let index = state.memories.firstIndex(where: { $0.id == id }),
-            state.memories[index].correct(to: text)
-        else { return }
-        Task { await save() }
+        guard let index = state.memories.firstIndex(where: { $0.id == id }) else { return }
+        let previous = state.memories[index]
+        guard state.memories[index].correct(to: text) else { return }
+        let appliedRevision = state.memories[index].correctionRevision
+        Task {
+            if !(await save()),
+                let current = state.memories.firstIndex(where: { $0.id == id }),
+                state.memories[current].correctionRevision == appliedRevision
+            {
+                state.memories[current] = previous
+            }
+        }
     }
     public func deleteMemory(_ id: UUID) {
-        guard let index = state.memories.firstIndex(where: { $0.id == id }),
-            state.memories[index].forget()
-        else { return }
-        Task { await save() }
+        guard let index = state.memories.firstIndex(where: { $0.id == id }) else { return }
+        let previous = state.memories[index]
+        guard state.memories[index].forget() else { return }
+        Task {
+            if !(await save()),
+                let current = state.memories.firstIndex(where: { $0.id == id }),
+                state.memories[current].deleted
+            {
+                state.memories[current] = previous
+            }
+        }
     }
 
     /// A reading/translation observation creates one paper-grounded memory. The reader can
@@ -71,11 +124,18 @@ extension ReaderModel {
             return best.0
         }
         if let groups = capture(memoryPattern), let target = groups.first, let memory = match(target),
-            let index = state.memories.firstIndex(where: { $0.id == memory.id }), state.memories[index].forget()
+            let index = state.memories.firstIndex(where: { $0.id == memory.id })
         {
+            let previous = state.memories[index]
+            guard state.memories[index].forget() else { return nil }
             Task {
-                try? await store.recordMemoryAudit(memoryID: memory.id, action: "forget", trigger: question)
-                await save()
+                if await save() {
+                    try? await store.recordMemoryAudit(memoryID: memory.id, action: "forget", trigger: question)
+                } else if let current = state.memories.firstIndex(where: { $0.id == memory.id }),
+                    state.memories[current].deleted
+                {
+                    state.memories[current] = previous
+                }
             }
             return "已忘掉这条研究记忆。"
         }
@@ -83,22 +143,36 @@ extension ReaderModel {
             value.trimmingCharacters(in: CharacterSet(charactersIn: "。.!！ "))
         }
         if let groups = capture(moveRevisionPattern), groups.count == 2, let memory = match(groups[0]),
-            let index = state.memories.firstIndex(where: { $0.id == memory.id }),
-            state.memories[index].correct(to: replacement(groups[1]))
+            let index = state.memories.firstIndex(where: { $0.id == memory.id })
         {
+            let previous = state.memories[index]
+            guard state.memories[index].correct(to: replacement(groups[1])) else { return nil }
+            let appliedRevision = state.memories[index].correctionRevision
             Task {
-                try? await store.recordMemoryAudit(memoryID: memory.id, action: "revise", trigger: question)
-                await save()
+                if await save() {
+                    try? await store.recordMemoryAudit(memoryID: memory.id, action: "revise", trigger: question)
+                } else if let current = state.memories.firstIndex(where: { $0.id == memory.id }),
+                    state.memories[current].correctionRevision == appliedRevision
+                {
+                    state.memories[current] = previous
+                }
             }
             return "已更正这条研究记忆。"
         }
         if let groups = capture(revisePattern), groups.count == 2, let memory = match(groups[0]),
-            let index = state.memories.firstIndex(where: { $0.id == memory.id }),
-            state.memories[index].correct(to: replacement(groups[1]))
+            let index = state.memories.firstIndex(where: { $0.id == memory.id })
         {
+            let previous = state.memories[index]
+            guard state.memories[index].correct(to: replacement(groups[1])) else { return nil }
+            let appliedRevision = state.memories[index].correctionRevision
             Task {
-                try? await store.recordMemoryAudit(memoryID: memory.id, action: "revise", trigger: question)
-                await save()
+                if await save() {
+                    try? await store.recordMemoryAudit(memoryID: memory.id, action: "revise", trigger: question)
+                } else if let current = state.memories.firstIndex(where: { $0.id == memory.id }),
+                    state.memories[current].correctionRevision == appliedRevision
+                {
+                    state.memories[current] = previous
+                }
             }
             return "已更正这条研究记忆。"
         }
@@ -110,7 +184,7 @@ extension ReaderModel {
     /// Explicit "remember this" commands do not need a model round. Source validation and dedup
     /// still run before the item is written; ambiguous or question-like wording falls back to the
     /// normal tool path.
-    func respondToRememberCommand(_ question: String) -> String? {
+    func respondToRememberCommand(_ question: String, turnID: UUID? = nil) -> String? {
         guard !question.contains("?"), !question.contains("？") else { return nil }
         let pattern =
             #"(?i)^\s*(?:请|帮我|麻烦你?)?\s*(?:记住|记下|记录|remember|save)\s*(?:一下|这个|这条)?\s*[：:，,\s]*(.{6,240})\s*[。.!！]?\s*$"#
@@ -122,16 +196,20 @@ extension ReaderModel {
         guard !statement.isEmpty, !ResearchQuestionProposal.isOperational(statement),
             ResearchMemory.permitsAutomaticWrite(for: question)
         else { return nil }
+        // The explicit command is itself the source turn; a random UUID would be an unreferenced origin.
         let item = MemoryItem(
-            agentStatement: statement, sourceID: UUID(), source: .reader(quote: statement))
+            agentStatement: statement, sourceID: turnID ?? UUID(), source: .reader(quote: statement))
         guard
             MemoryStatementProposal.isEligible(
                 item, in: state, excluding: pendingImportIDs)
         else { return nil }
         state.memories.append(item)
         Task {
-            try? await store.recordMemoryAudit(memoryID: item.id, action: "remember", trigger: question)
-            await save()
+            if await save() {
+                try? await store.recordMemoryAudit(memoryID: item.id, action: "remember", trigger: question)
+            } else {
+                state.memories.removeAll { $0.id == item.id }
+            }
         }
         return "已记住这条研究记忆。"
     }

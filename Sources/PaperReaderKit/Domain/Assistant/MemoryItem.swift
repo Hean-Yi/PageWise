@@ -64,7 +64,7 @@ public struct MemoryItem: Identifiable, Codable, Sendable, Equatable {
     }
 
     @discardableResult public mutating func correct(to replacement: String) -> Bool {
-        guard !deleted, replacement != text || !userEdited else { return false }
+        guard !deleted, replacement != text else { return false }
         preserveOriginalFingerprint()
         text = replacement
         userEdited = true

@@ -36,6 +36,18 @@ struct PaperAssistantView: View {
                                     maxWidth: .infinity, alignment: .leading
                                 )
                                 .background(ReaderTheme.elevated, in: RoundedRectangle(cornerRadius: 12))
+                                if let reasoning = turn.reasoning, !reasoning.isEmpty {
+                                    DisclosureGroup("模型思考") {
+                                        Text(reasoning)
+                                            .font(.caption)
+                                            .foregroundStyle(ReaderTheme.muted)
+                                            .textSelection(.enabled)
+                                            .frame(maxWidth: .infinity, alignment: .leading)
+                                            .padding(.top, 4)
+                                    }
+                                    .font(.caption.weight(.medium))
+                                    .foregroundStyle(ReaderTheme.muted)
+                                }
                                 PaperAssistantCitations(turn: turn, model: model, didNavigate: didNavigate) {
                                     sourceID in
                                     scroll.scrollTo(

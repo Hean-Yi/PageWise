@@ -8,37 +8,93 @@ public struct AgentClient: AgentCompleting {
     public func respond(settings: ModelSettings, key: String, messages: [AgentMessage], limits: AgentLimits)
         async throws -> AgentMessage
     {
-        try await perform(settings: settings, key: key, messages: messages, limits: limits, onPartial: nil)
+        try await perform(
+            settings: settings, key: key, messages: messages, limits: limits, onPartial: nil, onReasoning: nil)
     }
     public func respondStreaming(
         settings: ModelSettings, key: String, messages: [AgentMessage], limits: AgentLimits,
         onPartial: @escaping @Sendable (String) async throws -> Void
     ) async throws -> AgentMessage {
-        try await perform(settings: settings, key: key, messages: messages, limits: limits, onPartial: onPartial)
+        try await perform(
+            settings: settings, key: key, messages: messages, limits: limits, onPartial: onPartial, onReasoning: nil)
+    }
+    public func respondStreaming(
+        settings: ModelSettings, key: String, messages: [AgentMessage], limits: AgentLimits,
+        onPartial: @escaping @Sendable (String) async throws -> Void,
+        onReasoning: (@Sendable (String) async throws -> Void)?
+    ) async throws -> AgentMessage {
+        try await perform(
+            settings: settings, key: key, messages: messages, limits: limits,
+            onPartial: onPartial, onReasoning: onReasoning)
     }
     private func perform(
         settings: ModelSettings, key: String, messages: [AgentMessage], limits: AgentLimits,
-        onPartial: (@Sendable (String) async throws -> Void)?
+        onPartial: (@Sendable (String) async throws -> Void)?,
+        onReasoning: (@Sendable (String) async throws -> Void)?
     ) async throws -> AgentMessage {
         try Task.checkCancellation()
         try Self.validateHistory(messages)
-        guard try JSONEncoder().encode(messages).count <= limits.maxContextBytes else {
-            throw ReaderError.message("本次上下文已达到上限，请新建对话或缩小查找范围。")
-        }
         // Keeping definitions preserves DeepSeek's tool-mode reasoning history. Other compatible
         // endpoints can disable tools simply by omitting them, including those that only accept auto.
         let endpoint = try settings.endpointURL()
         let finalToolChoice: ChatCompletionRequest.ToolChoice? =
             endpoint.host == "api.deepseek.com" && endpoint.port == nil ? .disabled : nil
+        let includesTools = limits.maxToolCalls > 0 || finalToolChoice != nil
+        let toolBytes = includesTools ? Self.toolPayloadBytes(for: limits.availableToolNames) : 0
+        guard try JSONEncoder().encode(messages).count + toolBytes <= limits.maxContextBytes else {
+            throw ReaderError.message("本次上下文已达到上限，请新建对话或缩小查找范围。")
+        }
         let request = try ChatCompletionRequest.make(
             settings: settings, key: key, messages: messages, stream: onPartial != nil,
             toolChoice: limits.maxToolCalls > 0 ? .auto : finalToolChoice, availableToolNames: limits.availableToolNames
         )
+        let maxRetries = max(0, min(3, limits.maxTransientRetries))
+        var attempt = 0
+        while true {
+            do {
+                return try await executeAttempt(
+                    request: request, messages: messages, limits: limits, onPartial: onPartial,
+                    onReasoning: onReasoning, canRetry: attempt < maxRetries)
+            } catch let retry as RetrySignal {
+                attempt += 1
+                try Task.checkCancellation()
+                try await Task.sleep(for: .milliseconds(retry.delayMilliseconds))
+            }
+        }
+    }
+
+    /// Approximate serialized size of the tool schemas that accompany a request.
+    public static func toolPayloadBytes(for names: Set<String>?) -> Int {
+        let tools = Tool.definitions.filter { names?.contains($0.function.name) ?? true }
+        guard !tools.isEmpty else { return 0 }
+        return (try? JSONEncoder().encode(tools).count) ?? 0
+    }
+
+    private struct RetrySignal: Error {
+        let delayMilliseconds: Int
+    }
+
+    private func executeAttempt(
+        request: URLRequest, messages: [AgentMessage], limits: AgentLimits,
+        onPartial: (@Sendable (String) async throws -> Void)?,
+        onReasoning: (@Sendable (String) async throws -> Void)?,
+        canRetry: Bool
+    ) async throws -> AgentMessage {
         let data: Data
         let response: HTTPURLResponse
+        let tracker = StreamingProgressFlag()
         do {
             if let onPartial {
-                let decoder = ChatCompletionStreamDecoder(maxToolCalls: limits.maxToolCalls, onPartial: onPartial)
+                let decoder = ChatCompletionStreamDecoder(
+                    maxToolCalls: limits.maxToolCalls,
+                    onPartial: { text in
+                        await tracker.markEmitted()
+                        try await onPartial(text)
+                    },
+                    onReasoning: { thought in
+                        await tracker.markEmitted()
+                        if let onReasoning { try await onReasoning(thought) }
+                    })
                 response = try await transport.stream(for: request) { chunk in try await decoder.consume(chunk) }
                 if (200...299).contains(response.statusCode) {
                     let (message, reason) = try await decoder.finishMessage()
@@ -59,8 +115,11 @@ public struct AgentClient: AgentCompleting {
         } catch let failure as ReaderError {
             try Task.checkCancellation()
             throw failure
-        } catch is URLError {
+        } catch let urlError as URLError {
             try Task.checkCancellation()
+            if canRetry, await !tracker.emitted, Self.isTransientNetworkError(urlError) {
+                throw RetrySignal(delayMilliseconds: 200)
+            }
             throw ReaderError.message("模型网络请求未完成，请检查连接后重试。")
         } catch {
             try Task.checkCancellation()
@@ -70,7 +129,18 @@ public struct AgentClient: AgentCompleting {
         switch response.statusCode {
         case 200...299: break
         case 401, 403: throw ReaderError.message("模型服务拒绝访问，请检查密钥、模型权限和 API 地址。")
-        case 429: throw ReaderError.message("模型服务限流或额度不足，请稍后重试。")
+        case 429:
+            if canRetry, await !tracker.emitted,
+                let delayMs = Self.retryAfterMilliseconds(response, fallback: 500)
+            {
+                throw RetrySignal(delayMilliseconds: delayMs)
+            }
+            throw ReaderError.message("模型服务限流或额度不足，请稍后重试。")
+        case 500, 502, 503, 504:
+            if canRetry, await !tracker.emitted {
+                throw RetrySignal(delayMilliseconds: 300)
+            }
+            throw ReaderError.message("模型请求失败（HTTP \(response.statusCode)）；重试后仍未恢复。")
         default: throw ReaderError.message("模型请求失败（HTTP \(response.statusCode)）；没有自动重试。")
         }
         guard data.count <= limits.maxResponseBytes else { throw ReaderError.message("模型响应超过长度上限，未执行工具。") }
@@ -100,6 +170,30 @@ public struct AgentClient: AgentCompleting {
         default: throw Self.incompleteReply(.unexpectedFinish)
         }
         return message
+    }
+
+    private actor StreamingProgressFlag {
+        private(set) var emitted = false
+        func markEmitted() { emitted = true }
+    }
+
+    private static func isTransientNetworkError(_ error: URLError) -> Bool {
+        switch error.code {
+        case .timedOut, .networkConnectionLost, .cannotFindHost, .cannotConnectToHost, .dnsLookupFailed:
+            return true
+        default:
+            return false
+        }
+    }
+
+    private static func retryAfterMilliseconds(_ response: HTTPURLResponse, fallback: Int) -> Int? {
+        guard
+            let raw = response.value(forHTTPHeaderField: "Retry-After")?.trimmingCharacters(
+                in: .whitespacesAndNewlines),
+            let seconds = Double(raw)
+        else { return fallback }
+        guard seconds <= 10 else { return nil }
+        return max(100, Int((seconds * 1000).rounded()))
     }
 
     private static func incompleteReply(_ failure: ModelStreamFailure) -> ReaderError {

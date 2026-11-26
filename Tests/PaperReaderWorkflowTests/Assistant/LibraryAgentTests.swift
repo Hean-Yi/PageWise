@@ -308,12 +308,9 @@ private func recommendTwoOnlinePapers(_ messages: [AgentMessage], _ count: Int) 
     #expect(turn.presentedResults.isEmpty)
     #expect(turn.processNotes.filter { $0.kind == .progress }.map(\.text) == ["查找两种术语。"])
     let thinking = turn.processNotes.filter { $0.kind == .thinking }
-    if base == "https://api.deepseek.com/v1" {
-        #expect(thinking.map(\.text) == ["工具轮思考", "结论轮思考"])
-        #expect(thinking.map(\.beforeActivityCount) == [0, 2])
-    } else {
-        #expect(thinking.isEmpty)
-    }
+    // Reasoning is shown for every compatible provider; it is no longer gated on the DeepSeek host.
+    #expect(thinking.map(\.text) == ["工具轮思考", "结论轮思考"])
+    #expect(thinking.map(\.beforeActivityCount) == [0, 2])
 }
 
 @Test(arguments: [true, false]) @MainActor
@@ -1073,6 +1070,7 @@ private func repeatedOnlineScript(_ messages: [AgentMessage], _ count: Int) thro
     var limits = AgentLimits()
     limits.maxContextBytes =
         try JSONEncoder().encode(firstCompleteGroup + [.init(role: "user", content: followup)]).count + 32
+        + AgentClient.toolPayloadBytes(for: nil)
     let client = ScriptedLibraryModel { messages, count in
         if messages.first?.content?.contains("未纳入本次总结") == true {
             #expect(messages.filter { $0.role == "tool" }.compactMap(\.toolCallID) == ["budget_search"])
@@ -1097,7 +1095,10 @@ private func repeatedOnlineScript(_ messages: [AgentMessage], _ count: Int) thro
     agent.send(followup)
     try await eventually { !agent.isRunning }
     #expect(agent.turns[1].error == nil)
-    for request in await client.requests { #expect(try JSONEncoder().encode(request).count <= limits.maxContextBytes) }
+    let toolBytes = AgentClient.toolPayloadBytes(for: nil)
+    for request in await client.requests {
+        #expect(try JSONEncoder().encode(request).count + toolBytes <= limits.maxContextBytes)
+    }
 }
 
 private actor DelayedHistorySearch: PaperDiscovery {

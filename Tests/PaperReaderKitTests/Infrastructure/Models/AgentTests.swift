@@ -411,3 +411,72 @@ private actor AgentSaveGate {
     }
     await #expect(throws: CancellationError.self) { try await cancelled.value }
 }
+
+private actor TransientFailureTransport: HTTPTransport {
+    private(set) var attempts = 0
+    let failures: Int
+    let status: Int
+    let body: String
+    init(failures: Int, status: Int, body: String) {
+        self.failures = failures
+        self.status = status
+        self.body = body
+    }
+    func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        attempts += 1
+        if attempts <= failures {
+            if status == 429 {
+                return (
+                    Data(),
+                    HTTPURLResponse(
+                        url: request.url!, statusCode: 429, httpVersion: nil,
+                        headerFields: ["Retry-After": "0.1"])!
+                )
+            }
+            throw URLError(.timedOut)
+        }
+        return (
+            Data(body.utf8),
+            HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+        )
+    }
+}
+
+@Test func agentRetriesATransientNetworkFailureOnlyBeforeStreamingStarted() async throws {
+    let body = #"{"choices":[{"message":{"role":"assistant","content":"重试后完成"},"finish_reason":"stop"}]}"#
+    let transport = TransientFailureTransport(failures: 1, status: 0, body: body)
+    var limits = AgentLimits()
+    limits.maxTransientRetries = 2
+    let reply = try await AgentClient(transport: transport).respond(
+        settings: agentSettings(), key: "fixture", messages: [.init(role: "user", content: "q")], limits: limits)
+    #expect(reply.content == "重试后完成")
+    #expect(await transport.attempts == 2)
+}
+
+@Test func agentRetriesRateLimitingWithRetryAfterBeforeExecution() async throws {
+    let body = #"{"choices":[{"message":{"role":"assistant","content":"限流后完成"},"finish_reason":"stop"}]}"#
+    let transport = TransientFailureTransport(failures: 1, status: 429, body: body)
+    var limits = AgentLimits()
+    limits.maxTransientRetries = 2
+    let reply = try await AgentClient(transport: transport).respond(
+        settings: agentSettings(), key: "fixture", messages: [.init(role: "user", content: "q")], limits: limits)
+    #expect(reply.content == "限流后完成")
+    #expect(await transport.attempts == 2)
+}
+
+@Test func onlyReadOnlyToolBatchesRunConcurrently() {
+    #expect(
+        AgentToolConcurrency.canRunConcurrently([
+            .init(id: "a", name: "search_library", arguments: "{}"),
+            .init(id: "b", name: "read_paper", arguments: "{}"),
+        ]))
+    #expect(
+        !AgentToolConcurrency.canRunConcurrently([
+            .init(id: "a", name: "search_library", arguments: "{}"),
+            .init(id: "b", name: "move_papers", arguments: "{}"),
+        ]))
+    #expect(
+        !AgentToolConcurrency.canRunConcurrently([
+            .init(id: "a", name: "search_library", arguments: "{}")
+        ]))
+}

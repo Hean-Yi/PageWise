@@ -42,12 +42,76 @@ actor ChatCompletionStreamDecoder {
     private var received = 0
     private var calls: [Int: AgentToolCall] = [:]
     private var reasoning = ""
+    private var inlineThinkState: InlineThinkState = .initial
     private var finishReason: String?
     private let maxToolCalls: Int?
     private let onPartial: @Sendable (String) async throws -> Void
-    init(maxToolCalls: Int? = nil, onPartial: @escaping @Sendable (String) async throws -> Void) {
+    private let onReasoning: (@Sendable (String) async throws -> Void)?
+
+    private enum InlineThinkState {
+        case initial
+        case insideThink
+        case plainText
+        case finishedThink
+    }
+
+    init(
+        maxToolCalls: Int? = nil,
+        onPartial: @escaping @Sendable (String) async throws -> Void,
+        onReasoning: (@Sendable (String) async throws -> Void)? = nil
+    ) {
         self.maxToolCalls = maxToolCalls
         self.onPartial = onPartial
+        self.onReasoning = onReasoning
+    }
+
+    private var thinkCarry = ""
+
+    private func routeInlineContent(_ chunk: String) async throws -> (textDelta: String, reasoningDelta: String) {
+        if !reasoning.isEmpty && inlineThinkState == .initial {
+            inlineThinkState = .plainText
+        }
+        switch inlineThinkState {
+        case .plainText, .finishedThink:
+            return (chunk, "")
+        case .initial:
+            thinkCarry += chunk
+            let trimmed = thinkCarry.drop(while: \.isWhitespace)
+            if trimmed.isEmpty {
+                return ("", "")
+            }
+            let openTag = "<think>"
+            if openTag.hasPrefix(trimmed) && trimmed.count < openTag.count {
+                return ("", "")
+            }
+            if trimmed.hasPrefix(openTag) {
+                inlineThinkState = .insideThink
+                let afterTag = String(trimmed.dropFirst(openTag.count))
+                thinkCarry = ""
+                return try await routeInlineContent(afterTag)
+            }
+            inlineThinkState = .plainText
+            let flushed = thinkCarry
+            thinkCarry = ""
+            return (flushed, "")
+        case .insideThink:
+            thinkCarry += chunk
+            let closeTag = "</think>"
+            if let range = thinkCarry.range(of: closeTag) {
+                let thoughtPart = String(thinkCarry[..<range.lowerBound])
+                let remainder = String(thinkCarry[range.upperBound...]).replacingOccurrences(
+                    of: #"^\s+"#, with: "", options: .regularExpression)
+                thinkCarry = ""
+                inlineThinkState = .finishedThink
+                return (remainder, thoughtPart)
+            }
+            // Hold back up to closeTag.count - 1 trailing chars in case </think> spans chunks.
+            let keep = min(thinkCarry.count, closeTag.count - 1)
+            let splitIndex = thinkCarry.index(thinkCarry.endIndex, offsetBy: -keep)
+            let safeThought = String(thinkCarry[..<splitIndex])
+            thinkCarry = String(thinkCarry[splitIndex...])
+            return ("", safeThought)
+        }
     }
 
     func consume(_ data: Data) async throws {
@@ -64,6 +128,19 @@ actor ChatCompletionStreamDecoder {
             guard clean.hasPrefix("data:") else { continue }
             let payload = clean.dropFirst(5).trimmingCharacters(in: .whitespaces)
             if payload == "[DONE]" {
+                if !thinkCarry.isEmpty {
+                    switch inlineThinkState {
+                    case .insideThink:
+                        reasoning += thinkCarry
+                        if !reasoning.isEmpty { try await onReasoning?(reasoning) }
+                    case .initial:
+                        text += thinkCarry
+                        try await onPartial(text)
+                    case .plainText, .finishedThink:
+                        break
+                    }
+                    thinkCarry = ""
+                }
                 done = true
                 continue
             }
@@ -71,7 +148,10 @@ actor ChatCompletionStreamDecoder {
                 let event = try? JSONDecoder().decode(Event.self, from: json)
             else { throw ReaderError.message("流式响应格式不兼容，未保存当前段落。") }
             guard let choice = event.choices.first(where: { ($0.index ?? 0) == 0 }) else { continue }
-            if let value = choice.delta?.reasoningContent { reasoning += value }
+            if let value = choice.delta?.reasoningContent, !value.isEmpty {
+                reasoning += value
+                try await onReasoning?(reasoning)
+            }
             for part in choice.delta?.toolCalls ?? [] {
                 guard let maxToolCalls, !stopped, part.index >= 0 else {
                     throw ReaderError.message("流式工具调用无效，未执行。")
@@ -89,8 +169,15 @@ actor ChatCompletionStreamDecoder {
                 guard !stopped, text.utf8.count + content.utf8.count <= 200_000 else {
                     throw ReaderError.message("流式段落状态无效，未保存当前段落。")
                 }
-                text += content
-                try await onPartial(text)
+                let routed = try await routeInlineContent(content)
+                if !routed.reasoningDelta.isEmpty {
+                    reasoning += routed.reasoningDelta
+                    try await onReasoning?(reasoning)
+                }
+                if !routed.textDelta.isEmpty {
+                    text += routed.textDelta
+                    try await onPartial(text)
+                }
             }
             if let reason = choice.finishReason {
                 guard reason == "stop" || (maxToolCalls != nil && reason == "tool_calls") else {

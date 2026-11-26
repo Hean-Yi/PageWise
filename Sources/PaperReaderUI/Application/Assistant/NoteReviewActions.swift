@@ -30,13 +30,26 @@ final class NoteReviewSession {
     private let defaultsKey: String
     private var job: Task<Void, Never>?
     private var nextCheck = Date.distantPast
+    private var foregroundWork = 0
+    /// Test seam: production uses the configured model service.
+    @ObservationIgnored var reviewOverride: (@MainActor (ReaderModel, NoteReviewInput) async throws -> String)?
+    /// Test seam: hosts or CI may themselves be in Low Power Mode.
+    @ObservationIgnored var isLowPowerModeEnabled: @MainActor () -> Bool = {
+        ProcessInfo.processInfo.isLowPowerModeEnabled
+    }
 
     var enabled: Bool {
-        didSet { UserDefaults.standard.set(enabled, forKey: defaultsKey + ".enabled") }
+        didSet {
+            UserDefaults.standard.set(enabled, forKey: defaultsKey + ".enabled")
+            if !enabled { interrupt() }
+        }
     }
 
     var interval: TimeInterval {
-        didSet { UserDefaults.standard.set(interval, forKey: defaultsKey + ".interval") }
+        didSet {
+            UserDefaults.standard.set(interval, forKey: defaultsKey + ".interval")
+            nextCheck = .distantPast
+        }
     }
 
     init(store: LibraryStore, root: URL, encoder: (any SemanticTextEncoder)? = nil, minimumScore: Float? = nil) {
@@ -51,11 +64,27 @@ final class NoteReviewSession {
         interval = UserDefaults.standard.object(forKey: defaultsKey + ".interval") as? TimeInterval ?? 6 * 3600
     }
 
+    func beginForegroundWork() {
+        foregroundWork += 1
+        interrupt()
+    }
+
+    func endForegroundWork() {
+        foregroundWork = max(0, foregroundWork - 1)
+    }
+
+    func interrupt() {
+        job?.cancel()
+    }
+
     func run(reader: ReaderModel, automatic: Bool, withModel: Bool) {
-        guard !running, reader.loaded else { return }
+        guard !running, reader.loaded, !reader.busyAI, !reader.isImporting else { return }
+        #if os(iOS)
+            if automatic { guard reader.isActive else { return } }
+        #endif
         if automatic {
-            guard enabled, !reader.busyAI, !reader.isImporting,
-                !ProcessInfo.processInfo.isLowPowerModeEnabled,
+            guard enabled, foregroundWork == 0, !reader.memorySleep.running, !reader.busyAI, !reader.isImporting,
+                !isLowPowerModeEnabled(),
                 Date().timeIntervalSince(reader.lastInteraction) >= 120,
                 Date() >= nextCheck, !withModel || !reader.modelSettings.model.isEmpty
             else { return }
@@ -80,7 +109,12 @@ final class NoteReviewSession {
                 let input = NoteReviewInput(targets: targets)
                 let encoder = JSONEncoder()
                 encoder.dateEncodingStrategy = .iso8601
-                let response = try await reader.reviewNoteBatch(input)
+                let response =
+                    if let reviewOverride = self.reviewOverride {
+                        try await reviewOverride(reader, input)
+                    } else {
+                        try await reader.reviewNoteBatch(input)
+                    }
                 let decoder = JSONDecoder()
                 decoder.dateDecodingStrategy = .iso8601
                 let report = try decoder.decode(NoteReviewReport.self, from: Data(response.utf8))
@@ -204,6 +238,36 @@ final class NoteReviewSession {
 
 }
 
+struct NoteRevisionMutation {
+    struct Entry {
+        let noteID: UUID
+        let expectedModifiedAt: Date
+        let markdown: String
+        let sources: ChatSourceVersions
+    }
+
+    let entries: [Entry]
+
+    @MainActor
+    func apply(to state: inout LibraryState, excluding pending: Set<UUID>) -> Int {
+        var changed = 0
+        for entry in entries {
+            guard let index = state.readingNotes.firstIndex(where: { $0.id == entry.noteID }),
+                state.readingNotes[index].deletedAt == nil,
+                abs(entry.expectedModifiedAt.timeIntervalSince(state.readingNotes[index].modifiedAt)) < 0.001,
+                entry.sources.isCurrent(in: state, excluding: pending),
+                ReaderModel.isSmallNoteRevision(from: state.readingNotes[index].markdown, to: entry.markdown)
+            else { continue }
+            var note = state.readingNotes[index]
+            if note.applyAIRevision(entry.markdown, sources: entry.sources) {
+                state.readingNotes[index] = note
+                changed += 1
+            }
+        }
+        return changed
+    }
+}
+
 struct NoteReviewReport: Decodable {
     struct Revision: Decodable {
         let noteID: UUID
@@ -247,7 +311,7 @@ extension ReaderModel {
     func applyNoteReview(
         _ report: NoteReviewReport, contexts: [NoteReviewInput.Target] = []
     ) async throws -> Int {
-        var changed = 0
+        var entries: [NoteRevisionMutation.Entry] = []
         for revision in report.revisions.prefix(8) {
             guard let index = state.readingNotes.firstIndex(where: { $0.id == revision.noteID }),
                 state.readingNotes[index].deletedAt == nil,
@@ -256,10 +320,10 @@ extension ReaderModel {
             else { continue }
             // The model often echoes a related note's date. The runtime context, not the model's
             // date, is authoritative for detecting edits while the request was in flight.
-            let expectedDate = contexts.first(where: { $0.noteID == revision.noteID })?.modifiedAt
-            if let expectedDate,
-                abs(expectedDate.timeIntervalSince(state.readingNotes[index].modifiedAt)) >= 0.001
-            {
+            let expectedDate =
+                contexts.first(where: { $0.noteID == revision.noteID })?.modifiedAt
+                ?? state.readingNotes[index].modifiedAt
+            guard abs(expectedDate.timeIntervalSince(state.readingNotes[index].modifiedAt)) < 0.001 else {
                 continue
             }
             var sources = ChatSourceVersions()
@@ -276,18 +340,29 @@ extension ReaderModel {
                     sources.include(source)
                 }
             }
-            guard sourceStillValid else { continue }
-            var note = state.readingNotes[index]
-            guard Self.isSmallNoteRevision(from: note.markdown, to: revision.markdown) else { continue }
-            if note.applyAIRevision(revision.markdown, sources: sources) {
-                changed += 1
-                state.readingNotes[index] = note
-            }
+            guard sourceStillValid,
+                Self.isSmallNoteRevision(from: state.readingNotes[index].markdown, to: revision.markdown)
+            else { continue }
+            entries.append(
+                .init(
+                    noteID: revision.noteID, expectedModifiedAt: expectedDate,
+                    markdown: revision.markdown, sources: sources))
         }
-        if changed > 0, !(await save()) {
+        guard !entries.isEmpty else { return 0 }
+        let beforeRevisions = Dictionary(
+            uniqueKeysWithValues: entries.compactMap { entry in
+                state.readingNotes.first { $0.id == entry.noteID }.map { ($0.id, $0.revisions?.count ?? 0) }
+            })
+        guard await save(noteRevisionMutation: NoteRevisionMutation(entries: entries)) else {
             throw ReaderError.message("笔记修订未能保存。")
         }
-        return changed
+        return entries.reduce(into: 0) { count, entry in
+            if let note = state.readingNotes.first(where: { $0.id == entry.noteID }),
+                (note.revisions?.count ?? 0) > (beforeRevisions[entry.noteID] ?? 0)
+            {
+                count += 1
+            }
+        }
     }
 
     /// A silent pass may add or correct a clause, but it must not rewrite the reader's note.

@@ -638,3 +638,50 @@ private func closeReadingRepairsOnlyRejectedNumbersAndKeepsTheOtherSections(
     #expect(result.annotations.count == 5)
     #expect(result.sections.map(\.heading) == ["一句话概括", "还能排除哪种解释"])
 }
+
+@Test func closeReadingExtractsTheFirstBalancedJSONObjectWithoutCountingBracesInsideStrings() {
+    let raw = """
+        以下是结果：
+        ```json
+        {"text":"花括号 } 和 \\"引号\\" 都在字符串里","nested":{"n":1}}
+        ```
+        """
+    let slice = try? #require(CloseReadingEngine.extractJSONObject(from: raw))
+    #expect(slice.map(String.init) == #"{"text":"花括号 } 和 \"引号\" 都在字符串里","nested":{"n":1}}"#)
+}
+
+private actor CloseReadingCallCounter {
+    private(set) var windowCalls = 0
+    func recordWindow() { windowCalls += 1 }
+}
+
+@Test func closeReadingResumesFromACompletedWindowCheckpointWithoutCallingTheModelAgain() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let sentence = "A held-out sample improved accuracy from 71% to 78%."
+    let paper = try await closeReadingFixture(root: root, texts: [sentence])
+    let corpus = try await CloseReadingCorpus.read(paper: paper, root: root, progress: { _ in })
+    let passage = try #require(corpus.windows.first?.first)
+    let quote = String(passage.evidence.text.prefix(24))
+    let note = CloseReadingAnnotation(
+        dimension: .evidence, source: passage.evidence, quote: quote,
+        markdown: "留出样本的准确率从 71% 升到 78%，相差 7 个百分点。", references: [])
+    let checkpoint = CloseReadingCheckpoint(
+        version: "fixture-v1", focus: "", totalWindows: corpus.windows.count,
+        coverage: corpus.coverage, completedWindows: 1, notes: [note], seenAnalyses: [],
+        stages: [], supplementaryWindows: 0, missedSupplement: 0,
+        annotatedSources: [passage.evidence.id], rejected: 0, skippedWindows: [:])
+    let counter = CloseReadingCallCounter()
+    let analysis = try await CloseReadingEngine.run(
+        paper: paper, root: root, focus: "", version: "fixture-v1", checkpoint: checkpoint,
+        progress: { _ in },
+        complete: { system, user in
+            if system.contains("最终综合") {
+                return try CloseReadingNotebookInput.read(user).response()
+            }
+            await counter.recordWindow()
+            return "{}"
+        })
+    #expect(await counter.windowCalls == 0)
+    #expect(analysis.annotations.map(\.source.id) == [passage.evidence.id])
+}

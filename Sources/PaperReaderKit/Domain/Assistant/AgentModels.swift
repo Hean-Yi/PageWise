@@ -142,6 +142,7 @@ public struct AgentLimits: Sendable {
     public var maxResults = 12
     public var maxQuestionBytes = 8_000
     public var maxHistoryTurns = 6
+    public var maxTransientRetries = 2
     /// Tool definitions to advertise on this request. Standalone clients default to the full catalog.
     public var availableToolNames: Set<String>?
     public init() {}
@@ -215,6 +216,11 @@ public protocol AgentCompleting: Sendable {
         settings: ModelSettings, key: String, messages: [AgentMessage], limits: AgentLimits,
         onPartial: @escaping @Sendable (String) async throws -> Void
     ) async throws -> AgentMessage
+    func respondStreaming(
+        settings: ModelSettings, key: String, messages: [AgentMessage], limits: AgentLimits,
+        onPartial: @escaping @Sendable (String) async throws -> Void,
+        onReasoning: (@Sendable (String) async throws -> Void)?
+    ) async throws -> AgentMessage
 }
 
 extension AgentCompleting {
@@ -224,6 +230,19 @@ extension AgentCompleting {
     ) async throws -> AgentMessage {
         let result = try await respond(settings: settings, key: key, messages: messages, limits: limits)
         if let text = result.content { try await onPartial(text) }
+        return result
+    }
+
+    public func respondStreaming(
+        settings: ModelSettings, key: String, messages: [AgentMessage], limits: AgentLimits,
+        onPartial: @escaping @Sendable (String) async throws -> Void,
+        onReasoning: (@Sendable (String) async throws -> Void)?
+    ) async throws -> AgentMessage {
+        let result = try await respondStreaming(
+            settings: settings, key: key, messages: messages, limits: limits, onPartial: onPartial)
+        if let onReasoning, let thought = result.reasoningContent, !thought.isEmpty {
+            try await onReasoning(thought)
+        }
         return result
     }
 }

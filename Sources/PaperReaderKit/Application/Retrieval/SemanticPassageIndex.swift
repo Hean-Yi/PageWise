@@ -28,6 +28,7 @@ public struct SemanticPassage: Hashable, Sendable {
     public func hash(into hasher: inout Hasher) {
         hasher.combine(sourceID)
         hasher.combine(chunk)
+        hasher.combine(text)
     }
 
     public init(sourceID: UUID, chunk: Int = 0, text: String) {

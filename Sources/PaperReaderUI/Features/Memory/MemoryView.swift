@@ -49,7 +49,17 @@ struct MemoryView: View {
             Text("使用当前模型服务，发送本批记忆并计入 API 用量。")
                 .font(.caption).foregroundStyle(ReaderTheme.muted)
             @Bindable var noteReview = model.noteReview
-            Toggle("空闲时整理笔记", isOn: $noteReview.enabled)
+            HStack {
+                Toggle("空闲时整理笔记", isOn: $noteReview.enabled)
+                Spacer()
+                if noteReview.running {
+                    ProgressView().controlSize(.small)
+                    Button("停止") { noteReview.interrupt() }
+                } else {
+                    Button("整理笔记") { noteReview.run(reader: model, automatic: false, withModel: true) }
+                        .disabled(model.state.readingNotes.allSatisfy { $0.deletedAt != nil })
+                }
+            }
             Picker("整理间隔", selection: $noteReview.interval) {
                 Text("30 分钟").tag(TimeInterval(1_800))
                 Text("1 小时").tag(TimeInterval(3_600))
@@ -61,6 +71,9 @@ struct MemoryView: View {
             .pickerStyle(.menu)
             Text("只有新增笔记或阅读状态变化时才调用模型；更新会追加为新修订，保留原笔记。")
                 .font(.caption).foregroundStyle(ReaderTheme.muted)
+            if let reviewMessage = noteReview.message {
+                Text(verbatim: reviewMessage).font(.caption).foregroundStyle(ReaderTheme.muted)
+            }
             if let message = sleep.message {
                 Text(verbatim: message).font(.caption).foregroundStyle(ReaderTheme.muted)
             }

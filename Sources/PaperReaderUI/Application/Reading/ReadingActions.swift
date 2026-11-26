@@ -5,6 +5,7 @@ extension ReaderModel {
     public func touch() {
         lastInteraction = Date()
         if memorySleep.running { memorySleep.interrupt() }
+        if noteReview.running { noteReview.interrupt() }
         if readingStart == nil && isActive { beginReading() }
     }
     public func beginReading() {
@@ -49,7 +50,10 @@ extension ReaderModel {
         isActive = active
         researchBriefMaintenance.setActive(active)
         #if os(iOS)
-            if !active { memorySleep.interrupt() }
+            if !active {
+                memorySleep.interrupt()
+                noteReview.interrupt()
+            }
         #endif
         if active {
             pdfDocumentTranslation.activate(session: pdfBilingual)
@@ -71,6 +75,9 @@ extension ReaderModel {
     public func tick() {
         if isActive { researchBriefMaintenance.tick() }
         if memorySleep.enabled { memorySleep.run(reader: self, automatic: true, withModel: true) }
+        if noteReview.enabled && !memorySleep.running {
+            noteReview.run(reader: self, automatic: true, withModel: true)
+        }
         if Date().timeIntervalSince(lastInteraction) > 300 {
             endReading()
         } else if readingStart != nil {

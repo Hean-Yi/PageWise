@@ -122,7 +122,7 @@ public final class LibraryAgent {
         var turn = AgentTurn(question: question)
         if cardID == nil,
             let response = reader.respondToMemoryCommand(question)
-                ?? reader.respondToRememberCommand(question)
+                ?? reader.respondToRememberCommand(question, turnID: turn.id)
         {
             turn.answer = response
             turns.append(turn)
@@ -147,7 +147,9 @@ public final class LibraryAgent {
         }
         reader.touch()
         let sleep = reader.memorySleep
+        let noteReview = reader.noteReview
         sleep.beginForegroundWork()
+        noteReview.beginForegroundWork()
         isRunning = true
         activeTurnID = turn.id
         let currentEpoch = epoch
@@ -171,7 +173,10 @@ public final class LibraryAgent {
             seed = nil
         }
         runTask = Task { [weak self] in
-            defer { sleep.endForegroundWork() }
+            defer {
+                sleep.endForegroundWork()
+                noteReview.endForegroundWork()
+            }
             guard let self else { return }
             defer {
                 if self.activeTurnID == turn.id {
@@ -445,8 +450,10 @@ public final class LibraryAgent {
             reader.state.memories.contains(where: { !$0.deleted && !$0.isResponsePreference }),
             !ResearchQuestionProposal.isOperational(ownQuestion)
         {
+            let shelfID = paperID.flatMap { reader.state.paperShelfIDs[$0.uuidString] } ?? reader.activeShelfID
             let found = try await reader.researchMemory.relevant(
-                to: ownQuestion, paperID: paperID, state: reader.state, excluding: reader.pendingImportIDs)
+                to: ownQuestion, paperID: paperID, shelfID: shelfID, state: reader.state,
+                excluding: reader.pendingImportIDs)
             let effective = try await reader.effectiveSleepMemory(
                 question: ownQuestion, paperID: paperID, recalled: found)
             if !effective.sources.isEmpty { versions.sleepRevision = reader.memorySleep.edition.revision }
@@ -487,152 +494,195 @@ public final class LibraryAgent {
                     "\n本轮目标论文的登记 paper_id 为 \(id.uuidString)，共有 \(doc.pageCount) 个 PDF 原页，可从第 \(firstPage) 页核对。"
             }
         }
-        var remainingRounds = max(0, limits.maxRounds)
-        var remainingCalls = max(0, limits.maxToolCalls)
-        instructions +=
-            "\n工具预算为 \(remainingRounds) 轮、\(remainingCalls) 次调用。同轮多项分别计数。按本轮目标规划，只合并确有需要的独立调用。为结果卡或写笔记留出一轮。剩余两轮或两次时优先交付；预算用尽后另有一次只作答的机会，依据已有证据说明已知及待核实之处。"
-        let user = AgentMessage(role: "user", content: question)
-        var prior = Array(history.suffix(max(0, limits.maxHistoryTurns)))
-        var current = [user]
-        var finalReason: String?
         var explicitlyPresented = false
-        let endpoint = try settings.endpointURL()
-        let displaysProviderThinking = endpoint.host == "api.deepseek.com" && endpoint.port == nil
-        var callIDs = Set(prior.flatMap { $0 }.flatMap { $0.toolCalls ?? [] }.map(\.id))
-        toolLoop: while true {
-            try check(epoch)
-            try checkSourceContext()
-            let answerOnly = finalReason != nil || remainingRounds == 0 || remainingCalls == 0
-            let budget =
-                answerOnly
-                ? "\(finalReason ?? "工具预算已用完。")工具已关闭。"
-                : "当前剩余 \(remainingRounds) 轮工具、\(remainingCalls) 次调用（含本轮）。"
-            let system = AgentMessage(role: "system", content: instructions + "\n" + budget)
-            var messages = [system] + prior.flatMap { $0 } + current
-            while try JSONEncoder().encode(messages).count > limits.maxContextBytes {
-                if !prior.isEmpty {
-                    prior.removeFirst()
-                } else if let lastGroup = current.lastIndex(where: { $0.toolCalls?.isEmpty == false }) {
-                    // Discard complete tool exchanges so no reply loses its matching call.
-                    // Result cards remain available in the UI. The model only summarizes evidence it sees.
-                    current.removeSubrange(lastGroup...)
-                    finalReason = "部分工具结果超过上下文容量，未纳入本次总结。"
-                    continue toolLoop
-                } else {
-                    throw ReaderError.message("上下文达到上限，请缩小范围或新建对话。")
+        var textCadence = AssistantDraftCadence()
+        var reasoningCadence = AssistantDraftCadence()
+        var currentRoundThoughtIndex: Int?
+        let capturedVersions = versions
+        let capturedPersonalContext = personalContext
+        try await AgentLoopRunner.run(
+            client: client, settings: settings, key: key, limits: limits,
+            instructions: instructions, userQuestion: question, personalContext: personalContext,
+            priorHistory: history,
+            availableTools: { @MainActor in
+                self.availableToolNames(for: noteRequest, canRecommend: seed != nil, organization: organization)
+            },
+            beforeRequest: { @MainActor in
+                try self.check(epoch)
+                try self.checkSourceContext()
+                textCadence = AssistantDraftCadence()
+                reasoningCadence = AssistantDraftCadence()
+                currentRoundThoughtIndex = nil
+            },
+            onPersonalContextIncluded: { @MainActor in
+                if !capturedPersonalContext.isEmpty {
+                    self.remember(capturedVersions)
+                    self.updateTurn(turnID) { $0.suppliedPreferences = capturedVersions }
+                    try self.checkSourceContext()
                 }
-                messages = [system] + prior.flatMap { $0 } + current
-            }
-            // Attach personal context to this request only, as data. Preserve signed tool exchanges
-            // and leave the bounded conversation history free of standalone profile copies.
-            if !personalContext.isEmpty, let index = messages.lastIndex(where: { $0.role == "user" }) {
-                let ordinary = messages[index].content
-                messages[index].content = personalContext + "\n本轮问题：\n" + (messages[index].content ?? "")
-                if try JSONEncoder().encode(messages).count <= limits.maxContextBytes {
-                    remember(versions)
-                    updateTurn(turnID) { $0.suppliedPreferences = versions }
-                    try checkSourceContext()
-                } else {
-                    messages[index].content = ordinary
+            },
+            onPartialText: { text in
+                try Task.checkCancellation()
+                guard textCadence.shouldPublish(text) else { return }
+                if noteRequest == nil {
+                    try self.receiveDraft(text, turnID: turnID, epoch: epoch)
                 }
-            }
-            let drafts = AssistantDraftCadence()
-            var requestLimits = limits
-            requestLimits.maxToolCalls = answerOnly ? 0 : remainingCalls
-            requestLimits.availableToolNames = availableToolNames(
-                for: noteRequest, canRecommend: seed != nil, organization: organization)
-            let response: AgentMessage
-            do {
-                response = try await client.respondStreaming(
-                    settings: settings, key: key, messages: messages, limits: requestLimits
-                ) { [weak self] text in
-                    try Task.checkCancellation()
-                    guard drafts.shouldPublish(text) else { return }
-                    guard let self else { throw CancellationError() }
-                    if noteRequest == nil { try await self.receiveDraft(text, turnID: turnID, epoch: epoch) }
+            },
+            onPartialReasoning: { thought in
+                try Task.checkCancellation()
+                guard reasoningCadence.shouldPublish(thought) else { return }
+                guard self.epoch == epoch, self.activeTurnID == turnID else { return }
+                self.updateTurn(turnID) { turn in
+                    currentRoundThoughtIndex = turn.upsertStreamingThinking(
+                        thought, at: currentRoundThoughtIndex)
                 }
-                if (response.toolCalls?.count ?? 0) > requestLimits.maxToolCalls {
-                    throw AgentToolBudgetError.batchExceedsRemainingCalls
+            },
+            onBudgetExceeded: { @MainActor in
+                try? self.check(epoch)
+                self.updateTurn(turnID) { $0.answer = "" }
+            },
+            onAssistantResponse: { @MainActor response, isToolRound in
+                try self.check(epoch)
+                try self.checkSourceContext()
+                self.updateTurn(turnID) { turn in
+                    turn.finalizeProcess(
+                        response, thinkingIndex: currentRoundThoughtIndex, toolRound: isToolRound)
+                    if isToolRound, !turn.answer.isEmpty { turn.answer = "" }
                 }
-            } catch AgentToolBudgetError.batchExceedsRemainingCalls {
-                try check(epoch)
-                updateTurn(turnID) { $0.answer = "" }
-                guard !answerOnly else { throw ReaderError.message("工具已关闭，模型仍请求调用。已有结果可在工具记录中查看。") }
-                finalReason = "上批调用超过剩余额度，整批未执行。"
-                continue
-            }
-            try check(epoch)
-            try checkSourceContext()
-            guard response.role == "assistant", try JSONEncoder().encode(response).count <= limits.maxResponseBytes
-            else {
-                throw ReaderError.message("模型响应格式或长度无效。")
-            }
-            let calls = response.toolCalls ?? []
-            if calls.isEmpty {
+            },
+            executeBatch: { @MainActor calls, currentMessages in
+                try await self.executeToolBatch(
+                    calls, currentMessages: currentMessages, turnID: turnID, epoch: epoch,
+                    noteRequest: noteRequest, seed: seed, organization: organization,
+                    explicitlyPresented: &explicitlyPresented)
+            },
+            onCheckpoint: { @MainActor current, prior, system in
+                try self.retainCompletedHistory(current, after: prior, system: system, epoch: epoch)
+            },
+            onFinalAnswer: { @MainActor response, system, current, prior in
                 guard let text = response.content?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else {
                     throw ReaderError.message("模型没有返回完整回答。")
                 }
-                updateTurn(turnID) { turn in
-                    turn.recordProcess(response, displaysThinking: displaysProviderThinking, toolRound: false)
+                self.updateTurn(turnID) { turn in
                     let savedQuestion = turn.cards.contains { $0.researchMemoryID != nil }
                     let savedNote = turn.presentedResults.contains { $0.purpose == .readingNote }
                     if ResearchQuestionProposal.isWriteRequest(turn.question), savedQuestion {
-                        if noteRequest == nil {
-                            turn.answer = "待查研究问题已保存。"
-                        } else if savedNote {
-                            turn.answer = "待查研究问题和原文笔记均已保存。"
-                        } else {
-                            turn.answer = "待查研究问题已保存。原文笔记尚需一段可核对的出处。"
-                        }
+                        let status =
+                            if noteRequest == nil {
+                                "待查研究问题已保存。"
+                            } else if savedNote {
+                                "待查研究问题和原文笔记均已保存。"
+                            } else {
+                                "待查研究问题已保存。原文笔记尚需一段可核对的出处。"
+                            }
+                        turn.answer = Self.mergedReceiptAnswer(status: status, modelText: text)
                     } else if savedNote {
-                        turn.answer = "已保存原文笔记。待查研究问题尚未保存。"
+                        turn.answer = Self.mergedReceiptAnswer(
+                            status: "已保存原文笔记。待查研究问题尚未保存。", modelText: text)
                     } else if let noteRequest, CloseReadingIntent.isRequested(noteRequest.instruction) {
-                        turn.answer = "尚未生成精读。请指定书库中的目标论文，或在论文助读里点「AI 精读」。"
+                        turn.answer = Self.mergedReceiptAnswer(
+                            status: "尚未生成精读。请指定书库中的目标论文，或在论文助读里点「AI 精读」。", modelText: text)
                     } else if noteRequest != nil {
-                        turn.answer = "尚未保存笔记。请指定一段可核对的原文，或选中要标记的句子再试。"
+                        turn.answer = Self.mergedReceiptAnswer(
+                            status: "尚未保存笔记。请指定一段可核对的原文，或选中要标记的句子再试。", modelText: text)
                     } else if turn.answer != text {
                         turn.answer = text
                     }
                 }
-                current.append(AgentMessage(role: "assistant", content: turns.last?.answer))
-                try retainCompletedHistory(current, after: prior, system: system, epoch: epoch)
-                return
-            }
-            remainingRounds -= 1
-            remainingCalls -= calls.count
-            for call in calls {
-                guard call.type == "function", !call.id.isEmpty, call.id.utf8.count <= 128,
-                    callIDs.insert(call.id).inserted
-                else {
-                    throw ReaderError.message("工具调用标识重复或格式无效。")
+                var updated = current
+                updated.append(AgentMessage(role: "assistant", content: self.turns.last?.answer))
+                try self.retainCompletedHistory(updated, after: prior, system: system, epoch: epoch)
+            })
+    }
+
+    private static func mergedReceiptAnswer(status: String, modelText: String) -> String {
+        let trimmed = modelText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed != status else { return status }
+        return status + "\n\n" + trimmed
+    }
+
+    private func executeToolBatch(
+        _ calls: [AgentToolCall], currentMessages: [AgentMessage], turnID: UUID, epoch: UUID,
+        noteRequest: AgentNoteRequest?, seed: AgentRecommendationSeed?, organization: Set<String>,
+        explicitlyPresented: inout Bool
+    ) async throws -> AgentLoopRunner.BatchOutcome {
+        let pendingCardTools: Set<String> = [
+            "prepare_delete_paper", "prepare_delete_shelf", "prepare_local_import",
+        ]
+        let names = Set(calls.map(\.function.name))
+        let mixedCardBatch = !names.isDisjoint(with: pendingCardTools) && !names.isSubset(of: pendingCardTools)
+        let singleCallOnly: Set<String> = [
+            "ask_user", "create_reading_note", "close_read_paper", "propose_research_question",
+            "remember_preference", "propose_memory", "revise_memory", "forget_memory",
+        ]
+        var activityIDs: [UUID] = []
+        for call in calls {
+            let activity = AgentActivity(toolName: call.function.name)
+            activityIDs.append(activity.id)
+            updateTurn(turnID) { $0.activities.append(activity) }
+        }
+
+        struct CallFailure: Sendable {
+            let message: String
+            let canRefineQuery: Bool
+        }
+
+        enum CallResult: Sendable {
+            case success(AgentToolOutcome)
+            case failure(CallFailure)
+        }
+
+        let results: [CallResult]
+        if !mixedCardBatch, AgentToolConcurrency.canRunConcurrently(calls) {
+            // Read-only tools are independent network/database reads. Start them together and
+            // collect in request order so result cards stay aligned with the model's calls.
+            let tasks = calls.enumerated().map { index, call in
+                let activityID = activityIDs[index]
+                return Task { @MainActor [weak self] in
+                    guard let self else {
+                        return CallResult.failure(
+                            CallFailure(message: "工具执行已取消。", canRefineQuery: false))
+                    }
+                    do {
+                        let outcome = try await self.execute(
+                            call, epoch: epoch, noteRequest: noteRequest, recommendationSeed: seed,
+                            organization: organization
+                        ) { subject in
+                            self.updateTurn(turnID) { turn in
+                                if let row = turn.activities.firstIndex(where: { $0.id == activityID }) {
+                                    turn.activities[row].subject = subject
+                                }
+                            }
+                        }
+                        return .success(outcome)
+                    } catch {
+                        return .failure(
+                            CallFailure(
+                                message: Self.safeError(error, fallback: "工具执行失败，请稍后重试。"),
+                                canRefineQuery: (error as? FederatedSearchError)?.canRefineQuery
+                                    ?? (error as? ArxivQueryError)?.canRefineQuery ?? false))
+                    }
                 }
             }
-            updateTurn(turnID) { turn in
-                turn.recordProcess(response, displaysThinking: displaysProviderThinking, toolRound: true)
-                if !turn.answer.isEmpty { turn.answer = "" }
+            results = await withTaskCancellationHandler {
+                var ordered: [CallResult] = []
+                ordered.reserveCapacity(tasks.count)
+                for task in tasks { ordered.append(await task.value) }
+                return ordered
+            } onCancel: {
+                for task in tasks { task.cancel() }
             }
-            current.append(response)
-            let pendingCardTools: Set<String> = [
-                "prepare_delete_paper", "prepare_delete_shelf", "prepare_local_import",
-            ]
-            let names = Set(calls.map(\.function.name))
-            let mixedCardBatch = !names.isDisjoint(with: pendingCardTools) && !names.isSubset(of: pendingCardTools)
-            for call in calls {
+            try Task.checkCancellation()
+        } else {
+            var sequential: [CallResult] = []
+            for (index, call) in calls.enumerated() {
                 try check(epoch)
-                let activity = AgentActivity(toolName: call.function.name)
-                updateTurn(turnID) { $0.activities.append(activity) }
-                let content: String
+                let activityID = activityIDs[index]
                 do {
                     if mixedCardBatch {
                         throw ReaderError.message("请先完成检索和归类，再单独请求确认卡。")
                     }
-                    if [
-                        "ask_user", "create_reading_note", "close_read_paper", "propose_research_question",
-                        "remember_preference", "propose_memory", "revise_memory", "forget_memory",
-                    ].contains(
-                        call.function.name),
-                        calls.count != 1
-                    {
+                    if singleCallOnly.contains(call.function.name), calls.count != 1 {
                         throw ReaderError.message("请单独调用此工具。")
                     }
                     let outcome = try await execute(
@@ -640,21 +690,39 @@ public final class LibraryAgent {
                         organization: organization
                     ) { subject in
                         self.updateTurn(turnID) { turn in
-                            if let index = turn.activities.firstIndex(where: { $0.id == activity.id }) {
-                                turn.activities[index].subject = subject
+                            if let row = turn.activities.firstIndex(where: { $0.id == activityID }) {
+                                turn.activities[row].subject = subject
                             }
                         }
                     }
-                    try check(epoch)
+                    sequential.append(.success(outcome))
+                } catch is CancellationError {
+                    throw CancellationError()
+                } catch {
+                    sequential.append(
+                        .failure(
+                            CallFailure(
+                                message: Self.safeError(error, fallback: "工具执行失败，请稍后重试。"),
+                                canRefineQuery: (error as? FederatedSearchError)?.canRefineQuery
+                                    ?? (error as? ArxivQueryError)?.canRefineQuery ?? false)))
+                }
+            }
+            results = sequential
+        }
+
+        try check(epoch)
+        var toolMessages: [AgentMessage] = []
+        var changedOverview = false
+
+        for (index, call) in calls.enumerated() {
+            let activityID = activityIDs[index]
+            let content: String
+            switch results[index] {
+            case .success(let outcome):
+                do {
                     if outcome.changedResearchOverview {
-                        prior.removeAll()
+                        changedOverview = true
                         history.removeAll()
-                        let outdated = Set(
-                            current.flatMap { $0.toolCalls ?? [] }.filter { $0.function.name == "research_overview" }
-                                .map(\.id))
-                        for index in current.indices where current[index].toolCallID.map(outdated.contains) == true {
-                            current[index].content = #"{"research_overview_changed":true}"#
-                        }
                     }
                     for card in outcome.cards {
                         if let id = card.readingNoteID, let version = card.noteModifiedAt, let paperID = card.paperID {
@@ -668,7 +736,7 @@ public final class LibraryAgent {
                     }
                     content = outcome.content
                     updateTurn(turnID) { turn in
-                        if let index = turn.activities.firstIndex(where: { $0.id == activity.id }) {
+                        if let row = turn.activities.firstIndex(where: { $0.id == activityID }) {
                             if let prompt = outcome.clarification { turn.clarification = prompt }
                             var known = Set(turn.cards.map(\.id))
                             turn.cards.append(
@@ -714,62 +782,73 @@ public final class LibraryAgent {
                                     turn.registerAction(card, purpose: purpose)
                                 }
                             }
-                            turn.activities[index].status = .succeeded
-                            turn.activities[index].cardIDs = outcome.cards.map(\.id)
-                            turn.activities[index].isTruncated = outcome.truncated
-                            turn.activities[index].message = outcome.message
+                            turn.activities[row].status = .succeeded
+                            turn.activities[row].cardIDs = outcome.cards.map(\.id)
+                            turn.activities[row].isTruncated = outcome.truncated
+                            turn.activities[row].message = outcome.message
                         }
                     }
-                } catch is CancellationError { throw CancellationError() } catch {
+                } catch is CancellationError {
+                    throw CancellationError()
+                } catch {
                     try check(epoch)
                     let message = Self.safeError(error, fallback: "工具执行失败，请稍后重试。")
                     updateTurn(turnID) { turn in
-                        if let index = turn.activities.firstIndex(where: { $0.id == activity.id }) {
-                            turn.activities[index].status = .failed
-                            turn.activities[index].message = message
+                        if let row = turn.activities.firstIndex(where: { $0.id == activityID }) {
+                            turn.activities[row].status = .failed
+                            turn.activities[row].message = message
                         }
                     }
-                    let seedTitle = call.function.name == "recommend_related" ? seed?.title : nil
-                    content = try Self.errorResult(
-                        message, seedTitle: seedTitle,
-                        canRefineQuery: (error as? FederatedSearchError)?.canRefineQuery
-                            ?? (error as? ArxivQueryError)?.canRefineQuery,
-                        maxBytes: limits.maxToolResultBytes)
+                    content = try Self.errorResult(message, maxBytes: limits.maxToolResultBytes)
                 }
-                let result = AgentMessage(role: "tool", content: content, toolCallID: call.id)
-                current.append(result)
-            }
-            // A silent memory write has no further model decision to make. Checkpoint and finish
-            // immediately instead of spending another model round on an empty acknowledgement.
-            let silentMemoryTools: Set<String> = ["propose_memory", "revise_memory", "forget_memory"]
-            if names.isSubset(of: silentMemoryTools) {
+            case .failure(let failure):
+                try check(epoch)
                 updateTurn(turnID) { turn in
-                    if turn.answer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                        turn.answer = "研究记忆已更新。"
+                    if let row = turn.activities.firstIndex(where: { $0.id == activityID }) {
+                        turn.activities[row].status = .failed
+                        turn.activities[row].message = failure.message
                     }
                 }
-                try retainCompletedHistory(current, after: prior, system: system, epoch: epoch)
-                return
+                let seedTitle = call.function.name == "recommend_related" ? seed?.title : nil
+                content = try Self.errorResult(
+                    failure.message, seedTitle: seedTitle,
+                    canRefineQuery: failure.canRefineQuery,
+                    maxBytes: limits.maxToolResultBytes)
             }
-            // Checkpoint only after every tool reply matches this assistant message. Later
-            // request failures must not discard the evidence already shown in result cards.
-            try retainCompletedHistory(current, after: prior, system: system, epoch: epoch)
-            if let turn = turns.last {
-                if turn.clarification != nil
-                    || turn.presentedResults.contains(where: { [.removal, .localImport].contains($0.purpose) })
-                {
-                    return
+            toolMessages.append(AgentMessage(role: "tool", content: content, toolCallID: call.id))
+        }
+
+        // A silent memory write has no further model decision to make. Checkpoint and finish
+        // immediately instead of spending another model round on an empty acknowledgement.
+        let silentMemoryTools: Set<String> = ["propose_memory", "revise_memory", "forget_memory"]
+        if names.isSubset(of: silentMemoryTools) {
+            updateTurn(turnID) { turn in
+                if turn.answer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    turn.answer = "研究记忆已更新。"
                 }
+            }
+            return .init(toolMessages: toolMessages, changedResearchOverview: changedOverview, shouldStopEarly: true)
+        }
+        var shouldStopEarly = false
+        if let turn = turns.last {
+            if turn.clarification != nil
+                || turn.presentedResults.contains(where: { [.removal, .localImport].contains($0.purpose) })
+            {
+                shouldStopEarly = true
+            } else {
                 let wantsQuestion = ResearchQuestionProposal.isWriteRequest(turn.question)
                 let savedQuestion = turn.cards.contains { $0.researchMemoryID != nil }
                 if turn.presentedResults.contains(where: { $0.purpose == .readingNote }),
                     !wantsQuestion || savedQuestion
                 {
-                    return
+                    shouldStopEarly = true
+                } else if wantsQuestion && savedQuestion && noteRequest == nil {
+                    shouldStopEarly = true
                 }
-                if wantsQuestion && savedQuestion && noteRequest == nil { return }
             }
         }
+        return .init(
+            toolMessages: toolMessages, changedResearchOverview: changedOverview, shouldStopEarly: shouldStopEarly)
     }
 
     private func availableToolNames(for noteRequest: AgentNoteRequest?, canRecommend: Bool, organization: Set<String>)
@@ -797,6 +876,8 @@ public final class LibraryAgent {
                 || ResearchQuestionProposal.isWriteRequest(turn.question)
                 || turn.question.range(
                     of: #"(?i)记忆|记住|记录|更正|修订|memory"#, options: .regularExpression) != nil
+                || (!ResearchQuestionProposal.isOperational(turn.question)
+                    && ReaderPreference.declaredClauses(in: turn.question).isEmpty)
         {
             names.formUnion(["propose_memory", "revise_memory"])
         }
@@ -841,8 +922,12 @@ public final class LibraryAgent {
     private func receiveDraft(_ text: String, turnID: UUID, epoch: UUID) throws {
         try check(epoch)
         guard activeTurnID == turnID else { throw CancellationError() }
-        // A recalled private memory can change while the provider is streaming. Publish only the verified final answer.
-        guard recalledSources == nil else { return }
+        do {
+            try checkSourceContext()
+        } catch {
+            updateTurn(turnID) { $0.answer = "" }
+            throw error
+        }
         guard let index = turns.lastIndex(where: { $0.id == turnID }), turns[index].answer != text else { return }
         turns[index].answer = text
     }
@@ -885,11 +970,26 @@ public final class LibraryAgent {
 }
 
 extension AgentTurn {
-    fileprivate mutating func recordProcess(_ response: AgentMessage, displaysThinking: Bool, toolRound: Bool) {
-        if displaysThinking, let thought = response.reasoningContent?.trimmingCharacters(in: .whitespacesAndNewlines),
+    fileprivate mutating func upsertStreamingThinking(_ thought: String, at existingIndex: Int?) -> Int? {
+        let cleaned = thought.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleaned.isEmpty else { return existingIndex }
+        if let existingIndex, processNotes.indices.contains(existingIndex),
+            processNotes[existingIndex].kind == .thinking
+        {
+            processNotes[existingIndex] = .init(
+                beforeActivityCount: processNotes[existingIndex].beforeActivityCount,
+                kind: .thinking, text: cleaned)
+            return existingIndex
+        }
+        processNotes.append(.init(beforeActivityCount: activities.count, kind: .thinking, text: cleaned))
+        return processNotes.count - 1
+    }
+
+    fileprivate mutating func finalizeProcess(_ response: AgentMessage, thinkingIndex: Int?, toolRound: Bool) {
+        if let thought = response.reasoningContent?.trimmingCharacters(in: .whitespacesAndNewlines),
             !thought.isEmpty
         {
-            processNotes.append(.init(beforeActivityCount: activities.count, kind: .thinking, text: thought))
+            _ = upsertStreamingThinking(thought, at: thinkingIndex)
         }
         if toolRound, let progress = response.content?.trimmingCharacters(in: .whitespacesAndNewlines),
             !progress.isEmpty

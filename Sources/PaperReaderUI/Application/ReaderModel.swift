@@ -304,7 +304,8 @@ public final class ReaderModel {
         presentingReflow: (paperID: UUID, jobID: UUID)? = nil, insertingNote: AnchoredNoteInsertion? = nil,
         closeReading: (notes: [AnchoredNoteInsertion], report: ChatTurn)? = nil,
         obsidianBinding: ObsidianNoteBinding? = nil, proposingQuestion: ResearchQuestionProposal? = nil,
-        proposingMemory: MemoryStatementProposal? = nil, preferenceChange: ReaderPreferenceChange? = nil
+        proposingMemory: MemoryStatementProposal? = nil, memoryMutation: MemoryRecordMutation? = nil,
+        noteRevisionMutation: NoteRevisionMutation? = nil, preferenceChange: ReaderPreferenceChange? = nil
     ) async -> Bool {
         guard loaded else { return false }
         let previous = saveQueue
@@ -320,6 +321,12 @@ public final class ReaderModel {
                 if let deletingPaper, self.readingPaper == deletingPaper { self.endReading() }
                 var snapshot = self.state
                 if let preferenceChange, !preferenceChange.apply(to: &snapshot) { return false }
+                if let memoryMutation, !memoryMutation.apply(to: &snapshot) { return false }
+                if let noteRevisionMutation,
+                    noteRevisionMutation.apply(to: &snapshot, excluding: self.pendingImportIDs) == 0
+                {
+                    return false
+                }
                 if let proposingQuestion {
                     guard proposingQuestion.isEligible(in: snapshot, excluding: self.pendingImportIDs) else {
                         return false
@@ -421,6 +428,22 @@ public final class ReaderModel {
                 if let report { snapshot.chats.append(report) }
                 let changes = try await store.save(snapshot, respectingCancellation: cancellable, deleting: removed)
                 if let preferenceChange, !preferenceChange.apply(to: &self.state) {
+                    try await store.save(self.state)
+                    return false
+                }
+                if let memoryMutation {
+                    if !memoryMutation.apply(to: &self.state) {
+                        try await store.save(self.state)
+                        return false
+                    }
+                    if let trigger = memoryMutation.auditTrigger {
+                        try? await store.recordMemoryAudit(
+                            memoryID: memoryMutation.memoryID, action: memoryMutation.auditAction, trigger: trigger)
+                    }
+                }
+                if let noteRevisionMutation,
+                    noteRevisionMutation.apply(to: &self.state, excluding: self.pendingImportIDs) == 0
+                {
                     try await store.save(self.state)
                     return false
                 }

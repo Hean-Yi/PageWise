@@ -77,3 +77,56 @@ private struct AgentErrorTransport: HTTPTransport {
         }
     }
 }
+
+private actor ReasoningCapture {
+    var text: [String] = []
+    var reasoning: [String] = []
+    func partial(_ value: String) { text.append(value) }
+    func thought(_ value: String) { reasoning.append(value) }
+}
+
+@Test func streamReportsProviderReasoningIncrementallyAndRetainsTheFinalReasoning() async throws {
+    let capture = ReasoningCapture()
+    let decoder = ChatCompletionStreamDecoder(
+        onPartial: { await capture.partial($0) },
+        onReasoning: { await capture.thought($0) })
+    let events = [
+        #"{"choices":[{"delta":{"reasoning_content":"先核对"}}]}"#,
+        #"{"choices":[{"delta":{"reasoning_content":"预算是否匹配。"}}]}"#,
+        #"{"choices":[{"delta":{"content":"答案"}}]}"#,
+        #"{"choices":[{"delta":{},"finish_reason":"stop"}]}"#,
+    ]
+    for event in events { try await decoder.consume(Data(("data: " + event + "\n\n").utf8)) }
+    try await decoder.consume(Data("data: [DONE]\n\n".utf8))
+    let (message, reason) = try await decoder.finishMessage()
+    #expect(reason == "stop")
+    #expect(await capture.reasoning == ["先核对", "先核对预算是否匹配。"])
+    #expect(await capture.text == ["答案"])
+    #expect(message.reasoningContent == "先核对预算是否匹配。")
+    #expect(message.content == "答案")
+}
+
+@Test func streamSplitsInlineThinkBlocksAcrossChunksWithoutLeakingThemIntoTheAnswer() async throws {
+    let capture = ReasoningCapture()
+    let decoder = ChatCompletionStreamDecoder(
+        onPartial: { await capture.partial($0) },
+        onReasoning: { await capture.thought($0) })
+    let deltas = ["<thi", "nk>内部", "推理</th", "ink>正文"]
+    for delta in deltas {
+        let event = String(
+            decoding: try JSONSerialization.data(withJSONObject: [
+                "choices": [["delta": ["content": delta]]]
+            ]), as: UTF8.self)
+        try await decoder.consume(Data(("data: " + event + "\n\n").utf8))
+    }
+    let stop = #"{"choices":[{"delta":{},"finish_reason":"stop"}]}"#
+    try await decoder.consume(Data(("data: " + stop + "\n\ndata: [DONE]\n\n").utf8))
+    let (message, reason) = try await decoder.finishMessage()
+    #expect(reason == "stop")
+    let thoughts = await capture.reasoning
+    #expect(thoughts.last == "内部推理")
+    #expect(thoughts.allSatisfy { "内部推理".hasPrefix($0) })
+    #expect(await capture.text == ["正文"])
+    #expect(message.reasoningContent == "内部推理")
+    #expect(message.content == "正文")
+}

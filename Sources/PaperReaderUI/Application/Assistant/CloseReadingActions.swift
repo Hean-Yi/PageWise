@@ -62,6 +62,14 @@ extension ReaderModel {
         let scope = try discussionNoteScope(for: paperID)
         guard let document = paperID == selectedPaperID ? paper : state.papers.first(where: { $0.id == paperID })
         else { throw ReaderError.message("这篇论文已不在书库中。") }
+        let version = closeReadingVersion(for: scope)
+        let checkpointURL = closeReadingCheckpointURL(for: paperID)
+        let priorCheckpoint: CloseReadingCheckpoint? =
+            regenerate
+            ? nil
+            : (try? Data(contentsOf: checkpointURL)).flatMap {
+                try? JSONDecoder().decode(CloseReadingCheckpoint.self, from: $0)
+            }
         busyAI = true
         closeReadingPaperID = paperID
         closeReadingProgress = "准备本地原文…"
@@ -71,7 +79,15 @@ extension ReaderModel {
             let background = CloseReadingBackground()
             let useMemory = ReaderPreference.permitsRecall(focus)
             let analysis = try await CloseReadingEngine.run(
-                paper: document, root: root, focus: focus,
+                paper: document, root: root, focus: focus, version: version,
+                checkpoint: priorCheckpoint,
+                onCheckpoint: { checkpoint in
+                    let directory = checkpointURL.deletingLastPathComponent()
+                    try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+                    if let data = try? JSONEncoder().encode(checkpoint) {
+                        try? data.write(to: checkpointURL, options: .atomic)
+                    }
+                },
                 retrieveNotes: { query in
                     guard useMemory else { return [] }
                     return try await background.retrieve(query, paperID: paperID, reader: self)
@@ -89,7 +105,9 @@ extension ReaderModel {
             var verifiedScope = scope
             verifiedScope.backgroundSources = background.versions
             try validateDiscussionScope(verifiedScope)
-            return try await saveCloseReading(analysis, scope: verifiedScope, focus: focus)
+            let saved = try await saveCloseReading(analysis, scope: verifiedScope, focus: focus)
+            try? FileManager.default.removeItem(at: checkpointURL)
+            return saved
         }
         closeReadingTask = task
         defer {
@@ -103,6 +121,12 @@ extension ReaderModel {
         } onCancel: {
             task.cancel()
         }
+    }
+
+    private func closeReadingCheckpointURL(for paperID: UUID) -> URL {
+        root.appendingPathComponent("DerivedIndexes", isDirectory: true)
+            .appendingPathComponent("CloseReading", isDirectory: true)
+            .appendingPathComponent(paperID.uuidString + ".json")
     }
 
     private func setCloseReadingProgress(_ text: String) { closeReadingProgress = text }

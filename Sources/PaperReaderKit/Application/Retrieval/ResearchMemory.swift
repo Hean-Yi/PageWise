@@ -105,7 +105,10 @@ public actor ResearchMemory {
         return candidate
     }
 
-    public func relevant(to query: String, paperID: UUID? = nil, state: LibraryState, excluding pending: Set<UUID> = [])
+    public func relevant(
+        to query: String, paperID: UUID? = nil, shelfID: UUID? = nil, scope: ResearchBrief.Scope = .library,
+        state: LibraryState, excluding pending: Set<UUID> = []
+    )
         async throws -> [MemoryItem]
     {
         let hasModel = usesVectors ? await semantic.isAvailable() : false
@@ -114,14 +117,29 @@ public actor ResearchMemory {
         let live = Set(active.map(\.id))
         for id in indexedTerms.keys where !live.contains(id) { indexedTerms[id] = nil }
         let words = Retriever.expandedTokens(String(query.prefix(1_000))).subtracting(Self.stopWords)
-        let broad = paperID == nil && query == "*"
+        let scopePaperID: UUID? =
+            if let paperID { paperID } else if case .paper(let id) = scope { id } else { nil }
+        let broad = scopePaperID == nil && query == "*"
         guard !words.isEmpty || broad else { return [] }
+        let effectiveShelfID: UUID? =
+            if case .shelf(let id) = scope {
+                id
+            } else if let shelfID {
+                shelfID
+            } else {
+                scopePaperID.flatMap { state.paperShelfIDs[$0.uuidString] }
+            }
         let origins = ResearchMemoryOrigins(state: state, excluding: pending)
+        var scopedActive: [MemoryItem] = []
         var passages: [SemanticPassage] = []
         var matches: [(item: MemoryItem, score: Int)] = []
         for memory in active {
             try Task.checkCancellation()
-            guard let origin = origins.resolve(memory) else { continue }
+            guard let origin = origins.resolve(memory),
+                memory.preference?.applies(paperID: scopePaperID, shelfID: effectiveShelfID) != false,
+                Self.scopeIncludes(scope, origin: origin, state: state)
+            else { continue }
+            scopedActive.append(memory)
             if hasModel {
                 passages.append(Self.passage(memory))
             }
@@ -155,8 +173,23 @@ public actor ResearchMemory {
             query, passages: passages, allowed: Set(passages.map(\.sourceID)), limit: 12)
         let ordered = SemanticPassageIndex.fused(
             lexical: Array(lexical.prefix(12)).map(\.id), semantic: found.map(\.passage.sourceID))
-        let byID = Dictionary(uniqueKeysWithValues: active.map { ($0.id, $0) })
+        let byID = Dictionary(uniqueKeysWithValues: scopedActive.map { ($0.id, $0) })
         return ordered.prefix(5).compactMap { byID[$0] }
+    }
+
+    private static func scopeIncludes(
+        _ scope: ResearchBrief.Scope, origin: ResearchMemoryOrigins.Origin, state: LibraryState
+    ) -> Bool {
+        switch (scope, origin) {
+        case (.library, _), (_, .reader):
+            return true
+        case (.paper(let target), .paper(let paperID)):
+            return target == paperID
+        case (.shelf(let target), .paper(let paperID)):
+            return state.paperShelfIDs[paperID.uuidString] == target
+        default:
+            return false
+        }
     }
 
     public func prepare(_ state: LibraryState) async throws {

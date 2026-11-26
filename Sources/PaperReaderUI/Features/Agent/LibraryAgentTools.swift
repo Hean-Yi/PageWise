@@ -1,7 +1,7 @@
 import Foundation
 import PaperReaderKit
 
-struct AgentToolOutcome {
+struct AgentToolOutcome: Sendable {
     var content: String
     var cards: [AgentCard]
     var truncated: Bool
@@ -174,20 +174,20 @@ extension LibraryAgent {
         case .reviseMemory(let memoryID, let statement):
             guard let turn = activeTurn, ReaderPreference.permitsRecall(turn.question),
                 limits.availableToolNames?.contains(call.function.name) != false,
-                let index = reader.state.memories.firstIndex(where: { $0.id == memoryID }),
-                !reader.state.memories[index].deleted, !reader.state.memories[index].userEdited
+                let current = reader.state.memories.first(where: { $0.id == memoryID }),
+                !current.deleted, !current.userEdited
             else { throw ReaderError.message("这条记忆当前不可由 Agent 修改。") }
-            guard reader.state.memories[index].correct(to: statement) else {
+            var probe = current
+            guard probe.correct(to: statement) else {
                 throw ReaderError.message("新的记忆措辞没有变化。")
             }
-            let revisedID = reader.state.memories[index].id
-            guard await reader.save(cancellable: true) else {
+            let mutation = MemoryRecordMutation(
+                operation: .revise(id: memoryID, statement: statement), auditTrigger: turn.question)
+            guard await reader.save(cancellable: true, memoryMutation: mutation) else {
                 try check(epoch)
                 throw ReaderError.message("来源已变化或保存失败，此次未修改记忆。")
             }
             try check(epoch)
-            try? await reader.store.recordMemoryAudit(
-                memoryID: revisedID, action: "revise", trigger: turn.question)
             onSubject("研究记忆已静默修订")
             return AgentToolOutcome(
                 content: "{\"ok\":true,\"memory_id\":\"\(memoryID.uuidString)\"}", cards: [], truncated: false,
@@ -197,10 +197,9 @@ extension LibraryAgent {
                 turn.question.range(
                     of: #"(?i)忘掉|忘记|删除|移除|撤回|forget|remove|delete"#, options: .regularExpression) != nil,
                 limits.availableToolNames?.contains(call.function.name) != false,
-                let index = reader.state.memories.firstIndex(where: { $0.id == memoryID }),
-                !reader.state.memories[index].deleted, !reader.state.memories[index].userEdited
+                let target = reader.state.memories.first(where: { $0.id == memoryID }),
+                !target.deleted, !target.userEdited
             else { throw ReaderError.message("本轮没有明确要求删除这条记忆。") }
-            let target = reader.state.memories[index]
             let ignored: Set<String> = ["的", "了", "在", "和", "与", "及", "这", "那", "个", "记录", "记忆", "旧", "新"]
             let questionTerms = Retriever.tokens(turn.question).subtracting(ignored)
             let scored = reader.state.memories.compactMap { item -> (MemoryItem, Int)? in
@@ -214,16 +213,12 @@ extension LibraryAgent {
                 turn.question.localizedCaseInsensitiveContains(target.text)
                     || (topOverlap > 0 && uniqueTop.count == 1 && uniqueTop.first?.0.id == target.id)
             else { throw ReaderError.message("记忆删除目标不唯一或与请求不匹配。") }
-            guard reader.state.memories[index].forget() else {
-                throw ReaderError.message("这条记忆已经删除。")
-            }
-            guard await reader.save(cancellable: true) else {
+            let mutation = MemoryRecordMutation(operation: .forget(id: target.id), auditTrigger: turn.question)
+            guard await reader.save(cancellable: true, memoryMutation: mutation) else {
                 try check(epoch)
                 throw ReaderError.message("来源已变化或保存失败，此次未删除记忆。")
             }
             try check(epoch)
-            try? await reader.store.recordMemoryAudit(
-                memoryID: target.id, action: "forget", trigger: turn.question)
             onSubject("研究记忆已静默删除")
             return AgentToolOutcome(
                 content: "{\"ok\":true,\"memory_id\":\"\(memoryID.uuidString)\"}", cards: [], truncated: false,
@@ -735,8 +730,11 @@ extension LibraryAgent {
             matching: query, limit: min(4, limits.maxResults), scope: scope)
         try check(epoch)
         if let query {
+            let scopeShelfID: UUID? =
+                if case .shelf(let id) = scope { id } else { reader.activeShelfID }
             let found = try await reader.researchMemory.relevant(
-                to: query, paperID: scopePaperID, state: reader.state, excluding: reader.pendingImportIDs)
+                to: query, paperID: scopePaperID, shelfID: scopeShelfID, scope: scope, state: reader.state,
+                excluding: reader.pendingImportIDs)
             try check(epoch)
             let effective = try await reader.effectiveSleepMemory(
                 question: query, paperID: scopePaperID, recalled: found, scope: scope)

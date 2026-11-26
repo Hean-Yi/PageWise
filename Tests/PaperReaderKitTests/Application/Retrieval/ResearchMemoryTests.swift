@@ -172,3 +172,36 @@ import Testing
         readerMessage: turn.question, quote: "记住匹配预算的比较")
     #expect(!MemoryStatementProposal.isEligible(proposal.item, in: state, excluding: []))
 }
+
+@Test func researchMemoryFiltersPaperAndShelfScopeBeforeRankingTopResults() async throws {
+    let targetShelf = try Shelf(name: "Target")
+    let otherShelf = try Shelf(name: "Other")
+    let targetPaper = Paper(
+        title: "Target", digest: "target", originalPath: "target.pdf", pageCount: 1, blocks: [], warnings: [],
+        canReflow: false)
+    let otherPaper = Paper(
+        title: "Other", digest: "other", originalPath: "other.pdf", pageCount: 1, blocks: [], warnings: [],
+        canReflow: false)
+    var state = LibraryState()
+    state.papers = [targetPaper, otherPaper]
+    state.shelves = [targetShelf, otherShelf]
+    state.paperShelfIDs[targetPaper.id.uuidString] = targetShelf.id
+    state.paperShelfIDs[otherPaper.id.uuidString] = otherShelf.id
+    let target = MemoryItem(
+        agentStatement: "预算", sourceID: targetPaper.id, source: .paper(paperID: targetPaper.id))
+    let crowded = (0..<6).map { index in
+        MemoryItem(
+            agentStatement: "预算 预算 实验 对比 结论 \(index)", sourceID: otherPaper.id,
+            source: .paper(paperID: otherPaper.id))
+    }
+    state.memories = [target] + crowded
+    let index = ResearchMemory()
+    let paperHits = try await index.relevant(
+        to: "预算", paperID: targetPaper.id, scope: .paper(targetPaper.id), state: state)
+    #expect(paperHits.map(\.id) == [target.id])
+    let shelfHits = try await index.relevant(
+        to: "预算", scope: .shelf(targetShelf.id), state: state)
+    #expect(shelfHits.map(\.id) == [target.id])
+    let libraryHits = try await index.relevant(to: "预算", scope: .library, state: state)
+    #expect(libraryHits.count == 5)
+}

@@ -4,6 +4,8 @@ public struct ModelClient: Sendable {
     let transport: any HTTPTransport
     public init(transport: any HTTPTransport = NetworkTransport()) { self.transport = transport }
 
+    public func agentClient() -> AgentClient { AgentClient(transport: transport) }
+
     public func complete(
         settings: ModelSettings, key: String, system: String, user: String, jsonOutput: Bool = false,
         maxOutputTokens: Int = 4096

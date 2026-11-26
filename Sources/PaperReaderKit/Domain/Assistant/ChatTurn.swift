@@ -6,6 +6,8 @@ public struct ChatTurn: Identifiable, Codable, Sendable, Equatable {
     public var question: String
     public var selection: String
     public var answer: String
+    /// Provider reasoning shown while the answer streams; nil when the model returns none.
+    public var reasoning: String?
     public var evidence: [Evidence]
     /// Absent on legacy turns, whose supplied background cannot be reconstructed safely.
     public var backgroundSources: ChatSourceVersions?
