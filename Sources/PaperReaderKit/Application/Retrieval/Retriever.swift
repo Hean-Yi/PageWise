@@ -6,9 +6,46 @@ public enum Retriever {
         question: String, selection: String, current: Paper, notes: [Evidence], readingNotes: [Evidence] = [],
         selectedBlockIDs: Set<UUID> = [], originalPages: [Evidence] = []
     ) -> [Evidence] {
-        let terms = tokens(question + " " + selection)
+        context(
+            question: question, selection: selection, current: current, notes: notes, readingNotes: readingNotes,
+            selectedBlockIDs: selectedBlockIDs, originalPages: originalPages, semanticScores: [:])
+    }
+
+    /// Hybrid retrieval for the current paper. The lexical path still works without the bundled
+    /// model; when E5 is installed its cross-language matches lift the blocks a Chinese question
+    /// would otherwise score at zero against English prose.
+    public static func context(
+        question: String, selection: String, current: Paper, notes: [Evidence], readingNotes: [Evidence] = [],
+        selectedBlockIDs: Set<UUID> = [], originalPages: [Evidence] = [],
+        semantic: SemanticPassageIndex?
+    ) async -> [Evidence] {
+        var semanticScores: [UUID: Double] = [:]
+        if let semantic, !current.blocks.isEmpty {
+            let passages = current.blocks.prefix(400).map {
+                SemanticPassage(sourceID: $0.id, text: String($0.text.prefix(900)))
+            }
+            let query = String((question + " " + selection).prefix(1_600))
+            let matches =
+                (try? await semantic.matches(
+                    query, passages: passages, allowed: Set(passages.map(\.sourceID)), limit: 24)) ?? []
+            for (rank, match) in matches.enumerated() {
+                let boost = Double(matches.count - rank) / Double(max(1, matches.count))
+                semanticScores[match.passage.sourceID] = max(
+                    semanticScores[match.passage.sourceID] ?? 0, boost)
+            }
+        }
+        return context(
+            question: question, selection: selection, current: current, notes: notes, readingNotes: readingNotes,
+            selectedBlockIDs: selectedBlockIDs, originalPages: originalPages, semanticScores: semanticScores)
+    }
+
+    private static func context(
+        question: String, selection: String, current: Paper, notes: [Evidence], readingNotes: [Evidence],
+        selectedBlockIDs: Set<UUID>, originalPages: [Evidence], semanticScores: [UUID: Double]
+    ) -> [Evidence] {
+        let terms = expandedTokens(question + " " + selection)
         func rank(_ text: String) -> Double {
-            let words = tokens(text)
+            let words = expandedTokens(text)
             return Double(words.intersection(terms).count) / sqrt(Double(max(1, words.count)))
         }
         let pinned = current.blocks.indices.filter { index in
@@ -33,7 +70,9 @@ public enum Retriever {
         if total <= characterBudget {
             for index in current.blocks.indices { add(index) }
         } else {
-            let scores = current.blocks.map { rank($0.text) }
+            let scores = current.blocks.map {
+                rank($0.text) + (semanticScores[$0.id] ?? 0)
+            }
             let ranked = current.blocks.indices.sorted { lhs, rhs in
                 scores[lhs] == scores[rhs] ? lhs < rhs : scores[lhs] > scores[rhs]
             }

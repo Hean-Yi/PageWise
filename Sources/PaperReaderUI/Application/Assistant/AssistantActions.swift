@@ -102,7 +102,7 @@ extension ReaderModel {
             async let ranked = Retriever.context(
                 question: question, selection: selection, current: paper, notes: notes,
                 readingNotes: recalled,
-                selectedBlockIDs: pinnedIDs, originalPages: originalPages)
+                selectedBlockIDs: pinnedIDs, originalPages: originalPages, semantic: paperEvidenceIndex)
             var evidence = await ranked.filter { $0.readingNoteID == nil || referencedReadingNote(for: $0) != nil }
             try Task.checkCancellation()
             guard lastPaperDeletion[paper.id] == deletion else { return }

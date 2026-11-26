@@ -55,6 +55,7 @@ public final class ReaderModel {
     public var reflowBodyCount = 0
     @ObservationIgnored var reflowPresenting: Set<UUID> = []
     let researchMemory: ResearchMemory
+    let paperEvidenceIndex: SemanticPassageIndex
     let memorySleep: MemorySleepSession
     let noteReview: NoteReviewSession
     let researchBriefMaintenance: ResearchBriefMaintenance
@@ -163,6 +164,10 @@ public final class ReaderModel {
         researchMemory = ResearchMemory(
             encoder: semanticEncoder, cacheURL: indexDirectory.appendingPathComponent("memories.sqlite"),
             minimumScore: hasSemanticModel ? 0.15 : nil)
+        paperEvidenceIndex = SemanticPassageIndex(
+            encoder: semanticEncoder,
+            cacheURL: indexDirectory.appendingPathComponent("paper-evidence.sqlite"),
+            minimumScore: hasSemanticModel ? 0.15 : nil)
         researchBriefMaintenance = ResearchBriefMaintenance(
             store: store, notes: readingNoteIndex, memories: researchMemory)
         importer = PDFImporter(root: location)
@@ -266,6 +271,13 @@ public final class ReaderModel {
         selectedPaperID = id
         retainedReadingID = nil
         reflowBodyCount = 0
+        if let paper = currentEdition, !paper.blocks.isEmpty {
+            let index = paperEvidenceIndex
+            let passages = paper.blocks.prefix(400).map {
+                SemanticPassage(sourceID: $0.id, text: String($0.text.prefix(900)))
+            }
+            Task(priority: .utility) { try? await index.prepare(Array(passages)) }
+        }
         if let current = currentEdition {
             let position = workspace(for: current.id).position
             if let key = position?.pageKey, !current.readingPages.contains(where: { $0.id.uuidString == key }) {

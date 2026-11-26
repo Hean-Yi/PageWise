@@ -39,3 +39,33 @@ import Testing
         question: "解释", selection: "最后的消融实验", current: paper, notes: [], selectedBlockIDs: [selected.id])
     #expect(hits.first?.blockID == selected.id)
 }
+
+private struct TargetSemanticEncoder: SemanticTextEncoder {
+    var identifier: String { "fixture-target-semantics" }
+    func isInstalled() async -> Bool { true }
+    func retrievalQuery(_ text: String) async throws -> (vector: [Float], minimum: Float)? {
+        (text.contains("目标语义") ? [1, 0] : [0, 1], 0.5)
+    }
+    func encode(_ texts: [String], as role: SemanticTextRole) async throws -> [[Float]] {
+        texts.map { $0.contains("THE_TARGET") ? [1, 0] : [0, 1] }
+    }
+}
+
+@Test func currentPaperHybridRetrievalUsesSemanticMatchesForZeroLexicalOverlap() async throws {
+    let filler = (0..<4).map {
+        TextBlock(sourcePage: $0, text: String(repeating: "unrelated background prose ", count: 200))
+    }
+    let target = TextBlock(sourcePage: 9, text: "THE_TARGET passage explains the result.")
+    let paper = Paper(
+        title: "Hybrid", digest: "hybrid", originalPath: "hybrid.pdf", pageCount: 10,
+        blocks: filler + [target], warnings: [], canReflow: true)
+    let index = SemanticPassageIndex(encoder: TargetSemanticEncoder(), minimumScore: 0.5)
+    try await index.prepare(
+        paper.blocks.map { SemanticPassage(sourceID: $0.id, text: String($0.text.prefix(900))) })
+    let hits = await Retriever.context(
+        question: "目标语义是什么？", selection: "", current: paper, notes: [], semantic: index)
+    #expect(hits.first?.blockID == target.id)
+    let lexical = Retriever.context(
+        question: "目标语义是什么？", selection: "", current: paper, notes: [])
+    #expect(lexical.first?.blockID != target.id)
+}
