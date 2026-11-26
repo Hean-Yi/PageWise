@@ -100,11 +100,12 @@ func e5UnseenCrossLanguageRanking() async throws {
         ReadingNote(paperID: UUID(), contentVersion: "unseen", anchors: [], markdown: pair.0)
     }
     let titles = Dictionary(uniqueKeysWithValues: notes.map { ($0.paperID, "Unseen collection") })
-    let index = ReadingNoteMemoryIndex(encoder: encoder)
+    let minimumScore = environment["PAGEWISE_BENCH_MINSCORE"].flatMap(Float.init)
+    let index = ReadingNoteMemoryIndex(encoder: encoder, minimumScore: minimumScore)
     var ranks: [Int] = []
     for (offset, pair) in pairs.enumerated() {
         let hits = try await index.search(
-            query: pair.1, notes: notes, paperTitles: titles, limit: 5, mode: .semantic)
+            query: pair.1, notes: notes, paperTitles: titles, limit: 5, mode: .hybrid)
         let rank = hits.firstIndex(where: { $0.readingNoteID == notes[offset].id }).map { $0 + 1 } ?? 0
         ranks.append(rank)
     }

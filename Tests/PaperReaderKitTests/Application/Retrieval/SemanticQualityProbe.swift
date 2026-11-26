@@ -78,7 +78,8 @@ func measureInstalledSemanticRetrieval() async throws {
         ReadingNote(paperID: UUID(), contentVersion: "bench", anchors: [], markdown: item.text)
     }
     let titles = Dictionary(uniqueKeysWithValues: notes.map { ($0.paperID, "Collection") })
-    let index = ReadingNoteMemoryIndex(encoder: encoder)
+    let minimumScore = env["PAGEWISE_BENCH_MINSCORE"].flatMap(Float.init)
+    let index = ReadingNoteMemoryIndex(encoder: encoder, minimumScore: minimumScore)
     let build = clock.now
     _ = try await index.search(query: "", notes: notes, paperTitles: titles, limit: 0)
     print("QUALITY prepare_ms", notes.count, ms(build))
