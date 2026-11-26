@@ -39,12 +39,13 @@ final class NoteReviewSession {
         didSet { UserDefaults.standard.set(interval, forKey: defaultsKey + ".interval") }
     }
 
-    init(store: LibraryStore, root: URL) {
+    init(store: LibraryStore, root: URL, encoder: (any SemanticTextEncoder)? = nil, minimumScore: Float? = nil) {
         self.store = store
         semantic = SemanticPassageIndex(
-            encoder: DeviceSemanticEncoder.shared,
+            encoder: encoder,
             cacheURL: root.appendingPathComponent("DerivedIndexes", isDirectory: true)
-                .appendingPathComponent("note-relations.sqlite"))
+                .appendingPathComponent("note-relations.sqlite"),
+            minimumScore: minimumScore)
         defaultsKey = "pagewise.noteReview." + root.standardizedFileURL.path
         enabled = UserDefaults.standard.object(forKey: defaultsKey + ".enabled") as? Bool ?? false
         interval = UserDefaults.standard.object(forKey: defaultsKey + ".interval") as? TimeInterval ?? 6 * 3600
@@ -160,7 +161,7 @@ final class NoteReviewSession {
     private func computeRelations(
         for note: ReadingNote, notes: [ReadingNote]
     ) async -> [(note: ReadingNote, overlap: Int, kind: NoteRelation.Kind)] {
-        let terms = Retriever.tokens(note.markdown)
+        let terms = Retriever.expandedTokens(note.markdown)
         let others = notes.filter { $0.id != note.id }
         let byID = Dictionary(others.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let passages = others.map { SemanticPassage(sourceID: $0.id, text: String($0.markdown.prefix(900))) }
@@ -171,7 +172,7 @@ final class NoteReviewSession {
             {
                 return matches.compactMap { match -> (ReadingNote, Int, NoteRelation.Kind)? in
                     guard let other = byID[match.passage.sourceID] else { return nil }
-                    let overlap = terms.intersection(Retriever.tokens(other.markdown)).count
+                    let overlap = terms.intersection(Retriever.expandedTokens(other.markdown)).count
                     let kind = Self.relationKind(note.markdown, other.markdown)
                     return (other, overlap, kind)
                 }
@@ -180,7 +181,7 @@ final class NoteReviewSession {
         return
             others
             .compactMap { other -> (ReadingNote, Int, NoteRelation.Kind)? in
-                let overlap = terms.intersection(Retriever.tokens(other.markdown)).count
+                let overlap = terms.intersection(Retriever.expandedTokens(other.markdown)).count
                 guard overlap >= 2 else { return nil }
                 return (other, overlap, Self.relationKind(note.markdown, other.markdown))
             }

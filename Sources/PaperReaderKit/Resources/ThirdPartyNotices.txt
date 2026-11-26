@@ -386,7 +386,7 @@ standalone and requires a support library to be linked with it.  This
 support library is itself covered by the above license.
 
 
-Optional retrieval model: intfloat/multilingual-e5-small (MIT)
+Bundled 4-bit retrieval model: intfloat/multilingual-e5-small (MIT)
 https://huggingface.co/intfloat/multilingual-e5-small
-Core ML conversion: tamikisg/multilingual-e5-small-coreml (MIT)
+4-bit Core ML conversion: tamikisg/multilingual-e5-small-coreml (MIT)
 https://huggingface.co/tamikisg/multilingual-e5-small-coreml

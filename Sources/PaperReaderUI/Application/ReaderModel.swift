@@ -131,7 +131,8 @@ public final class ReaderModel {
         root: URL? = nil, client: ModelClient = ModelClient(),
         credentials: any ModelCredentialStore = DeviceModelCredentials(),
         pageTextLocator: any FixedPageTextLocating = PDFPageTextLocator(),
-        translationValidation: PDFTranslationValidationConfiguration? = nil
+        translationValidation: PDFTranslationValidationConfiguration? = nil,
+        useSemanticModel: Bool = false
     ) throws {
         self.client = client
         self.pageTextLocator = pageTextLocator
@@ -142,15 +143,26 @@ public final class ReaderModel {
         self.root = location
         pdfTranslations = PDFSentenceTranslationStore(root: location)
         self.translationValidation = translationValidation ?? PDFTranslationValidationConfiguration.load(root: location)
-        self.paperSearchWarmup = PaperSearchWarmup(root: location)
+        let hasSemanticModel =
+            useSemanticModel
+            && (ProcessInfo.processInfo.environment["PAGEWISE_DISABLE_BUNDLED_MODEL"] != "1")
+        let semanticEncoder: (any SemanticTextEncoder)? = hasSemanticModel ? DeviceSemanticEncoder.shared : nil
+        self.paperSearchWarmup = PaperSearchWarmup(
+            root: location, encoder: semanticEncoder, minimumScore: hasSemanticModel ? 0.15 : nil)
         store = try LibraryStore(directory: location)
-        memorySleep = MemorySleepSession(store: store, root: location)
-        noteReview = NoteReviewSession(store: store, root: location)
+        memorySleep = MemorySleepSession(
+            store: store, root: location, encoder: semanticEncoder,
+            minimumScore: hasSemanticModel ? 0.15 : nil)
+        noteReview = NoteReviewSession(
+            store: store, root: location, encoder: semanticEncoder,
+            minimumScore: hasSemanticModel ? 0.15 : nil)
         let indexDirectory = location.appendingPathComponent("DerivedIndexes", isDirectory: true)
         readingNoteIndex = ReadingNoteMemoryIndex(
-            encoder: DeviceSemanticEncoder.shared, cacheURL: indexDirectory.appendingPathComponent("notes.sqlite"))
+            encoder: semanticEncoder, cacheURL: indexDirectory.appendingPathComponent("notes.sqlite"),
+            minimumScore: hasSemanticModel ? 0.15 : nil)
         researchMemory = ResearchMemory(
-            encoder: DeviceSemanticEncoder.shared, cacheURL: indexDirectory.appendingPathComponent("memories.sqlite"))
+            encoder: semanticEncoder, cacheURL: indexDirectory.appendingPathComponent("memories.sqlite"),
+            minimumScore: hasSemanticModel ? 0.15 : nil)
         researchBriefMaintenance = ResearchBriefMaintenance(
             store: store, notes: readingNoteIndex, memories: researchMemory)
         importer = PDFImporter(root: location)
@@ -216,6 +228,14 @@ public final class ReaderModel {
             researchBriefMaintenance.sourcesChanged()
             backfillLibraryAbstracts()
             paperSearchWarmup.enqueue(state.papers)
+            let notes = state.readingNotes
+            let titles = Dictionary(
+                state.papers.map { ($0.id, $0.title) }, uniquingKeysWith: { first, _ in first })
+            Task(priority: .utility) { [weak self] in
+                guard let self else { return }
+                await self.readingNoteIndex.warm(notes: notes, paperTitles: titles)
+                try? await self.researchMemory.prepare(self.state)
+            }
         } catch {
             loadFailure = error.localizedDescription
             message = error.localizedDescription

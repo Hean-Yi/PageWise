@@ -120,7 +120,10 @@ public final class LibraryAgent {
             return
         }
         var turn = AgentTurn(question: question)
-        if cardID == nil, let response = reader.respondToMemoryCommand(question) {
+        if cardID == nil,
+            let response = reader.respondToMemoryCommand(question)
+                ?? reader.respondToRememberCommand(question)
+        {
             turn.answer = response
             turns.append(turn)
             return

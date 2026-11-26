@@ -8,6 +8,18 @@ enum E5ModelResources {
     static let model = "MultilingualE5Small.mlmodelc"
     static let tokenizer = "sentencepiece.bpe.model"
     static let revision = "e5-4c124bb3-spm1"
+    static let bundledSubdirectory = "Embeddings/e5-int4"
+
+    /// The release build contains a 4-bit model. Development/test builds fall back to the
+    /// on-demand directory; callers must still verify that the directory is installed.
+    static var bundledParent: URL? {
+        Bundle.module.url(forResource: "e5-int4", withExtension: nil, subdirectory: "Embeddings")
+    }
+
+    static var defaultDirectory: URL {
+        bundledParent
+            ?? URL.applicationSupportDirectory.appendingPathComponent("PageWise/Models", isDirectory: true)
+    }
     private static let converted =
         "https://huggingface.co/tamikisg/multilingual-e5-small-coreml/resolve/4c124bb3c5fa88dba23279263df88e3d98fe0c51/"
     private static let upstream =

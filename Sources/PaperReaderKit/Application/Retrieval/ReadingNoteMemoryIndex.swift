@@ -29,6 +29,18 @@ public actor ReadingNoteMemoryIndex {
         usesVectors = encoder != nil
     }
 
+    /// True once the semantic vectors are ready. The first search returns lexical results while
+    /// this is false; callers never need to wait for a cold model before showing something.
+    public func isSemanticWarm() async -> Bool {
+        await semantic.isWarm()
+    }
+
+    /// Idle prewarm. A missing model or an empty corpus is a no-op.
+    public func warm(notes: [ReadingNote], paperTitles: [UUID: String]) async {
+        _ = try? await search(
+            query: "", notes: notes, paperTitles: paperTitles, limit: 0, mode: .hybrid)
+    }
+
     public func search(
         query: String, state: LibraryState, pending: Set<UUID>, excluding: UUID?, paperID: UUID?, limit: Int,
         includeArchived: Bool, mode: RetrievalMode = .hybrid
@@ -102,7 +114,8 @@ public actor ReadingNoteMemoryIndex {
             guard let indexed = postings[term] else { continue }
             let matches = unavailable.isEmpty ? indexed : indexed.subtracting(unavailable)
             guard !matches.isEmpty else { continue }
-            weights[term] = log(1 + Double(eligibleCount) / Double(matches.count))
+            let idf = log(1 + Double(eligibleCount) / Double(matches.count))
+            weights[term] = term.hasPrefix("concept:") || term.hasPrefix("phrase:") ? idf * 1.8 : idf
             candidates.formUnion(matches)
         }
         func weight(_ terms: Set<String>) -> Double {
@@ -215,7 +228,9 @@ public actor ReadingNoteMemoryIndex {
     ]
 
     private static func terms(in text: String) -> Set<String> {
-        Retriever.tokens(text).filter { $0.contains(where: { $0.isLetter || $0.isNumber }) && !stopWords.contains($0) }
+        Retriever.expandedTokens(text).filter {
+            $0.contains(where: { $0.isLetter || $0.isNumber }) && !stopWords.contains($0)
+        }
     }
 
     /// Chunk long Markdown so an observation near the end of a note remains citable verbatim.

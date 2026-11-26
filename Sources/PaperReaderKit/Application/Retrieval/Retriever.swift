@@ -86,6 +86,18 @@ public enum Retriever {
     // every Chinese word. Tokenize each script run independently, retaining the original word tokenizer.
     private static let scriptRuns = try! NSRegularExpression(pattern: #"\p{Han}+|[^\p{Han}]+"#)
 
+    /// Lexical tokens plus a small bilingual research vocabulary. This is the zero-download
+    /// fallback for note/memory retrieval; it is not a substitute for a semantic model.
+    public static func expandedTokens(_ value: String) -> Set<String> {
+        let base = tokens(value)
+        var result = base
+        result.formUnion(LocalSemanticLexicon.phraseConcepts(in: value))
+        for token in base {
+            result.formUnion(LocalSemanticLexicon.concepts(for: token))
+        }
+        return result
+    }
+
     public static func tokens(_ value: String) -> Set<String> {
         let text = value.lowercased()
         let chinese = NLTokenizer(unit: .word)

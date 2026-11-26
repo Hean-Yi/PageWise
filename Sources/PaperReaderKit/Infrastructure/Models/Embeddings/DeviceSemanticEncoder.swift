@@ -4,8 +4,7 @@ import Foundation
 import SentencePiece
 
 public actor DeviceSemanticEncoder: SemanticTextEncoder {
-    public static let shared = DeviceSemanticEncoder(
-        directory: URL.applicationSupportDirectory.appendingPathComponent("PageWise/Models", isDirectory: true))
+    public static let shared = DeviceSemanticEncoder(directory: E5ModelResources.defaultDirectory)
     public nonisolated let identifier = E5ModelResources.revision
     private let directory: URL
     private let transport: any HTTPTransport
@@ -35,6 +34,8 @@ public actor DeviceSemanticEncoder: SemanticTextEncoder {
     public func cancelInstall() { installation?.cancel() }
 
     public func uninstall() async throws {
+        // A bundled release model is immutable and must never be deleted by a settings action.
+        guard E5ModelResources.bundledParent == nil else { return }
         if let job = installation {
             job.cancel()
             _ = await job.result

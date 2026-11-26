@@ -33,7 +33,7 @@ private actor FixtureEncoder: SemanticTextEncoder {
     ) async throws -> [Evidence] {
         try await index.search(query: query, notes: [current], paperTitles: titles, mode: mode)
     }
-    #expect(try await search(index, note, "对齐", .lexical).isEmpty)
+    #expect(try await search(index, note, "天气", .lexical).isEmpty)
     #expect(try await search(index, note, "对齐").first?.text == note.markdown)
     #expect(try await search(index, note, "天气").isEmpty)
     #expect(await encoder.encodedPassages == 1)
@@ -75,6 +75,8 @@ private actor FixtureEncoder: SemanticTextEncoder {
     var paper = Paper(
         title: "Comparison", digest: "fixture", originalPath: "fixture.pdf", pageCount: 2,
         blocks: [distractor, evidence], warnings: [], canReflow: false)
+    try await index.refresh([paper])
+    try await index.warmVectors()
     let found = try await index.search("对齐", papers: [paper]).first
     #expect(found?.blockID == evidence.id)
     #expect(found?.sourcePage == 2)
