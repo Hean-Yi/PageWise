@@ -574,45 +574,6 @@ public enum CloseReadingEngine {
     }
 
     static func extractJSONObject(from raw: String) -> Substring? {
-        var source = raw[...]
-        if let fenceStart = source.range(of: "```"),
-            let lineEnd = source[fenceStart.upperBound...].firstIndex(of: "\n"),
-            let fenceEnd = source[lineEnd...].range(of: "```")
-        {
-            source = source[source.index(after: lineEnd)..<fenceEnd.lowerBound]
-        }
-        guard let start = source.firstIndex(of: "{") else { return nil }
-        var depth = 0
-        var inString = false
-        var escaped = false
-        var index = start
-        while index < source.endIndex {
-            let ch = source[index]
-            if inString {
-                if escaped {
-                    escaped = false
-                } else if ch == "\\" {
-                    escaped = true
-                } else if ch == "\"" {
-                    inString = false
-                }
-            } else {
-                if ch == "\"" {
-                    inString = true
-                } else if ch == "{" {
-                    depth += 1
-                } else if ch == "}" {
-                    depth -= 1
-                    if depth == 0 {
-                        return source[start...index]
-                    }
-                }
-            }
-            index = source.index(after: index)
-        }
-        if let end = source.lastIndex(of: "}"), start <= end {
-            return source[start...end]
-        }
-        return nil
+        ModelJSON.extractObject(from: raw).map { Substring($0) }
     }
 }
