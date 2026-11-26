@@ -7,9 +7,11 @@ import Testing
 
 private actor OversizedPromptTransport: HTTPTransport {
     private(set) var requestBytes: [Int] = []
+    private(set) var requestBodies: [String] = []
 
     func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) {
         requestBytes.append(request.httpBody?.count ?? 0)
+        requestBodies.append(String(decoding: request.httpBody ?? Data(), as: UTF8.self))
         let body = #"{"choices":[{"message":{"content":"{\"memory\":\"\"}"},"finish_reason":"stop"}]}"#
         return (
             Data(body.utf8),
@@ -21,6 +23,7 @@ private actor OversizedPromptTransport: HTTPTransport {
         -> HTTPURLResponse
     {
         requestBytes.append(request.httpBody?.count ?? 0)
+        requestBodies.append(String(decoding: request.httpBody ?? Data(), as: UTF8.self))
         let event = #"{"choices":[{"delta":{"content":"这段原文讨论对照条件 [S1]。"},"finish_reason":"stop"}]}"#
         try await onData(Data(("data: " + event + "\n\ndata: [DONE]\n\n").utf8))
         return HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
@@ -51,4 +54,6 @@ private actor OversizedPromptTransport: HTTPTransport {
     // The request body includes JSON overhead plus tool schemas. The hard budget is 80 KB, so a
     // little envelope headroom is expected; an untrimmed Chinese prompt would exceed 120 KB.
     #expect(sizes.allSatisfy { $0 <= 96_000 })
+    let bodies = await transport.requestBodies
+    #expect(!bodies.contains { $0.contains("读者背景（非学术证据）：") })
 }

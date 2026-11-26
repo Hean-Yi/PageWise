@@ -112,6 +112,16 @@ func modelServicesUseTheirWireFormatForTextReflowAndTools(_ preset: ModelService
     #expect(!capabilities.keepsToolsWhenDisabled)
     #expect(!capabilities.supportsThinkingToggle)
     #expect(!capabilities.disablesThinkingForStructuredOutput)
+
+    settings.model = "openai/o3-mini"
+    capabilities = ModelCapabilities.resolve(settings)
+    #expect(capabilities.family == .openAI)
+    #expect(capabilities.fixedSampling)
+
+    settings.model = "custom/video1-pro3"
+    capabilities = ModelCapabilities.resolve(settings)
+    #expect(capabilities.family == .other)
+    #expect(!capabilities.fixedSampling)
 }
 
 @Test func officialFamiliesKeepTheirDocumentedStructuredOutputQuirks() {

@@ -27,18 +27,26 @@ public struct ModelCapabilities: Sendable, Equatable {
         let officialDeepSeek = host == "api.deepseek.com" && endpoint?.port == nil
         let newerOpenAI =
             family == .openAI
-            && (model.contains("gpt-5") || model.contains("gpt-6") || model.contains("o1")
-                || model.contains("o3") || model.contains("o4"))
+            && (hasModelToken(model, "gpt-5") || hasModelToken(model, "gpt-6")
+                || hasModelToken(model, "o1") || hasModelToken(model, "o3") || hasModelToken(model, "o4"))
         let flash = family == .deepSeek || family == .glm ? model.hasSuffix("flash") : false
         return ModelCapabilities(
             family: family,
-            fixedSampling: family == .anthropic || (family == .kimi && model.contains("kimi-k"))
+            fixedSampling: family == .anthropic || (family == .kimi && hasModelToken(model, "kimi-k"))
                 || newerOpenAI,
             usesCompletionTokenLimit: family == .openAI || family == .kimi,
             rejectsJSONObjectResponseFormat: family == .anthropic,
+            // Only official DeepSeek/GLM endpoints accept the non-standard `thinking` field;
+            // unknown OpenAI-compatible gateways stay conservative so they do not reject the body.
             supportsThinkingToggle: provider == .deepSeek || provider == .glm || officialDeepSeek,
             disablesThinkingForStructuredOutput: flash,
             keepsToolsWhenDisabled: officialDeepSeek)
+    }
+
+    private static func hasModelToken(_ model: String, _ token: String) -> Bool {
+        let escaped = NSRegularExpression.escapedPattern(for: token)
+        return model.range(
+            of: #"(?:^|[/:_.-])"# + escaped + #"(?:$|[/:_.-]|\d)"#, options: .regularExpression) != nil
     }
 
     private static func family(provider: ModelServicePreset, model: String, host: String) -> Family {
@@ -59,7 +67,9 @@ public struct ModelCapabilities: Sendable, Equatable {
         if model.contains("kimi") || model.contains("moonshot") { return .kimi }
         if model.contains("glm") || model.contains("chatglm") { return .glm }
         if model.contains("qwen") || model.contains("qwq") { return .qwen }
-        if model.contains("gpt-") || model.contains("o1") || model.contains("o3") || model.contains("o4") {
+        if model.contains("gpt-") || hasModelToken(model, "o1") || hasModelToken(model, "o3")
+            || hasModelToken(model, "o4")
+        {
             return .openAI
         }
         return .other

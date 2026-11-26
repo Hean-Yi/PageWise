@@ -96,12 +96,15 @@ public enum AgentLoopRunner {
                 : "当前剩余 \(remainingRounds) 轮工具、\(remainingCalls) 次调用（含本轮）。"
             let system = AgentMessage(role: "system", content: baseInstructions)
             let toolNames = await availableTools()
+            let needsTrailingBudget = answerOnly || current.contains(where: { $0.role == "tool" })
+            let trailing = needsTrailingBudget ? AgentMessage(role: "user", content: "（系统状态）" + budget) : nil
             // Only the tool definitions actually advertised are sent, so reserve their real size.
-            // The tiny dynamic note rides on an existing assistant message; reserve a little extra.
+            // The dynamic per-round budget travels in a trailing ephemeral message so neither the
+            // system prompt nor completed assistant/tool messages ever mutate across rounds.
             let fitted = try AgentContextCompactor.fit(
                 system: system, prior: prior, current: current, maxContextBytes: limits.maxContextBytes,
-                reservedBytes: AgentClient.toolPayloadBytes(for: toolNames) + budget.utf8.count + 64,
-                personalContext: personalContext)
+                reservedBytes: answerOnly ? 0 : AgentClient.toolPayloadBytes(for: toolNames),
+                personalContext: personalContext, trailing: trailing)
             prior = fitted.prior
             current = fitted.current
             if let reason = fitted.finalReason {
@@ -112,11 +115,8 @@ public enum AgentLoopRunner {
                 [system] + prior.flatMap { $0 }
                 + (fitted.includedPersonalContext
                     ? AgentContextCompactor.applyingPersonalContext(personalContext, to: current) : current)
-            if let index = messages.lastIndex(where: {
-                $0.role == "assistant" && $0.toolCalls?.isEmpty == false
-            }) {
-                let existing = messages[index].content ?? ""
-                messages[index].content = existing + (existing.isEmpty ? "" : "\n") + "（系统状态）" + budget
+            if let trailing {
+                messages.append(trailing)
             }
             if fitted.includedPersonalContext, !personalContext.isEmpty {
                 try await onPersonalContextIncluded()

@@ -510,14 +510,16 @@ private actor ScriptedAgentLoopClient: AgentCompleting {
 }
 
 @Test @MainActor func agentLoopKeepsAStableSystemPrefixAndBudgetAtTheTail() async throws {
-    let call = AgentToolCall(id: "call_1", name: "search_library", arguments: "{}")
+    let call1 = AgentToolCall(id: "call_1", name: "search_library", arguments: "{}")
+    let call2 = AgentToolCall(id: "call_2", name: "search_library", arguments: "{}")
     let client = ScriptedAgentLoopClient([
-        AgentMessage(role: "assistant", content: "working", toolCalls: [call]),
+        AgentMessage(role: "assistant", content: "working 1", toolCalls: [call1]),
+        AgentMessage(role: "assistant", content: "working 2", toolCalls: [call2]),
         AgentMessage(role: "assistant", content: "done"),
     ])
     var limits = AgentLimits()
-    limits.maxRounds = 2
-    limits.maxToolCalls = 2
+    limits.maxRounds = 3
+    limits.maxToolCalls = 3
     limits.maxHistoryTurns = 4
     var personalIncluded = false
     var checkpoints: [[AgentMessage]] = []
@@ -538,8 +540,8 @@ private actor ScriptedAgentLoopClient: AgentCompleting {
         onPartialText: { _ in },
         onPartialReasoning: nil,
         onAssistantResponse: { _, _ in },
-        executeBatch: { _, _ in
-            .init(toolMessages: [AgentMessage(role: "tool", content: #"{"ok":true}"#, toolCallID: call.id)])
+        executeBatch: { calls, _ in
+            .init(toolMessages: calls.map { AgentMessage(role: "tool", content: #"{"ok":true}"#, toolCallID: $0.id) })
         },
         onCheckpoint: { current, _, _ in checkpoints.append(current) },
         onFinalAnswer: { response, _, _, _ in finalText = response.content ?? "" }
@@ -547,25 +549,29 @@ private actor ScriptedAgentLoopClient: AgentCompleting {
     #expect(finalText == "done")
     #expect(personalIncluded)
     let requests = await client.requests
-    #expect(requests.count == 2)
+    #expect(requests.count == 3)
     let systems = requests.compactMap { request in request.first(where: { $0.role == "system" })?.content }
     #expect(Set(systems).count == 1)
-    #expect(systems.allSatisfy { $0.hasPrefix("STABLE RULES") && $0.contains("工具预算为 2 轮") })
+    #expect(systems.allSatisfy { $0.hasPrefix("STABLE RULES") && $0.contains("工具预算为 3 轮") })
     #expect(!systems.contains { $0.contains("当前剩余") })
     // Personal context travels with the current question, and prior reasoning is not replayed.
     #expect(requests[0].last?.role == "user")
     #expect(requests[0].last?.content?.contains("PERSONAL CONTEXT") == true)
     #expect(!requests[0].contains { $0.content == "old private thought" })
     #expect(!requests[0].contains { $0.reasoningContent == "old private thought" })
-    // Only the dynamic remaining budget rides on the latest assistant tool-call, keeping the
-    // stable system prompt and the natural tail message untouched.
-    let carrier = requests[1].last { $0.role == "assistant" && $0.toolCalls?.isEmpty == false }
-    #expect(carrier?.content?.contains("当前剩余 1 轮") == true)
-    #expect(requests[1].last?.role == "tool")
+    // Dynamic remaining budget travels in a trailing ephemeral user message so every completed
+    // assistant and tool message stays byte-for-byte identical across later rounds.
+    let round2Prefix = Array(requests[1].dropLast())
+    let round3Prefix = Array(requests[2].prefix(round2Prefix.count))
+    #expect(round2Prefix == round3Prefix)
+    #expect(requests[1].last?.role == "user")
+    #expect(requests[1].last?.content?.contains("当前剩余 2 轮") == true)
+    #expect(requests[2].last?.role == "user")
+    #expect(requests[2].last?.content?.contains("当前剩余 1 轮") == true)
     // The ephemeral budget note is never persisted into the transcript.
-    #expect(checkpoints.count == 1)
-    #expect(!checkpoints[0].contains { $0.content?.contains("系统状态") == true })
-    #expect(!checkpoints[0].contains { $0.content?.contains("PERSONAL CONTEXT") == true })
+    #expect(checkpoints.count == 2)
+    #expect(checkpoints.allSatisfy { !$0.contains { $0.content?.contains("系统状态") == true } })
+    #expect(checkpoints.allSatisfy { !$0.contains { $0.content?.contains("PERSONAL CONTEXT") == true } })
 }
 
 @Test func completedAssistantReasoningIsNotReplayedInLaterTurns() async throws {
