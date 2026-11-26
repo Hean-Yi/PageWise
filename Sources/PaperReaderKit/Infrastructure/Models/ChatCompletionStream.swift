@@ -42,8 +42,7 @@ actor ChatCompletionStreamDecoder {
     private var received = 0
     private var calls: [Int: AgentToolCall] = [:]
     private var reasoning = ""
-    private var inlineThinkState: InlineThinkState = .initial
-    private var inlineCloseTag = "</think>"
+    private var inlineThinkState: InlineThinkState = .outsideThink
     private var finishReason: String?
     private var lastEmittedTextBytes = 0
     private var lastEmittedReasoningBytes = 0
@@ -51,23 +50,27 @@ actor ChatCompletionStreamDecoder {
     private let maxToolCalls: Int?
     private let onPartial: @Sendable (String) async throws -> Void
     private let onReasoning: (@Sendable (String) async throws -> Void)?
+    private let onTextDelta: (@Sendable (String) async throws -> Void)?
+    private let onReasoningDelta: (@Sendable (String) async throws -> Void)?
 
     private enum InlineThinkState {
-        case initial
-        case insideThink
-        case plainText
-        case finishedThink
+        case outsideThink
+        case insideThink(closeTag: String)
     }
 
     init(
         maxToolCalls: Int? = nil, emissionStride: Int = 128,
         onPartial: @escaping @Sendable (String) async throws -> Void,
-        onReasoning: (@Sendable (String) async throws -> Void)? = nil
+        onReasoning: (@Sendable (String) async throws -> Void)? = nil,
+        onTextDelta: (@Sendable (String) async throws -> Void)? = nil,
+        onReasoningDelta: (@Sendable (String) async throws -> Void)? = nil
     ) {
         self.maxToolCalls = maxToolCalls
         self.emissionStride = max(0, emissionStride)
         self.onPartial = onPartial
         self.onReasoning = onReasoning
+        self.onTextDelta = onTextDelta
+        self.onReasoningDelta = onReasoningDelta
     }
 
     /// Coalesce cumulative snapshots. Callers receive the same full-text contract, but SwiftUI
@@ -97,54 +100,80 @@ actor ChatCompletionStreamDecoder {
     }
 
     private var thinkCarry = ""
+    private static let inlineThinkTags: [(open: String, close: String)] = [
+        ("<think>", "</think>"),
+        ("<thought>", "</thought>"),
+        ("<thinking>", "</thinking>"),
+    ]
 
-    private func routeInlineContent(_ chunk: String) async throws -> (textDelta: String, reasoningDelta: String) {
-        if !reasoning.isEmpty && inlineThinkState == .initial {
-            inlineThinkState = .plainText
+    private func routeInlineContent(_ chunk: String) -> (textDelta: String, reasoningDelta: String) {
+        thinkCarry += chunk
+        var textDelta = ""
+        var reasoningDelta = ""
+        while !thinkCarry.isEmpty {
+            switch inlineThinkState {
+            case .outsideThink:
+                guard let lt = thinkCarry.firstIndex(of: "<") else {
+                    textDelta += thinkCarry
+                    thinkCarry = ""
+                    break
+                }
+                if lt > thinkCarry.startIndex {
+                    let prefix = String(thinkCarry[..<lt])
+                    // Ignore whitespace-only lead-in before an opening think tag at the start of a reply.
+                    if !(text.isEmpty && textDelta.isEmpty && prefix.allSatisfy(\.isWhitespace)) {
+                        textDelta += prefix
+                    }
+                    thinkCarry = String(thinkCarry[lt...])
+                }
+                let lower = thinkCarry.lowercased()
+                if let tag = Self.inlineThinkTags.first(where: { lower.hasPrefix($0.open) }) {
+                    thinkCarry = String(thinkCarry.dropFirst(tag.open.count))
+                    inlineThinkState = .insideThink(closeTag: tag.close)
+                    continue
+                }
+                if Self.inlineThinkTags.contains(where: { $0.open.hasPrefix(lower) && lower.count < $0.open.count }) {
+                    return (textDelta, reasoningDelta)
+                }
+                textDelta.append(thinkCarry.removeFirst())
+            case .insideThink(let closeTag):
+                if let range = thinkCarry.range(of: closeTag, options: .caseInsensitive) {
+                    reasoningDelta += thinkCarry[..<range.lowerBound]
+                    var remainder = String(thinkCarry[range.upperBound...])
+                    if text.isEmpty && textDelta.isEmpty {
+                        remainder = remainder.replacingOccurrences(
+                            of: #"^\s+"#, with: "", options: .regularExpression)
+                    }
+                    thinkCarry = remainder
+                    inlineThinkState = .outsideThink
+                    continue
+                }
+                // Hold back up to closeTag.count - 1 trailing chars in case the closing tag spans chunks.
+                let keep = min(thinkCarry.count, closeTag.count - 1)
+                let splitIndex = thinkCarry.index(thinkCarry.endIndex, offsetBy: -keep)
+                if splitIndex > thinkCarry.startIndex {
+                    reasoningDelta += thinkCarry[..<splitIndex]
+                    thinkCarry = String(thinkCarry[splitIndex...])
+                }
+                return (textDelta, reasoningDelta)
+            }
         }
+        return (textDelta, reasoningDelta)
+    }
+
+    private func flushThinkCarry() async throws {
+        guard !thinkCarry.isEmpty else { return }
+        let trailing = thinkCarry
+        thinkCarry = ""
         switch inlineThinkState {
-        case .plainText, .finishedThink:
-            return (chunk, "")
-        case .initial:
-            thinkCarry += chunk
-            let trimmed = thinkCarry.drop(while: \.isWhitespace)
-            if trimmed.isEmpty {
-                return ("", "")
-            }
-            let lower = trimmed.lowercased()
-            let tags = [("<think>", "</think>"), ("<thought>", "</thought>"), ("<thinking>", "</thinking>")]
-            if let partial = tags.first(where: { $0.0.hasPrefix(lower) && lower.count < $0.0.count }) {
-                _ = partial
-                return ("", "")
-            }
-            if let tag = tags.first(where: { lower.hasPrefix($0.0) }) {
-                inlineThinkState = .insideThink
-                inlineCloseTag = tag.1
-                let afterTag = String(trimmed.dropFirst(tag.0.count))
-                thinkCarry = ""
-                return try await routeInlineContent(afterTag)
-            }
-            inlineThinkState = .plainText
-            let flushed = thinkCarry
-            thinkCarry = ""
-            return (flushed, "")
         case .insideThink:
-            thinkCarry += chunk
-            let closeTag = inlineCloseTag
-            if let range = thinkCarry.range(of: closeTag, options: .caseInsensitive) {
-                let thoughtPart = String(thinkCarry[..<range.lowerBound])
-                let remainder = String(thinkCarry[range.upperBound...]).replacingOccurrences(
-                    of: #"^\s+"#, with: "", options: .regularExpression)
-                thinkCarry = ""
-                inlineThinkState = .finishedThink
-                return (remainder, thoughtPart)
-            }
-            // Hold back up to closeTag.count - 1 trailing chars in case </think> spans chunks.
-            let keep = min(thinkCarry.count, closeTag.count - 1)
-            let splitIndex = thinkCarry.index(thinkCarry.endIndex, offsetBy: -keep)
-            let safeThought = String(thinkCarry[..<splitIndex])
-            thinkCarry = String(thinkCarry[splitIndex...])
-            return ("", safeThought)
+            reasoning += trailing
+            try await onReasoningDelta?(trailing)
+            try await emitReasoning(force: true)
+        case .outsideThink:
+            text += trailing
+            try await onTextDelta?(trailing)
+            try await emitText(force: true)
         }
     }
 
@@ -162,19 +191,7 @@ actor ChatCompletionStreamDecoder {
             guard clean.hasPrefix("data:") else { continue }
             let payload = clean.dropFirst(5).trimmingCharacters(in: .whitespaces)
             if payload == "[DONE]" {
-                if !thinkCarry.isEmpty {
-                    switch inlineThinkState {
-                    case .insideThink:
-                        reasoning += thinkCarry
-                        try await emitReasoning(force: true)
-                    case .initial:
-                        text += thinkCarry
-                        try await emitText(force: true)
-                    case .plainText, .finishedThink:
-                        break
-                    }
-                    thinkCarry = ""
-                }
+                try await flushThinkCarry()
                 done = true
                 continue
             }
@@ -184,6 +201,7 @@ actor ChatCompletionStreamDecoder {
             guard let choice = event.choices.first(where: { ($0.index ?? 0) == 0 }) else { continue }
             if let value = choice.delta?.reasoningContent, !value.isEmpty {
                 reasoning += value
+                try await onReasoningDelta?(value)
                 try await emitReasoning(force: false)
             }
             for part in choice.delta?.toolCalls ?? [] {
@@ -203,13 +221,15 @@ actor ChatCompletionStreamDecoder {
                 guard !stopped, text.utf8.count + content.utf8.count <= 200_000 else {
                     throw ReaderError.message("流式段落状态无效，未保存当前段落。")
                 }
-                let routed = try await routeInlineContent(content)
+                let routed = routeInlineContent(content)
                 if !routed.reasoningDelta.isEmpty {
                     reasoning += routed.reasoningDelta
+                    try await onReasoningDelta?(routed.reasoningDelta)
                     try await emitReasoning(force: false)
                 }
                 if !routed.textDelta.isEmpty {
                     text += routed.textDelta
+                    try await onTextDelta?(routed.textDelta)
                     try await emitText(force: false)
                 }
             }
@@ -221,6 +241,7 @@ actor ChatCompletionStreamDecoder {
                 }
                 stopped = true
                 finishReason = reason
+                try await flushThinkCarry()
                 try await flush()
             }
         }

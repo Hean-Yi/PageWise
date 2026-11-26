@@ -171,3 +171,46 @@ private actor ReasoningCapture {
     #expect(snapshots.count < chunks.count)
     #expect(snapshots.dropFirst().allSatisfy { $0.hasPrefix(chunks[0]) })
 }
+
+@Test func streamExtractsMidStreamThinkBlocksAndPreservesLiteralLessThanSigns() async throws {
+    let capture = ReasoningCapture()
+    let decoder = ChatCompletionStreamDecoder(
+        onPartial: { await capture.partial($0) },
+        onReasoning: { await capture.thought($0) })
+    let deltas = ["前置正文 p < 0.05 ", "<thi", "nk>中途复核", "对照表</th", "ink>后续正文"]
+    for delta in deltas {
+        let event = String(
+            decoding: try JSONSerialization.data(withJSONObject: [
+                "choices": [["delta": ["content": delta]]]
+            ]), as: UTF8.self)
+        try await decoder.consume(Data(("data: " + event + "\n\n").utf8))
+    }
+    let stop = #"{"choices":[{"delta":{},"finish_reason":"stop"}]}"#
+    try await decoder.consume(Data(("data: " + stop + "\n\ndata: [DONE]\n\n").utf8))
+    let (message, _) = try await decoder.finishMessage()
+    #expect(message.content == "前置正文 p < 0.05 后续正文")
+    #expect(message.reasoningContent == "中途复核对照表")
+}
+
+@Test func streamDeliversTrueIncrementalDeltasWithoutRepeatingPrefixes() async throws {
+    let capture = ReasoningCapture()
+    let decoder = ChatCompletionStreamDecoder(
+        onPartial: { _ in },
+        onReasoning: nil,
+        onTextDelta: { await capture.partial($0) },
+        onReasoningDelta: { await capture.thought($0) })
+    let events = [
+        #"{"choices":[{"delta":{"reasoning_content":"先查"}}]}"#,
+        #"{"choices":[{"delta":{"reasoning_content":"对照组"}}]}"#,
+        #"{"choices":[{"delta":{"content":"结论"}}]}"#,
+        #"{"choices":[{"delta":{"content":"成立。"}}]}"#,
+        #"{"choices":[{"delta":{},"finish_reason":"stop"}]}"#,
+    ]
+    for event in events { try await decoder.consume(Data(("data: " + event + "\n\n").utf8)) }
+    try await decoder.consume(Data("data: [DONE]\n\n".utf8))
+    let (message, _) = try await decoder.finishMessage()
+    #expect(await capture.reasoning == ["先查", "对照组"])
+    #expect(await capture.text == ["结论", "成立。"])
+    #expect(message.reasoningContent == "先查对照组")
+    #expect(message.content == "结论成立。")
+}
