@@ -75,6 +75,8 @@ private actor FixtureEncoder: SemanticTextEncoder {
     var paper = Paper(
         title: "Comparison", digest: "fixture", originalPath: "fixture.pdf", pageCount: 2,
         blocks: [distractor, evidence], warnings: [], canReflow: false)
+    try await index.refresh([paper])
+    try await index.warmVectors()
     let found = try await index.search("对齐", papers: [paper]).first
     #expect(found?.blockID == evidence.id)
     #expect(found?.sourcePage == 2)

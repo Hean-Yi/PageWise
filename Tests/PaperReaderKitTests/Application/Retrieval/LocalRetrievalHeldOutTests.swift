@@ -113,3 +113,42 @@ func e5UnseenCrossLanguageRanking() async throws {
         "E5_UNSEEN_TOTAL", "top1", ranks.filter { $0 == 1 }.count, "top5", ranks.filter { $0 > 0 }.count,
         "mrr", ranks.reduce(0.0) { $0 + ($1 > 0 ? 1 / Double($1) : 0) } / Double(ranks.count))
 }
+
+@Test(.enabled(if: ProcessInfo.processInfo.environment["PAGEWISE_TEST_PROGRESSIVE"] == "1"))
+func progressiveLexicalFirstThenSemanticWarm() async throws {
+    let environment = ProcessInfo.processInfo.environment
+    let parent = URL(fileURLWithPath: try #require(environment["PAGEWISE_BENCH_MODEL_PARENT"]))
+    let encoder = DeviceSemanticEncoder(directory: parent)
+    #expect(await encoder.isInstalled())
+    let notes = (0..<100).map { index in
+        ReadingNote(
+            paperID: UUID(), contentVersion: "progressive", anchors: [],
+            markdown: "Note \(index) discusses matched compute budgets, sample size, accuracy and latency.")
+    }
+    let titles = Dictionary(uniqueKeysWithValues: notes.map { ($0.paperID, "Progressive collection") })
+    let index = ReadingNoteMemoryIndex(encoder: encoder, minimumScore: 0.15)
+    let clock = ContinuousClock()
+    func ms(_ start: ContinuousClock.Instant) -> Double {
+        let elapsed = clock.now - start
+        return Double(elapsed.components.seconds) * 1000 + Double(elapsed.components.attoseconds) / 1e15
+    }
+    let firstStart = clock.now
+    let first = try await index.search(
+        query: "匹配计算预算和样本量", notes: notes, paperTitles: titles, limit: 5, mode: .hybrid)
+    let firstMs = ms(firstStart)
+    #expect(!first.isEmpty)
+    let warmStart = clock.now
+    for _ in 0..<240 where !(await index.isSemanticWarm()) {
+        try await Task.sleep(for: .milliseconds(250))
+    }
+    let warmMs = ms(warmStart)
+    let secondStart = clock.now
+    _ = try await index.search(
+        query: "匹配计算预算和样本量", notes: notes, paperTitles: titles, limit: 5, mode: .hybrid)
+    let secondMs = ms(secondStart)
+    print(
+        "PROGRESSIVE_RETRIEVAL", "first_lexical_ms", firstMs, "background_warm_ms", warmMs,
+        "second_semantic_warm", await index.isSemanticWarm(), "second_ms", secondMs)
+    #expect(firstMs < 2_000)
+    #expect(await index.isSemanticWarm())
+}

@@ -97,6 +97,10 @@ public actor SemanticPassageIndex {
         return false
     }
 
+    public func isWarm() -> Bool {
+        !keys.isEmpty && vectors.count >= keys.count
+    }
+
     public func removeSources(_ ids: Set<UUID>) {
         guard opened, !ids.isEmpty, let encoder, passages.contains(where: { ids.contains($0.sourceID) }) else { return }
         reconcile(passages.filter { !ids.contains($0.sourceID) }, encoderID: encoder.identifier)
@@ -160,8 +164,9 @@ public actor SemanticPassageIndex {
         }
         do {
             if vectors.count < keys.count {
-                let job = warmup(encoder, version: version)
-                if keys.count <= 4 { try await job.value }
+                // Never make the first lexical result wait for model loading. Start the warmup
+                // and serve the current lexical result; later queries see the semantic vectors.
+                _ = warmup(encoder, version: version)
             }
             guard !vectors.isEmpty, version == generation,
                 let encoded = try await encoder.retrievalQuery(String(query.prefix(1_600))),

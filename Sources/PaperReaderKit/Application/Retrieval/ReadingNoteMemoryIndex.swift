@@ -29,6 +29,12 @@ public actor ReadingNoteMemoryIndex {
         usesVectors = encoder != nil
     }
 
+    /// True once the semantic vectors are ready. The first search returns lexical results while
+    /// this is false; callers never need to wait for a cold model before showing something.
+    public func isSemanticWarm() async -> Bool {
+        await semantic.isWarm()
+    }
+
     public func search(
         query: String, state: LibraryState, pending: Set<UUID>, excluding: UUID?, paperID: UUID?, limit: Int,
         includeArchived: Bool, mode: RetrievalMode = .hybrid
