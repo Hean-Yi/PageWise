@@ -262,4 +262,28 @@ private actor GatedEncoder: SemanticTextEncoder {
 
     let afterRemoval = try await index.search("distillation", papers: [weak])
     #expect(afterRemoval.isEmpty)
+
+    // Mixed Chinese + English queries keep FTS5 BM25 ranking for Latin terms instead of bypassing FTS.
+    let mixedHits = try await index.search("distillation 蒸馏算力", papers: [weak, strong])
+    #expect(mixedHits.first?.paperID == strong.id)
+    #expect(mixedHits.first?.blockID == strongBlock.id)
+}
+
+@Test func semanticIndexKeepsServingHighCoverageWarmCorpusDuringIncrementalSingleNoteEdit() async throws {
+    let encoder = FixtureEncoder()
+    let index = SemanticPassageIndex(encoder: encoder)
+    let initial = (0..<10).map { offset in
+        SemanticPassage(
+            sourceID: UUID(),
+            text: offset == 0 ? "equal budgets hold in trial 0" : "unrelated trial \(offset)")
+    }
+    try await index.prepare(initial)
+    #expect(await index.coverage() == 1.0)
+
+    // Add 1 brand-new passage (10/11 = 90.9% >= 85% coverage). Semantic matches over the warm set
+    // must remain available immediately while the 1 missing vector warms in the background.
+    let updated = initial + [SemanticPassage(sourceID: UUID(), text: "newly added note")]
+    let matches = try await index.matches(
+        "对齐", passages: updated, allowed: Set(updated.map(\.sourceID)), limit: 3)
+    #expect(matches.first?.passage.sourceID == initial[0].sourceID)
 }

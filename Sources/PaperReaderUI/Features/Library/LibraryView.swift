@@ -11,6 +11,7 @@ public struct LibraryView: View {
     @State private var agentDraft = ""
     @State private var showImporter = false
     @State private var showSettings = false
+    @State private var settingsHint: String?
     @State private var guide = QuickStartNavigation()
     @AppStorage("completedQuickStart") private var completedQuickStart = false
     @State private var onlineSearch: OnlinePaperSearch
@@ -66,9 +67,13 @@ public struct LibraryView: View {
                     if (error as NSError).code != NSUserCancelledError { model.message = error.localizedDescription }
                 }
             }
-            .sheet(isPresented: $showSettings) {
+            .sheet(
+                isPresented: $showSettings,
+                onDismiss: { settingsHint = nil }
+            ) {
                 SettingsView(
                     model: model,
+                    contextHint: settingsHint,
                     openGuide: {
                         if beginGuide() { showSettings = false }
                     }
@@ -285,7 +290,10 @@ public struct LibraryView: View {
                         WorkspaceAssistantSidebar(
                             model: model, agent: agent, isReading: isReading, tab: isReading ? assistantTab : .library,
                             select: { self.assistantTab = $0 }, question: $paperQuestion, agentDraft: $agentDraft,
-                            openSettings: { showSettings = true },
+                            openSettings: {
+                                settingsHint = "请先选择模型服务并保存 API 密钥，即可使用助读与精读功能。"
+                                showSettings = true
+                            },
                             didNavigate: {
                                 if !inline {
                                     self.assistantTab = nil
@@ -389,7 +397,11 @@ public struct LibraryView: View {
                         explainSelection: {
                             paperQuestion = "请结合全文解释选中内容。"
                             assistantTab = .paper
-                        }, openSettings: { showSettings = true })
+                        },
+                        openSettings: {
+                            settingsHint = "请先选择模型服务并保存 API 密钥，即可开启双语重排与翻译。"
+                            showSettings = true
+                        })
                 case .shelf:
                     LibraryWorkspaceView(
                         model: model, collection: $collection, selectedShelfID: $selectedShelfID,
@@ -527,6 +539,7 @@ public struct LibraryView: View {
                 }
                 .readerIconButtonStyle(.plain).quickStartTarget(.importPaper)
                 Button {
+                    settingsHint = nil
                     showSettings = true
                 } label: {
                     Label("设置", systemImage: "gearshape").labelStyle(

@@ -6,6 +6,7 @@ struct DocumentSummaryPage: View {
     let model: ReaderModel
     let note: ReadingNote
     @State private var citationRequest = 0
+    @State private var confirmDelete = false
     @AppStorage("PDFBilingualFontSize") private var pdfFontSize = 16
 
     @ScaledMetric(relativeTo: .headline) private var titleSize: CGFloat = 16
@@ -57,11 +58,17 @@ struct DocumentSummaryPage: View {
             }
             .help("引用阅读笔记")
             Button(role: .destructive) {
-                model.deleteReadingNote(note.id)
+                confirmDelete = true
             } label: {
                 Label("删除总结", readerIcon: .delete).labelStyle(.iconOnly).readerIconTarget()
             }
             .tint(ReaderTheme.muted).help("删除总结")
+            .confirmationDialog("删除这篇文末总结？", isPresented: $confirmDelete, titleVisibility: .visible) {
+                Button("删除总结", role: .destructive) { model.deleteReadingNote(note.id) }
+                Button("取消", role: .cancel) {}
+            } message: {
+                Text("删除后可在右侧「笔记」栏撤销，或重新发起 AI 精读。")
+            }
         }
         .readerIconButtonStyle(.borderless)
         .padding(.horizontal, 8)

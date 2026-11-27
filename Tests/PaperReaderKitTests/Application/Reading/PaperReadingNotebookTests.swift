@@ -78,3 +78,23 @@ import Testing
     #expect(entry?.id == report.id && entry?.note == primary)
     #expect(entry?.annotations == [other])
 }
+
+@Test func marginNoteGroupsSurfaceOfflinePassageNotesNotCoveredByCloseReading() {
+    let paper = Paper(
+        title: "Offline Paper", digest: "offline", originalPath: "offline.pdf", pageCount: 2, blocks: [],
+        warnings: [], canReflow: false)
+    let marginNote = ReadingNote(
+        paperID: paper.id, contentVersion: "v1", anchors: [], markdown: "离线读到的关键反例。")
+    var deletedNote = ReadingNote(
+        paperID: paper.id, contentVersion: "v1", anchors: [], markdown: "已删除")
+    deletedNote.deletedAt = Date()
+    var state = LibraryState()
+    state.papers = [paper]
+    state.readingNotes = [marginNote, deletedNote]
+
+    #expect(PaperReadingNotebook.notebooks(in: state).isEmpty)
+    let groups = PaperReadingNotebook.marginNoteGroups(in: state)
+    #expect(groups.count == 1)
+    #expect(groups.first?.id == paper.id)
+    #expect(groups.first?.notes == [marginNote])
+}

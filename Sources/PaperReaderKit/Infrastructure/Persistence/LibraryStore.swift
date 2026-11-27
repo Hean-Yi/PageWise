@@ -411,6 +411,7 @@ public actor LibraryStore {
         case brief = "research_brief"
         case sleep = "memory_sleep"
         case index = "research_index_state"
+        case noteReview = "note_review_state"
     }
 
     private static func ensureResearchSchema(_ db: OpaquePointer) throws {
@@ -465,6 +466,10 @@ public actor LibraryStore {
                 action TEXT NOT NULL, trigger_hash TEXT NOT NULL, occurred_at REAL NOT NULL
             )
             """)
+        try execute(
+            db,
+            "CREATE TABLE IF NOT EXISTS note_review_state(id INTEGER PRIMARY KEY CHECK(id=1), payload BLOB NOT NULL)"
+        )
     }
 
     private static func appendResearchEvents(
@@ -663,6 +668,23 @@ public actor LibraryStore {
 
     private static func hasResearchCheckpoint(_ db: OpaquePointer, _ table: ResearchTable) throws -> Bool {
         try integer(db, "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='\(table.rawValue)'") != 0
+    }
+
+    public func readNoteReviewCursor() throws -> Data? {
+        try readResearchCheckpoint(.noteReview)
+    }
+
+    public func saveNoteReviewCursor(_ data: Data) throws {
+        guard data.count <= 256 * 1024 else { return }
+        try Self.database(at: databaseURL) { db in
+            try Self.transaction(db) {
+                try Self.execute(
+                    db,
+                    "CREATE TABLE IF NOT EXISTS note_review_state(id INTEGER PRIMARY KEY CHECK(id=1), payload BLOB NOT NULL)"
+                )
+                try Self.writeCheckpoint(data, db, .noteReview)
+            }
+        }
     }
 
     func readResearchCheckpoint(_ table: ResearchTable = .brief) throws -> Data? {

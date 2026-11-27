@@ -254,3 +254,28 @@ private actor ReasoningCapture {
     #expect(message.content == "模型忘记闭合标签但给出了正文结论。")
     #expect(message.reasoningContent == nil)
 }
+
+@Test func streamHandlesUnterminatedDoneLineUsageChunkAndSafeErrorFrames() async throws {
+    let decoder = ChatCompletionStreamDecoder(onPartial: { _ in })
+    let body =
+        "data: {\"choices\":[{\"delta\":{\"content\":\"完整\"},\"finish_reason\":\"stop\"}]}\n\n"
+        + "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":100,\"completion_tokens\":20,\"prompt_tokens_details\":{\"cached_tokens\":80},\"completion_tokens_details\":{\"reasoning_tokens\":5}}}\n\n"
+        + "data: [DONE]"
+    try await decoder.consume(Data(body.utf8))
+    let (message, reason) = try await decoder.finishMessage()
+    #expect(reason == "stop")
+    #expect(message.content == "完整")
+    let usage = await decoder.lastUsage
+    #expect(usage?.promptTokensDetails?.cachedTokens == 80)
+    #expect(usage?.completionTokensDetails?.reasoningTokens == 5)
+
+    let errorDecoder = ChatCompletionStreamDecoder(onPartial: { _ in })
+    do {
+        try await errorDecoder.consume(
+            Data("data: {\"error\":{\"type\":\"rate_limit_error\",\"message\":\"secret internal quota\"}}\n\n".utf8))
+        Issue.record("Expected stream error frame to throw")
+    } catch let error as ReaderError {
+        #expect(error.localizedDescription.contains("限流"))
+        #expect(!error.localizedDescription.contains("secret"))
+    }
+}

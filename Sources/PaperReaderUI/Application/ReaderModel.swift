@@ -60,7 +60,9 @@ public final class ReaderModel {
     let noteReview: NoteReviewSession
     let researchBriefMaintenance: ResearchBriefMaintenance
     public var assistantDraft: ChatTurn?
+    public var assistantActivityStatus: String?
     public var busyAI = false
+    @ObservationIgnored var assistantTask: Task<Void, Never>?
     var closeReadingPaperID: UUID?
     var closeReadingProgress = ""
     @ObservationIgnored var closeReadingTask: Task<ChatTurn, Error>?
@@ -230,6 +232,7 @@ public final class ReaderModel {
             if let folder = try? await vault.directory() { vaultName = folder.lastPathComponent }
             loaded = true
             await memorySleep.restore()
+            await noteReview.restoreCursor()
             researchBriefMaintenance.sourcesChanged()
             backfillLibraryAbstracts()
             paperSearchWarmup.enqueue(state.papers)
@@ -262,6 +265,7 @@ public final class ReaderModel {
         let changedPaper = selectedPaperID != id
         if changedPaper {
             outlineArrival = nil
+            assistantTask?.cancel()
             closeReadingTask?.cancel()
             pdfBilingual.close()
             translationPauseReason = nil

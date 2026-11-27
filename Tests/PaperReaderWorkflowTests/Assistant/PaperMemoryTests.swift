@@ -418,3 +418,42 @@ private struct DeterministicSemanticEncoder: SemanticTextEncoder {
     let activeDirect = try await reader.researchMemory.relevant(to: "比较", state: reader.state)
     #expect(activeDirect.map(\.id) == [newer.id])
 }
+
+@Test @MainActor func noteReviewCursorPersistsInsideSQLiteAcrossSessionReload() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let reader = try ReaderModel(root: root)
+    await reader.load()
+    let paper = Paper(
+        title: "Cursor Paper", digest: "cursor", originalPath: "unused.pdf", pageCount: 1,
+        blocks: [], warnings: [], canReflow: false)
+    let note = ReadingNote(paperID: paper.id, contentVersion: "v", anchors: [], markdown: "Persisted cursor note.")
+    reader.state.papers = [paper]
+    reader.state.readingNotes = [note]
+    #expect(await reader.save())
+
+    let probe = NoteReviewProbe()
+    reader.noteReview.reviewOverride = { _, _ in
+        probe.count += 1
+        return #"{"revisions":[]}"#
+    }
+    reader.noteReview.run(reader: reader, automatic: false, withModel: true)
+    for _ in 0..<200 where reader.noteReview.running {
+        try await Task.sleep(for: .milliseconds(10))
+    }
+    #expect(probe.count == 1)
+    #expect(try await reader.store.readNoteReviewCursor() != nil)
+
+    // Clear UserDefaults to prove a fresh session restores the cursor strictly from SQLite.
+    UserDefaults.standard.removeObject(forKey: "pagewise.noteReview." + root.standardizedFileURL.path + ".cursor")
+    let reloaded = NoteReviewSession(store: reader.store, root: root)
+    reloaded.reviewOverride = { _, _ in
+        probe.count += 1
+        return #"{"revisions":[]}"#
+    }
+    reloaded.run(reader: reader, automatic: false, withModel: true)
+    for _ in 0..<200 where reloaded.running {
+        try await Task.sleep(for: .milliseconds(10))
+    }
+    #expect(probe.count == 1)
+}

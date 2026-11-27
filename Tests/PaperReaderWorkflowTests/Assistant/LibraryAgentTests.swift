@@ -733,10 +733,15 @@ func downloadsFromTwoRecommendationCardsQueueOnceAndRespectCancellation(cancelSe
     let reader = try await makeAgentReader(root)
     let client = ScriptedLibraryModel { messages, count in
         let prompt = try #require(messages.first?.content)
-        // The stable system message holds the run's initial budget; the per-round remainder rides
-        // on the latest assistant tool-call so the cached prefix is not rewritten.
+        // The stable system message holds the run's initial budget; each completed tool round is
+        // stamped once, and an answer-only transition that reuses an already-stamped round appends
+        // a trailing ephemeral user status message so the cached prefix stays untouched.
+        let trailingState =
+            messages.last?.role == "user" && messages.last?.content?.hasPrefix("（系统状态）") == true
+            ? messages.last?.content : nil
         let roundState =
-            messages.last { $0.role == "assistant" && $0.toolCalls?.isEmpty == false }?.content ?? ""
+            trailingState
+            ?? messages.last { $0.role == "assistant" && $0.toolCalls?.isEmpty == false }?.content ?? ""
         switch count {
         case 1:
             #expect(prompt.contains("工具预算为 2 轮、3 次调用"))

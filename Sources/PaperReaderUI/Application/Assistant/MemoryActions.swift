@@ -55,7 +55,7 @@ extension ReaderModel {
     static func hasExplicitRevisionIntent(_ question: String) -> Bool {
         question.range(
             of:
-                #"(?i)更正|改正|纠正|修正|修改|改成|改为|更新|调整|记错|写错|说错|不是|而是|不再|改变主意|改主意|不用再|无需再|停止追踪|取消追踪|correct|change|update|instead|no longer|replace|changed my mind|stop tracking"#,
+                #"(?i)更正|改正|纠正|修正|修改|改成|改为|更新|调整|记错|写错|说错|不是|而是|不再|改变主意|改主意|不用再|无需再|停止追踪|取消追踪|其实我现在更在意|后来发现|现在只看|转向|改关注|重心放到|correct|change|update|instead|no longer|replace|changed my mind|stop tracking"#,
             options: .regularExpression) != nil
     }
 

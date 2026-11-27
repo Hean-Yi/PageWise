@@ -29,10 +29,13 @@ enum ChatCompletionRequest {
             : AgentClient.Tool.definitions.filter { tool in
                 availableToolNames?.contains(tool.function.name) ?? true
             }
-        // A completed assistant answer has no tool round to continue. Its private reasoning is
-        // not part of the conversation and some OpenAI-compatible gateways reject the field.
+        // A completed assistant answer has no tool round to continue. For tool-call turns, only
+        // replay `reasoning_content` to providers whose wire schema accepts it.
         let requestMessages = messages.map { message -> AgentMessage in
-            guard message.role == "assistant", message.toolCalls?.isEmpty != false else { return message }
+            guard message.role == "assistant" else { return message }
+            let keepReasoning =
+                capabilities.replaysReasoningInToolTurns && message.toolCalls?.isEmpty == false
+            guard !keepReasoning, message.reasoningContent != nil else { return message }
             var clean = message
             clean.reasoningContent = nil
             return clean

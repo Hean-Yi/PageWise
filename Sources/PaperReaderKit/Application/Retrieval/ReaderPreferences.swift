@@ -41,17 +41,20 @@ public struct ReaderPreference: Codable, Sendable, Equatable {
             && !matches(text, #"(?i)api[ _-]?key|sk-[a-z0-9]{8}|bearer\s+|密码|私钥|密钥|password|secret key|access token"#)
     }
 
-    /// Reserve the optional extraction request for an ongoing reader-owned project or question.
-    public static func hasResearchSignal(in message: String) -> Bool {
-        guard permitsExtraction(message),
-            !ResearchQuestionProposal.isOperational(message),
-            !ResearchQuestionProposal.isRecallRequest(message)
-        else { return false }
+    /// Matches explicit ongoing research plan/focus phrasing even when combined with a leading
+    /// operational request (e.g. "帮我搜一下 X，我接下来打算研究 Y").
+    public static func hasResearchIntentClause(in message: String) -> Bool {
+        guard permitsExtraction(message), !ResearchQuestionProposal.isRecallRequest(message) else { return false }
         return ResearchQuestionProposal.isWriteRequest(message)
             || matches(
                 message,
                 #"(?i)(?:我|我们)(?:目前|接下来|一直|之后|最近|后续|长期|的)?(?:正在|在做|在研究|在追|打算|计划|会继续|想继续|想研究|想比较|想弄清|关心|关注|研究方向|项目|假设)|(?:my|our) (?:project|research|hypothesis|plan)|(?:i|we) (?:plan to|want to (?:study|investigate|follow up)|am studying|are studying|track|am working on|are working on)"#
             )
+    }
+
+    /// Reserve the optional extraction request for an ongoing reader-owned project or question.
+    public static func hasResearchSignal(in message: String) -> Bool {
+        !ResearchQuestionProposal.isOperational(message) && hasResearchIntentClause(in: message)
     }
 
     public static func isReview(_ text: String) -> Bool {

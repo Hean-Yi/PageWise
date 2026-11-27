@@ -44,6 +44,7 @@ actor ChatCompletionStreamDecoder {
     private var reasoning = ""
     private var inlineThinkState: InlineThinkState = .outsideThink
     private var finishReason: String?
+    private(set) var lastUsage: StreamUsage?
     private var lastEmittedTextBytes = 0
     private var lastEmittedReasoningBytes = 0
     private let emissionStride: Int
@@ -226,21 +227,28 @@ actor ChatCompletionStreamDecoder {
         while let newline = pending.firstIndex(of: 10) {
             let line = Data(pending[..<newline])
             pending.removeSubrange(...newline)
-            guard let string = String(data: line, encoding: .utf8) else {
-                throw ReaderError.message("流式文本编码不完整，未保存当前段落。")
-            }
-            let clean = string.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard clean.hasPrefix("data:") else { continue }
-            let payload = clean.dropFirst(5).trimmingCharacters(in: .whitespaces)
-            if payload == "[DONE]" {
-                try await flushThinkCarry()
-                done = true
-                continue
-            }
-            guard !done, let json = payload.data(using: .utf8),
-                let event = try? JSONDecoder().decode(Event.self, from: json)
-            else { throw ReaderError.message("流式响应格式不兼容，未保存当前段落。") }
-            guard let choice = event.choices.first(where: { ($0.index ?? 0) == 0 }) else { continue }
+            try await consumeLine(line)
+        }
+    }
+
+    private func consumeLine(_ line: Data) async throws {
+        guard let string = String(data: line, encoding: .utf8) else {
+            throw ReaderError.message("流式文本编码不完整，未保存当前段落。")
+        }
+        let clean = string.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard clean.hasPrefix("data:") else { return }
+        let payload = clean.dropFirst(5).trimmingCharacters(in: .whitespaces)
+        if payload == "[DONE]" {
+            try await flushThinkCarry()
+            done = true
+            return
+        }
+        guard !done, let json = payload.data(using: .utf8) else {
+            throw ReaderError.message("流式响应格式不兼容，未保存当前段落。")
+        }
+        if let event = try? JSONDecoder().decode(Event.self, from: json) {
+            if let usage = event.usage { lastUsage = usage }
+            guard let choice = event.choices.first(where: { ($0.index ?? 0) == 0 }) else { return }
             if let value = choice.delta?.reasoningContent, !value.isEmpty {
                 sawStructuredReasoning = true
                 reasoning += value
@@ -287,10 +295,39 @@ actor ChatCompletionStreamDecoder {
                 try await flushThinkCarry()
                 try await flush()
             }
+            return
         }
+        if let errorFrame = try? JSONDecoder().decode(ErrorEvent.self, from: json) {
+            throw Self.mappedStreamError(errorFrame.error)
+        }
+        throw ReaderError.message("流式响应格式不兼容，未保存当前段落。")
     }
 
-    func finish() throws -> String {
+    private static func mappedStreamError(_ error: ErrorEvent.Detail) -> ReaderError {
+        let signature = [error.type, error.code, error.message].compactMap { $0?.lowercased() }.joined(separator: " ")
+        if signature.contains("rate_limit") || signature.contains("quota") || signature.contains("429") {
+            return .message("模型服务限流或额度不足，请稍后重试。")
+        }
+        if signature.contains("context_length") || signature.contains("maximum context")
+            || signature.contains("too long")
+        {
+            return .message("本次上下文超过模型服务限制，请缩小范围或新建对话。")
+        }
+        if signature.contains("auth") || signature.contains("api_key") || signature.contains("permission") {
+            return .message("模型服务拒绝访问，请检查密钥、模型权限和 API 地址。")
+        }
+        return .message("模型服务在流式返回期间报告错误，未执行工具。")
+    }
+
+    private func flushTrailingLineIfNeeded() async throws {
+        guard !pending.isEmpty else { return }
+        let trailing = pending
+        pending.removeAll()
+        try await consumeLine(trailing)
+    }
+
+    func finish() async throws -> String {
+        try await flushTrailingLineIfNeeded()
         let result = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard done, stopped, !result.isEmpty, pending.isEmpty else {
             throw ReaderError.message("翻译流中断，当前半段未保存；此前完成的段落仍保留。")
@@ -298,7 +335,8 @@ actor ChatCompletionStreamDecoder {
         return result
     }
 
-    func finishMessage() throws -> (AgentMessage, String) {
+    func finishMessage() async throws -> (AgentMessage, String) {
+        try await flushTrailingLineIfNeeded()
         guard done, stopped, pending.isEmpty, let finishReason else {
             throw ReaderError.message("模型流式响应中断，未执行工具。")
         }
@@ -308,6 +346,36 @@ actor ChatCompletionStreamDecoder {
                 toolCalls: calls.isEmpty ? nil : calls.keys.sorted().compactMap { calls[$0] },
                 reasoningContent: reasoning.isEmpty ? nil : reasoning), finishReason
         )
+    }
+
+    struct StreamUsage: Decodable, Sendable, Equatable {
+        struct PromptDetails: Decodable, Sendable, Equatable {
+            let cachedTokens: Int?
+            enum CodingKeys: String, CodingKey { case cachedTokens = "cached_tokens" }
+        }
+        struct CompletionDetails: Decodable, Sendable, Equatable {
+            let reasoningTokens: Int?
+            enum CodingKeys: String, CodingKey { case reasoningTokens = "reasoning_tokens" }
+        }
+        let promptTokens: Int?
+        let completionTokens: Int?
+        let promptTokensDetails: PromptDetails?
+        let completionTokensDetails: CompletionDetails?
+        enum CodingKeys: String, CodingKey {
+            case promptTokens = "prompt_tokens"
+            case completionTokens = "completion_tokens"
+            case promptTokensDetails = "prompt_tokens_details"
+            case completionTokensDetails = "completion_tokens_details"
+        }
+    }
+
+    private struct ErrorEvent: Decodable {
+        struct Detail: Decodable {
+            let type: String?
+            let code: String?
+            let message: String?
+        }
+        let error: Detail
     }
 
     private struct Event: Decodable {
@@ -346,6 +414,7 @@ actor ChatCompletionStreamDecoder {
             }
         }
         let choices: [Choice]
+        let usage: StreamUsage?
     }
 }
 

@@ -12,11 +12,14 @@ struct HTTPCassette: Codable, Sendable, Equatable {
         var method: String?
         var path: String?
         var expectedToolChoice: String?
+        var expectedToolNames: [String]?
+        var expectedMessageRoles: [String]?
         var networkErrorCode: Int?
 
         init(
             statusCode: Int = 200, headers: [String: String] = [:], stream: Bool, chunks: [String],
             method: String? = nil, path: String? = nil, expectedToolChoice: String? = nil,
+            expectedToolNames: [String]? = nil, expectedMessageRoles: [String]? = nil,
             networkErrorCode: Int? = nil
         ) {
             self.statusCode = statusCode
@@ -26,16 +29,20 @@ struct HTTPCassette: Codable, Sendable, Equatable {
             self.method = method
             self.path = path
             self.expectedToolChoice = expectedToolChoice
+            self.expectedToolNames = expectedToolNames
+            self.expectedMessageRoles = expectedMessageRoles
             self.networkErrorCode = networkErrorCode
         }
 
         static func sse(
             _ payloads: [String], statusCode: Int = 200, headers: [String: String] = [:],
-            expectedToolChoice: String? = nil
+            expectedToolChoice: String? = nil, expectedToolNames: [String]? = nil,
+            expectedMessageRoles: [String]? = nil
         ) -> Entry {
             Entry(
                 statusCode: statusCode, headers: headers, stream: true, chunks: payloads,
-                expectedToolChoice: expectedToolChoice)
+                expectedToolChoice: expectedToolChoice, expectedToolNames: expectedToolNames,
+                expectedMessageRoles: expectedMessageRoles)
         }
 
         static func json(
@@ -188,11 +195,28 @@ actor CassetteTransport: HTTPTransport {
         if let expectedPath = entry.path, request.url?.path != expectedPath {
             throw ReaderError.message("回放请求路径不匹配：期望 \(expectedPath)，实际 \(request.url?.path ?? "nil")。")
         }
+        guard entry.expectedToolChoice != nil || entry.expectedToolNames != nil || entry.expectedMessageRoles != nil
+        else { return }
+        let object = request.httpBody.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
         if let expectedToolChoice = entry.expectedToolChoice {
-            let object = request.httpBody.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
             let actual = object?["tool_choice"] as? String ?? "nil"
             guard actual == expectedToolChoice else {
                 throw ReaderError.message("回放 tool_choice 不匹配：期望 \(expectedToolChoice)，实际 \(actual)。")
+            }
+        }
+        if let expectedToolNames = entry.expectedToolNames {
+            let actualTools =
+                (object?["tools"] as? [[String: Any]] ?? []).compactMap {
+                    ($0["function"] as? [String: Any])?["name"] as? String
+                }
+            guard Set(actualTools) == Set(expectedToolNames) && actualTools.count == expectedToolNames.count else {
+                throw ReaderError.message("回放工具集合不匹配：期望 \(expectedToolNames)，实际 \(actualTools)。")
+            }
+        }
+        if let expectedRoles = entry.expectedMessageRoles {
+            let actualRoles = (object?["messages"] as? [[String: Any]] ?? []).compactMap { $0["role"] as? String }
+            guard actualRoles == expectedRoles else {
+                throw ReaderError.message("回放消息角色序列不匹配：期望 \(expectedRoles)，实际 \(actualRoles)。")
             }
         }
     }

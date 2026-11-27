@@ -184,14 +184,18 @@ public actor SemanticPassageIndex {
                     // A tiny corpus finishes within a single encoding batch; await it so cold
                     // small libraries do not race with background warmup.
                     try await warmup(encoder, version: version).value
-                } else {
-                    // Never mix a partially warmed vector subset into RRF. Warm in the background
-                    // and let callers serve a consistent lexical ranking until full coverage is ready.
+                } else if coverage() < 0.85 {
+                    // Never mix a heavily under-warmed vector subset into RRF. Warm in the
+                    // background and let callers serve a consistent lexical ranking until >=85%
+                    // coverage is ready; incremental single-note edits on a warm library keep
+                    // serving existing vectors while filling only the delta in the background.
                     _ = warmup(encoder, version: version)
                     return []
+                } else {
+                    _ = warmup(encoder, version: version)
                 }
             }
-            guard isWarm(), version == generation,
+            guard isWarm() || coverage() >= 0.85, version == generation,
                 let encoded = try await encoder.retrievalQuery(String(query.prefix(1_600))),
                 let queryVector = Self.unit(encoded.vector), version == generation
             else { return [] }

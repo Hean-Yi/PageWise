@@ -106,6 +106,21 @@ final class NoteReviewSession {
         }
     }
 
+    private var cursorLoadedFromStore = false
+
+    func restoreCursor() async {
+        guard !cursorLoadedFromStore else { return }
+        if let data = try? await store.readNoteReviewCursor(),
+            let saved = try? JSONDecoder().decode(NoteReviewCursor.self, from: data)
+        {
+            cursor = saved
+        } else if let data = try? JSONEncoder().encode(cursor), cursor.date != Date(timeIntervalSinceReferenceDate: 0) {
+            // Migrate any pre-SQLite UserDefaults watermark into the library database once.
+            try? await store.saveNoteReviewCursor(data)
+        }
+        cursorLoadedFromStore = true
+    }
+
     func beginForegroundWork() {
         foregroundWork += 1
         interrupt()
@@ -142,6 +157,7 @@ final class NoteReviewSession {
                 job = nil
             }
             do {
+                await self.restoreCursor()
                 let page = try await self.reviewTargets(reader: reader, cursor: self.cursor)
                 guard !page.targets.isEmpty else {
                     self.nextCheck = Date().addingTimeInterval(self.interval)
@@ -160,7 +176,7 @@ final class NoteReviewSession {
                 decoder.dateDecodingStrategy = .iso8601
                 let report = try decoder.decode(NoteReviewReport.self, from: Data(response.utf8))
                 let changed = try await reader.applyNoteReview(report, contexts: page.targets)
-                self.advanceCursor(page: page, startedAt: startedAt)
+                await self.advanceCursor(page: page, startedAt: startedAt)
                 if changed > 0 {
                     message = "已静默更新 \(changed) 条笔记正文"
                 }
@@ -172,10 +188,11 @@ final class NoteReviewSession {
         }
     }
 
-    private func advanceCursor(page: NoteReviewPage, startedAt: Date) {
+    private func advanceCursor(page: NoteReviewPage, startedAt: Date) async {
         cursor = NoteReviewCursor.advanced(
             cursor, processed: page.targets, startedAt: startedAt, hasMore: page.hasMore)
         if let data = try? JSONEncoder().encode(cursor) {
+            try? await store.saveNoteReviewCursor(data)
             UserDefaults.standard.set(data, forKey: defaultsKey + ".cursor")
         }
     }
@@ -385,6 +402,7 @@ extension ReaderModel {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         let payload = String(decoding: try encoder.encode(input), as: UTF8.self)
+        let maxTokens = ModelCapabilities.resolve(config).structuredOutputTokenLimit(requested: 800)
         return try await client.complete(
             settings: config, key: key,
             system: """
@@ -399,7 +417,7 @@ extension ReaderModel {
                 - 若 target 与 relation 的条件相同但数字/否定不同，且 relation.modified_at 晚于 target.modified_at，优先在较旧的笔记末尾追加一句简短的“新近复现/冲突：…（保留旧值）”或补上样本量/条件，不要删除旧数字，也不要把两个数字合并成新的确定结论；
                 - 如果 target 本身已经是较新、更具体的一方，则不要为了“对称”强行改写它。
                 不引用未提供的原文和外部链接；不写模型自己的建议口吻，直接写成读者笔记正文。
-                """, user: payload, jsonOutput: true, maxOutputTokens: 800)
+                """, user: payload, jsonOutput: true, maxOutputTokens: maxTokens)
     }
 
     func applyNoteReview(

@@ -26,19 +26,21 @@ struct ReadingNotebooksView: View {
 
     var body: some View {
         let notebooks = PaperReadingNotebook.notebooks(in: model.state)
+        let marginGroups = PaperReadingNotebook.marginNoteGroups(in: model.state)
+        let totalPapers = Set(notebooks.map(\.id)).union(marginGroups.map(\.id)).count
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 HStack(alignment: .firstTextBaseline, spacing: 12) {
                     Text("阅读笔记").font(ReaderTheme.editorial(headingSize, weight: .medium))
                         .accessibilityAddTraits(.isHeader)
-                    if !notebooks.isEmpty {
-                        Text("\(notebooks.count) 篇").font(.subheadline).foregroundStyle(ReaderTheme.muted)
+                    if totalPapers > 0 {
+                        Text("\(totalPapers) 篇").font(.subheadline).foregroundStyle(ReaderTheme.muted)
                     }
                 }
                 .padding(.bottom, 14)
                 paperRule
 
-                if notebooks.isEmpty {
+                if notebooks.isEmpty && marginGroups.isEmpty {
                     ContentUnavailableView {
                         Label {
                             Text("还没有阅读笔记")
@@ -46,7 +48,7 @@ struct ReadingNotebooksView: View {
                             ReaderIcon(.notebook, size: 36)
                         }
                     } description: {
-                        Text("在论文助读中完成 AI 精读后，可在这里重读文末笔记。")
+                        Text("拖选原文添加页边笔记，或在论文助读中完成 AI 精读后，都会汇聚在这里。")
                     }
                     .frame(maxWidth: .infinity, minHeight: 240)
                 }
@@ -55,6 +57,19 @@ struct ReadingNotebooksView: View {
                         VStack(alignment: .leading, spacing: 0) {
                             if notebook.id != notebooks.first?.id { paperRule }
                             notebookSection(notebook).padding(.vertical, 24)
+                        }
+                    }
+                    if !marginGroups.isEmpty {
+                        if !notebooks.isEmpty {
+                            paperRule
+                            Text("页边笔记").font(.caption.weight(.semibold)).foregroundStyle(ReaderTheme.muted)
+                                .padding(.top, 20)
+                        }
+                        ForEach(marginGroups) { group in
+                            VStack(alignment: .leading, spacing: 0) {
+                                if group.id != marginGroups.first?.id { paperRule }
+                                marginGroupSection(group).padding(.vertical, 22)
+                            }
                         }
                     }
                 }
@@ -205,6 +220,55 @@ struct ReadingNotebooksView: View {
         .readerIconButtonStyle(.borderless).foregroundStyle(ReaderTheme.muted)
         .accessibilityLabel("打开论文原文：\(notebook.title)")
         ObsidianExportButton(model: model, paperID: notebook.id)
+    }
+
+    private func marginGroupSection(_ group: PaperReadingNotebook.MarginNoteGroup) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
+                Text(group.title).font(ReaderTheme.editorial(22, weight: .medium))
+                    .foregroundStyle(ReaderTheme.ink).lineLimit(2)
+                    .accessibilityAddTraits(.isHeader)
+                Spacer(minLength: 8)
+                Button {
+                    model.select(group.id)
+                    model.showOriginalReading()
+                } label: {
+                    Label {
+                        Text("原文")
+                    } icon: {
+                        ReaderIcon(.source, size: 15)
+                    }
+                }
+                .font(.callout).readerIconButtonStyle(.borderless).foregroundStyle(ReaderTheme.muted)
+                .accessibilityLabel("打开论文原文：\(group.title)")
+                ObsidianExportButton(model: model, paperID: group.id).font(.callout)
+            }
+            VStack(alignment: .leading, spacing: 4) {
+                ForEach(group.notes.prefix(8)) { note in
+                    Button {
+                        open(note)
+                    } label: {
+                        HStack(alignment: .firstTextBaseline, spacing: 9) {
+                            Circle().fill(note.dimension?.swatch ?? ReaderTheme.accent.opacity(0.75))
+                                .frame(width: 7, height: 7).accessibilityHidden(true)
+                            let text = ReadingNoteSummary.bodyExcerpt(note.markdown)
+                            Text(text.isEmpty ? note.anchors.first?.text ?? "打开笔记" : text)
+                                .lineLimit(2).frame(maxWidth: .infinity, alignment: .leading)
+                            ReaderIcon(.openNote, size: 14).foregroundStyle(ReaderTheme.muted)
+                        }
+                        .padding(.vertical, 5).contentShape(Rectangle())
+                    }
+                    .readerIconButtonStyle(.plain).multilineTextAlignment(.leading)
+                    .font(.callout)
+                    .accessibilityHint("在原文位置打开阅读笔记")
+                }
+            }
+            Text(
+                "\(group.notes.count) 条页边笔记 · 最近更新于 "
+                    + group.latestModifiedAt.formatted(date: .abbreviated, time: .shortened)
+            )
+            .font(.caption).foregroundStyle(ReaderTheme.muted)
+        }
     }
 
     private func toggle(_ id: UUID, in expanded: Binding<Set<UUID>>) {

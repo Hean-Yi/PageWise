@@ -9,6 +9,8 @@ struct PaperAssistantView: View {
     let relatedPapers: () -> Void
     let canFindRelated: Bool
     @FocusState private var composerFocused: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var expandedThinking: Set<UUID> = []
 
     private var displayedChats: [ChatTurn] {
         model.currentChats + (model.currentAssistantDraft.map { [$0] } ?? [])
@@ -37,15 +39,43 @@ struct PaperAssistantView: View {
                                 )
                                 .background(ReaderTheme.elevated, in: RoundedRectangle(cornerRadius: 12))
                                 if let reasoning = turn.reasoning, !reasoning.isEmpty {
-                                    DisclosureGroup("模型思考") {
-                                        Text(reasoning)
-                                            .font(.caption)
-                                            .foregroundStyle(ReaderTheme.muted)
-                                            .textSelection(.enabled)
-                                            .frame(maxWidth: .infinity, alignment: .leading)
-                                            .padding(.top, 4)
+                                    let isStreamingTurn = model.assistantDraft?.id == turn.id
+                                    let showsThinking = expandedThinking.contains(turn.id)
+                                    VStack(alignment: .leading, spacing: 6) {
+                                        Button {
+                                            withAnimation(ReaderMotion.disclosure(reduceMotion)) {
+                                                if showsThinking {
+                                                    expandedThinking.remove(turn.id)
+                                                } else {
+                                                    expandedThinking.insert(turn.id)
+                                                }
+                                            }
+                                        } label: {
+                                            HStack(spacing: 7) {
+                                                ReaderActionSymbol("text.bubble").frame(width: 15)
+                                                Text("模型思考").fontWeight(.medium)
+                                                Spacer(minLength: 4)
+                                                ReaderActionSymbol("chevron.right").font(.caption2)
+                                                    .rotationEffect(.degrees(showsThinking ? 90 : 0))
+                                                    .accessibilityHidden(true)
+                                            }
+                                            .font(.caption).padding(.vertical, 3).contentShape(Rectangle())
+                                        }
+                                        .readerIconButtonStyle(.plain)
+                                        .accessibilityValue(showsThinking ? "已展开" : "已收起")
+                                        if showsThinking || isStreamingTurn {
+                                            Text(reasoning)
+                                                .font(.caption).lineSpacing(2)
+                                                .lineLimit(showsThinking ? nil : 2)
+                                                .textSelection(.enabled)
+                                                .frame(maxWidth: .infinity, alignment: .leading)
+                                                .padding(.leading, 11)
+                                                .overlay(alignment: .leading) {
+                                                    Rectangle().fill(ReaderTheme.line).frame(width: 1)
+                                                }
+                                                .padding(.leading, 7)
+                                        }
                                     }
-                                    .font(.caption.weight(.medium))
                                     .foregroundStyle(ReaderTheme.muted)
                                 }
                                 PaperAssistantCitations(turn: turn, model: model, didNavigate: didNavigate) {
@@ -54,7 +84,12 @@ struct PaperAssistantView: View {
                                         AssistantCitationAnchor(turn: turn.id, source: sourceID), anchor: .top)
                                 }
                                 if model.assistantDraft?.id == turn.id, turn.answer.isEmpty {
-                                    ProgressView().controlSize(.small).accessibilityLabel("正在处理请求")
+                                    HStack(spacing: 8) {
+                                        ProgressView().controlSize(.mini)
+                                        Text(model.assistantActivityStatus ?? "正在准备回答…")
+                                            .font(.caption).foregroundStyle(ReaderTheme.muted)
+                                    }
+                                    .accessibilityLabel(model.assistantActivityStatus ?? "正在处理请求")
                                 }
                             }
                         }
@@ -116,10 +151,18 @@ struct PaperAssistantView: View {
                     .disabled(model.busyAI)
                 }
                 Spacer()
-                Button(action: send) {
-                    ReaderActionSymbol("arrow.up")
-                }.readerIconButtonStyle(AssistantSendButtonStyle()).help("发送问题").accessibilityLabel("发送问题")
-                    .disabled(question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || model.busyAI)
+                Button {
+                    if model.busyAI { model.cancelAssistant() } else { send() }
+                } label: {
+                    ReaderActionSymbol(model.busyAI ? "stop.fill" : "arrow.up")
+                        .font(model.busyAI ? .system(size: 11) : .body.weight(.semibold))
+                        .contentTransition(reduceMotion ? .identity : .opacity)
+                        .animation(ReaderMotion.feedback(reduceMotion), value: model.busyAI)
+                }
+                .readerIconButtonStyle(AssistantSendButtonStyle())
+                .help(model.busyAI ? "停止生成" : "发送问题（Return 发送，Option+Return 换行）")
+                .accessibilityLabel(model.busyAI ? "停止生成" : "发送问题")
+                .disabled(!model.busyAI && question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
         }
         .assistantComposerSurface(emphasized: composerFocused || !model.assistantSelectionText.isEmpty)
@@ -134,6 +177,6 @@ struct PaperAssistantView: View {
         let text = question.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, !model.busyAI else { return }
         question = ""
-        Task { await model.ask(text) }
+        model.startAsking(text)
     }
 }

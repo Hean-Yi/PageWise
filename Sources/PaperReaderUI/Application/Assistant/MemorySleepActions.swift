@@ -131,6 +131,7 @@ extension ReaderModel {
         guard !key.isEmpty else { throw ReaderError.message("请在设置中连接模型服务。") }
         try Task.checkCancellation()
         guard input.isCurrent(in: state, excluding: pendingImportIDs) else { throw CancellationError() }
+        let maxTokens = ModelCapabilities.resolve(config).structuredOutputTokenLimit(requested: 1400)
         return try await client.complete(
             settings: config, key: key,
             system: """
@@ -139,7 +140,7 @@ extension ReaderModel {
                 归纳共同研究主题，识别适用条件或时间变化，指出具体差异。这是下一次对话真正检索和使用的活动记忆。合并同义命题，保留读者原意与条件，指出具体分歧。每一句话都应能回查到组内成员，最多120字。
                 kind 为 refine（精炼单条自动记忆，members 仅一个 ID）、duplicate（重复，可合并呈现）、related（同一主题的不同信息）、compare（并存分歧），superseded（较晚的决定明确替代旧决定，此时 current 字段填仍有效的 UUID）。protected 条目只能保留，不可淘汰。保留范围、否定和时间条件。不同项目的决定不得合并。
                 可用 retire 字段列出需要撤销的既有关联的完整 members 数组，例如 {"groups":[],"retire":[["UUID1","UUID2"]]}。撤销关联后各条恢复独立召回。无须改动则返回 {"groups":[]}。source 是记录来源，不同论文中的类似问题可以关联，具体实验决定不得混为同一项。自动提取的问题要保留其待核实身份。不得虚构原记录没有的信息、改写用户偏好、发起外部操作。
-                """, user: input.json, jsonOutput: true, maxOutputTokens: 1400)
+                """, user: input.json, jsonOutput: true, maxOutputTokens: maxTokens)
     }
 }
 

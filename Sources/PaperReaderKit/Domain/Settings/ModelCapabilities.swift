@@ -14,9 +14,21 @@ public struct ModelCapabilities: Sendable, Equatable {
     public let rejectsJSONObjectResponseFormat: Bool
     public let supportsThinkingToggle: Bool
     public let disablesThinkingForStructuredOutput: Bool
-    /// DeepSeek official keeps tool definitions when `tool_choice` is `none` so a completed tool
-    /// round can be replayed for its reasoning. Other compatible endpoints omit them entirely.
+    /// Official endpoints that accept `tool_choice: "none"` alongside `tools` preserve KV Prompt
+    /// Cache across the final answer-only turn. Other gateways omit `tools` when disabled.
     public let keepsToolsWhenDisabled: Bool
+    /// Only providers whose tool-mode protocol expects or tolerates `reasoning_content` on
+    /// assistant tool-call turns receive it back; strict OpenAI/Anthropic/Gemini gateways strip it.
+    public let replaysReasoningInToolTurns: Bool
+    public let isReasoningModel: Bool
+
+    /// Reasoning models that cannot disable thinking during structured JSON generation need extra
+    /// completion token headroom so `<think>` tokens do not truncate the JSON payload.
+    public func structuredOutputTokenLimit(requested: Int) -> Int {
+        let thinkingDisabled = disablesThinkingForStructuredOutput && supportsThinkingToggle
+        guard isReasoningModel, !thinkingDisabled else { return requested }
+        return max(requested, 4_096)
+    }
 
     public static func resolve(_ settings: ModelSettings) -> ModelCapabilities {
         let provider = ModelServicePreset.matching(settings)
@@ -30,6 +42,9 @@ public struct ModelCapabilities: Sendable, Equatable {
             && (hasModelToken(model, "gpt-5") || hasModelToken(model, "gpt-6")
                 || hasModelToken(model, "o1") || hasModelToken(model, "o3") || hasModelToken(model, "o4"))
         let flash = family == .deepSeek || family == .glm ? model.hasSuffix("flash") : false
+        let reasoningModel =
+            newerOpenAI || model.contains("reasoner") || model.contains("thinking") || model.contains("qwq")
+            || hasModelToken(model, "r1")
         return ModelCapabilities(
             family: family,
             fixedSampling: family == .anthropic || (family == .kimi && hasModelToken(model, "kimi-k"))
@@ -40,7 +55,9 @@ public struct ModelCapabilities: Sendable, Equatable {
             // unknown OpenAI-compatible gateways stay conservative so they do not reject the body.
             supportsThinkingToggle: provider == .deepSeek || provider == .glm || officialDeepSeek,
             disablesThinkingForStructuredOutput: flash,
-            keepsToolsWhenDisabled: officialDeepSeek)
+            keepsToolsWhenDisabled: officialDeepSeek || provider == .openAI || provider == .anthropic,
+            replaysReasoningInToolTurns: ![.openAI, .anthropic, .gemini].contains(family),
+            isReasoningModel: reasoningModel)
     }
 
     private static func hasModelToken(_ model: String, _ token: String) -> Bool {

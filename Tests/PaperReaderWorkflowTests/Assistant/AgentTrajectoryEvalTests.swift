@@ -411,4 +411,163 @@ private func sseAnswer(_ text: String) throws -> String {
             messages: [.init(role: "user", content: "mismatch")], limits: limits,
             onPartial: { _ in }, onReasoning: nil)
     }
+
+    // Strict tool-name and message-role contracts also catch prompt/tool drift during replay.
+    let roleContractTransport = CassetteTransport(
+        cassette: HTTPCassette(entries: [
+            .sse(
+                [try sseAnswer("ok")], expectedToolChoice: "auto", expectedToolNames: ["search_library"],
+                expectedMessageRoles: ["system", "user"])
+        ]))
+    var scopedLimits = limits
+    scopedLimits.availableToolNames = ["search_library"]
+    let matched = try await AgentClient(transport: roleContractTransport).respondStreaming(
+        settings: settings, key: "test-only",
+        messages: [.init(role: "system", content: "S"), .init(role: "user", content: "Q")], limits: scopedLimits,
+        onPartial: { _ in }, onReasoning: nil)
+    #expect(matched.content == "ok")
+}
+
+@Test @MainActor func overdrawAnswerOnlyTransitionPreservesByteForBytePrefixCache() async throws {
+    let overdrawPayload =
+        "data: "
+        + #"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"over1","type":"function","function":{"name":"search_library","arguments":"{\"query\":\"a\"}"}},{"index":1,"id":"over2","type":"function","function":{"name":"search_library","arguments":"{\"query\":\"b\"}"}}]},"finish_reason":"tool_calls"}]}"#
+        + "\n\ndata: [DONE]\n\n"
+    let cassette = HTTPCassette(entries: [
+        .sse([try sseToolCall(id: "c1", name: "search_library", arguments: #"{"query":"first"}"#)]),
+        .sse([overdrawPayload]),
+        .sse([try sseAnswer("依据已有检索结果直接总结。")]),
+    ])
+    let transport = CassetteTransport(cassette: cassette)
+    var settings = ModelSettings()
+    settings.baseURL = ModelServicePreset.openAI.baseURL
+    settings.model = "gpt-5-mini"
+    var limits = AgentLimits()
+    limits.maxRounds = 2
+    limits.maxToolCalls = 2
+    var finalText = ""
+    try await AgentLoopRunner.run(
+        client: AgentClient(transport: transport), settings: settings, key: "test-only", limits: limits,
+        instructions: "STATIC", userQuestion: "找资料", personalContext: "", priorHistory: [],
+        availableTools: { ["search_library"] }, beforeRequest: {}, onPersonalContextIncluded: {},
+        onPartialText: { _ in }, onPartialReasoning: nil, onAssistantResponse: { _, _ in },
+        executeBatch: { calls, _ in
+            .init(
+                toolMessages: calls.map {
+                    AgentMessage(role: "tool", content: #"{"ok":true,"results":[]}"#, toolCallID: $0.id)
+                })
+        },
+        onCheckpoint: { _, _, _ in },
+        onFinalAnswer: { response, _, _, _ in finalText = response.content ?? "" })
+    #expect(finalText == "依据已有检索结果直接总结。")
+    let bodies = await transport.recordedBodies
+    #expect(bodies.count == 3)
+    #expect(TrajectoryAssertion.verifyFullRequestPrefixStability(bodies))
+}
+
+@Test @MainActor func paperAssistantRecallsSameShelfCrossPaperMemoryAndIsolatesOtherShelves() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    let fileA = root.appendingPathComponent("a.pdf")
+    let fileB = root.appendingPathComponent("b.pdf")
+    let fileC = root.appendingPathComponent("c.pdf")
+    try AttentionFixture.write(to: fileA)
+    try AttentionFixture.write(to: fileB)
+    try AttentionFixture.write(to: fileC)
+
+    let cassette = HTTPCassette(entries: [.sse([try sseAnswer("结合同书架研究记忆解释 [S1]。")])])
+    let transport = CassetteTransport(cassette: cassette)
+    let reader = try ReaderModel(
+        root: root, client: ModelClient(transport: transport), credentials: WorkflowCredentials())
+    await reader.load()
+    var settings = reader.modelSettings
+    settings.baseURL = ModelServicePreset.openAI.baseURL
+    settings.model = "gpt-5-mini"
+    try reader.saveSettings(settings, key: "test-only")
+
+    let shelfEfficiency = try Shelf(name: "Efficiency")
+    let shelfVision = try Shelf(name: "Vision")
+    let paperA = Paper(
+        title: "Paper A", digest: "da", originalPath: "a.pdf", pageCount: 1,
+        blocks: [TextBlock(sourcePage: 0, text: "Matched compute budget comparison.")], warnings: [], canReflow: true)
+    let paperB = Paper(
+        title: "Paper B", digest: "db", originalPath: "b.pdf", pageCount: 1,
+        blocks: [TextBlock(sourcePage: 0, text: "Attention latency and compute budget.")], warnings: [],
+        canReflow: true)
+    let paperC = Paper(
+        title: "Paper C", digest: "dc", originalPath: "c.pdf", pageCount: 1,
+        blocks: [TextBlock(sourcePage: 0, text: "Image segmentation compute budget.")], warnings: [], canReflow: true)
+    let turnA = ChatTurn(paperID: paperA.id, question: "等算力预算", selection: "", answer: "ok", evidence: [])
+    let turnC = ChatTurn(paperID: paperC.id, question: "视觉算力预算", selection: "", answer: "ok", evidence: [])
+    let sameShelfMemory = MemoryItem(text: "AI 整理（待核实）：同书架追踪等算力预算控制", sourceID: turnA.id)
+    let otherShelfMemory = MemoryItem(text: "AI 整理（待核实）：视觉书架专属分割算力预算", sourceID: turnC.id)
+    reader.state.shelves = [shelfEfficiency, shelfVision]
+    reader.state.papers = [paperA, paperB, paperC]
+    reader.state.paperShelfIDs[paperA.id.uuidString] = shelfEfficiency.id
+    reader.state.paperShelfIDs[paperB.id.uuidString] = shelfEfficiency.id
+    reader.state.paperShelfIDs[paperC.id.uuidString] = shelfVision.id
+    reader.state.chats = [turnA, turnC]
+    reader.state.memories = [sameShelfMemory, otherShelfMemory]
+    #expect(await reader.save())
+
+    reader.select(paperB.id)
+    await reader.ask("这篇论文的算力预算怎么看？")
+    let body = try #require(await transport.recordedBodies.first)
+    #expect(body.contains("同书架追踪等算力预算控制"))
+    #expect(!body.contains("视觉书架专属分割算力预算"))
+}
+
+@Test @MainActor func compositeOperationalAndResearchPlanTurnStillAllowsProposeMemory() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let reader = try ReaderModel(root: root, credentials: WorkflowCredentials())
+    await reader.load()
+    var settings = reader.modelSettings
+    settings.baseURL = ModelServicePreset.openAI.baseURL
+    settings.model = "gpt-5-mini"
+    try reader.saveSettings(settings, key: "test-only")
+
+    let proposeArgs = #"{"statement":"接下来计划系统研究 IO-aware 算子优化","quote":"我接下来计划系统研究 IO-aware 算子优化"}"#
+    let cassette = HTTPCassette(entries: [
+        .sse([try sseToolCall(id: "pm1", name: "propose_memory", arguments: proposeArgs)])
+    ])
+    let agent = LibraryAgent(reader: reader, client: AgentClient(transport: CassetteTransport(cassette: cassette)))
+    agent.send("帮我搜一下 FlashAttention，我接下来计划系统研究 IO-aware 算子优化。")
+    for _ in 0..<200 where agent.isRunning { try await Task.sleep(for: .milliseconds(10)) }
+
+    #expect(agent.turns.last?.activities.first?.status == .succeeded)
+    #expect(reader.state.memories.contains { $0.isActive && $0.text.contains("IO-aware") })
+}
+
+@Test @MainActor func mixedBatchContainingSingleCallOnlyToolFailsAtomicallyWithoutSideEffects() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let reader = try ReaderModel(root: root, credentials: WorkflowCredentials())
+    await reader.load()
+    var settings = reader.modelSettings
+    settings.baseURL = ModelServicePreset.openAI.baseURL
+    settings.model = "gpt-5-mini"
+    try reader.saveSettings(settings, key: "test-only")
+    let paper = Paper(
+        title: "Atomic Batch Paper", digest: "atomic", originalPath: "a.pdf", pageCount: 1,
+        blocks: [TextBlock(sourcePage: 0, text: "Atomic content")], warnings: [], canReflow: true)
+    reader.state.papers = [paper]
+    #expect(await reader.save())
+
+    let mixedPayload =
+        "data: "
+        + #"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"m1","type":"function","function":{"name":"search_library","arguments":"{\"query\":\"Atomic\"}"}},{"index":1,"id":"m2","type":"function","function":{"name":"ask_user","arguments":"{\"question\":\"选哪篇？\",\"options\":[\"A\",\"B\"]}"}}]},"finish_reason":"tool_calls"}]}"#
+        + "\n\ndata: [DONE]\n\n"
+    let cassette = HTTPCassette(entries: [
+        .sse([mixedPayload]),
+        .sse([try sseAnswer("已拆分后回答。")]),
+    ])
+    let agent = LibraryAgent(reader: reader, client: AgentClient(transport: CassetteTransport(cassette: cassette)))
+    agent.send("查找 Atomic Batch Paper")
+    for _ in 0..<200 where agent.isRunning { try await Task.sleep(for: .milliseconds(10)) }
+    let turn = try #require(agent.turns.last)
+    #expect(turn.activities.count == 2)
+    #expect(turn.activities.allSatisfy { $0.status == .failed })
+    #expect(turn.cards.isEmpty)
 }

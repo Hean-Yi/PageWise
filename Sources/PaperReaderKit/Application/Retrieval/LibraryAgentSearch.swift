@@ -205,27 +205,59 @@ public actor LibraryAgentSearchIndex {
         let bounded = min(limit, 64)
         let key = query.trimmingCharacters(in: .whitespacesAndNewlines)
         let identifier = SearchTermMatches.isIdentifierQuery(key) ? key : nil
-        let hasIdeograph = terms.contains { $0.unicodeScalars.contains { $0.properties.isIdeographic } }
+        let latinTerms = Set(terms.filter { !$0.unicodeScalars.contains { $0.properties.isIdeographic } })
+        let cjkTerms = terms.subtracting(latinTerms)
         let lexical: [AgentSearchHit]
-        if identifier == nil, !hasIdeograph, fts.isAvailable {
-            let ftsHits = fts.search(terms: terms, requireAllTerms: true, limit: bounded * 2).map { hit in
-                AgentSearchHit(
-                    paperID: hit.paperID, title: hit.title, blockID: hit.blockID,
-                    sourcePage: hit.sourcePage, excerpt: hit.excerpt, score: hit.score)
+        if identifier == nil, fts.isAvailable {
+            func toAgentHits(_ hits: [LibraryFTSIndex.Hit]) -> [AgentSearchHit] {
+                hits.map { hit in
+                    AgentSearchHit(
+                        paperID: hit.paperID, title: hit.title, blockID: hit.blockID,
+                        sourcePage: hit.sourcePage, excerpt: hit.excerpt, score: hit.score)
+                }
             }
-            if !ftsHits.isEmpty {
-                lexical = ftsHits
-            } else {
-                let fallback = try LibraryAgentSearch.rank(terms, in: entries, limit: bounded * 2, identifier: nil)
-                lexical =
-                    fallback.isEmpty
-                    ? fts.search(terms: terms, requireAllTerms: false, limit: bounded * 2).map { hit in
-                        AgentSearchHit(
-                            paperID: hit.paperID, title: hit.title, blockID: hit.blockID,
-                            sourcePage: hit.sourcePage, excerpt: hit.excerpt, score: hit.score)
+            var combined: [UUID: AgentSearchHit] = [:]
+            func merge(_ incoming: [AgentSearchHit]) {
+                for hit in incoming {
+                    if let existing = combined[hit.paperID] {
+                        let prefersIncoming =
+                            hit.score > existing.score
+                            || (existing.blockID == nil && existing.sourcePage == nil
+                                && (hit.blockID != nil || hit.sourcePage != nil))
+                        var merged = prefersIncoming ? hit : existing
+                        merged.score = max(existing.score, hit.score) + min(existing.score, hit.score) / 2
+                        combined[hit.paperID] = merged
+                    } else {
+                        combined[hit.paperID] = hit
                     }
-                    : fallback
+                }
             }
+            if !latinTerms.isEmpty {
+                let strictLatin = toAgentHits(fts.search(terms: latinTerms, requireAllTerms: true, limit: bounded * 2))
+                if !strictLatin.isEmpty {
+                    merge(strictLatin)
+                } else {
+                    let exactFallback = try LibraryAgentSearch.rank(
+                        latinTerms, in: entries, limit: bounded * 2, identifier: nil)
+                    merge(
+                        exactFallback.isEmpty
+                            ? toAgentHits(fts.search(terms: latinTerms, requireAllTerms: false, limit: bounded * 2))
+                            : exactFallback)
+                }
+            }
+            if !cjkTerms.isEmpty {
+                let trigramHits = toAgentHits(
+                    fts.searchTrigram(terms: cjkTerms, requireAllTerms: false, limit: bounded * 2))
+                merge(trigramHits)
+                let shortCJK = cjkTerms.filter { $0.count < 3 }
+                if !shortCJK.isEmpty || trigramHits.isEmpty {
+                    merge(try LibraryAgentSearch.rank(cjkTerms, in: entries, limit: bounded * 2, identifier: nil))
+                }
+            }
+            lexical = combined.values.sorted {
+                if $0.score != $1.score { return $0.score > $1.score }
+                return $0.paperID.uuidString < $1.paperID.uuidString
+            }.prefix(bounded * 2).map { $0 }
         } else {
             lexical = try LibraryAgentSearch.rank(terms, in: entries, limit: bounded * 2, identifier: identifier)
         }

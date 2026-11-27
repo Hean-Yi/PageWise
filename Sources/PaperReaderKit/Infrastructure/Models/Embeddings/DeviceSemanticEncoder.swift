@@ -6,6 +6,7 @@ import SentencePiece
 public actor DeviceSemanticEncoder: SemanticTextEncoder {
     public static let shared = DeviceSemanticEncoder(directory: E5ModelResources.defaultDirectory)
     public nonisolated let identifier = E5ModelResources.revision
+    public nonisolated var isBundled: Bool { E5ModelResources.bundledParent != nil }
     private let directory: URL
     private let transport: any HTTPTransport
     private var runtime: Runtime?

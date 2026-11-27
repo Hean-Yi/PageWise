@@ -13,6 +13,7 @@ final class LibraryFTSIndex {
     }
 
     private var db: OpaquePointer?
+    private var hasTrigram = false
 
     init() {
         var handle: OpaquePointer?
@@ -34,6 +35,17 @@ final class LibraryFTSIndex {
             sqlite3_close(handle)
             return
         }
+        let trigramDDL = """
+            CREATE VIRTUAL TABLE paper_fts_trigram USING fts5(
+                paper_id UNINDEXED,
+                block_id UNINDEXED,
+                source_page UNINDEXED,
+                title,
+                body,
+                tokenize = 'trigram'
+            );
+            """
+        hasTrigram = sqlite3_exec(handle, trigramDDL, nil, nil, nil) == SQLITE_OK
         db = handle
     }
 
@@ -45,8 +57,13 @@ final class LibraryFTSIndex {
 
     func remove(paperID: UUID) {
         guard let db else { return }
+        deleteRows(paperID: paperID, table: "paper_fts", in: db)
+        if hasTrigram { deleteRows(paperID: paperID, table: "paper_fts_trigram", in: db) }
+    }
+
+    private func deleteRows(paperID: UUID, table: String, in db: OpaquePointer) {
         var stmt: OpaquePointer?
-        guard sqlite3_prepare_v2(db, "DELETE FROM paper_fts WHERE paper_id = ?", -1, &stmt, nil) == SQLITE_OK,
+        guard sqlite3_prepare_v2(db, "DELETE FROM \(table) WHERE paper_id = ?", -1, &stmt, nil) == SQLITE_OK,
             let stmt
         else { return }
         defer { sqlite3_finalize(stmt) }
@@ -60,17 +77,28 @@ final class LibraryFTSIndex {
         guard let db else { return }
         _ = sqlite3_exec(db, "BEGIN IMMEDIATE", nil, nil, nil)
         remove(paperID: paperID)
-        var stmt: OpaquePointer?
-        let sql = "INSERT INTO paper_fts(paper_id, block_id, source_page, title, body) VALUES (?, ?, ?, ?, ?)"
-        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK, let stmt else {
-            _ = sqlite3_exec(db, "ROLLBACK", nil, nil, nil)
-            return
-        }
-        defer { sqlite3_finalize(stmt) }
         let rows =
             passages.isEmpty
             ? [(blockID: UUID?.none, sourcePage: Int?.none, text: "")]
             : passages
+        guard insertRows(paperID: paperID, title: title, rows: rows, table: "paper_fts", in: db) else {
+            _ = sqlite3_exec(db, "ROLLBACK", nil, nil, nil)
+            return
+        }
+        if hasTrigram {
+            _ = insertRows(paperID: paperID, title: title, rows: rows, table: "paper_fts_trigram", in: db)
+        }
+        _ = sqlite3_exec(db, "COMMIT", nil, nil, nil)
+    }
+
+    private func insertRows(
+        paperID: UUID, title: String, rows: [(blockID: UUID?, sourcePage: Int?, text: String)],
+        table: String, in db: OpaquePointer
+    ) -> Bool {
+        var stmt: OpaquePointer?
+        let sql = "INSERT INTO \(table)(paper_id, block_id, source_page, title, body) VALUES (?, ?, ?, ?, ?)"
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK, let stmt else { return false }
+        defer { sqlite3_finalize(stmt) }
         for row in rows {
             sqlite3_reset(stmt)
             sqlite3_clear_bindings(stmt)
@@ -89,7 +117,7 @@ final class LibraryFTSIndex {
             bindText(row.text, at: 5, in: stmt)
             _ = sqlite3_step(stmt)
         }
-        _ = sqlite3_exec(db, "COMMIT", nil, nil, nil)
+        return true
     }
 
     func search(terms: Set<String>, requireAllTerms: Bool = true, limit: Int) -> [Hit] {
@@ -101,10 +129,28 @@ final class LibraryFTSIndex {
         }.sorted()
         guard !sanitized.isEmpty else { return [] }
         let matchQuery = sanitized.joined(separator: requireAllTerms ? " AND " : " OR ")
+        return runQuery(table: "paper_fts", matchQuery: matchQuery, limit: limit, in: db)
+    }
+
+    /// Trigram BM25 lookup for >=3-character CJK or substring terms so mixed Chinese/English
+    /// queries do not bypass SQLite FTS5 indexing.
+    func searchTrigram(terms: Set<String>, requireAllTerms: Bool = false, limit: Int) -> [Hit] {
+        guard let db, hasTrigram, limit > 0 else { return [] }
+        let sanitized = terms.compactMap { raw -> String? in
+            let clean = raw.filter { $0.isLetter || $0.isNumber }
+            guard clean.count >= 3 else { return nil }
+            return "\"\(clean)\""
+        }.sorted()
+        guard !sanitized.isEmpty else { return [] }
+        let matchQuery = sanitized.joined(separator: requireAllTerms ? " AND " : " OR ")
+        return runQuery(table: "paper_fts_trigram", matchQuery: matchQuery, limit: limit, in: db)
+    }
+
+    private func runQuery(table: String, matchQuery: String, limit: Int, in db: OpaquePointer) -> [Hit] {
         let sql = """
-            SELECT paper_id, block_id, source_page, title, body, bm25(paper_fts, 0.0, 0.0, 0.0, 5.0, 1.0) AS rank
-            FROM paper_fts
-            WHERE paper_fts MATCH ?
+            SELECT paper_id, block_id, source_page, title, body, bm25(\(table), 0.0, 0.0, 0.0, 5.0, 1.0) AS rank
+            FROM \(table)
+            WHERE \(table) MATCH ?
             ORDER BY rank ASC, paper_id ASC, rowid ASC
             LIMIT ?
             """

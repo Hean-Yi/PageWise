@@ -628,6 +628,7 @@ public final class LibraryAgent {
             "ask_user", "create_reading_note", "close_read_paper", "propose_research_question",
             "remember_preference", "propose_memory", "revise_memory", "forget_memory",
         ]
+        let invalidSingleCallBatch = calls.count > 1 && !names.isDisjoint(with: singleCallOnly)
         var activityIDs: [UUID] = []
         for call in calls {
             let activity = AgentActivity(toolName: call.function.name)
@@ -646,7 +647,7 @@ public final class LibraryAgent {
         }
 
         let results: [CallResult]
-        if !mixedCardBatch, AgentToolConcurrency.canRunConcurrently(calls) {
+        if !mixedCardBatch, !invalidSingleCallBatch, AgentToolConcurrency.canRunConcurrently(calls) {
             // Read-only tools are independent network/database reads. Start them together and
             // collect in request order so result cards stay aligned with the model's calls.
             let tasks = calls.enumerated().map { index, call in
@@ -695,8 +696,8 @@ public final class LibraryAgent {
                     if mixedCardBatch {
                         throw ReaderError.message("请先完成检索和归类，再单独请求确认卡。")
                     }
-                    if singleCallOnly.contains(call.function.name), calls.count != 1 {
-                        throw ReaderError.message("请单独调用此工具。")
+                    if invalidSingleCallBatch {
+                        throw ReaderError.message("包含需单独调用的工具，整批未执行，请拆分后重新调用。")
                     }
                     let outcome = try await execute(
                         call, epoch: epoch, noteRequest: noteRequest, recommendationSeed: seed,
@@ -898,6 +899,7 @@ public final class LibraryAgent {
         if let turn = activeTurn, ReaderPreference.permitsExtraction(turn.question),
             !ResearchQuestionProposal.isRecallRequest(turn.question),
             ResearchQuestionProposal.isWriteRequest(turn.question)
+                || ReaderPreference.hasResearchIntentClause(in: turn.question)
                 || turn.question.range(
                     of: #"(?i)记忆|记住|记录|更正|修订|memory"#, options: .regularExpression) != nil
                 || (!ResearchQuestionProposal.isOperational(turn.question)

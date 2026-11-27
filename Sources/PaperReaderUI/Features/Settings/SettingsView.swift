@@ -20,6 +20,7 @@ struct SettingsView: View {
     private enum Field { case model, address, key }
 
     @Bindable var model: ReaderModel
+    private let contextHint: String?
     private let openGuide: () -> Void
     private let openMemorySource: (UUID) -> Void
     @Environment(\.dismiss) private var dismiss
@@ -40,8 +41,12 @@ struct SettingsView: View {
     @State private var cleanupWarning: String?
     @State private var testTask: Task<Void, Never>?
 
-    init(model: ReaderModel, openGuide: @escaping () -> Void, openMemorySource: @escaping (UUID) -> Void) {
+    init(
+        model: ReaderModel, contextHint: String? = nil, openGuide: @escaping () -> Void,
+        openMemorySource: @escaping (UUID) -> Void
+    ) {
         self.model = model
+        self.contextHint = contextHint
         self.openMemorySource = openMemorySource
         self.openGuide = openGuide
         let settings = model.modelSettings
@@ -232,6 +237,12 @@ struct SettingsView: View {
 
     private var modelForm: some View {
         VStack(alignment: .leading, spacing: 17) {
+            if let contextHint, !contextHint.isEmpty {
+                Label(contextHint, systemImage: "info.circle")
+                    .font(.callout).foregroundStyle(ReaderTheme.ink)
+                    .padding(12).frame(maxWidth: .infinity, alignment: .leading)
+                    .background(ReaderTheme.elevated, in: RoundedRectangle(cornerRadius: 10))
+            }
             VStack(alignment: .leading, spacing: 7) {
                 fieldLabel("服务预设")
                 ReaderPopupMenu(

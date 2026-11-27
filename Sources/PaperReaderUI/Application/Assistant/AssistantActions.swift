@@ -23,6 +23,20 @@ extension ReaderModel {
         pdfBilingual.selectFromTranslation(ids)
     }
 
+    public func startAsking(_ question: String) {
+        guard !busyAI, !question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        assistantTask?.cancel()
+        assistantTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.ask(question)
+        }
+    }
+
+    public func cancelAssistant() {
+        assistantTask?.cancel()
+        assistantTask = nil
+    }
+
     public func ask(_ question: String) async {
         guard let paper, !busyAI, !question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         touch()
@@ -37,9 +51,12 @@ extension ReaderModel {
             return
         }
         busyAI = true
+        assistantActivityStatus = nil
         defer {
             busyAI = false
             assistantDraft = nil
+            assistantActivityStatus = nil
+            assistantTask = nil
         }
         let deletion = lastPaperDeletion[paper.id]
         let selectedSentences = pdfBilingual.selectedSourceSentences
@@ -172,11 +189,13 @@ extension ReaderModel {
                     return "[\(source.id)] \(source.title) / \(kind)\n\(source.text)"
                 }.joined(separator: "\n\n")
             }
+            let shelfID = state.paperShelfIDs[paper.id.uuidString]
+            let memoryScope: ResearchBrief.Scope = shelfID.map(ResearchBrief.Scope.shelf) ?? .library
             let recalledMemory =
                 useMemory
                 ? try await researchMemory.relevant(
-                    to: question, paperID: paper.id, shelfID: state.paperShelfIDs[paper.id.uuidString],
-                    scope: .paper(paper.id), state: state)
+                    to: question, paperID: paper.id, shelfID: shelfID,
+                    scope: memoryScope, state: state)
                 : []
             let style = preferences(for: question, paperID: paper.id, overrides: overrides)
             guard lastPaperDeletion[paper.id] == deletion else { return }
@@ -184,7 +203,8 @@ extension ReaderModel {
             let liveMemory = recalledMemory.filter { candidate in
                 state.memories.contains { $0.id == candidate.id && !$0.deleted && $0.text == candidate.text }
             }
-            let effective = try await effectiveSleepMemory(question: question, paperID: paper.id, recalled: liveMemory)
+            let effective = try await effectiveSleepMemory(
+                question: question, paperID: paper.id, recalled: liveMemory, scope: memoryScope)
             var personalSources = ChatSourceVersions()
             if !effective.sources.isEmpty { personalSources.sleepRevision = memorySleep.edition.revision }
             for memory in effective.sources + style { personalSources.include(memory) }
@@ -356,6 +376,8 @@ extension ReaderModel {
                     }
                 },
                 executeBatch: { @MainActor calls, _ in
+                    self.assistantActivityStatus = Self.paperAssistantToolStatus(for: calls)
+                    defer { self.assistantActivityStatus = nil }
                     let outcomes: [PaperAssistantToolOutcome]
                     if AgentToolConcurrency.canRunConcurrently(calls) {
                         let tasks = calls.map { call in
@@ -445,29 +467,61 @@ extension ReaderModel {
             state.chats.append(turn)
             await save()
             guard lastPaperDeletion[paper.id] == deletion else { return }
+            var failedMemoryCommits = 0
             if !declarations.isEmpty {
                 for clause in declarations {
                     if var change = try preferenceChange(
                         for: clause, turnID: turn.id, paperID: paper.id, paperTurn: true)
                     {
                         change.linkExistingTurn = true
-                        _ = await save(cancellable: true, preferenceChange: change)
+                        if !(await save(cancellable: true, preferenceChange: change)) {
+                            failedMemoryCommits += 1
+                        }
                     }
                 }
             }
             if !pendingMemoryProposals.isEmpty {
                 for proposal in pendingMemoryProposals {
                     guard lastPaperDeletion[paper.id] == deletion else { return }
-                    _ = await save(cancellable: true, proposingMemory: proposal)
+                    if !(await save(cancellable: true, proposingMemory: proposal)) {
+                        failedMemoryCommits += 1
+                    }
                 }
             }
             if !pendingMemoryMutations.isEmpty {
                 for mutation in pendingMemoryMutations {
                     guard lastPaperDeletion[paper.id] == deletion else { return }
-                    _ = await save(cancellable: true, memoryMutation: mutation)
+                    if !(await save(cancellable: true, memoryMutation: mutation)) {
+                        failedMemoryCommits += 1
+                    }
                 }
             }
+            if failedMemoryCommits > 0, let index = state.chats.firstIndex(where: { $0.id == turn.id }) {
+                state.chats[index].answer += "\n\n（注：有 \(failedMemoryCommits) 项研究记忆因状态变化未能保存，可在「设置 → 研究记忆」核对。）"
+                status = "部分研究记忆未能写入，来源已变化"
+                await save()
+            }
+        } catch is CancellationError {
         } catch { message = error.localizedDescription }
+    }
+
+    private static func paperAssistantToolStatus(for calls: [AgentToolCall]) -> String {
+        guard let first = calls.first else { return "正在处理工具请求…" }
+        if calls.count > 1 { return "正在并行检索 \(calls.count) 项资料…" }
+        switch first.function.name {
+        case "read_paper":
+            if let data = first.function.arguments.data(using: .utf8),
+                let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                let page = object["source_page"] as? Int
+            {
+                return "正在阅读原文第 \(page) 页…"
+            }
+            return "正在阅读论文原页…"
+        case "search_reading_notes": return "正在检索阅读笔记…"
+        case "remember_preference": return "正在核对回答偏好…"
+        case "propose_memory", "revise_memory", "forget_memory": return "正在维护研究记忆…"
+        default: return "正在处理请求…"
+        }
     }
 
     private static func nextCitationID(in evidence: [Evidence]) -> String {

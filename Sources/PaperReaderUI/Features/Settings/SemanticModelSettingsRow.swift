@@ -8,12 +8,19 @@ struct SemanticModelSettingsRow: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 12) {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("本地语义检索").font(.headline)
-                    Text(settings.installed ? "多语言模型已安装" : "多语言模型 · 约 240 MB")
-                        .font(.caption).foregroundStyle(ReaderTheme.muted)
+                    Text("本地中英语义检索").font(.subheadline.weight(.semibold))
+                    Text(
+                        settings.isBundled
+                            ? "已随应用内置（离线运行，无需额外下载）"
+                            : (settings.installed ? "多语言模型已安装" : "多语言模型 · 约 240 MB")
+                    )
+                    .font(.caption).foregroundStyle(ReaderTheme.muted)
                 }
                 Spacer()
-                if settings.working {
+                if settings.isBundled {
+                    Label("就绪", systemImage: "checkmark.circle.fill")
+                        .font(.caption.weight(.medium)).foregroundStyle(ReaderTheme.accent)
+                } else if settings.working {
                     ProgressView().controlSize(.small)
                     Button("取消") { Task { await settings.cancel() } }
                 } else {

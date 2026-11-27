@@ -143,3 +143,40 @@ func modelServicesUseTheirWireFormatForTextReflowAndTools(_ preset: ModelService
     settings.model = "glm-5.3"
     #expect(!ModelCapabilities.resolve(settings).disablesThinkingForStructuredOutput)
 }
+
+@Test func capabilitiesGateReasoningReplayAndScaleStructuredOutputForReasoningModels() async throws {
+    var openAI = ModelSettings()
+    openAI.baseURL = ModelServicePreset.openAI.baseURL
+    openAI.model = "o3-mini"
+    let openAICaps = ModelCapabilities.resolve(openAI)
+    #expect(!openAICaps.replaysReasoningInToolTurns)
+    #expect(openAICaps.keepsToolsWhenDisabled)
+    #expect(openAICaps.structuredOutputTokenLimit(requested: 800) == 4_096)
+
+    var reasoner = ModelSettings()
+    reasoner.baseURL = ModelServicePreset.deepSeek.baseURL
+    reasoner.model = "deepseek-reasoner"
+    let reasonerCaps = ModelCapabilities.resolve(reasoner)
+    #expect(reasonerCaps.replaysReasoningInToolTurns)
+    #expect(reasonerCaps.structuredOutputTokenLimit(requested: 800) == 4_096)
+
+    var flash = ModelSettings()
+    flash.baseURL = ModelServicePreset.deepSeek.baseURL
+    flash.model = "deepseek-flash"
+    #expect(ModelCapabilities.resolve(flash).structuredOutputTokenLimit(requested: 800) == 800)
+
+    // Strict OpenAI tool turns strip reasoning_content from wire messages even on tool-call turns.
+    let transport = PresetTransport()
+    let call = AgentToolCall(id: "c1", name: "search_library", arguments: "{}")
+    let messages: [AgentMessage] = [
+        .init(role: "user", content: "q"),
+        .init(role: "assistant", toolCalls: [call], reasoningContent: "private thought"),
+        .init(role: "tool", content: "[]", toolCallID: "c1"),
+    ]
+    _ = try await AgentClient(transport: transport).respond(
+        settings: openAI, key: "fixture", messages: messages, limits: .init())
+    let body = try #require(await transport.requests.first?.httpBody)
+    let wire = try #require(JSONSerialization.jsonObject(with: body) as? [String: Any])
+    let wireMessages = try #require(wire["messages"] as? [[String: Any]])
+    #expect(wireMessages[1]["reasoning_content"] == nil)
+}

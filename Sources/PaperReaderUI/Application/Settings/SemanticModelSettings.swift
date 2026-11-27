@@ -6,6 +6,7 @@ import PaperReaderKit
 final class SemanticModelSettings {
     static let shared = SemanticModelSettings()
     private let encoder = DeviceSemanticEncoder.shared
+    var isBundled: Bool { encoder.isBundled }
     private(set) var installed = false
     private(set) var working = false
     private(set) var errorMessage: String?
