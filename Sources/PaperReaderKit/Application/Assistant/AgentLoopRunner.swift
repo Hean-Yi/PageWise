@@ -175,8 +175,8 @@ public enum AgentLoopRunner {
             let calls = response.toolCalls ?? []
             if calls.isEmpty {
                 try await onAssistantResponse(response, false)
-                // Pass `currentWithNotes` so persisted history matches the exact bytes sent to the
-                // provider, preserving server-side KV Prompt Cache across subsequent user turns.
+                // The completed turn keeps the exact request bytes (including personal context and
+                // the budget stamps) so the next turn can reuse the full server-side prefix cache.
                 try await onFinalAnswer(response, system, currentWithNotes, prior)
                 return
             }
@@ -296,14 +296,9 @@ public enum AgentLoopRunner {
             // changes: the mutation tool's own receipt already carries `research_overview_changed`,
             // so keeping earlier messages untouched preserves the KV Prompt Cache prefix.
             current.append(contentsOf: finalOutcome.toolMessages)
-            var checkpointCurrent =
-                fitted.includedPersonalContext
-                ? AgentContextCompactor.applyingPersonalContext(personalContext, to: current) : current
-            for (index, note) in roundBudgetNotes where checkpointCurrent.indices.contains(index) {
-                checkpointCurrent[index].content = Self.attachingBudgetNote(
-                    note, to: checkpointCurrent[index].content)
-            }
-            try await onCheckpoint(checkpointCurrent, prior, system)
+            // Checkpoints contain only the real conversation. Per-round budget notes and the
+            // personal context remain ephemeral request decorations.
+            try await onCheckpoint(current, prior, system)
             if finalOutcome.shouldStopEarly { return }
         }
     }
