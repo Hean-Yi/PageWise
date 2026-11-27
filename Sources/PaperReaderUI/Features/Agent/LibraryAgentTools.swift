@@ -172,24 +172,11 @@ extension LibraryAgent {
                 content: "{\"ok\":true,\"status\":\"ai_unverified\",\"memory_id\":\"\(proposal.item.id.uuidString)\"}",
                 cards: [], truncated: false, message: nil)
         case .reviseMemory(let memoryID, let statement, let expectedRevision):
-            guard let turn = activeTurn, ReaderPreference.permitsRecall(turn.question),
-                limits.availableToolNames?.contains(call.function.name) != false,
-                let current = reader.state.memories.first(where: { $0.id == memoryID }),
-                current.isActive, !current.userEdited
-            else { throw ReaderError.message("本轮没有明确要求更正已有记忆。") }
-            if let expectedRevision, !current.matchesRevision(expectedRevision) {
-                throw ReaderError.message("这条研究记忆已更新，请重新核对最新版本。")
-            }
-            guard Self.hasExplicitRevisionIntent(turn.question) || expectedRevision != nil else {
+            guard let turn = activeTurn, limits.availableToolNames?.contains(call.function.name) != false else {
                 throw ReaderError.message("本轮没有明确要求更正已有记忆。")
             }
-            var probe = current
-            guard probe.correct(to: statement) else {
-                throw ReaderError.message("新的记忆措辞没有变化。")
-            }
-            let mutation = MemoryRecordMutation(
-                operation: .revise(id: memoryID, statement: statement, expectedRevision: expectedRevision),
-                auditTrigger: turn.question)
+            let mutation = try reader.buildMemoryRevisionMutation(
+                memoryID: memoryID, statement: statement, expectedRevision: expectedRevision, question: turn.question)
             guard await reader.save(cancellable: true, memoryMutation: mutation) else {
                 try check(epoch)
                 throw ReaderError.message("来源已变化或保存失败，此次未修改记忆。")
@@ -200,38 +187,12 @@ extension LibraryAgent {
                 content: "{\"ok\":true,\"memory_id\":\"\(memoryID.uuidString)\"}", cards: [], truncated: false,
                 message: nil)
         case .forgetMemory(let memoryID, let expectedRevision):
-            guard let turn = activeTurn, ReaderPreference.permitsRecall(turn.question),
-                limits.availableToolNames?.contains(call.function.name) != false,
-                let target = reader.state.memories.first(where: { $0.id == memoryID }),
-                target.isActive, !target.userEdited
-            else { throw ReaderError.message("本轮没有明确要求删除这条记忆。") }
-            if let expectedRevision, !target.matchesRevision(expectedRevision) {
-                throw ReaderError.message("这条研究记忆已更新，请重新核对最新版本。")
-            }
-            let hasForgetWording =
-                turn.question.range(
-                    of: #"(?i)忘掉|忘记|删除|移除|撤回|不用再|无需再|不再|停止|取消|forget|remove|delete|stop|drop|no longer"#,
-                    options: .regularExpression) != nil
-            guard hasForgetWording || expectedRevision != nil else {
+            guard let turn = activeTurn, limits.availableToolNames?.contains(call.function.name) != false else {
                 throw ReaderError.message("本轮没有明确要求删除这条记忆。")
             }
-            let ignored: Set<String> = ["的", "了", "在", "和", "与", "及", "这", "那", "个", "记录", "记忆", "旧", "新"]
-            let questionTerms = Retriever.tokens(turn.question).subtracting(ignored)
-            let scored = reader.state.memories.compactMap { item -> (MemoryItem, Int)? in
-                guard item.isActive, !item.isResponsePreference else { return nil }
-                let overlap = Retriever.tokens(item.text).subtracting(ignored).intersection(questionTerms).count
-                return overlap > 0 ? (item, overlap) : nil
-            }.sorted { $0.1 > $1.1 }
-            let topOverlap = scored.first?.1 ?? 0
-            let uniqueTop = scored.filter { $0.1 == topOverlap }
-            let recalledThisTurn = recalledSources?.memoryIDs.contains(target.id) == true
-            let verifiedByRevision = expectedRevision.map { target.matchesRevision($0) } == true
-            guard
-                verifiedByRevision || recalledThisTurn || turn.question.localizedCaseInsensitiveContains(target.text)
-                    || (topOverlap > 0 && uniqueTop.count == 1 && uniqueTop.first?.0.id == target.id)
-            else { throw ReaderError.message("记忆删除目标不唯一或与请求不匹配。") }
-            let mutation = MemoryRecordMutation(
-                operation: .forget(id: target.id, expectedRevision: expectedRevision), auditTrigger: turn.question)
+            let mutation = try reader.buildMemoryForgetMutation(
+                memoryID: memoryID, expectedRevision: expectedRevision, question: turn.question,
+                recalledIDs: recalledSources?.memoryIDs ?? [])
             guard await reader.save(cancellable: true, memoryMutation: mutation) else {
                 try check(epoch)
                 throw ReaderError.message("来源已变化或保存失败，此次未删除记忆。")
@@ -501,10 +462,7 @@ extension LibraryAgent {
     /// A new research statement belongs in `propose_memory`; an existing memory may only be
     /// overwritten when the reader explicitly asks to correct or replace it.
     static func hasExplicitRevisionIntent(_ question: String) -> Bool {
-        question.range(
-            of:
-                #"(?i)更正|改正|纠正|修正|修改|改成|改为|更新|调整|记错|写错|说错|不是|而是|不再|改变主意|改主意|不用再|无需再|停止追踪|取消追踪|correct|change|update|instead|no longer|replace|changed my mind|stop tracking"#,
-            options: .regularExpression) != nil
+        ReaderModel.hasExplicitRevisionIntent(question)
     }
 
     func registeredPaper(_ id: String, page: Int?) throws -> Paper {

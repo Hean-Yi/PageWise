@@ -87,6 +87,7 @@ public enum AgentLoopRunner {
         var roundBudgetNotes: [Int: String] = [:]
         var finalReason: String?
         var callIDs = Set(prior.flatMap { $0 }.flatMap { $0.toolCalls ?? [] }.map(\.id))
+        var repeatCounts: [String: Int] = [:]
 
         toolLoop: while true {
             try await beforeRequest()
@@ -172,7 +173,66 @@ public enum AgentLoopRunner {
             }
             try await onAssistantResponse(response, true)
             current.append(response)
-            let outcome = try await executeBatch(calls, current)
+            let signatures = calls.map(Self.canonicalSignature)
+            let roundUnique = Set(signatures)
+            var stuckIndices = Set<Int>()
+            var warnIndices = Set<Int>()
+            for (index, signature) in signatures.enumerated() {
+                let priorCount = repeatCounts[signature, default: 0]
+                if priorCount >= 2 {
+                    stuckIndices.insert(index)
+                } else if priorCount == 1 {
+                    warnIndices.insert(index)
+                }
+            }
+            for signature in roundUnique {
+                repeatCounts[signature, default: 0] += 1
+            }
+            let outcome: BatchOutcome
+            if stuckIndices.count == calls.count {
+                let blocked = calls.map { call in
+                    AgentMessage(
+                        role: "tool",
+                        content:
+                            #"{"ok":false,"loop_detected":true,"message":"检测到连续三次相同的工具调用与参数，已中止重复执行，请依据已有结果直接作答或更换策略。"}"#,
+                        toolCallID: call.id)
+                }
+                finalReason = "检测到连续重复工具调用，已停止重复执行。"
+                outcome = BatchOutcome(toolMessages: blocked)
+            } else if !stuckIndices.isEmpty {
+                let runnable = calls.enumerated().compactMap { stuckIndices.contains($0.offset) ? nil : $0.element }
+                let partial = try await executeBatch(runnable, current)
+                var merged: [AgentMessage] = []
+                var runnableCursor = 0
+                for (index, call) in calls.enumerated() {
+                    if stuckIndices.contains(index) {
+                        merged.append(
+                            AgentMessage(
+                                role: "tool",
+                                content:
+                                    #"{"ok":false,"loop_detected":true,"message":"该调用已连续重复三次，本次未再执行，请更换参数或直接作答。"}"#,
+                                toolCallID: call.id))
+                    } else if runnableCursor < partial.toolMessages.count {
+                        merged.append(partial.toolMessages[runnableCursor])
+                        runnableCursor += 1
+                    }
+                }
+                outcome = BatchOutcome(
+                    toolMessages: merged, changedResearchOverview: partial.changedResearchOverview,
+                    shouldStopEarly: partial.shouldStopEarly)
+            } else {
+                var executed = try await executeBatch(calls, current)
+                if !warnIndices.isEmpty {
+                    for index in warnIndices where executed.toolMessages.indices.contains(index) {
+                        if let raw = executed.toolMessages[index].content,
+                            let annotated = Self.annotatingLoopWarning(raw)
+                        {
+                            executed.toolMessages[index].content = annotated
+                        }
+                    }
+                }
+                outcome = executed
+            }
             if outcome.changedResearchOverview {
                 prior.removeAll()
                 let outdated = Set(
@@ -186,5 +246,28 @@ public enum AgentLoopRunner {
             try await onCheckpoint(current, prior, system)
             if outcome.shouldStopEarly { return }
         }
+    }
+
+    private static func canonicalSignature(_ call: AgentToolCall) -> String {
+        let trimmed = call.function.arguments.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let data = trimmed.data(using: .utf8),
+            let object = try? JSONSerialization.jsonObject(with: data),
+            JSONSerialization.isValidJSONObject(object),
+            let canonical = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+        {
+            return call.function.name + "|" + String(decoding: canonical, as: UTF8.self)
+        }
+        return call.function.name + "|" + trimmed
+    }
+
+    private static func annotatingLoopWarning(_ raw: String) -> String? {
+        guard var object = try? JSONSerialization.jsonObject(with: Data(raw.utf8)) as? [String: Any] else {
+            return nil
+        }
+        object["loop_warning"] = "此工具与参数已在前序轮次调用过，请勿重复相同查询；可直接作答或更换参数。"
+        guard let data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]) else {
+            return nil
+        }
+        return String(decoding: data, as: UTF8.self)
     }
 }

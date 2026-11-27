@@ -148,21 +148,33 @@ private func sseAnswer(_ text: String) throws -> String {
     #expect(turn.activities[1].status == .succeeded)
     #expect(reader.state.memories.first { $0.id == auto.id }?.text == "改为优先比较等算力准确率")
 
-    // 2) Even with a matching expected_revision, user-edited memory cannot be forgotten by the agent.
+    // 2) Implicit turn without forget intent still protects user-edited memory; explicit reader
+    // instruction silently updates/forgets it with an audit trail.
     let forgetProtectedArgs =
         #"{"memory_id":"\#(userEdited.id.uuidString)","expected_revision":"\#(userEdited.revisionFingerprint)"}"#
-    let protectTransport = CassetteTransport(
+    let implicitProtectTransport = CassetteTransport(
         cassette: HTTPCassette(entries: [
-            .sse([try sseToolCall(id: "f1", name: "forget_memory", arguments: forgetProtectedArgs)]),
-            .sse([try sseAnswer("读者手动修订的记忆受保护，未删除。")]),
+            .sse([try sseToolCall(id: "f_implicit", name: "forget_memory", arguments: forgetProtectedArgs)]),
+            .sse([try sseAnswer("读者手动修订的记忆在未明确要求删除时保持受保护。")]),
         ]))
-    let protectAgent = LibraryAgent(reader: reader, client: AgentClient(transport: protectTransport))
-    protectAgent.send("我觉得方差区间那条太繁琐了，后面不用再追查它了。")
-    for _ in 0..<200 where protectAgent.isRunning { try await Task.sleep(for: .milliseconds(10)) }
-    let protectTurn = try #require(protectAgent.turns.last)
-    #expect(protectTurn.activities.first?.status == .failed)
-    #expect(TrajectoryAssertion.verifyNoForbiddenSucceededTools(protectTurn, forbidden: ["forget_memory"]))
+    let implicitAgent = LibraryAgent(reader: reader, client: AgentClient(transport: implicitProtectTransport))
+    implicitAgent.send("方差区间这个话题先聊聊理论背景。")
+    for _ in 0..<200 where implicitAgent.isRunning { try await Task.sleep(for: .milliseconds(10)) }
+    let implicitTurn = try #require(implicitAgent.turns.last)
+    #expect(implicitTurn.activities.first?.status == .failed)
+    #expect(TrajectoryAssertion.verifyNoForbiddenSucceededTools(implicitTurn, forbidden: ["forget_memory"]))
     #expect(reader.state.memories.first { $0.id == userEdited.id }?.deleted == false)
+
+    let explicitForgetTransport = CassetteTransport(
+        cassette: HTTPCassette(entries: [
+            .sse([try sseToolCall(id: "f_explicit", name: "forget_memory", arguments: forgetProtectedArgs)])
+        ]))
+    let explicitAgent = LibraryAgent(reader: reader, client: AgentClient(transport: explicitForgetTransport))
+    explicitAgent.send("我觉得方差区间那条太繁琐了，后面不用再追查它了。")
+    for _ in 0..<200 where explicitAgent.isRunning { try await Task.sleep(for: .milliseconds(10)) }
+    let explicitTurn = try #require(explicitAgent.turns.last)
+    #expect(explicitTurn.activities.first?.status == .succeeded)
+    #expect(reader.state.memories.first { $0.id == userEdited.id }?.deleted == true)
 }
 
 @Test @MainActor func promptInjectionInsidePaperTextNeverTriggersUnauthorizedDestructiveTools() async throws {
@@ -294,4 +306,109 @@ private func sseAnswer(_ text: String) throws -> String {
     #expect(!TrajectoryAssertion.verifyFullRequestPrefixStability([req0, req1MutatedUser]))
     #expect(!TrajectoryAssertion.verifyFullRequestPrefixStability([req0, req1MutatedSystem]))
     #expect(!TrajectoryAssertion.verifyFullRequestPrefixStability([req0, req1MutatedTools]))
+}
+
+@Test @MainActor func agentLoopDetectorNudgesOnSecondRepeatAndCircuitBreaksOnThirdRepeat() async throws {
+    let cassette = HTTPCassette(entries: [
+        .sse([try sseToolCall(id: "r1", name: "search_library", arguments: #"{"query":"loop"}"#)]),
+        .sse([try sseToolCall(id: "r2", name: "search_library", arguments: #"{"query":"loop"}"#)]),
+        .sse([try sseToolCall(id: "r3", name: "search_library", arguments: #"{"query":"loop"}"#)]),
+        .sse([try sseAnswer("已停止重复调用并直接给出总结。")]),
+    ])
+    let transport = CassetteTransport(cassette: cassette)
+    var settings = ModelSettings()
+    settings.baseURL = ModelServicePreset.openAI.baseURL
+    settings.model = "gpt-5-mini"
+    var limits = AgentLimits()
+    limits.maxRounds = 16
+    limits.maxToolCalls = 48
+    var executedCount = 0
+    var finalText = ""
+    try await AgentLoopRunner.run(
+        client: AgentClient(transport: transport), settings: settings, key: "test-only", limits: limits,
+        instructions: "STATIC", userQuestion: "找 loop", personalContext: "", priorHistory: [],
+        availableTools: { ["search_library"] }, beforeRequest: {}, onPersonalContextIncluded: {},
+        onPartialText: { _ in }, onPartialReasoning: nil, onAssistantResponse: { _, _ in },
+        executeBatch: { calls, _ in
+            executedCount += calls.count
+            return .init(
+                toolMessages: calls.map {
+                    AgentMessage(role: "tool", content: #"{"ok":true,"results":[]}"#, toolCallID: $0.id)
+                })
+        },
+        onCheckpoint: { _, _, _ in },
+        onFinalAnswer: { response, _, _, _ in finalText = response.content ?? "" })
+    #expect(executedCount == 2)
+    #expect(finalText == "已停止重复调用并直接给出总结。")
+    let messages = await transport.recordedMessages
+    #expect(messages.count == 4)
+    #expect(messages[2].last?.content?.contains("loop_warning") == true)
+    #expect(messages[3].last?.content?.contains("loop_detected") == true)
+}
+
+@Test @MainActor func paperAssistantSupportsDeclarativeReviseForgetAndFastCommandsWithoutExtraExtraction()
+    async throws
+{
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    let file = root.appendingPathComponent("paper.pdf")
+    try AttentionFixture.write(to: file)
+    let memory = MemoryItem(agentStatement: "优先比较吞吐量", sourceID: UUID(), source: .reader(quote: "优先比较吞吐量"))
+    let reviseArgs =
+        #"{"memory_id":"\#(memory.id.uuidString)","statement":"改为优先比较等算力准确率","expected_revision":"\#(memory.revisionFingerprint)"}"#
+    let cassette = HTTPCassette(entries: [
+        .sse([try sseToolCall(id: "rev_paper", name: "revise_memory", arguments: reviseArgs)]),
+        .sse([try sseAnswer("已将研究记忆更新为等算力准确率，文中示例见 [S1]。")]),
+    ])
+    let transport = CassetteTransport(cassette: cassette, chunkSplitBytes: 5)
+    let reader = try ReaderModel(
+        root: root, client: ModelClient(transport: transport), credentials: WorkflowCredentials())
+    await reader.load()
+    var settings = reader.modelSettings
+    settings.baseURL = ModelServicePreset.openAI.baseURL
+    settings.model = "gpt-5-mini"
+    try reader.saveSettings(settings, key: "test-only")
+    let paperID = try #require(await reader.importURLs([file]).first)
+    reader.select(paperID)
+    reader.state.memories = [memory]
+    #expect(await reader.save())
+
+    await reader.ask("请把吞吐量那条研究记忆改成优先比较等算力准确率，并结合这篇论文说明。")
+    let updated = try #require(reader.state.memories.first { $0.id == memory.id })
+    #expect(updated.text == "改为优先比较等算力准确率")
+    #expect(await transport.recordedBodies.count == 2)
+
+    // Paper assistant also supports the local forget fast-path without hitting the model.
+    await reader.ask("忘掉等算力准确率。")
+    #expect(reader.state.memories.first { $0.id == memory.id }?.deleted == true)
+    #expect(await transport.recordedBodies.count == 2)
+}
+
+@Test @MainActor func cassetteTransportSupportsFaultInjection429RecoveryAndContractChecking() async throws {
+    let cassette = HTTPCassette(entries: [
+        .sse([], statusCode: 429, headers: ["Retry-After": "0.1"], expectedToolChoice: "auto"),
+        .sse([try sseAnswer("限流重试后恢复成功。")], expectedToolChoice: "auto"),
+    ])
+    let transport = CassetteTransport(cassette: cassette, chunkSplitBytes: 3)
+    var settings = ModelSettings()
+    settings.baseURL = ModelServicePreset.openAI.baseURL
+    settings.model = "gpt-5-mini"
+    var limits = AgentLimits()
+    limits.maxTransientRetries = 2
+    let reply = try await AgentClient(transport: transport).respondStreaming(
+        settings: settings, key: "test-only",
+        messages: [.init(role: "user", content: "测试 429 恢复")], limits: limits,
+        onPartial: { _ in }, onReasoning: nil)
+    #expect(reply.content == "限流重试后恢复成功。")
+    #expect(await transport.recordedBodies.count == 2)
+
+    let mismatchTransport = CassetteTransport(
+        cassette: HTTPCassette(entries: [.sse([try sseAnswer("x")], expectedToolChoice: "none")]))
+    await #expect(throws: (any Error).self) {
+        _ = try await AgentClient(transport: mismatchTransport).respondStreaming(
+            settings: settings, key: "test-only",
+            messages: [.init(role: "user", content: "mismatch")], limits: limits,
+            onPartial: { _ in }, onReasoning: nil)
+    }
 }

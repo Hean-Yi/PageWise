@@ -371,6 +371,8 @@ private actor AgentSaveGate {
     #expect(LibraryOrganizationIntent.tools(for: "恢复已经删除的论文").isEmpty)
     #expect(LibraryOrganizationIntent.tools(for: "请永久删除这篇论文") == ["prepare_delete_paper"])
     #expect(LibraryOrganizationIntent.tools(for: "如果它们重复，请删除论文").isEmpty)
+    #expect(LibraryOrganizationIntent.tools(for: "怎么这么多未分类论文，帮我建书架整理一下") == organize)
+    #expect(LibraryOrganizationIntent.tools(for: "怎么这么多未分类论文帮我整理书架") == organize)
 }
 
 @Test func libraryOrganizationParserRejectsPathsAmbiguousDestinationsAndRepeatedIDs() throws {

@@ -16,6 +16,12 @@ public struct MemoryStatementProposal: Sendable {
         if let fingerprint = item.originalFingerprint, state.suppressedMemoryFingerprints.contains(fingerprint) {
             return false
         }
+        let canonical = MemoryItem.canonicalHash(item.text)
+        if let fingerprint = item.originalFingerprint,
+            state.memories.contains(where: { $0.suppressesAutomaticProposition(fingerprint, canonical: canonical) })
+        {
+            return false
+        }
         let origins = ResearchMemoryOrigins(state: state, excluding: pending, for: [item])
         return origins.resolve(item) != nil
     }

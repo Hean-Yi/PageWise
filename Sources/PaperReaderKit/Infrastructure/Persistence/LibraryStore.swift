@@ -497,6 +497,35 @@ public actor LibraryStore {
     /// is authoritative. Keep a bounded recent tail so diagnostics stay useful without growing
     /// the event table for the lifetime of the library.
     /// Local audit for silent memory changes. The trigger is hashed; no prose is retained.
+    /// Persist salience recall telemetry (`lastRecalledAt`, `recallCount`) without advancing
+    /// `library_generation` or `research_generation`, so read-only memory recall never races
+    /// concurrent sleep/brief publication or emits spurious research events.
+    public func recordMemoryRecall(_ ids: Set<UUID>, at date: Date = Date()) throws {
+        guard var current = baseline, !ids.isEmpty else { return }
+        var changedIndices: [Int] = []
+        for index in current.state.memories.indices {
+            let item = current.state.memories[index]
+            guard ids.contains(item.id), item.isActive, !item.userEdited, !item.isResponsePreference else { continue }
+            current.state.memories[index].recordRecall(at: date)
+            changedIndices.append(index)
+        }
+        guard !changedIndices.isEmpty else { return }
+        let updated = try Self.database(at: databaseURL) { db -> Bool in
+            try Self.transaction(db) {
+                guard try Self.integer(db, "SELECT revision FROM library_generation WHERE id=1") == current.revision
+                else { return false }
+                let records = LibraryRecords(db)
+                for index in changedIndices {
+                    try records.updateMemory(current.state.memories[index])
+                }
+                return true
+            }
+        }
+        if updated {
+            baseline = current
+        }
+    }
+
     public func recordMemoryAudit(memoryID: UUID, action: String, trigger: String) throws {
         let hash = SHA256.hash(data: Data(trigger.utf8)).map { String(format: "%02x", $0) }.joined()
         try Self.database(at: databaseURL) { db in

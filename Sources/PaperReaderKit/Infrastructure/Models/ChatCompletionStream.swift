@@ -100,6 +100,11 @@ actor ChatCompletionStreamDecoder {
     }
 
     private var thinkCarry = ""
+    private var inFencedCode = false
+    private var inInlineCode = false
+    private var sawInlineThinkOpen = false
+    private var sawInlineThinkClose = false
+    private var sawStructuredReasoning = false
     private static let inlineThinkTags: [(open: String, close: String)] = [
         ("<think>", "</think>"),
         ("<thought>", "</thought>"),
@@ -113,23 +118,46 @@ actor ChatCompletionStreamDecoder {
         while !thinkCarry.isEmpty {
             switch inlineThinkState {
             case .outsideThink:
-                guard let lt = thinkCarry.firstIndex(of: "<") else {
+                // Track Markdown code fences (```) and inline code spans (`) so literal `<think>`
+                // examples inside paper discussions are never swallowed into reasoning.
+                let nextSpecial = thinkCarry.firstIndex { $0 == "`" || (!inFencedCode && !inInlineCode && $0 == "<") }
+                guard let special = nextSpecial else {
                     textDelta += thinkCarry
                     thinkCarry = ""
                     break
                 }
-                if lt > thinkCarry.startIndex {
-                    let prefix = String(thinkCarry[..<lt])
-                    // Ignore whitespace-only lead-in before an opening think tag at the start of a reply.
-                    if !(text.isEmpty && textDelta.isEmpty && prefix.allSatisfy(\.isWhitespace)) {
+                if special > thinkCarry.startIndex {
+                    let prefix = String(thinkCarry[..<special])
+                    if !(text.isEmpty && textDelta.isEmpty && thinkCarry[special] == "<"
+                        && prefix.allSatisfy(\.isWhitespace))
+                    {
                         textDelta += prefix
                     }
-                    thinkCarry = String(thinkCarry[lt...])
+                    thinkCarry = String(thinkCarry[special...])
+                }
+                if thinkCarry.first == "`" {
+                    if thinkCarry.hasPrefix("```") {
+                        inFencedCode.toggle()
+                        if inFencedCode { inInlineCode = false }
+                        textDelta += "```"
+                        thinkCarry = String(thinkCarry.dropFirst(3))
+                        continue
+                    }
+                    // Hold back 1-2 trailing backticks in case a ``` fence is split across chunks.
+                    if thinkCarry.allSatisfy({ $0 == "`" }) && thinkCarry.count < 3 {
+                        return (textDelta, reasoningDelta)
+                    }
+                    if !inFencedCode {
+                        inInlineCode.toggle()
+                    }
+                    textDelta.append(thinkCarry.removeFirst())
+                    continue
                 }
                 let lower = thinkCarry.lowercased()
                 if let tag = Self.inlineThinkTags.first(where: { lower.hasPrefix($0.open) }) {
                     thinkCarry = String(thinkCarry.dropFirst(tag.open.count))
                     inlineThinkState = .insideThink(closeTag: tag.close)
+                    sawInlineThinkOpen = true
                     continue
                 }
                 if Self.inlineThinkTags.contains(where: { $0.open.hasPrefix(lower) && lower.count < $0.open.count }) {
@@ -146,6 +174,7 @@ actor ChatCompletionStreamDecoder {
                     }
                     thinkCarry = remainder
                     inlineThinkState = .outsideThink
+                    sawInlineThinkClose = true
                     continue
                 }
                 // Hold back up to closeTag.count - 1 trailing chars in case the closing tag spans chunks.
@@ -162,17 +191,30 @@ actor ChatCompletionStreamDecoder {
     }
 
     private func flushThinkCarry() async throws {
-        guard !thinkCarry.isEmpty else { return }
-        let trailing = thinkCarry
-        thinkCarry = ""
-        switch inlineThinkState {
-        case .insideThink:
-            reasoning += trailing
-            try await onReasoningDelta?(trailing)
-            try await emitReasoning(force: true)
-        case .outsideThink:
-            text += trailing
-            try await onTextDelta?(trailing)
+        if !thinkCarry.isEmpty {
+            let trailing = thinkCarry
+            thinkCarry = ""
+            switch inlineThinkState {
+            case .insideThink:
+                reasoning += trailing
+                try await onReasoningDelta?(trailing)
+                try await emitReasoning(force: true)
+            case .outsideThink:
+                text += trailing
+                try await onTextDelta?(trailing)
+                try await emitText(force: true)
+            }
+        }
+        // If a model opened an inline `<think>` block and hit `stop` without ever closing it,
+        // promote the unclosed buffer back to visible text instead of discarding the entire reply.
+        if finishReason == "stop", text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+            calls.isEmpty, sawInlineThinkOpen, !sawInlineThinkClose, !sawStructuredReasoning,
+            case .insideThink = inlineThinkState, !reasoning.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        {
+            text = reasoning
+            reasoning = ""
+            inlineThinkState = .outsideThink
+            try await onTextDelta?(text)
             try await emitText(force: true)
         }
     }
@@ -200,6 +242,7 @@ actor ChatCompletionStreamDecoder {
             else { throw ReaderError.message("流式响应格式不兼容，未保存当前段落。") }
             guard let choice = event.choices.first(where: { ($0.index ?? 0) == 0 }) else { continue }
             if let value = choice.delta?.reasoningContent, !value.isEmpty {
+                sawStructuredReasoning = true
                 reasoning += value
                 try await onReasoningDelta?(value)
                 try await emitReasoning(force: false)

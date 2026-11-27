@@ -112,7 +112,8 @@ private func searchTurn(_ payload: String) -> [AgentMessage] {
     }
     let memories = (0..<6).map { index in
         [
-            "memory_id": UUID().uuidString, "status": "user_edited", "origin": "paper_reading",
+            "memory_id": UUID().uuidString, "revision": "rev\(index)abcd", "status": "user_edited",
+            "origin": "paper_reading",
             "text": String(repeating: "memory \(index) ", count: 20),
         ]
     }
@@ -141,6 +142,7 @@ private func searchTurn(_ payload: String) -> [AgentMessage] {
     #expect(slim.contains("total_topics"))
     #expect(slim.contains("total_memories"))
     #expect(slim.contains("Topic 0"))
+    #expect(slim.contains("rev0abcd"))
     #expect(slim.utf8.count < payload.utf8.count)
 }
 

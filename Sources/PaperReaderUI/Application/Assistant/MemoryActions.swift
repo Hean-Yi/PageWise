@@ -3,8 +3,8 @@ import PaperReaderKit
 
 struct MemoryRecordMutation {
     enum Operation {
-        case revise(id: UUID, statement: String, expectedRevision: String? = nil)
-        case forget(id: UUID, expectedRevision: String? = nil)
+        case revise(id: UUID, statement: String, expectedRevision: String? = nil, allowUserEdited: Bool = false)
+        case forget(id: UUID, expectedRevision: String? = nil, allowUserEdited: Bool = false)
         case supersede(oldID: UUID, replacementID: UUID, at: Date = Date())
     }
 
@@ -13,7 +13,7 @@ struct MemoryRecordMutation {
 
     var memoryID: UUID {
         switch operation {
-        case .revise(let id, _, _), .forget(let id, _), .supersede(let id, _, _): id
+        case .revise(let id, _, _, _), .forget(let id, _, _), .supersede(let id, _, _): id
         }
     }
 
@@ -27,15 +27,17 @@ struct MemoryRecordMutation {
 
     func apply(to state: inout LibraryState) -> Bool {
         switch operation {
-        case .revise(let id, let statement, let expectedRevision):
+        case .revise(let id, let statement, let expectedRevision, let allowUserEdited):
             guard let index = state.memories.firstIndex(where: { $0.id == id }),
-                state.memories[index].isActive, !state.memories[index].userEdited,
+                state.memories[index].isActive,
+                allowUserEdited || !state.memories[index].userEdited,
                 expectedRevision == nil || state.memories[index].matchesRevision(expectedRevision!)
             else { return false }
             return state.memories[index].correct(to: statement)
-        case .forget(let id, let expectedRevision):
+        case .forget(let id, let expectedRevision, let allowUserEdited):
             guard let index = state.memories.firstIndex(where: { $0.id == id }),
-                state.memories[index].isActive, !state.memories[index].userEdited,
+                state.memories[index].isActive,
+                allowUserEdited || !state.memories[index].userEdited,
                 expectedRevision == nil || state.memories[index].matchesRevision(expectedRevision!)
             else { return false }
             return state.memories[index].forget()
@@ -46,6 +48,88 @@ struct MemoryRecordMutation {
             else { return false }
             return state.memories[index].supersede(by: replacementID, at: date)
         }
+    }
+}
+
+extension ReaderModel {
+    static func hasExplicitRevisionIntent(_ question: String) -> Bool {
+        question.range(
+            of:
+                #"(?i)更正|改正|纠正|修正|修改|改成|改为|更新|调整|记错|写错|说错|不是|而是|不再|改变主意|改主意|不用再|无需再|停止追踪|取消追踪|correct|change|update|instead|no longer|replace|changed my mind|stop tracking"#,
+            options: .regularExpression) != nil
+    }
+
+    static func hasExplicitForgetIntent(_ question: String) -> Bool {
+        question.range(
+            of: #"(?i)忘掉|忘记|删除|移除|撤回|不用再|无需再|不再|停止|取消|forget|remove|delete|stop|drop|no longer"#,
+            options: .regularExpression) != nil
+    }
+
+    /// Shared validator for both LibraryAgent and Paper Assistant declarative `revise_memory`.
+    /// Explicit reader revision requests may silently update even `userEdited` memories; implicit
+    /// requests and background processes remain blocked from touching `userEdited` records.
+    func buildMemoryRevisionMutation(
+        memoryID: UUID, statement: String, expectedRevision: String?, question: String
+    ) throws -> MemoryRecordMutation {
+        guard ReaderPreference.permitsRecall(question),
+            let current = state.memories.first(where: { $0.id == memoryID }), current.isActive
+        else { throw ReaderError.message("本轮没有明确要求更正已有记忆。") }
+        if let expectedRevision, !current.matchesRevision(expectedRevision) {
+            throw ReaderError.message("这条研究记忆已更新，请重新核对最新版本。")
+        }
+        let explicitIntent = Self.hasExplicitRevisionIntent(question)
+        guard explicitIntent || expectedRevision != nil else {
+            throw ReaderError.message("本轮没有明确要求更正已有记忆。")
+        }
+        if current.userEdited, !explicitIntent {
+            throw ReaderError.message("读者手动修订的记忆仅在明确指令下才可修改。")
+        }
+        var probe = current
+        guard probe.correct(to: statement) else {
+            throw ReaderError.message("新的记忆措辞没有变化。")
+        }
+        return MemoryRecordMutation(
+            operation: .revise(
+                id: memoryID, statement: statement, expectedRevision: expectedRevision,
+                allowUserEdited: explicitIntent),
+            auditTrigger: question)
+    }
+
+    /// Shared validator for both LibraryAgent and Paper Assistant declarative `forget_memory`.
+    func buildMemoryForgetMutation(
+        memoryID: UUID, expectedRevision: String?, question: String, recalledIDs: Set<UUID>
+    ) throws -> MemoryRecordMutation {
+        guard ReaderPreference.permitsRecall(question),
+            let target = state.memories.first(where: { $0.id == memoryID }), target.isActive
+        else { throw ReaderError.message("本轮没有明确要求删除这条记忆。") }
+        if let expectedRevision, !target.matchesRevision(expectedRevision) {
+            throw ReaderError.message("这条研究记忆已更新，请重新核对最新版本。")
+        }
+        let explicitIntent = Self.hasExplicitForgetIntent(question)
+        guard explicitIntent || expectedRevision != nil else {
+            throw ReaderError.message("本轮没有明确要求删除这条记忆。")
+        }
+        if target.userEdited, !explicitIntent {
+            throw ReaderError.message("读者手动修订的记忆仅在明确指令下才可删除。")
+        }
+        let ignored: Set<String> = ["的", "了", "在", "和", "与", "及", "这", "那", "个", "记录", "记忆", "旧", "新"]
+        let questionTerms = Retriever.tokens(question).subtracting(ignored)
+        let scored = state.memories.compactMap { item -> (MemoryItem, Int)? in
+            guard item.isActive, !item.isResponsePreference else { return nil }
+            let overlap = Retriever.tokens(item.text).subtracting(ignored).intersection(questionTerms).count
+            return overlap > 0 ? (item, overlap) : nil
+        }.sorted { $0.1 > $1.1 }
+        let topOverlap = scored.first?.1 ?? 0
+        let uniqueTop = scored.filter { $0.1 == topOverlap }
+        let recalledThisTurn = recalledIDs.contains(target.id)
+        let verifiedByRevision = expectedRevision.map { target.matchesRevision($0) } == true
+        guard
+            verifiedByRevision || recalledThisTurn || question.localizedCaseInsensitiveContains(target.text)
+                || (topOverlap > 0 && uniqueTop.count == 1 && uniqueTop.first?.0.id == target.id)
+        else { throw ReaderError.message("记忆删除目标不唯一或与请求不匹配。") }
+        return MemoryRecordMutation(
+            operation: .forget(id: target.id, expectedRevision: expectedRevision, allowUserEdited: explicitIntent),
+            auditTrigger: question)
     }
 }
 
@@ -101,7 +185,7 @@ extension ReaderModel {
     /// Update salience recall telemetry without disturbing research revisions or sleep signatures.
     func recordMemoryRecall(_ ids: Set<UUID>, at now: Date = Date()) {
         guard !ids.isEmpty else { return }
-        var updated = false
+        var updatedIDs = Set<UUID>()
         for index in state.memories.indices {
             let item = state.memories[index]
             guard ids.contains(item.id), item.isActive, !item.userEdited, !item.isResponsePreference else { continue }
@@ -109,11 +193,12 @@ extension ReaderModel {
                 continue
             }
             state.memories[index].recordRecall(at: now)
-            updated = true
+            updatedIDs.insert(item.id)
         }
-        guard updated, loaded else { return }
-        Task(priority: .utility) { [weak self] in
-            _ = await self?.save()
+        guard !updatedIDs.isEmpty, loaded else { return }
+        let store = self.store
+        Task(priority: .utility) {
+            try? await store.recordMemoryRecall(updatedIDs, at: now)
         }
     }
 

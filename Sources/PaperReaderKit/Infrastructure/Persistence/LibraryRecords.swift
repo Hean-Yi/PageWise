@@ -95,6 +95,10 @@ struct LibraryRecords {
         }
     }
 
+    func updateMemory(_ item: MemoryItem) throws {
+        try put("memories", item.id.uuidString, encoder.encode(item))
+    }
+
     private func put(_ kind: String, _ key: String, _ value: Data) throws {
         try Self.statement(db, "INSERT OR REPLACE INTO library_records(kind,record_key,payload) VALUES(?,?,?)") {
             stmt in

@@ -43,6 +43,10 @@ public struct MemoryItem: Identifiable, Codable, Sendable, Equatable {
     public private(set) var originalFingerprint: String?
     /// When deleting a correction, suppress the last visible wording as well as the automatic original.
     private var forgottenFingerprint: String?
+    /// SHA-256 of the word-boundary canonical key (`MemoryDedupKey`), retaining zero plaintext so
+    /// deleted/edited memories cannot resurrect via simple bilingual paraphrases.
+    private var canonicalFingerprint: String?
+    private var forgottenCanonicalFingerprint: String?
 
     public var isActive: Bool { !deleted && invalidAt == nil && !text.isEmpty }
 
@@ -125,6 +129,7 @@ public struct MemoryItem: Identifiable, Codable, Sendable, Equatable {
         self.validFrom = createdAt
         if text.hasPrefix(Self.automaticPrefix) {
             originalFingerprint = Self.fingerprint(text)
+            canonicalFingerprint = Self.canonicalHash(text)
         }
     }
 
@@ -149,6 +154,8 @@ public struct MemoryItem: Identifiable, Codable, Sendable, Equatable {
         preserveOriginalFingerprint()
         let visible = Self.fingerprint(text)
         forgottenFingerprint = visible == originalFingerprint ? nil : visible
+        let visibleCanonical = Self.canonicalHash(text)
+        forgottenCanonicalFingerprint = visibleCanonical == canonicalFingerprint ? nil : visibleCanonical
         text = ""
         if case .reader = librarySource { librarySource = .reader(quote: "") }
         deleted = true
@@ -160,13 +167,27 @@ public struct MemoryItem: Identifiable, Codable, Sendable, Equatable {
         return [originalFingerprint, forgottenFingerprint, evidenceFingerprint].compactMap { $0 }
     }
 
-    func suppressesAutomaticProposition(_ fingerprint: String) -> Bool {
+    func suppressesAutomaticProposition(_ fingerprint: String, canonical: String? = nil) -> Bool {
         if originalFingerprint == fingerprint || forgottenFingerprint == fingerprint { return true }
+        if let canonical, userEdited || deleted,
+            canonicalFingerprint == canonical || forgottenCanonicalFingerprint == canonical
+        {
+            return true
+        }
         return !deleted && (userEdited || originalFingerprint == nil) && Self.fingerprint(text) == fingerprint
     }
 
     private mutating func preserveOriginalFingerprint() {
-        if originalFingerprint == nil && !userEdited && !deleted { originalFingerprint = Self.fingerprint(text) }
+        if originalFingerprint == nil && !userEdited && !deleted {
+            originalFingerprint = Self.fingerprint(text)
+            canonicalFingerprint = Self.canonicalHash(text)
+        }
+    }
+
+    static func canonicalHash(_ text: String) -> String? {
+        let key = MemoryDedupKey.key(text)
+        guard key.contains(where: { $0.isLetter || $0.isNumber }) else { return nil }
+        return SHA256.hash(data: Data(key.utf8)).map { String(format: "%02x", $0) }.joined()
     }
 
     private static func fingerprint(_ text: String) -> String? {

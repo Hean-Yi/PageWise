@@ -87,9 +87,11 @@ public struct ReaderPreference: Codable, Sendable, Equatable {
             forgetTarget(message) == nil, message.utf8.count <= 4000
         else { return nil }
         let value = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Strip inline technical code spans (e.g. `FlashAttention`) before checking for quoted speech.
+        let uncoded = value.replacingOccurrences(of: #"`[^`\n]{1,60}`"#, with: "code", options: .regularExpression)
         guard (4...240).contains(value.count),
             !matches(
-                value,
+                uncoded,
                 #"[?？「」『』“”`"<>]|(?i:例如|比如|举例|假设|假如|作者|说过|他说|她说|有人说|原文|举个例子|for example|suppose|imagine|the author|someone said|if I said)"#
             ),
             !ResearchQuestionProposal.isOperational(value), !ResearchQuestionProposal.isWriteRequest(value)
@@ -115,11 +117,11 @@ public struct ReaderPreference: Codable, Sendable, Equatable {
     }
 
     /// A durable declaration may be followed by an unrelated question in the same turn.
-    /// Only complete reader-authored sentences can cross the persistence boundary.
+    /// Only complete reader-authored sentences can cross the persistence boundary. Evaluate
+    /// quotation/attribution per sentence so a later question mentioning `FlashAttention` or
+    /// quoting an author does not discard an earlier genuine preference sentence.
     public static func declaredClauses(in message: String) -> [String] {
-        guard permitsExtraction(message), message.utf8.count <= 4000,
-            !matches(message, #"[「」『』“”`"<>]|(?i:比如|例如|假设|原文|作者|转述|for example|someone said|the author)"#)
-        else { return [] }
+        guard permitsExtraction(message), message.utf8.count <= 4000 else { return [] }
         let match = try! NSRegularExpression(pattern: #"[^。！？.!?；;\n]+[。！？.!?；;\n]?"#)
         return match.matches(in: message, range: NSRange(message.startIndex..., in: message)).compactMap { piece in
             guard let range = Range(piece.range, in: message) else { return nil }

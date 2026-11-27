@@ -311,6 +311,14 @@ private final class NoteReviewProbe {
         NoteReviewSession.relationKind(
             "The method improves accuracy on the held-out split.",
             "The method does not improve accuracy on the held-out split.") == .conflict)
+    #expect(
+        NoteReviewSession.relationKind(
+            "The method improves accuracy on CIFAR. We did not tune batch size.",
+            "The method improves accuracy on CIFAR under matched compute.") == .similar)
+    #expect(
+        NoteReviewSession.relationKind(
+            "该方法在等算力下提升显著，原文未提供源码。",
+            "该方法在等算力下提升显著。") == .similar)
 }
 
 private struct DeterministicSemanticEncoder: SemanticTextEncoder {

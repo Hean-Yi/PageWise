@@ -128,7 +128,8 @@ public struct ModelClient: Sendable {
 enum ModelJSON {
     static func extractObject(from raw: String) -> String? {
         var source = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let fenced = fencedObject(in: source) { source = fenced }
+        // Strip inline reasoning blocks first so a draft ```json ... ``` fence inside `<think>`
+        // can never shadow the actual JSON response emitted after `</think>`.
         let reasoningBlock =
             #"(?is)<(?:think|thought|thinking)\b[^>]*>.*?</(?:think|thought|thinking)\s*>"#
         source = source.replacingOccurrences(of: reasoningBlock, with: "", options: .regularExpression)
@@ -142,6 +143,7 @@ enum ModelJSON {
             let tail = String(source[open.upperBound...])
             if tail.contains("{") { source = tail }
         }
+        if let fenced = fencedObject(in: source) { source = fenced }
         guard let start = source.firstIndex(of: "{") else { return nil }
         var depth = 0
         var inString = false

@@ -57,14 +57,15 @@ private actor ConnectionTransport: HTTPTransport {
         let start = await transport.requests.count
         await model.ask("What does the source say?")
         #expect(await transport.requests.count == start + 1)
-        // Only the ongoing research question warrants a separate memory extraction call.
+        // Memory proposals now travel through declarative tool calls inside the main turn, so no
+        // extra trailing extraction request is sent.
         await model.ask("I am studying whether the comparison uses equal training budgets.")
-        #expect(await transport.requests.count == start + 3)
+        #expect(await transport.requests.count == start + 2)
         await model.summarize()
         agent.send("Library question")
         for _ in 0..<500 where agent.isRunning { try await Task.sleep(for: .milliseconds(10)) }
         let requests = await transport.requests.dropFirst(start)
-        #expect(requests.count == 5)
+        #expect(requests.count == 4)
         #expect(model.state.chats.last?.answer == "Answer [S1]")
         #expect(model.paper?.summary == "OK")
         #expect(agent.turns.last?.answer == "Answer [S1]")

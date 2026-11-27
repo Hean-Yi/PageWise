@@ -214,3 +214,43 @@ private actor ReasoningCapture {
     #expect(message.reasoningContent == "先查对照组")
     #expect(message.content == "结论成立。")
 }
+
+@Test func streamPreservesThinkTagsInsideCodeFencesAndInlineCodeAcrossArbitrarySplits() async throws {
+    let capture = ReasoningCapture()
+    let decoder = ChatCompletionStreamDecoder(
+        onPartial: { await capture.partial($0) },
+        onReasoning: { await capture.thought($0) })
+    let full = "<think>私有思考</think>论文讨论了 `<think>` 标签：\n```xml\n<think>示例内容</think>\n```\n结论不变。"
+    // Split every 2 characters to stress fence and tag boundary transitions.
+    var index = full.startIndex
+    while index < full.endIndex {
+        let next = full.index(index, offsetBy: 2, limitedBy: full.endIndex) ?? full.endIndex
+        let piece = String(full[index..<next])
+        let event = String(
+            decoding: try JSONSerialization.data(withJSONObject: [
+                "choices": [["delta": ["content": piece]]]
+            ]), as: UTF8.self)
+        try await decoder.consume(Data(("data: " + event + "\n\n").utf8))
+        index = next
+    }
+    try await decoder.consume(
+        Data("data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n".utf8))
+    let (message, _) = try await decoder.finishMessage()
+    #expect(message.reasoningContent == "私有思考")
+    #expect(message.content?.contains("`<think>`") == true)
+    #expect(message.content?.contains("<think>示例内容</think>") == true)
+    #expect(message.content?.hasSuffix("结论不变。") == true)
+}
+
+@Test func streamPromotesUnclosedInlineThinkOnStopInsteadOfDroppingAnswer() async throws {
+    let capture = ReasoningCapture()
+    let decoder = ChatCompletionStreamDecoder(
+        onPartial: { await capture.partial($0) },
+        onReasoning: { await capture.thought($0) })
+    let event = #"{"choices":[{"delta":{"content":"<think>模型忘记闭合标签但给出了正文结论。"},"finish_reason":"stop"}]}"#
+    try await decoder.consume(Data(("data: " + event + "\n\ndata: [DONE]\n\n").utf8))
+    let (message, reason) = try await decoder.finishMessage()
+    #expect(reason == "stop")
+    #expect(message.content == "模型忘记闭合标签但给出了正文结论。")
+    #expect(message.reasoningContent == nil)
+}

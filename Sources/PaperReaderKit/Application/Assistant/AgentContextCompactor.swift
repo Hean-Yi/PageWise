@@ -162,11 +162,15 @@ public enum AgentContextCompactor {
         }
         if let memories = object["memories"] as? [[String: Any]] {
             summary["memories"] = memories.prefix(4).map { memory in
-                [
+                var entry: [String: Any] = [
                     "memory_id": memory["memory_id"] ?? "", "status": memory["status"] ?? "",
                     "origin": memory["origin"] ?? "",
                     "text": String((memory["text"] as? String ?? "").prefix(160)),
                 ]
+                if let revision = memory["revision"] {
+                    entry["revision"] = revision
+                }
+                return entry
             }
             summary["total_memories"] = memories.count
         }

@@ -302,14 +302,32 @@ final class NoteReviewSession {
     }
 
     static func relationKind(_ lhs: String, _ rhs: String) -> NoteRelation.Kind {
-        // Numbers alone do not establish a conflict: different tables, seeds, years and
-        // hyperparameters legitimately use different values. The model receives the excerpts
-        // and decides whether two notes disagree; the local cache only records a coarse hint.
+        // Numbers alone do not establish a conflict, and incidental meta-negations (e.g.
+        // "we did not tune batch size", "未提供源码") do not contradict an empirical claim.
+        // Require explicit contradiction/correction markers or opposite polarity over shared
+        // substantive terms after stripping non-contradictory gap statements.
+        let explicitContradiction =
+            #"(?i)相反|矛盾|笔误|更正|推翻|未能复现|不成立|contradicts?|fails? to reproduce|refutes?|erratum"#
+        if lhs.range(of: explicitContradiction, options: .regularExpression) != nil
+            || rhs.range(of: explicitContradiction, options: .regularExpression) != nil
+        {
+            return .conflict
+        }
+        let stripMetaGaps = { (text: String) -> String in
+            text.replacingOccurrences(
+                of:
+                    #"(?i)(?:未|没有|不)(?:提供|讨论|报告|说明|测试|调优|调参|给出|开源|包含)[^。.!！；;\n]{0,24}|(?:did not|do not|does not|never|without)\s+(?:report|discuss|provide|tune|test|include|release|mention)[^.!?;,\n]{0,36}"#,
+                with: " ", options: .regularExpression)
+        }
+        let cleanLHS = stripMetaGaps(lhs)
+        let cleanRHS = stripMetaGaps(rhs)
         let negated = { (text: String) -> Bool in
             text.range(of: #"(?i)\b(?:not|no|never|without)\b|不|没有|未|并非|无法"#, options: .regularExpression) != nil
         }
-        if negated(lhs) != negated(rhs) { return .conflict }
-        return .similar
+        guard negated(cleanLHS) != negated(cleanRHS) else { return .similar }
+        let shared = Retriever.expandedTokens(cleanLHS).intersection(Retriever.expandedTokens(cleanRHS))
+            .filter { $0.count >= 2 }
+        return shared.count >= 2 ? .conflict : .similar
     }
 
 }

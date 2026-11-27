@@ -49,7 +49,17 @@ public enum LibraryOrganizationIntent {
     }
 
     private static func tools(inClause text: String) -> Set<String> {
-        func has(_ pattern: String) -> Bool { text.range(of: pattern, options: .regularExpression) != nil }
+        // A rhetorical exclamation followed by an explicit imperative in the same clause
+        // (e.g. "怎么这么多未分类论文帮我整理书架") delegates to the imperative tail, while
+        // genuine how/why questions ("怎么移除这个书架？") still remain read-only.
+        var clause = text
+        if let lead = clause.range(
+            of: #"^\s*(?:怎么|为什么)(?:有)?(?:这么|那么|这么多|那么多).{0,24}?(?=(?:请|帮我|麻烦|替我|给我|把|将|直接))"#,
+            options: .regularExpression)
+        {
+            clause = String(clause[lead.upperBound...])
+        }
+        func has(_ pattern: String) -> Bool { clause.range(of: pattern, options: .regularExpression) != nil }
         if has(
             #"不要|不用|不必|无需|暂不|别(?:动|改|删|建|放|整理)|仅供参考|如何|怎么|为什么|只(?:需|要)?(?:建议|分析|预览|讨论|列出)|先.{0,4}(?:方案|建议)|(?:do not|don['’]t|suggest|hypothetical|how (?:can|do|would)|what if|preview only)\b"#
         ) {
@@ -60,7 +70,7 @@ public enum LibraryOrganizationIntent {
         func directs(_ expression: String) -> Bool { has(command + "(?:" + expression + ")") }
         var names = Set<String>()
         if directs(
-            #"(?:整理|归类|分类|分组|划分).{0,60}(?:书库|论文|书架|文献)|(?:把|将).{1,80}(?:按.{1,16})?(?:归类|分类|分组|整理)|(?:把|将).{0,90}按.{1,20}(?:归到|归入|放到|分到).{0,30}书架|(?:organize|organise|categorize|categorise|classify|group|sort)\b"#
+            #"(?:整理|归类|分类|分组|划分).{0,60}(?:书库|论文|书架|文献)|(?:建|新建|创建).{0,16}书架.{0,12}(?:整理|归类|分类|分组)|(?:把|将).{1,80}(?:按.{1,16})?(?:归类|分类|分组|整理)|(?:把|将).{0,90}按.{1,20}(?:归到|归入|放到|分到).{0,30}书架|(?:organize|organise|categorize|categorise|classify|group|sort)\b"#
         ) {
             names.formUnion(["create_shelf", "move_papers"])
         }

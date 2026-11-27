@@ -11,10 +11,13 @@ struct HTTPCassette: Codable, Sendable, Equatable {
         var chunks: [String]
         var method: String?
         var path: String?
+        var expectedToolChoice: String?
+        var networkErrorCode: Int?
 
         init(
             statusCode: Int = 200, headers: [String: String] = [:], stream: Bool, chunks: [String],
-            method: String? = nil, path: String? = nil
+            method: String? = nil, path: String? = nil, expectedToolChoice: String? = nil,
+            networkErrorCode: Int? = nil
         ) {
             self.statusCode = statusCode
             self.headers = headers
@@ -22,14 +25,30 @@ struct HTTPCassette: Codable, Sendable, Equatable {
             self.chunks = chunks
             self.method = method
             self.path = path
+            self.expectedToolChoice = expectedToolChoice
+            self.networkErrorCode = networkErrorCode
         }
 
-        static func sse(_ payloads: [String], statusCode: Int = 200) -> Entry {
-            Entry(statusCode: statusCode, stream: true, chunks: payloads)
+        static func sse(
+            _ payloads: [String], statusCode: Int = 200, headers: [String: String] = [:],
+            expectedToolChoice: String? = nil
+        ) -> Entry {
+            Entry(
+                statusCode: statusCode, headers: headers, stream: true, chunks: payloads,
+                expectedToolChoice: expectedToolChoice)
         }
 
-        static func json(_ body: String, statusCode: Int = 200) -> Entry {
-            Entry(statusCode: statusCode, stream: false, chunks: [body])
+        static func json(
+            _ body: String, statusCode: Int = 200, headers: [String: String] = [:],
+            expectedToolChoice: String? = nil
+        ) -> Entry {
+            Entry(
+                statusCode: statusCode, headers: headers, stream: false, chunks: [body],
+                expectedToolChoice: expectedToolChoice)
+        }
+
+        static func networkError(_ code: URLError.Code, stream: Bool = true) -> Entry {
+            Entry(statusCode: 0, stream: stream, chunks: [], networkErrorCode: code.rawValue)
         }
     }
 
@@ -48,23 +67,27 @@ actor CassetteTransport: HTTPTransport {
     }
 
     private let mode: Mode
+    private let chunkSplitBytes: Int?
     private var replayCursor = 0
     private(set) var recordedEntries: [HTTPCassette.Entry] = []
     private(set) var recordedBodies: [String] = []
     private(set) var recordedMessages: [[AgentMessage]] = []
 
-    init(cassette: HTTPCassette) {
+    init(cassette: HTTPCassette, chunkSplitBytes: Int? = nil) {
         mode = .replay(cassette.entries)
+        self.chunkSplitBytes = chunkSplitBytes
     }
 
-    init(cassetteURL: URL) throws {
+    init(cassetteURL: URL, chunkSplitBytes: Int? = nil) throws {
         let data = try Data(contentsOf: cassetteURL)
         let cassette = try JSONDecoder().decode(HTTPCassette.self, from: data)
         mode = .replay(cassette.entries)
+        self.chunkSplitBytes = chunkSplitBytes
     }
 
     init(recording upstream: any HTTPTransport) {
         mode = .record(upstream)
+        self.chunkSplitBytes = nil
     }
 
     func cassette() -> HTTPCassette {
@@ -89,6 +112,10 @@ actor CassetteTransport: HTTPTransport {
             }
             let entry = entries[replayCursor]
             replayCursor += 1
+            try Self.verifyRequestMatches(request, entry: entry)
+            if let code = entry.networkErrorCode {
+                throw URLError(URLError.Code(rawValue: code))
+            }
             let body = entry.chunks.joined()
             let response = HTTPURLResponse(
                 url: request.url ?? URL(string: "https://cassette.invalid")!,
@@ -119,8 +146,22 @@ actor CassetteTransport: HTTPTransport {
             }
             let entry = entries[replayCursor]
             replayCursor += 1
-            for chunk in entry.chunks {
-                try await onData(Data(chunk.utf8))
+            try Self.verifyRequestMatches(request, entry: entry)
+            if let code = entry.networkErrorCode {
+                throw URLError(URLError.Code(rawValue: code))
+            }
+            if let split = chunkSplitBytes, split > 0 {
+                let bytes = Data(entry.chunks.joined().utf8)
+                var offset = 0
+                while offset < bytes.count {
+                    let end = min(offset + split, bytes.count)
+                    try await onData(bytes[offset..<end])
+                    offset = end
+                }
+            } else {
+                for chunk in entry.chunks {
+                    try await onData(Data(chunk.utf8))
+                }
             }
             return HTTPURLResponse(
                 url: request.url ?? URL(string: "https://cassette.invalid")!,
@@ -140,6 +181,19 @@ actor CassetteTransport: HTTPTransport {
                     method: request.httpMethod,
                     path: request.url?.path))
             return response
+        }
+    }
+
+    private static func verifyRequestMatches(_ request: URLRequest, entry: HTTPCassette.Entry) throws {
+        if let expectedPath = entry.path, request.url?.path != expectedPath {
+            throw ReaderError.message("回放请求路径不匹配：期望 \(expectedPath)，实际 \(request.url?.path ?? "nil")。")
+        }
+        if let expectedToolChoice = entry.expectedToolChoice {
+            let object = request.httpBody.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+            let actual = object?["tool_choice"] as? String ?? "nil"
+            guard actual == expectedToolChoice else {
+                throw ReaderError.message("回放 tool_choice 不匹配：期望 \(expectedToolChoice)，实际 \(actual)。")
+            }
         }
     }
 

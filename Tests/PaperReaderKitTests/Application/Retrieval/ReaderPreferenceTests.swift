@@ -35,6 +35,10 @@ import Testing
     #expect(ReaderPreference.statement(in: "以后先讲结论。") != nil)
     #expect(ReaderPreference.statement(in: "I prefer concise answers.") != nil)
     #expect(ReaderPreference.declaredClauses(in: "以后先讲结论。解释一下方差？") == ["以后先讲结论"])
+    #expect(
+        ReaderPreference.declaredClauses(in: "以后遇到 `FlashAttention` 这类算子先讲显存带宽。这篇是怎么实现的？")
+            == ["以后遇到 `FlashAttention` 这类算子先讲显存带宽"])
+    #expect(ReaderPreference.declaredClauses(in: "以后先讲结论。原文说「注意力权重不代表因果」，你怎么看？") == ["以后先讲结论"])
     for text in [
         "这次详细推导。", "作者说：以后先讲结论。", "For example: I prefer concise answers.",
         "以后别记这些偏好。", "以后帮我下载论文。", "以后请保存我的 API key",

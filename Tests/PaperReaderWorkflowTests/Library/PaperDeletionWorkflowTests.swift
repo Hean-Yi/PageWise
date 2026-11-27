@@ -77,6 +77,7 @@ import Testing
 
 private actor DelayedPaperAnswer: HTTPTransport {
     let delayMemory: Bool
+    private var calls = 0
     private var gate: CheckedContinuation<Void, Never>?
     var waiting: Bool { gate != nil }
 
@@ -88,14 +89,27 @@ private actor DelayedPaperAnswer: HTTPTransport {
     }
 
     func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) {
-        let input = try #require(try JSONSerialization.jsonObject(with: request.httpBody ?? Data()) as? [String: Any])
-        let stream = input["stream"] as? Bool == true
-        if delayMemory != stream { await withCheckedContinuation { gate = $0 } }
-        let text =
-            stream
-            ? #"data: {"choices":[{"delta":{"content":"Context [S1]"},"finish_reason":"stop"}]}"#
+        calls += 1
+        let text: String
+        if delayMemory {
+            if calls == 1 {
+                let args = #"{\"statement\":\"持续研究注意力机制\",\"quote\":\"我正在研究注意力\"}"#
+                text =
+                    "data: "
+                    + #"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"mem_1","type":"function","function":{"name":"propose_memory","arguments":"\#(args)"}}]},"finish_reason":"tool_calls"}]}"#
+                    + "\n\ndata: [DONE]\n\n"
+            } else {
+                await withCheckedContinuation { gate = $0 }
+                text =
+                    #"data: {"choices":[{"delta":{"content":"Context [S1]"},"finish_reason":"stop"}]}"#
+                    + "\n\ndata: [DONE]\n\n"
+            }
+        } else {
+            await withCheckedContinuation { gate = $0 }
+            text =
+                #"data: {"choices":[{"delta":{"content":"Context [S1]"},"finish_reason":"stop"}]}"#
                 + "\n\ndata: [DONE]\n\n"
-            : #"{"choices":[{"message":{"content":"{}"},"finish_reason":"stop"}]}"#
+        }
         return (
             Data(text.utf8), HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
         )

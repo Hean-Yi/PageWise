@@ -71,6 +71,32 @@ private struct ReplyTransport: HTTPTransport {
     #expect(try JSONDecoder().decode(Extracted.self, from: Data(result.utf8)).memory == "核对预算后再比较方法")
 }
 
+@Test func modelIgnoresFencedJSONDraftInsideThinkBlockAndExtractsFinalJSON() async throws {
+    var settings = ModelSettings()
+    settings.baseURL = "https://example.invalid/v4"
+    settings.model = "test"
+    let content = """
+        <think>
+        先草拟一个错误示例：
+        ```json
+        {"memory":"草稿不应被提取"}
+        ```
+        </think>
+        ```json
+        {"memory":"正式结果"}
+        ```
+        """
+    let body = String(
+        decoding: try JSONSerialization.data(withJSONObject: [
+            "choices": [["message": ["content": content], "finish_reason": "stop"]]
+        ]), as: UTF8.self)
+    let client = ModelClient(transport: ReplyTransport(status: 200, body: body))
+    let result = try await client.complete(
+        settings: settings, key: "test-only", system: "extract", user: "input", jsonOutput: true)
+    struct Extracted: Decodable { let memory: String }
+    #expect(try JSONDecoder().decode(Extracted.self, from: Data(result.utf8)).memory == "正式结果")
+}
+
 private actor SequencedTransport: HTTPTransport {
     private var responses: [(status: Int, body: String, retryAfter: String?)]
     private(set) var calls = 0

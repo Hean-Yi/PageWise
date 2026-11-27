@@ -153,6 +153,24 @@ import Testing
     #expect(MemoryDedupKey.key("匹配计算预算后，方法 A 的准确率更高。") == MemoryDedupKey.key("在相同 compute budget 下，方法 A 的准确率更高。"))
     #expect(MemoryDedupKey.key("提升 3.2 个点。") != MemoryDedupKey.key("提升 5.0 个点。"))
     #expect(MemoryDedupKey.key("没有提升。") != MemoryDedupKey.key("有提升。"))
+    // Word-boundary safety: multi-character Chinese words must not be corrupted by particle stripping.
+    #expect(MemoryDedupKey.key("上下文窗口长度") != MemoryDedupKey.key("上文窗口长度"))
+    #expect(MemoryDedupKey.key("性能下降明显") != MemoryDedupKey.key("性能降明显"))
+    #expect(MemoryDedupKey.key("不等式推导") != MemoryDedupKey.key("notequal式推导"))
+    #expect(MemoryDedupKey.key("保留 p < 0.05") != MemoryDedupKey.key("保留 p > 0.05"))
+}
+
+@Test func deletedMemorySuppressesBilingualCanonicalParaphraseResurrection() throws {
+    let first = ChatTurn(paperID: UUID(), question: "比较方法", selection: "", answer: "", evidence: [])
+    let second = ChatTurn(paperID: first.paperID, question: "换个说法继续问", selection: "", answer: "", evidence: [])
+    var state = LibraryState()
+    state.chats = [first, second]
+    var item = try #require(ResearchMemory.candidate("匹配计算预算后比较方法。", turn: first, state: state))
+    let forgotten = item.forget()
+    #expect(forgotten)
+    state.memories = [item]
+    #expect(ResearchMemory.candidate("在相同 compute budget 下比较方法。", turn: second, state: state) == nil)
+    #expect(ResearchMemory.candidate("提升 5.0 个点。", turn: second, state: state) != nil)
 }
 
 @Test func memoryStatementProposalRejectsAParaphrasedActiveMemory() throws {
