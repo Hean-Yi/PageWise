@@ -54,7 +54,9 @@ enum ChatCompletionRequest {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("Bearer " + key, forHTTPHeaderField: "Authorization")
         if stream { request.setValue("text/event-stream", forHTTPHeaderField: "Accept") }
-        request.httpBody = try JSONEncoder().encode(body)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        request.httpBody = try encoder.encode(body)
         return request
     }
 

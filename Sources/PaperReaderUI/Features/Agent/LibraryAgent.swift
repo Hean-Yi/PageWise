@@ -832,15 +832,21 @@ public final class LibraryAgent {
             toolMessages.append(AgentMessage(role: "tool", content: content, toolCallID: call.id))
         }
 
-        // A succeeded silent memory write has no further model decision to make. Checkpoint and
-        // finish immediately; if a write failed (e.g. stale revision or protected edit), continue
-        // the loop so the model can see the error and recover or explain it.
+        // A pure silent memory write has no further model decision to make. Checkpoint and finish
+        // immediately; if earlier non-memory tools also ran in this turn (composite request such as
+        // listing papers + remembering a research direction) or if a write failed, continue so the
+        // model can answer the reader's primary question or recover from the error.
         let silentMemoryTools: Set<String> = ["propose_memory", "revise_memory", "forget_memory"]
         let allSucceeded = results.allSatisfy {
             if case .success = $0 { return true }
             return false
         }
-        if names.isSubset(of: silentMemoryTools), allSucceeded {
+        let hasEarlierSubstantiveWork =
+            turns.last?.activities.contains { activity in
+                activity.status == .succeeded && !silentMemoryTools.contains(activity.toolName)
+                    && activity.toolName != "research_overview"
+            } == true
+        if names.isSubset(of: silentMemoryTools), allSucceeded, !hasEarlierSubstantiveWork {
             updateTurn(turnID) { turn in
                 if turn.answer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     turn.answer = "研究记忆已更新。"

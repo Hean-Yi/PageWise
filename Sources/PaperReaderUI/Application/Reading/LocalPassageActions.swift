@@ -239,11 +239,12 @@ extension ReaderModel {
     }
 
     func readingNoteEvidence(
-        query: String, excluding: UUID? = nil, paperID: UUID? = nil, limit: Int = 6, includeArchived: Bool = false
+        query: String, excluding: UUID? = nil, paperID: UUID? = nil, shelfID: UUID? = nil, limit: Int = 6,
+        includeArchived: Bool = false
     ) async throws -> [Evidence] {
         let hits = try await readingNoteIndex.search(
-            query: query, state: state, pending: pendingImportIDs, excluding: excluding, paperID: paperID, limit: limit,
-            includeArchived: includeArchived)
+            query: query, state: state, pending: pendingImportIDs, excluding: excluding, paperID: paperID,
+            shelfID: shelfID, limit: limit, includeArchived: includeArchived)
         try Task.checkCancellation()
         return hits.filter { referencedReadingNote(for: $0, includeArchived: includeArchived) != nil }
     }

@@ -500,6 +500,10 @@ private func sseAnswer(_ text: String) throws -> String {
         blocks: [TextBlock(sourcePage: 0, text: "Image segmentation compute budget.")], warnings: [], canReflow: true)
     let turnA = ChatTurn(paperID: paperA.id, question: "等算力预算", selection: "", answer: "ok", evidence: [])
     let turnC = ChatTurn(paperID: paperC.id, question: "视觉算力预算", selection: "", answer: "ok", evidence: [])
+    let sameShelfNote = ReadingNote(
+        paperID: paperA.id, contentVersion: "v1", anchors: [], markdown: "同书架笔记：核对等算力预算下的延迟。")
+    let otherShelfNote = ReadingNote(
+        paperID: paperC.id, contentVersion: "v1", anchors: [], markdown: "其他书架笔记：VISION_SHELF_ONLY_MARKER 视觉分割算力预算。")
     let sameShelfMemory = MemoryItem(text: "AI 整理（待核实）：同书架追踪等算力预算控制", sourceID: turnA.id)
     let otherShelfMemory = MemoryItem(text: "AI 整理（待核实）：视觉书架专属分割算力预算", sourceID: turnC.id)
     reader.state.shelves = [shelfEfficiency, shelfVision]
@@ -508,6 +512,7 @@ private func sseAnswer(_ text: String) throws -> String {
     reader.state.paperShelfIDs[paperB.id.uuidString] = shelfEfficiency.id
     reader.state.paperShelfIDs[paperC.id.uuidString] = shelfVision.id
     reader.state.chats = [turnA, turnC]
+    reader.state.readingNotes = [sameShelfNote, otherShelfNote]
     reader.state.memories = [sameShelfMemory, otherShelfMemory]
     #expect(await reader.save())
 
@@ -515,7 +520,9 @@ private func sseAnswer(_ text: String) throws -> String {
     await reader.ask("这篇论文的算力预算怎么看？")
     let body = try #require(await transport.recordedBodies.first)
     #expect(body.contains("同书架追踪等算力预算控制"))
+    #expect(body.contains("同书架笔记：核对等算力预算下的延迟"))
     #expect(!body.contains("视觉书架专属分割算力预算"))
+    #expect(!body.contains("VISION_SHELF_ONLY_MARKER"))
 }
 
 @Test @MainActor func compositeOperationalAndResearchPlanTurnStillAllowsProposeMemory() async throws {
@@ -570,4 +577,38 @@ private func sseAnswer(_ text: String) throws -> String {
     #expect(turn.activities.count == 2)
     #expect(turn.activities.allSatisfy { $0.status == .failed })
     #expect(turn.cards.isEmpty)
+}
+
+@Test @MainActor func compositeListAndMemoryTurnDoesNotDropPrimaryAnswer() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let reader = try ReaderModel(root: root, credentials: WorkflowCredentials())
+    await reader.load()
+    var settings = reader.modelSettings
+    settings.baseURL = ModelServicePreset.openAI.baseURL
+    settings.model = "gpt-5-mini"
+    try reader.saveSettings(settings, key: "test-only")
+    let paper = Paper(
+        title: "KV Cache Quantization", digest: "kv-comp", originalPath: "kv.pdf", pageCount: 1,
+        blocks: [TextBlock(sourcePage: 0, text: "INT4 KV cache")], warnings: [], canReflow: true)
+    reader.state.papers = [paper]
+    #expect(await reader.save())
+
+    let proposeArgs = #"{"statement":"长期研究低显存 KV 量化推理","quote":"我接下来主要研究低显存 KV 量化推理"}"#
+    let cassette = HTTPCassette(entries: [
+        .sse([try sseToolCall(id: "l1", name: "list_library", arguments: #"{"scope":"papers","offset":0}"#)]),
+        .sse([try sseToolCall(id: "m1", name: "propose_memory", arguments: proposeArgs)]),
+        .sse([try sseAnswer("书库里目前有《KV Cache Quantization》，我也已记住你的研究方向。")]),
+    ])
+    let transport = CassetteTransport(cassette: cassette)
+    let agent = LibraryAgent(reader: reader, client: AgentClient(transport: transport))
+    agent.send("先帮我列一下书库里有哪些论文，另外我接下来主要研究低显存 KV 量化推理，请记住这个研究方向。")
+    for _ in 0..<200 where agent.isRunning { try await Task.sleep(for: .milliseconds(10)) }
+
+    let turn = try #require(agent.turns.last)
+    #expect(turn.activities.map(\.toolName) == ["list_library", "propose_memory"])
+    #expect(turn.activities.allSatisfy { $0.status == .succeeded })
+    #expect(turn.answer.contains("KV Cache Quantization"))
+    #expect(reader.state.memories.contains { $0.isActive && $0.text.contains("KV 量化") })
+    #expect(TrajectoryAssertion.verifyFullRequestPrefixStability(await transport.recordedBodies))
 }

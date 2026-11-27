@@ -35,13 +35,15 @@ public enum ReadingNoteIntent {
         if isDirective(joined) { return true }
         return clauses.dropFirst().contains { clause in
             let part = clause.trimmingCharacters(in: .whitespaces)
-            return contains(#"^(?:请|帮我|替我|麻烦|然后请|please )"#, in: part) && isDirective(part)
+            return contains(
+                #"^(?:请|帮我|替我|给我|麻烦|顺便|同时|然后|接着|随后|再|并|please |then |and (?:please )?)"#,
+                in: part) && isDirective(part)
         }
     }
 
     private static func isDirective(_ text: String) -> Bool {
         let prefix =
-            #"^(?:(?:请问|请你|请|麻烦你|麻烦|我希望你|我需要你|我想让你|我想请你|我要你|我想|你|可不可以|可以|可否|能不能|能否|能|帮我|替我|给我|直接|现在|顺便|再|先|也|然后|\s))*"#
+            #"^(?:(?:请问|请你|请|麻烦你|麻烦|我希望你|我需要你|我想让你|我想请你|我要你|我想|你|可不可以|可以|可否|能不能|能否|能|帮我|替我|给我|直接|现在|顺便|同时|并且|并|接着|随后|再|先|也|然后|\s))*"#
         let command = text.replacingOccurrences(of: prefix, with: "", options: .regularExpression)
         guard !contains(#"^(?:解释|介绍|谈谈|讲讲|告诉我|分析|示范|举例|比较|评价|翻译|复述|检查|模拟|怎么|如何|为什么)"#, in: command)
         else { return false }

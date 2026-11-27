@@ -179,4 +179,14 @@ func modelServicesUseTheirWireFormatForTextReflowAndTools(_ preset: ModelService
     let wire = try #require(JSONSerialization.jsonObject(with: body) as? [String: Any])
     let wireMessages = try #require(wire["messages"] as? [[String: Any]])
     #expect(wireMessages[1]["reasoning_content"] == nil)
+
+    // Wire JSON uses sorted keys so tool schemas remain byte-for-byte deterministic across rounds/runs.
+    _ = try await AgentClient(transport: transport).respond(
+        settings: openAI, key: "fixture", messages: messages, limits: .init())
+    let requests = await transport.requests
+    #expect(requests.count == 2)
+    #expect(requests[0].httpBody == requests[1].httpBody)
+    let raw = String(decoding: body, as: UTF8.self)
+    #expect(raw.contains(#""max_completion_tokens":"#))
+    #expect(raw.range(of: #""messages":"#)!.lowerBound < raw.range(of: #""tools":"#)!.lowerBound)
 }

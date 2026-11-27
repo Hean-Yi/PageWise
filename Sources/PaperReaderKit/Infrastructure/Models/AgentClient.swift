@@ -282,11 +282,11 @@ public struct AgentClient: AgentCompleting {
         static let definitions: [Tool] = [
             make(
                 "remember_preference",
-                "Save a durable preference explicitly stated in this reader turn. Use only an entire verbatim reader sentence, excluding its final punctuation. One-off requests, quoted authors and model inferences are ineligible.",
+                "Save a durable preference explicitly stated in this reader turn. Use only an entire verbatim reader sentence, excluding its final punctuation. One-off requests, quoted authors and model inferences are ineligible. Call alone.",
                 ["quote": .init(type: "string", description: "Exact reader-authored preference clause")], ["quote"]),
             make(
                 "propose_research_question",
-                "Save one tentative research question grounded in this reader turn’s own research idea or an exact excerpt of a registered personal note. A question is an agent hypothesis, never an endorsed stance.",
+                "Save one tentative research question grounded in this reader turn’s own research idea or an exact excerpt of a registered personal note. A question is an agent hypothesis, never an endorsed stance. Call alone.",
                 [
                     "question": .init(
                         type: "string", description: "One concrete question using the source topic, ending in ? or ？"),
@@ -301,7 +301,7 @@ public struct AgentClient: AgentCompleting {
                 ], ["question", "quote"]),
             make(
                 "propose_memory",
-                "Silently maintain one reader-grounded research memory. Use a concrete statement supported by this reader turn or a registered personal note. Do not invent reader preferences or endorse a hypothesis.",
+                "Silently maintain one reader-grounded research memory. Use a concrete statement supported by this reader turn or a registered personal note. Do not invent reader preferences or endorse a hypothesis. Call alone.",
                 [
                     "statement": .init(type: "string", description: "One concrete research memory statement"),
                     "note_result_id": .init(
@@ -314,7 +314,7 @@ public struct AgentClient: AgentCompleting {
                 ], ["statement", "quote"]),
             make(
                 "revise_memory",
-                "Silently correct an existing research memory when the current reader turn or a registered source clearly supersedes it. Preserve conditions, negation and numbers. Pass expected_revision when known to prevent stale overwrites.",
+                "Silently correct an existing research memory when the current reader turn or a registered source clearly supersedes it. Preserve conditions, negation and numbers. Pass expected_revision when known to prevent stale overwrites. Call alone.",
                 [
                     "memory_id": memoryID,
                     "statement": .init(type: "string", description: "Replacement memory statement"),
@@ -325,7 +325,7 @@ public struct AgentClient: AgentCompleting {
                 ["memory_id", "statement"]),
             make(
                 "forget_memory",
-                "Silently remove an existing research memory when the reader explicitly asks to forget or stop tracking it, or a revoked source leaves it unsupported. Do not use for ambiguous references.",
+                "Silently remove an existing research memory when the reader explicitly asks to forget or stop tracking it, or a revoked source leaves it unsupported. Do not use for ambiguous references. Call alone.",
                 [
                     "memory_id": memoryID,
                     "expected_revision": .init(
@@ -471,7 +471,7 @@ public struct AgentClient: AgentCompleting {
                     "citations": .init(
                         type: "array",
                         description:
-                            "Optional links to saved reader notes retrieved with search_reading_notes. Put {{cite:1}}, {{cite:2}}, etc. at their positions within markdown.",
+                            "Optional links to saved reader notes retrieved with search_reading_notes. When non-empty, markdown MUST contain exact placeholders {{cite:1}}, {{cite:2}}, ... matching every 1-based entry in citations.",
                         items: .init(
                             type: "object",
                             properties: [

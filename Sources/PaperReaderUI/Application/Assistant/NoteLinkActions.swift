@@ -14,7 +14,11 @@ extension ReaderModel {
         let tokens = markdown.matches(of: /\{\{cite:([0-9]+)\}\}/)
         let expected = Set(references.indices.map { String($0 + 1) })
         guard Set(tokens.map { String($0.1) }) == expected else {
-            throw ReaderError.message("笔记中的引用标记与本地摘录不匹配。")
+            if references.isEmpty {
+                throw ReaderError.message("未提供 citations，markdown 中不应包含 {{cite:...}} 占位符。")
+            }
+            throw ReaderError.message(
+                "笔记中的引用标记与 citations 不匹配：markdown 必须逐一包含 {{cite:1}} 到 {{cite:\(references.count)}} 占位符。")
         }
         var citations: [LocalPassageCitation] = []
         var replacements: [String] = []

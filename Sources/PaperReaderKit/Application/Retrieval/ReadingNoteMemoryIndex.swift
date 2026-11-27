@@ -42,23 +42,29 @@ public actor ReadingNoteMemoryIndex {
     }
 
     public func search(
-        query: String, state: LibraryState, pending: Set<UUID>, excluding: UUID?, paperID: UUID?, limit: Int,
-        includeArchived: Bool, mode: RetrievalMode = .hybrid
+        query: String, state: LibraryState, pending: Set<UUID>, excluding: UUID?, paperID: UUID?,
+        shelfID: UUID? = nil, limit: Int, includeArchived: Bool, mode: RetrievalMode = .hybrid
     ) async throws -> [Evidence] {
         let withdrawn = ChatSourceVersions.withdrawnNoteIDs(in: state, excluding: pending)
         let unavailable: Set<UUID> = includeArchived ? [] : withdrawn
         let titles = Dictionary(
             state.papers.lazy.filter { !pending.contains($0.id) }.map { ($0.id, $0.title) },
             uniquingKeysWith: { first, _ in first })
+        let allowedPaperIDs: Set<UUID>? = shelfID.map { shelf in
+            Set(
+                state.papers.lazy
+                    .filter { !pending.contains($0.id) && state.paperShelfIDs[$0.id.uuidString] == shelf }
+                    .map(\.id))
+        }
         return try await search(
             query: query, notes: state.readingNotes, paperTitles: titles, excluding: excluding, paperID: paperID,
-            limit: limit, unavailable: unavailable, mode: mode, withdrawn: withdrawn)
+            allowedPaperIDs: allowedPaperIDs, limit: limit, unavailable: unavailable, mode: mode, withdrawn: withdrawn)
     }
 
     public func search(
         query: String, notes: [ReadingNote], paperTitles: [UUID: String], excluding: UUID? = nil,
-        paperID: UUID? = nil, limit: Int = 6, unavailable: Set<UUID> = [], mode: RetrievalMode = .hybrid,
-        withdrawn: Set<UUID> = []
+        paperID: UUID? = nil, allowedPaperIDs: Set<UUID>? = nil, limit: Int = 6, unavailable: Set<UUID> = [],
+        mode: RetrievalMode = .hybrid, withdrawn: Set<UUID> = []
     ) async throws -> [Evidence] {
         let hasModel = usesVectors && mode != .lexical ? await semantic.isAvailable() : false
         let active = notes.filter { $0.deletedAt == nil && paperTitles[$0.paperID] != nil }
@@ -125,6 +131,7 @@ public actor ReadingNoteMemoryIndex {
         var results: [(evidence: Evidence, score: Double, modified: Date)] = []
         for note in active
         where !unavailable.contains(note.id) && note.paperID != excluding && (paperID == nil || note.paperID == paperID)
+            && (allowedPaperIDs?.contains(note.paperID) ?? true)
         {
             guard browsing || candidates.contains(note.id), let entry = entries[note.id],
                 let first = entry.chunks.first
@@ -162,6 +169,7 @@ public actor ReadingNoteMemoryIndex {
         }
         let eligible = active.filter {
             !unavailable.contains($0.id) && $0.paperID != excluding && (paperID == nil || $0.paperID == paperID)
+                && (allowedPaperIDs?.contains($0.paperID) ?? true)
         }
         let byID = Dictionary(uniqueKeysWithValues: eligible.map { ($0.id, $0) })
         let matches = try await semantic.matches(query, passages: semanticPassages, allowed: Set(byID.keys), limit: 64)

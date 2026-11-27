@@ -303,10 +303,8 @@ enum TrajectoryAssertion {
             else { return false }
             decodedMessages.append(envelope.messages)
             let toolChoice = object["tool_choice"] as? String
-            if toolChoice != "none", let tools = object["tools"],
-                let serialized = try? JSONSerialization.data(withJSONObject: tools, options: [.sortedKeys])
-            {
-                toolPayloads.append(serialized)
+            if toolChoice != "none", let toolsRange = body.range(of: #""tools":"#) {
+                toolPayloads.append(Data(body[toolsRange.lowerBound...].utf8))
             }
         }
         guard verifyPrefixStability(decodedMessages) else { return false }
