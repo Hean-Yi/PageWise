@@ -52,7 +52,13 @@ public actor SemanticPassageIndex {
     private var opened = false
     private var passages: [SemanticPassage] = []
     private var keys: [SemanticPassage: Data] = [:]
-    private var vectors: [Data: [Float]] = [:]
+    private var vectors = SemanticVectorMatrix()
+    /// Matrix row per entry of `passages` (`-1` until encoded) and its source ordinal.
+    private var passageRows: [Int] = []
+    private var passageSources: [Int] = []
+    private var sourceIDs: [UUID] = []
+    private var readyKeys = 0
+    private var rowsDirty = true
     private var generation: UInt64 = 0
     private var cancelledWarmups = 0
     private var warmer: Task<Void, Error>?
@@ -71,11 +77,13 @@ public actor SemanticPassageIndex {
 
     private func reconcile(_ next: [SemanticPassage], encoderID: String) {
         if !opened {
-            vectors = (try? disk?.load(writer: writer)) ?? [:]
+            vectors = (try? disk?.load(writer: writer)) ?? SemanticVectorMatrix()
             opened = true
+            rowsDirty = true
         } else if next == passages {
             return
         }
+        rowsDirty = true
         if let existing = warmer {
             existing.cancel()
             cancelledWarmups += 1
@@ -91,7 +99,7 @@ public actor SemanticPassageIndex {
         keys = wanted
         let stale = Set(vectors.keys).subtracting(wanted.values)
         if !stale.isEmpty {
-            for key in stale { vectors.removeValue(forKey: key) }
+            for key in stale { vectors.remove(key) }
             try? disk?.update(adding: [:], removing: stale, writer: writer)
         }
     }
@@ -108,16 +116,15 @@ public actor SemanticPassageIndex {
     }
 
     public func isWarm() -> Bool {
-        !keys.isEmpty && keys.values.allSatisfy { vectors[$0] != nil }
+        refreshRows()
+        return !keys.isEmpty && readyKeys == keys.count
     }
 
     /// Fraction of the current corpus whose semantic vectors are ready in memory (`0.0 ... 1.0`).
     public func coverage() -> Double {
         guard !keys.isEmpty else { return 1.0 }
-        let ready = keys.values.reduce(into: 0) { count, key in
-            if vectors[key] != nil { count += 1 }
-        }
-        return Double(ready) / Double(keys.count)
+        refreshRows()
+        return Double(readyKeys) / Double(keys.count)
     }
 
     public func removeSources(_ ids: Set<UUID>) {
@@ -150,12 +157,12 @@ public actor SemanticPassageIndex {
     }
 
     private func fill(_ encoder: any SemanticTextEncoder, generation version: UInt64) async throws {
-        let missing = passages.filter { keys[$0].flatMap { vectors[$0] } == nil }
+        let missing = passages.filter { keys[$0].map(vectors.contains) != true }
         for start in stride(from: 0, to: missing.count, by: 4) {
             try Task.checkCancellation()
             guard version == generation else { return }
             let batch = missing[start..<min(start + 4, missing.count)].filter {
-                keys[$0].flatMap { vectors[$0] } == nil
+                keys[$0].map(vectors.contains) != true
             }
             guard !batch.isEmpty else { continue }
             let output = try await encoder.encode(batch.map(\.text), as: .passage)
@@ -163,13 +170,32 @@ public actor SemanticPassageIndex {
             guard version == generation, output.count == batch.count else { return }
             var added: [Data: [Float]] = [:]
             for (passage, raw) in zip(batch, output) {
-                guard let key = keys[passage], let unit = Self.unit(raw) else { continue }
-                vectors[key] = unit
+                guard let key = keys[passage], let unit = Self.unit(raw), vectors.insert(key, unit) else { continue }
                 added[key] = unit
             }
+            rowsDirty = true
             try? disk?.update(adding: added, removing: [], writer: writer)
             await Task.yield()
         }
+    }
+
+    /// Rebuilds per-passage matrix rows and source ordinals after the corpus or vectors change,
+    /// so each query walks plain arrays instead of hashing every passage text and fingerprint.
+    private func refreshRows() {
+        guard rowsDirty else { return }
+        var ordinal: [UUID: Int] = [:]
+        sourceIDs = []
+        passageSources = passages.map { p in
+            if let known = ordinal[p.sourceID] { return known }
+            ordinal[p.sourceID] = sourceIDs.count
+            sourceIDs.append(p.sourceID)
+            return sourceIDs.count - 1
+        }
+        passageRows = passages.map { keys[$0].flatMap(vectors.row(of:)) ?? -1 }
+        readyKeys = keys.values.reduce(into: 0) { count, key in
+            if vectors.contains(key) { count += 1 }
+        }
+        rowsDirty = false
     }
 
     public func matches(_ query: String, passages: [SemanticPassage], allowed: Set<UUID>, limit: Int) async throws
@@ -200,25 +226,37 @@ public actor SemanticPassageIndex {
             }
             guard isWarm() || coverage() >= 0.85, version == generation,
                 let encoded = try await encoder.retrievalQuery(String(query.prefix(1_600))),
-                let queryVector = Self.unit(encoded.vector), version == generation
+                let queryVector = Self.unit(encoded.vector), version == generation,
+                queryVector.count == vectors.dimension
             else { return [] }
-            var best: [UUID: SemanticMatch] = [:]
-            for p in passages where allowed.contains(p.sourceID) {
-                try Task.checkCancellation()
-                guard let key = keys[p], let vector = vectors[key], vector.count == queryVector.count else { continue }
-                let score = vDSP.dot(queryVector, vector)
-                guard score >= (minimumScore ?? encoded.minimum) else { continue }
-                if let current = best[p.sourceID],
-                    current.score > score || (current.score == score && current.passage.chunk <= p.chunk)
+            refreshRows()
+            let eligibleSource = sourceIDs.map(allowed.contains)
+            var candidates = 0
+            for i in passages.indices where passageRows[i] >= 0 && eligibleSource[passageSources[i]] { candidates += 1 }
+            // One matrix-vector product beats per-row dot products unless few rows are eligible.
+            let allScores = candidates * 4 >= vectors.rowCount ? vectors.scores(queryVector) : nil
+            let threshold = minimumScore ?? encoded.minimum
+            var best = [(score: Float, index: Int)?](repeating: nil, count: sourceIDs.count)
+            for i in passages.indices {
+                if i & 4_095 == 0 { try Task.checkCancellation() }
+                let row = passageRows[i]
+                let source = passageSources[i]
+                guard row >= 0, eligibleSource[source] else { continue }
+                let score = allScores?[row] ?? vectors.score(row: row, queryVector)
+                guard score >= threshold else { continue }
+                if let current = best[source],
+                    current.score > score
+                        || (current.score == score && passages[current.index].chunk <= passages[i].chunk)
                 {
                     continue
                 }
-                best[p.sourceID] = SemanticMatch(passage: p, score: score)
+                best[source] = (score, i)
             }
-            let ranked = best.values.sorted {
-                if $0.score != $1.score { return $0.score > $1.score }
-                return $0.passage.sourceID.uuidString < $1.passage.sourceID.uuidString
-            }
+            let ranked = best.compactMap { $0 }.map { SemanticMatch(passage: passages[$0.index], score: $0.score) }
+                .sorted {
+                    if $0.score != $1.score { return $0.score > $1.score }
+                    return $0.passage.sourceID.uuidString < $1.passage.sourceID.uuidString
+                }
             return Array(ranked.prefix(limit))
         } catch {
             try Task.checkCancellation()
