@@ -12,9 +12,12 @@ public struct LibraryView: View {
     @State private var showImporter = false
     @State private var showSettings = false
     @State private var settingsHint: String?
+    @State private var pendingSettingsAction: (@MainActor () -> Void)?
     @State private var guide = QuickStartNavigation()
     @State private var openingSample = false
     @AppStorage("completedQuickStart") private var completedQuickStart = false
+    @AppStorage("AssistantSidebarWidth") private var customSidebarWidth = 340.0
+    @State private var sidebarDragStartWidth: CGFloat?
     @State private var detailMetrics = DetailSidebarMetrics(width: 1100)
     @State private var leftSidebarWidth = SidebarWidthBox()
     @State private var onlineSearch: OnlinePaperSearch
@@ -76,8 +79,12 @@ public struct LibraryView: View {
                 isPresented: $showSettings,
                 onDismiss: {
                     settingsHint = nil
+                    let continuation = pendingSettingsAction
+                    pendingSettingsAction = nil
                     if guide.step == .modelSettings && model.isModelReadyForRequests {
                         moveGuide(1)
+                    } else if let continuation, model.isModelReadyForRequests {
+                        continuation()
                     }
                 }
             ) {
@@ -313,7 +320,7 @@ public struct LibraryView: View {
 
     private var detailContent: some View {
         let inline = detailMetrics.inline
-        let sidebarWidth = detailMetrics.sidebarWidth
+        let sidebarWidth = detailMetrics.resolvedSidebarWidth(preferred: CGFloat(customSidebarWidth))
         let sidebarVisible = assistantTab != nil
         let reservesSidebar = inline && sidebarVisible
         let isShelf = workspacePage == .shelf
@@ -356,6 +363,27 @@ public struct LibraryView: View {
                         }
                     )
                     .frame(width: sidebarWidth)
+                    .overlay(alignment: .leading) {
+                        #if os(macOS)
+                            if inline {
+                                Rectangle()
+                                    .fill(Color.clear)
+                                    .frame(width: 8)
+                                    .contentShape(Rectangle())
+                                    .gesture(
+                                        DragGesture(minimumDistance: 1, coordinateSpace: .global)
+                                            .onChanged { value in
+                                                let base = sidebarDragStartWidth ?? sidebarWidth
+                                                sidebarDragStartWidth = base
+                                                let next = min(520, max(320, base - value.translation.width))
+                                                customSidebarWidth = Double(next)
+                                            }
+                                            .onEnded { _ in sidebarDragStartWidth = nil }
+                                    )
+                                    .help("拖拽调整助读侧栏宽度")
+                            }
+                        #endif
+                    }
                     .background(alignment: .leading) {
                         if !inline {
                             LinearGradient(
@@ -450,8 +478,9 @@ public struct LibraryView: View {
                             paperQuestion = "请结合全文解释选中内容。"
                             assistantTab = .paper
                         },
-                        openSettings: {
+                        openSettings: { continuation in
                             settingsHint = "请先选择模型服务并保存 API 密钥，即可开启双语重排与翻译。"
+                            pendingSettingsAction = continuation
                             showSettings = true
                         })
                 case .shelf:
@@ -492,7 +521,8 @@ public struct LibraryView: View {
         #if os(iOS)
             if horizontalSizeClass == .compact { return assistantTab != nil }
         #endif
-        return assistantTab != nil || columns != .detailOnly
+        // On wide screens keep margin note cards active even when the left outline sidebar is open.
+        return assistantTab != nil || (columns != .detailOnly && detailMetrics.width < 920)
     }
 
     private enum WorkspacePage {
@@ -659,12 +689,20 @@ public struct LibraryView: View {
 }
 
 private struct DetailSidebarMetrics: Equatable {
+    let width: CGFloat
     let inline: Bool
     let sidebarWidth: CGFloat
 
     init(width: CGFloat) {
+        self.width = width
         inline = width >= 840
         sidebarWidth = width >= 376 ? 340 : max(1, floor(width - 36))
+    }
+
+    func resolvedSidebarWidth(preferred: CGFloat) -> CGFloat {
+        guard inline else { return sidebarWidth }
+        let maxAllowed = min(520, max(320, floor(width * 0.46)))
+        return min(maxAllowed, max(320, preferred))
     }
 }
 

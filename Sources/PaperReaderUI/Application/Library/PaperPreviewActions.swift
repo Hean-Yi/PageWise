@@ -22,7 +22,8 @@ extension ReaderModel {
     public func previewContent(for paperID: UUID) async -> PaperPreviewContent {
         guard let paper = state.papers.first(where: { $0.id == paperID }), !Task.isCancelled else { return .init() }
         var content =
-            (try? await previewReader.read(paper: paper, root: root, store: pdfTranslations, settings: modelSettings))
+            (try? await previewReader.read(
+                paper: paper, root: root, store: pdfTranslations, settings: fastModelSettings))
             ?? .init()
         guard !Task.isCancelled else { return .init() }
         content.oneSentence = closeReadingTakeaway(for: paper)

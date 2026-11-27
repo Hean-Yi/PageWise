@@ -17,7 +17,7 @@ struct SettingsView: View {
         }
     }
 
-    private enum Field { case model, address, key }
+    private enum Field { case model, fastModel, address, key }
 
     @Bindable var model: ReaderModel
     private let contextHint: String?
@@ -290,10 +290,26 @@ struct SettingsView: View {
                         .textContentType(.URL)
                 }
             }
-            input("模型 ID", field: .model) {
+            input("模型 ID（主力 / 精读）", field: .model) {
                 TextField("模型名称", text: $draft.model)
             }
+            input("轻量模型 ID（可选 · 翻译与后台整理）", field: .fastModel) {
+                TextField(
+                    "留空则沿用主模型（如 flash / mini）",
+                    text: Binding(
+                        get: { draft.fastModel ?? "" },
+                        set: { draft.fastModel = $0.isEmpty ? nil : $0 }
+                    ))
+            }
             credentials
+            if model.memorySleep.enabled {
+                Label(
+                    "空闲自动整理研究记忆默认开启，会优先使用轻量模型并计入 API 额度，可在「研究记忆」中关闭。",
+                    systemImage: "moon.stars"
+                )
+                .font(.caption).foregroundStyle(ReaderTheme.muted)
+                .fixedSize(horizontal: false, vertical: true)
+            }
             if provider != .custom, let endpoint = try? draft.endpointURL() {
                 DisclosureGroup("请求地址") {
                     Text(endpoint.absoluteString).font(.system(.caption, design: .monospaced))
@@ -471,9 +487,11 @@ struct SettingsView: View {
         if ModelServicePreset.matching(savedSettings) == value {
             draft.baseURL = savedSettings.baseURL
             draft.model = savedSettings.model.isEmpty ? value.defaultModel : savedSettings.model
+            draft.fastModel = savedSettings.fastModel
         } else {
             draft.baseURL = value.baseURL
             draft.model = value.defaultModel
+            draft.fastModel = nil
         }
         key = ""
         removeKey = false

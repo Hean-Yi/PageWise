@@ -86,12 +86,14 @@ struct LibrarySearchField: View {
 
 extension View {
     func librarySearchSuggestions(
-        state: LibraryState, findRequest: Int, dismissRequest: Int = 0, onSelect: @escaping (UUID) -> Void
+        state: LibraryState, model: ReaderModel? = nil, findRequest: Int, dismissRequest: Int = 0,
+        onSelect: @escaping (UUID) -> Void, onOpenEvidence: ((Evidence) -> Void)? = nil
     ) -> some View {
         modifier(
             LibrarySearchSuggestions(
-                state: state, titles: state.papers.map(LibraryTitleIndex.Document.init), findRequest: findRequest,
-                dismissRequest: dismissRequest, onSelect: onSelect))
+                state: state, model: model, titles: state.papers.map(LibraryTitleIndex.Document.init),
+                findRequest: findRequest, dismissRequest: dismissRequest,
+                onSelect: onSelect, onOpenEvidence: onOpenEvidence))
     }
 }
 
@@ -102,10 +104,12 @@ private struct LibrarySearchSuggestions: ViewModifier {
     }
 
     let state: LibraryState
+    let model: ReaderModel?
     let titles: [LibraryTitleIndex.Document]
     let findRequest: Int
     let dismissRequest: Int
     let onSelect: (UUID) -> Void
+    let onOpenEvidence: ((Evidence) -> Void)?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ScaledMetric(relativeTo: .body) private var rowHeight: CGFloat = 64
     @FocusState private var focused: Bool
@@ -115,6 +119,7 @@ private struct LibrarySearchSuggestions: ViewModifier {
     @State private var index = LibraryTitleIndex()
     @State private var resultRequest: Request?
     @State private var results: [LibraryTitleIndex.Match] = []
+    @State private var deepHits: [Evidence] = []
     @State private var submitWhenReady = false
 
     func body(content: Content) -> some View {
@@ -174,6 +179,26 @@ private struct LibrarySearchSuggestions: ViewModifier {
                     submitWhenReady = false
                     if let id = activeID(in: updated) { choose(id) }
                 }
+                if let model, onOpenEvidence != nil {
+                    let papers = state.papers.filter { !model.pendingImportIDs.contains($0.id) }
+                    async let passageHits = try? model.paperSearchIndex.search(request.query, papers: papers, limit: 4)
+                    async let noteHits = try? model.readingNoteEvidence(query: request.query, limit: 4)
+                    let passages = (await passageHits ?? []).map { hit in
+                        Evidence(
+                            id: "passage-\(hit.paperID)-\(hit.sourcePage ?? 0)",
+                            title: hit.title, text: hit.excerpt, paperID: hit.paperID,
+                            blockID: hit.blockID, sourcePage: hit.sourcePage.map { $0 - 1 })
+                    }
+                    let notes = await noteHits ?? []
+                    guard !Task.isCancelled, focused, query == request.query else { return }
+                    let titleIDs = Set(updated.map(\.id))
+                    let filteredPassages = passages.filter { hit in
+                        hit.sourcePage != nil || !titleIDs.contains(hit.paperID ?? UUID())
+                    }
+                    deepHits = Array((notes + filteredPassages).prefix(6))
+                } else {
+                    deepHits = []
+                }
             }
             .onChange(of: findRequest) { _, _ in focused = true }
             .onChange(of: dismissRequest) { _, _ in dismiss() }
@@ -187,7 +212,8 @@ private struct LibrarySearchSuggestions: ViewModifier {
         let below = size.height - field.maxY - gap
         let above = field.minY - gap
         let placeBelow = below >= rowHeight * 2 || below >= above
-        let height = min(max(0, placeBelow ? below : above), min(5.5, CGFloat(max(matches.count, 1))) * rowHeight + 8)
+        let totalRows = matches.count + deepHits.count
+        let height = min(max(0, placeBelow ? below : above), min(6.5, CGFloat(max(totalRows, 1))) * rowHeight + 8)
         let width = min(max(0, size.width - 16), max(field.width, 356))
         if field.intersects(bounds), height > 0 {
             let backdrop = Path { path in
@@ -198,8 +224,8 @@ private struct LibrarySearchSuggestions: ViewModifier {
                 .contentShape(backdrop, eoFill: true).onTapGesture(perform: dismiss)
                 .accessibilityHidden(true)
             Group {
-                if matches.isEmpty {
-                    Label("没有匹配的论文", systemImage: "magnifyingglass")
+                if matches.isEmpty && deepHits.isEmpty {
+                    Label("没有匹配的论文或笔记", systemImage: "magnifyingglass")
                         .font(.callout).foregroundStyle(ReaderTheme.muted)
                 } else {
                     ScrollViewReader { scroll in
@@ -208,6 +234,12 @@ private struct LibrarySearchSuggestions: ViewModifier {
                                 ForEach(matches) { paper in
                                     row(paper, selected: current == paper.id)
                                         .frame(height: rowHeight).id(paper.id)
+                                }
+                                if !deepHits.isEmpty {
+                                    if !matches.isEmpty { Divider().padding(.vertical, 4) }
+                                    ForEach(deepHits) { hit in
+                                        evidenceRow(hit).frame(height: rowHeight)
+                                    }
                                 }
                             }
                         }
@@ -262,6 +294,27 @@ private struct LibrarySearchSuggestions: ViewModifier {
         .accessibilityLabel("\(title)，\(shelf)").accessibilityHint("在书架定位")
         .accessibilityAddTraits(selected ? .isSelected : [])
         .accessibilityIdentifier("library-search-result-\(paper.id)")
+    }
+
+    private func evidenceRow(_ hit: Evidence) -> some View {
+        let isNote = hit.readingNoteID != nil
+        let badge = isNote ? "阅读笔记" : (hit.sourcePage.map { "原文第 \($0 + 1) 页" } ?? "正文段落")
+        return Button {
+            dismiss()
+            onOpenEvidence?(hit)
+        } label: {
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
+                    Text(badge).font(.caption2.weight(.semibold)).foregroundStyle(ReaderTheme.accent)
+                    Text(hit.displayTitle).font(.caption).foregroundStyle(ReaderTheme.muted).lineLimit(1)
+                }
+                Text(ReadingNoteSummary.text(hit.text))
+                    .font(.callout).foregroundStyle(ReaderTheme.ink).lineLimit(2).multilineTextAlignment(.leading)
+            }
+            .padding(.horizontal, 10).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .readerIconButtonStyle(.plain).focusable(false)
     }
 
     private func titleMatches(in title: String) -> [Range<String.Index>] {

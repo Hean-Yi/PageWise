@@ -800,3 +800,75 @@ private func sseAnswer(_ text: String) throws -> String {
     #expect(!replacement.userEdited)
     #expect(replacement.text.contains("显存压缩率"))
 }
+
+@Test @MainActor func zeroGainSearchLoopNudgesOnSecondAndCircuitBreaksOnThirdRound() async throws {
+    let cassette = HTTPCassette(entries: [
+        .sse([try sseToolCall(id: "z1", name: "search_library", arguments: #"{"query":"alpha"}"#)]),
+        .sse([try sseToolCall(id: "z2", name: "search_library", arguments: #"{"query":"beta"}"#)]),
+        .sse([try sseToolCall(id: "z3", name: "search_library", arguments: #"{"query":"gamma"}"#)]),
+        .sse([try sseAnswer("连续三轮未找到新资料，直接作答。")]),
+    ])
+    let transport = CassetteTransport(cassette: cassette)
+    var settings = ModelSettings()
+    settings.baseURL = ModelServicePreset.openAI.baseURL
+    settings.model = "gpt-5-mini"
+    var limits = AgentLimits()
+    limits.maxRounds = 16
+    limits.maxToolCalls = 48
+    var finalText = ""
+    try await AgentLoopRunner.run(
+        client: AgentClient(transport: transport), settings: settings, key: "test-only", limits: limits,
+        instructions: "STATIC", userQuestion: "找资料", personalContext: "", priorHistory: [],
+        availableTools: { ["search_library"] }, beforeRequest: {}, onPersonalContextIncluded: {},
+        onPartialText: { _ in }, onPartialReasoning: nil, onAssistantResponse: { _, _ in },
+        executeBatch: { calls, _ in
+            .init(
+                toolMessages: calls.map {
+                    AgentMessage(role: "tool", content: #"{"ok":true,"results":[]}"#, toolCallID: $0.id)
+                })
+        },
+        onCheckpoint: { _, _, _ in },
+        onFinalAnswer: { response, _, _, _ in finalText = response.content ?? "" })
+
+    #expect(finalText == "连续三轮未找到新资料，直接作答。")
+    let requests = await transport.recordedMessages
+    #expect(requests.count == 4)
+    #expect(requests[2].last?.content?.contains("stall_warning") == true)
+    #expect(requests[3].last?.content?.contains("连续三轮检索未获得新增有效资料") == true)
+}
+
+@Test @MainActor func crossTurnFollowUpPreservesByteForBytePrefixCacheWithPersonalContext() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let reader = try ReaderModel(root: root, credentials: WorkflowCredentials())
+    await reader.load()
+    var settings = reader.modelSettings
+    settings.baseURL = ModelServicePreset.openAI.baseURL
+    settings.model = "gpt-5-mini"
+    try reader.saveSettings(settings, key: "test-only")
+    let paper = Paper(
+        title: "Cross Turn Prefix Paper", digest: "cross-turn", originalPath: "ct.pdf", pageCount: 1,
+        blocks: [TextBlock(sourcePage: 0, text: "Matched compute budget comparison.")], warnings: [], canReflow: true)
+    let memory = MemoryItem(
+        agentStatement: "优先比较等算力预算", sourceID: UUID(), source: .reader(quote: "优先比较等算力预算"))
+    reader.state.papers = [paper]
+    reader.state.memories = [memory]
+    #expect(await reader.save())
+
+    let cassette = HTTPCassette(entries: [
+        .sse([try sseToolCall(id: "t1_s1", name: "search_library", arguments: #"{"query":"Matched compute"}"#)]),
+        .sse([try sseAnswer("第一轮找到《Cross Turn Prefix Paper》。")]),
+        .sse([try sseAnswer("第二轮延续同一前缀缓存完成追问。")]),
+    ])
+    let transport = CassetteTransport(cassette: cassette)
+    let agent = LibraryAgent(reader: reader, client: AgentClient(transport: transport))
+
+    agent.send("分析一下关于等算力预算的论文证据。")
+    for _ in 0..<200 where agent.isRunning { try await Task.sleep(for: .milliseconds(10)) }
+    agent.send("继续展开说明这篇论文在等算力预算上的结论。")
+    for _ in 0..<200 where agent.isRunning { try await Task.sleep(for: .milliseconds(10)) }
+
+    let bodies = await transport.recordedBodies
+    #expect(bodies.count == 3)
+    #expect(TrajectoryAssertion.verifyFullRequestPrefixStability(bodies))
+}

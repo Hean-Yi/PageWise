@@ -97,10 +97,11 @@ final class PDFDocumentTranslationController {
     }
 
     func settingsChanged(_ model: ReaderModel, previousSettings: ModelSettings, resumeVisible: Bool) {
-        let settings = model.modelSettings
+        let settings = model.fastModelSettings
+        let previousFast = previousSettings.fastSettings
         let connectionChanged =
-            previousSettings.model != settings.model || previousSettings.baseURL != settings.baseURL
-            || previousSettings.credentialID != settings.credentialID
+            previousFast.model != settings.model || previousFast.baseURL != settings.baseURL
+            || previousFast.credentialID != settings.credentialID
         for (id, previous) in jobs {
             let wasPaused = previous.phase == .paused && !previous.resumeOnActivation
             pause(id)
@@ -121,7 +122,7 @@ final class PDFDocumentTranslationController {
     }
 
     private func makeJob(_ model: ReaderModel, paper: Paper, page: Int) -> PDFDocumentTranslationStatus {
-        let settings = model.modelSettings
+        let settings = model.fastModelSettings
         let queue = PDFDocumentTranslationQueue(
             url: model.root.appendingPathComponent(paper.originalPath), documentHash: paper.digest,
             pageCount: paper.pageCount, store: model.pdfTranslations, settings: settings, client: model.client,

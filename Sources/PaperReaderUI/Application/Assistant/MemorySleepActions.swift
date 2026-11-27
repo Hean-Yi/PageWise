@@ -126,7 +126,7 @@ final class MemorySleepSession {
 extension ReaderModel {
     func reviewSleepBatch(_ input: MemorySleepStore.ReviewInput) async throws -> String {
         try Task.checkCancellation()
-        let config = modelSettings
+        let config = fastModelSettings
         let key = try await modelKey(for: config)
         guard !key.isEmpty else { throw ReaderError.message("请在设置中连接模型服务。") }
         try Task.checkCancellation()

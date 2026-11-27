@@ -396,7 +396,7 @@ struct NoteReviewReport: Decodable {
 
 extension ReaderModel {
     func reviewNoteBatch(_ input: NoteReviewInput) async throws -> String {
-        let config = modelSettings
+        let config = fastModelSettings
         let key = try await modelKey(for: config)
         guard !key.isEmpty else { throw ReaderError.message("请在设置中连接模型服务。") }
         let encoder = JSONEncoder()
@@ -493,5 +493,21 @@ extension ReaderModel {
         let changed = difference.count
         guard changed > 0 else { return false }
         return Double(changed) / Double(max(oldCount, newCount)) <= 0.30
+    }
+
+    @discardableResult
+    public func restoreReadingNoteRevision(noteID: UUID, revisionID: UUID) async -> Bool {
+        guard let index = state.readingNotes.firstIndex(where: { $0.id == noteID }) else { return false }
+        let previous = state.readingNotes[index]
+        guard state.readingNotes[index].restoreRevision(revisionID) else { return false }
+        if await save() {
+            noteRevision += 1
+            status = "已恢复笔记历史版本"
+            return true
+        }
+        if let current = state.readingNotes.firstIndex(where: { $0.id == noteID }) {
+            state.readingNotes[current] = previous
+        }
+        return false
     }
 }

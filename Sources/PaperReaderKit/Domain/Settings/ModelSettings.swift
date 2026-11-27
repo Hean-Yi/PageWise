@@ -4,12 +4,23 @@ public struct ModelSettings: Codable, Equatable, Sendable {
     public static let glmBaseURL = "https://open.bigmodel.cn/api/paas/v4"
     public var baseURL = Self.glmBaseURL
     public var model = ""
+    /// Optional lightweight model ID on the same endpoint for bulk PDF translation and idle maintenance.
+    public var fastModel: String?
     public var temperature = 0.2
     /// A Keychain account identifier, never the API key itself. Nil supports the original MVP account.
     public var credentialID: String?
     /// Non-sensitive hint recorded on save so UI readiness checks avoid triggering Keychain prompts at launch.
     public var hasStoredCredential: Bool?
     public init() {}
+
+    /// Settings resolved for high-volume or background tasks; falls back to the primary `model` when unset.
+    public var fastSettings: ModelSettings {
+        let trimmed = fastModel?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !trimmed.isEmpty else { return self }
+        var copy = self
+        copy.model = trimmed
+        return copy
+    }
 
     public func endpointURL() throws -> URL {
         let value = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -40,6 +51,14 @@ public struct ModelSettings: Codable, Equatable, Sendable {
         result.model = model.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !result.model.isEmpty, !result.model.contains(where: { $0.isNewline }) else {
             throw ReaderError.message("请填写该账户可用的模型名称。")
+        }
+        if let rawFast = fastModel?.trimmingCharacters(in: .whitespacesAndNewlines), !rawFast.isEmpty {
+            guard !rawFast.contains(where: { $0.isNewline }) else {
+                throw ReaderError.message("轻量模型名称不能包含换行。")
+            }
+            result.fastModel = rawFast
+        } else {
+            result.fastModel = nil
         }
         guard temperature.isFinite, (0...2).contains(temperature) else {
             throw ReaderError.message("模型温度必须在 0 到 2 之间。")

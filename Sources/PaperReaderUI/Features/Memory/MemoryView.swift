@@ -2,23 +2,89 @@ import PaperReaderKit
 import SwiftUI
 
 struct MemoryView: View {
+    private enum OriginFilter: String, CaseIterable {
+        case all = "全部"
+        case edited = "已编辑"
+        case preference = "回答偏好"
+        case auto = "自动整理"
+    }
+
     @Bindable var model: ReaderModel
     var onlyID: UUID?
     let openPaper: (UUID) -> Void
     @State private var maintenanceExpanded = false
+    @State private var searchQuery = ""
+    @State private var semanticMatchIDs: Set<UUID> = []
+    @State private var originFilter: OriginFilter = .all
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    private var memories: [MemoryItem] {
+    private var allMemories: [MemoryItem] {
         model.state.memories.filter { $0.isActive && (onlyID == nil || $0.id == onlyID) }
+    }
+    private var memories: [MemoryItem] {
+        guard onlyID == nil else { return allMemories }
+        let trimmed = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        return allMemories.filter { item in
+            let matchesOrigin: Bool =
+                switch originFilter {
+                case .all: true
+                case .edited: item.userEdited
+                case .preference: item.isResponsePreference
+                case .auto: !item.userEdited && !item.isResponsePreference
+                }
+            guard matchesOrigin else { return false }
+            guard !trimmed.isEmpty else { return true }
+            return item.text.localizedCaseInsensitiveContains(trimmed) || semanticMatchIDs.contains(item.id)
+        }
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             if onlyID == nil {
                 maintenanceDisclosure
+                if !allMemories.isEmpty {
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack(spacing: 6) {
+                            Image(systemName: "magnifyingglass").foregroundStyle(ReaderTheme.muted)
+                            TextField("搜索研究记忆与偏好…", text: $searchQuery)
+                                .textFieldStyle(.plain).font(.callout)
+                            if !searchQuery.isEmpty {
+                                Button {
+                                    searchQuery = ""
+                                } label: {
+                                    ReaderIcon(.close, size: 12)
+                                }
+                                .buttonStyle(.plain).foregroundStyle(ReaderTheme.muted)
+                            }
+                        }
+                        .padding(.horizontal, 10).frame(height: 34)
+                        .background(ReaderTheme.surface, in: RoundedRectangle(cornerRadius: 8))
+                        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(ReaderTheme.line))
+                        HStack(spacing: 6) {
+                            ForEach(OriginFilter.allCases, id: \.self) { option in
+                                let selected = originFilter == option
+                                Button(option.rawValue) { originFilter = option }
+                                    .buttonStyle(.plain)
+                                    .font(.caption.weight(selected ? .semibold : .regular))
+                                    .foregroundStyle(selected ? ReaderTheme.accent : ReaderTheme.muted)
+                                    .padding(.horizontal, 9).padding(.vertical, 4)
+                                    .background(
+                                        selected ? ReaderTheme.accent.opacity(0.12) : ReaderTheme.surface,
+                                        in: Capsule()
+                                    )
+                                    .overlay(
+                                        Capsule().strokeBorder(
+                                            selected ? ReaderTheme.accent.opacity(0.45) : ReaderTheme.line))
+                            }
+                            Spacer(minLength: 0)
+                        }
+                    }
+                }
             }
             if memories.isEmpty {
-                ContentUnavailableView("暂无研究记忆", systemImage: "brain.head.profile")
-                    .frame(maxWidth: .infinity, minHeight: 190)
+                ContentUnavailableView(
+                    allMemories.isEmpty ? "暂无研究记忆" : "没有匹配的研究记忆", systemImage: "brain.head.profile"
+                )
+                .frame(maxWidth: .infinity, minHeight: 190)
             } else {
                 let groups = onlyID == nil ? currentGroups : []
                 let organized = Set(groups.flatMap(\.members))
@@ -63,6 +129,18 @@ struct MemoryView: View {
                     ForEach(memories.filter { !organized.contains($0.id) }) { memory in memoryCard(memory) }
                 }
             }
+        }
+        .task(id: searchQuery) {
+            let trimmed = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard onlyID == nil, !trimmed.isEmpty else {
+                semanticMatchIDs = []
+                return
+            }
+            let hits =
+                (try? await model.researchMemory.relevant(
+                    to: trimmed, state: model.state, excluding: model.pendingImportIDs)) ?? []
+            guard !Task.isCancelled else { return }
+            semanticMatchIDs = Set(hits.map(\.id))
         }
     }
 

@@ -101,7 +101,7 @@ actor ChatCompletionStreamDecoder {
     }
 
     private var thinkCarry = ""
-    private var inFencedCode = false
+    private var fenceTickCount = 0
     private var inInlineCode = false
     private var sawInlineThinkOpen = false
     private var sawInlineThinkClose = false
@@ -119,9 +119,13 @@ actor ChatCompletionStreamDecoder {
         while !thinkCarry.isEmpty {
             switch inlineThinkState {
             case .outsideThink:
-                // Track Markdown code fences (```) and inline code spans (`) so literal `<think>`
-                // examples inside paper discussions are never swallowed into reasoning.
-                let nextSpecial = thinkCarry.firstIndex { $0 == "`" || (!inFencedCode && !inInlineCode && $0 == "<") }
+                // Track Markdown code fences (``` or ````) and inline code spans (`) so literal `<think>`
+                // examples inside paper discussions are never swallowed into reasoning. Reset inline code
+                // across newlines so an unmatched backtick on one line never poisons subsequent lines.
+                let inFencedCode = fenceTickCount > 0
+                let nextSpecial = thinkCarry.firstIndex {
+                    $0 == "`" || (inInlineCode && $0 == "\n") || (!inFencedCode && !inInlineCode && $0 == "<")
+                }
                 guard let special = nextSpecial else {
                     textDelta += thinkCarry
                     thinkCarry = ""
@@ -136,22 +140,35 @@ actor ChatCompletionStreamDecoder {
                     }
                     thinkCarry = String(thinkCarry[special...])
                 }
+                if thinkCarry.first == "\n" {
+                    inInlineCode = false
+                    textDelta.append(thinkCarry.removeFirst())
+                    continue
+                }
                 if thinkCarry.first == "`" {
-                    if thinkCarry.hasPrefix("```") {
-                        inFencedCode.toggle()
-                        if inFencedCode { inInlineCode = false }
-                        textDelta += "```"
-                        thinkCarry = String(thinkCarry.dropFirst(3))
-                        continue
-                    }
-                    // Hold back 1-2 trailing backticks in case a ``` fence is split across chunks.
-                    if thinkCarry.allSatisfy({ $0 == "`" }) && thinkCarry.count < 3 {
+                    let tickEnd = thinkCarry.firstIndex { $0 != "`" } ?? thinkCarry.endIndex
+                    let runLength = thinkCarry.distance(from: thinkCarry.startIndex, to: tickEnd)
+                    // Hold back trailing backticks if they reach the end of the chunk and might form a fence.
+                    if tickEnd == thinkCarry.endIndex && runLength < max(3, fenceTickCount) {
                         return (textDelta, reasoningDelta)
+                    }
+                    let ticks = String(thinkCarry[..<tickEnd])
+                    if runLength >= 3 {
+                        if fenceTickCount == 0 {
+                            fenceTickCount = runLength
+                            inInlineCode = false
+                        } else if runLength >= fenceTickCount {
+                            fenceTickCount = 0
+                        }
+                        textDelta += ticks
+                        thinkCarry = String(thinkCarry[tickEnd...])
+                        continue
                     }
                     if !inFencedCode {
                         inInlineCode.toggle()
                     }
-                    textDelta.append(thinkCarry.removeFirst())
+                    textDelta += ticks
+                    thinkCarry = String(thinkCarry[tickEnd...])
                     continue
                 }
                 let lower = thinkCarry.lowercased()

@@ -150,13 +150,17 @@ private struct ShelfWorkspaceContent: View {
         ScrollViewReader { scroll in
             workspace
                 .librarySearchSuggestions(
-                    state: model.state, findRequest: findRequest, dismissRequest: dismissSearchRequest
-                ) { paperID in
-                    guard let target = ShelfSearchReveal(paperID: paperID, in: model.state) else { return }
-                    collection = .all
-                    selectedShelfID = target.shelfID
-                    searchReveal = target
-                }
+                    state: model.state, model: model, findRequest: findRequest, dismissRequest: dismissSearchRequest,
+                    onSelect: { paperID in
+                        guard let target = ShelfSearchReveal(paperID: paperID, in: model.state) else { return }
+                        collection = .all
+                        selectedShelfID = target.shelfID
+                        searchReveal = target
+                    },
+                    onOpenEvidence: { evidence in
+                        _ = model.jump(to: evidence)
+                    }
+                )
                 .task(id: searchReveal?.id) {
                     guard let target = searchReveal else { return }
                     withAnimation(ReaderMotion.navigation(reduceMotion)) {

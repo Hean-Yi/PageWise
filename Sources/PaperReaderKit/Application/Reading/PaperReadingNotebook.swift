@@ -14,7 +14,7 @@ public struct PaperReadingNotebook: Identifiable, Sendable {
         public let id: UUID
         public let title: String
         public let latestModifiedAt: Date
-        public let notes: [ReadingNote]
+        public var notes: [ReadingNote]
     }
 
     public let id: UUID

@@ -2,9 +2,17 @@ import PaperReaderKit
 import SwiftUI
 
 struct ReaderNotesView: View {
+    private enum NoteLayerFilter: String, CaseIterable {
+        case all = "全部"
+        case mine = "我的笔记"
+        case ai = "AI 精读"
+    }
+
     @Bindable var model: ReaderModel
     let summarize: () -> Void
     let didNavigate: () -> Void
+    @State private var noteFilter: NoteLayerFilter = .all
+    @State private var inspectingRevisionNoteID: UUID?
 
     var body: some View {
         let notes = model.currentReadingNotes
@@ -52,35 +60,97 @@ struct ReaderNotesView: View {
         .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(ReaderTheme.line))
     }
 
+    private func isAINote(_ note: ReadingNote) -> Bool {
+        note.isDocumentSummary || note.dimension != nil || note.backgroundSources != nil
+    }
+
     private var readingNotes: some View {
-        let notes = model.currentReadingNotes
+        let allNotes = model.currentReadingNotes
+        let hasUserNotes = allNotes.contains { !isAINote($0) }
+        let hasAINotes = allNotes.contains { isAINote($0) }
+        let notes: [ReadingNote] =
+            switch noteFilter {
+            case .all: allNotes
+            case .mine: allNotes.filter { !isAINote($0) }
+            case .ai: allNotes.filter { isAINote($0) }
+            }
         return Section {
+            if hasUserNotes && hasAINotes {
+                HStack(spacing: 6) {
+                    ForEach(NoteLayerFilter.allCases, id: \.self) { option in
+                        let selected = noteFilter == option
+                        Button(option.rawValue) { noteFilter = option }
+                            .buttonStyle(.plain)
+                            .font(.caption.weight(selected ? .semibold : .regular))
+                            .foregroundStyle(selected ? ReaderTheme.accent : ReaderTheme.muted)
+                            .padding(.horizontal, 9).padding(.vertical, 4)
+                            .background(
+                                selected ? ReaderTheme.accent.opacity(0.12) : ReaderTheme.surface,
+                                in: Capsule()
+                            )
+                            .overlay(
+                                Capsule().strokeBorder(selected ? ReaderTheme.accent.opacity(0.45) : ReaderTheme.line))
+                    }
+                    Spacer(minLength: 0)
+                }
+                .padding(.bottom, 4)
+            }
             ForEach(notes) { note in
-                Button {
-                    model.openReadingNote(note)
-                    didNavigate()
-                } label: {
-                    VStack(alignment: .leading, spacing: 7) {
-                        if note.isDocumentSummary {
-                            Label("文末总结", readerIcon: .notebook, size: 14).font(.caption)
-                        } else if let dimension = note.dimension {
-                            Label {
-                                Text(dimension.title)
-                            } icon: {
-                                Circle().fill(dimension.swatch).frame(width: 8, height: 8)
-                            }.font(.caption)
+                VStack(alignment: .leading, spacing: 6) {
+                    Button {
+                        model.openReadingNote(note)
+                        didNavigate()
+                    } label: {
+                        VStack(alignment: .leading, spacing: 7) {
+                            HStack(spacing: 6) {
+                                if note.isDocumentSummary {
+                                    Label("文末总结", readerIcon: .notebook, size: 14).font(.caption)
+                                } else if let dimension = note.dimension {
+                                    Label {
+                                        Text(dimension.title)
+                                    } icon: {
+                                        Circle().fill(dimension.swatch).frame(width: 8, height: 8)
+                                    }.font(.caption)
+                                }
+                                Spacer(minLength: 0)
+                                if let count = note.revisions?.count, count > 0 {
+                                    Text("含 \(count) 条历史修订")
+                                        .font(.caption2).foregroundStyle(ReaderTheme.accent)
+                                }
+                            }
+                            if let quote = note.anchors.first?.text {
+                                Text(ReadingNoteSummary.excerpt(quote)).font(.system(size: 11))
+                                    .foregroundStyle(
+                                        ReaderTheme.muted
+                                    ).lineLimit(2)
+                            }
+                            Text(note.markdown.isEmpty ? "空白笔记" : ReadingNoteSummary.text(note.markdown)).font(
+                                .system(size: 13)
+                            ).lineLimit(1)
+                        }.frame(maxWidth: .infinity, alignment: .leading).padding(12)
+                    }.readerIconButtonStyle(AssistantToolButtonStyle())
+                    if let revisions = note.revisions, !revisions.isEmpty {
+                        Button {
+                            inspectingRevisionNoteID = inspectingRevisionNoteID == note.id ? nil : note.id
+                        } label: {
+                            Label("查看修订与回退", systemImage: "clock.arrow.circlepath")
+                                .font(.caption2.weight(.medium)).foregroundStyle(ReaderTheme.accent)
                         }
-                        if let quote = note.anchors.first?.text {
-                            Text(ReadingNoteSummary.excerpt(quote)).font(.system(size: 11))
-                                .foregroundStyle(
-                                    ReaderTheme.muted
-                                ).lineLimit(2)
+                        .buttonStyle(.plain).padding(.leading, 4)
+                        .popover(
+                            isPresented: Binding(
+                                get: { inspectingRevisionNoteID == note.id },
+                                set: {
+                                    if !$0 && inspectingRevisionNoteID == note.id { inspectingRevisionNoteID = nil }
+                                }
+                            )
+                        ) {
+                            NoteRevisionHistoryPopover(model: model, note: note) {
+                                inspectingRevisionNoteID = nil
+                            }
                         }
-                        Text(note.markdown.isEmpty ? "空白笔记" : ReadingNoteSummary.text(note.markdown)).font(
-                            .system(size: 13)
-                        ).lineLimit(1)
-                    }.frame(maxWidth: .infinity, alignment: .leading).padding(12)
-                }.readerIconButtonStyle(AssistantToolButtonStyle())
+                    }
+                }
             }
             if model.lastDeletedNoteID != nil {
                 Button("撤销删除笔记", action: model.undoReadingNoteDeletion).font(.system(size: 12))
@@ -189,5 +259,63 @@ struct ReaderNotesView: View {
             if let count { Text("\(count)").foregroundStyle(ReaderTheme.muted) }
             Spacer()
         }.font(.system(size: 12, weight: .medium))
+    }
+}
+
+private struct NoteRevisionHistoryPopover: View {
+    let model: ReaderModel
+    let note: ReadingNote
+    let dismiss: () -> Void
+    @State private var restoringID: UUID?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("笔记修订历史").font(ReaderTheme.editorial(16, weight: .semibold))
+                Spacer()
+                Button("关闭", action: dismiss).buttonStyle(.borderless).font(.caption)
+            }
+            ScrollView {
+                VStack(alignment: .leading, spacing: 10) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("当前版本").font(.caption.weight(.semibold)).foregroundStyle(ReaderTheme.accent)
+                        Text(note.markdown).font(.caption).lineSpacing(2).textSelection(.enabled)
+                    }
+                    .padding(10).frame(maxWidth: .infinity, alignment: .leading)
+                    .background(ReaderTheme.canvas, in: RoundedRectangle(cornerRadius: 8))
+                    ForEach((note.revisions ?? []).reversed()) { rev in
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack {
+                                Text(rev.author == .reader ? "读者原版" : "AI 修订版")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(rev.author == .reader ? ReaderTheme.ink : ReaderTheme.muted)
+                                Text(rev.modifiedAt, format: .dateTime.month(.twoDigits).day().hour().minute())
+                                    .font(.caption2).foregroundStyle(ReaderTheme.muted)
+                                Spacer()
+                                Button {
+                                    restoringID = rev.id
+                                    Task {
+                                        _ = await model.restoreReadingNoteRevision(noteID: note.id, revisionID: rev.id)
+                                        restoringID = nil
+                                        dismiss()
+                                    }
+                                } label: {
+                                    Text(restoringID == rev.id ? "恢复中…" : "恢复此版本")
+                                        .font(.caption.weight(.medium)).foregroundStyle(ReaderTheme.accent)
+                                }
+                                .buttonStyle(.borderless).disabled(restoringID != nil)
+                            }
+                            Text(rev.markdown).font(.caption).lineSpacing(2).foregroundStyle(ReaderTheme.muted)
+                                .textSelection(.enabled)
+                        }
+                        .padding(10).frame(maxWidth: .infinity, alignment: .leading)
+                        .background(ReaderTheme.surface, in: RoundedRectangle(cornerRadius: 8))
+                        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(ReaderTheme.line))
+                    }
+                }
+            }
+        }
+        .padding(14).frame(width: 340).frame(maxHeight: 380)
+        .readerPopupSurface()
     }
 }

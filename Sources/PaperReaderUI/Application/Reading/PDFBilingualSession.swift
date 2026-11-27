@@ -274,7 +274,7 @@ final class PDFBilingualSession {
 
     private func load(_ index: Int, paper: Paper, model: ReaderModel) {
         let url = model.root.appendingPathComponent(paper.originalPath)
-        let settings = model.modelSettings
+        let settings = model.fastModelSettings
         let store = model.pdfTranslations
         let priority: TaskPriority = index == pageIndex ? .userInitiated : .utility
         loadTasks[index] = Task {
@@ -399,7 +399,7 @@ final class PDFBilingualSession {
 
     private func translate(_ items: [PDFSourceSentence], model: ReaderModel, selection: Bool) {
         guard let paper = model.paper, !items.isEmpty else { return }
-        let settings = model.modelSettings
+        let settings = model.fastModelSettings
         error = nil
         let token = UUID()
         requestID = token

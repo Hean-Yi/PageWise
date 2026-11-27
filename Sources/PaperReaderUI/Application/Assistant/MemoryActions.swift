@@ -97,7 +97,7 @@ extension ReaderModel {
         hasExplicitMemoryRevisionDirective(question)
             || question.range(
                 of:
-                    #"(?i)更正|改正|纠正|修正|改变主意|改主意|其实我现在更在意|我现在更在意|放后面|现在只看|现在只关注|改关注|重心放到|转向.{0,12}(?:研究|关注|比较)|改成|改为|\bchanged my mind\b|\bnow focus(?:ing)? on\b|\bno longer (?:track|focus|study|care)\b|\bstop tracking\b"#,
+                    #"(?i)更正|改正|纠正|修正|改变主意|改主意|其实我现在更在意|我现在更在意|放后面|现在只看|现在只关注|改关注|重心放到|转向.{0,12}(?:研究|关注|比较)|改成|改为|说错了|记错了|前提不对|其实(?:是|应该)|换个方向|不再看|\bchanged my mind\b|\bnow focus(?:ing)? on\b|\bno longer (?:track|focus|study|care)\b|\bstop tracking\b|\bactually.{0,24}(?:wrong|instead|focus)\b|\bswitch(?:ed|ing)?\s+(?:my\s+)?focus\b"#,
                 options: .regularExpression) != nil
     }
 

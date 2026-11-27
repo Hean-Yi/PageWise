@@ -18,6 +18,9 @@ struct ReadingNotebooksView: View {
     let bookmark: NotebookScrollBookmark
     @Binding var expandedAnnotations: Set<UUID>
     @State private var expandedMarginPapers = Set<UUID>()
+    @State private var searchQuery = ""
+    @State private var semanticMatchNoteIDs: Set<UUID> = []
+    @State private var selectedShelfFilter: UUID?
     @State private var scrollPosition = ScrollPosition()
     @State private var restoredViewport = false
     @Environment(\.displayScale) private var displayScale
@@ -26,8 +29,36 @@ struct ReadingNotebooksView: View {
     @ScaledMetric(relativeTo: .title) private var headingSize = 30.0
 
     var body: some View {
-        let notebooks = PaperReadingNotebook.notebooks(in: model.state)
-        let marginGroups = PaperReadingNotebook.marginNoteGroups(in: model.state)
+        let rawNotebooks = PaperReadingNotebook.notebooks(in: model.state)
+        let rawMarginGroups = PaperReadingNotebook.marginNoteGroups(in: model.state)
+        let trimmedQuery = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        let notebooks = rawNotebooks.filter { notebook in
+            matchesShelf(paperID: notebook.id)
+                && (trimmedQuery.isEmpty
+                    || notebook.title.localizedCaseInsensitiveContains(trimmedQuery)
+                    || notebook.entries.contains { entry in
+                        entry.note.markdown.localizedCaseInsensitiveContains(trimmedQuery)
+                            || semanticMatchNoteIDs.contains(entry.note.id)
+                            || entry.annotations.contains {
+                                $0.markdown.localizedCaseInsensitiveContains(trimmedQuery)
+                                    || semanticMatchNoteIDs.contains($0.id)
+                            }
+                    })
+        }
+        let marginGroups = rawMarginGroups.compactMap { group -> PaperReadingNotebook.MarginNoteGroup? in
+            guard matchesShelf(paperID: group.id) else { return nil }
+            guard !trimmedQuery.isEmpty else { return group }
+            if group.title.localizedCaseInsensitiveContains(trimmedQuery) { return group }
+            let filteredNotes = group.notes.filter {
+                $0.markdown.localizedCaseInsensitiveContains(trimmedQuery)
+                    || semanticMatchNoteIDs.contains($0.id)
+                    || $0.anchors.contains { $0.text.localizedCaseInsensitiveContains(trimmedQuery) }
+            }
+            guard !filteredNotes.isEmpty else { return nil }
+            var copy = group
+            copy.notes = filteredNotes
+            return copy
+        }
         let totalPapers = Set(notebooks.map(\.id)).union(marginGroups.map(\.id)).count
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
@@ -37,19 +68,53 @@ struct ReadingNotebooksView: View {
                     if totalPapers > 0 {
                         Text("\(totalPapers) 篇").font(.subheadline).foregroundStyle(ReaderTheme.muted)
                     }
+                    Spacer(minLength: 8)
+                    if !rawNotebooks.isEmpty || !rawMarginGroups.isEmpty {
+                        HStack(spacing: 6) {
+                            Image(systemName: "magnifyingglass").foregroundStyle(ReaderTheme.muted)
+                            TextField("搜索笔记与论文…", text: $searchQuery)
+                                .textFieldStyle(.plain).font(.callout)
+                            if !searchQuery.isEmpty {
+                                Button {
+                                    searchQuery = ""
+                                } label: {
+                                    ReaderIcon(.close, size: 12)
+                                }
+                                .buttonStyle(.plain).foregroundStyle(ReaderTheme.muted)
+                            }
+                        }
+                        .padding(.horizontal, 10).frame(width: 220, height: 32)
+                        .background(ReaderTheme.surface, in: RoundedRectangle(cornerRadius: 8))
+                        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(ReaderTheme.line))
+                    }
                 }
-                .padding(.bottom, 14)
+                .padding(.bottom, 12)
+                if !model.state.shelves.isEmpty && (!rawNotebooks.isEmpty || !rawMarginGroups.isEmpty) {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 6) {
+                            shelfFilterPill(title: "全部书架", id: nil)
+                            ForEach(model.state.shelves) { shelf in
+                                shelfFilterPill(title: shelf.name, id: shelf.id)
+                            }
+                        }
+                    }
+                    .padding(.bottom, 12)
+                }
                 paperRule
 
                 if notebooks.isEmpty && marginGroups.isEmpty {
                     ContentUnavailableView {
                         Label {
-                            Text("还没有阅读笔记")
+                            Text(trimmedQuery.isEmpty && selectedShelfFilter == nil ? "还没有阅读笔记" : "没有匹配的阅读笔记")
                         } icon: {
                             ReaderIcon(.notebook, size: 36)
                         }
                     } description: {
-                        Text("拖选原文添加页边笔记，或在论文助读中完成 AI 精读后，都会汇聚在这里。")
+                        Text(
+                            trimmedQuery.isEmpty && selectedShelfFilter == nil
+                                ? "拖选原文添加页边笔记，或在论文助读中完成 AI 精读后，都会汇聚在这里。"
+                                : "试试更换关键词或切换书架筛选。"
+                        )
                     }
                     .frame(maxWidth: .infinity, minHeight: 240)
                 }
@@ -99,6 +164,32 @@ struct ReadingNotebooksView: View {
             bookmark.place = current
         }
         .background(ReaderTheme.canvas).foregroundStyle(ReaderTheme.ink).tint(ReaderTheme.accent)
+        .task(id: searchQuery) {
+            let trimmed = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else {
+                semanticMatchNoteIDs = []
+                return
+            }
+            let hits = (try? await model.readingNoteEvidence(query: trimmed, limit: 24)) ?? []
+            guard !Task.isCancelled else { return }
+            semanticMatchNoteIDs = Set(hits.compactMap(\.readingNoteID))
+        }
+    }
+
+    private func matchesShelf(paperID: UUID) -> Bool {
+        guard let filter = selectedShelfFilter else { return true }
+        return model.state.paperShelfIDs[paperID.uuidString] == filter
+    }
+
+    private func shelfFilterPill(title: String, id: UUID?) -> some View {
+        let selected = selectedShelfFilter == id
+        return Button(title) { selectedShelfFilter = id }
+            .buttonStyle(.plain)
+            .font(.caption.weight(selected ? .semibold : .regular))
+            .foregroundStyle(selected ? ReaderTheme.accent : ReaderTheme.muted)
+            .padding(.horizontal, 10).padding(.vertical, 4)
+            .background(selected ? ReaderTheme.accent.opacity(0.12) : ReaderTheme.surface, in: Capsule())
+            .overlay(Capsule().strokeBorder(selected ? ReaderTheme.accent.opacity(0.45) : ReaderTheme.line))
     }
 
     private var paperRule: some View {

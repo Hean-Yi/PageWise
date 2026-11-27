@@ -5,7 +5,8 @@ struct ReaderView: View {
     @Bindable var model: ReaderModel
     let sidebarOpen: Bool
     let explainSelection: () -> Void
-    let openSettings: () -> Void
+    let openSettings: ((@MainActor () -> Void)?) -> Void
+    @Environment(\.requestPaperDeletion) private var requestPaperDeletion
     @State private var pageInput = "1"
     @FocusState private var pageFocused: Bool
     @State private var showWarnings = false
@@ -84,7 +85,8 @@ struct ReaderView: View {
                     .transition(ReaderMotion.arrival())
             } else if model.showsPDFCanvas, isLocalPDF {
                 PDFBilingualReadingView(
-                    model: model, penEnabled: penEnabled, sidebarOpen: sidebarOpen, openSettings: openSettings,
+                    model: model, penEnabled: penEnabled, sidebarOpen: sidebarOpen,
+                    openSettings: { openSettings(nil) },
                     layout: $pdfLayout, peekingAtOriginal: $peekingAtOriginal
                 )
                 .transition(ReaderMotion.arrival())
@@ -167,7 +169,6 @@ struct ReaderView: View {
                     .accessibilityLabel(favorite ? "取消收藏" : "收藏论文")
                     .accessibilityAddTraits(favorite ? .isSelected : [])
                     .help(favorite ? "取消收藏" : "收藏论文")
-                    DeletePaperButton(paper: paper, model: model)
                     readingStatusMenu(for: paper)
                 }
             }
@@ -183,7 +184,12 @@ struct ReaderView: View {
         peekingAtOriginal = false
         if bilingual {
             model.closeDocumentSummary()
-            if !model.openBilingualReading(translatingDocument: true) { openSettings() }
+            if !model.openBilingualReading(translatingDocument: true) {
+                openSettings {
+                    model.closeDocumentSummary()
+                    _ = model.openBilingualReading(translatingDocument: true)
+                }
+            }
         } else {
             model.showOriginalReading()
         }
@@ -191,16 +197,23 @@ struct ReaderView: View {
 
     private func readingStatusMenu(for paper: Paper) -> some View {
         let status = model.workspace(for: paper.id).status
-        let items = PaperReadingStatus.allCases.map { choice in
+        var items = PaperReadingStatus.allCases.map { choice in
             ReaderMenuItem.action(choice.title, selected: status == choice) {
                 model.setReadingStatus(choice, for: paper.id)
             }
         }
-        return ReaderPopupMenu("阅读状态", items: items, width: 160) {
+        if let requestPaperDeletion {
+            items.append(.divider)
+            items.append(
+                .action("删除论文…", icon: .delete, destructive: true) {
+                    requestPaperDeletion(PaperDeletionRequest(paper, model: model))
+                })
+        }
+        return ReaderPopupMenu("阅读状态与更多操作", items: items, width: 170) {
             ReaderActionGlyph(mark: .more, size: 17)
                 .foregroundStyle(ReaderTheme.muted).readerIconTarget(macOS: 32)
         }
-        .accessibilityValue(status.title).help("更改阅读状态")
+        .accessibilityValue(status.title).help("阅读状态与更多操作")
     }
 
     private func readingVersions(for paper: Paper) -> [ReaderMenuItem] {
@@ -323,7 +336,7 @@ struct ReaderView: View {
             }
             Spacer()
             if model.pdfBilingual.isOpen && isLocalPDF && (model.selectionText.isEmpty || !originalVisible) {
-                PDFTranslationStatusControl(model: model, layout: pdfLayout, openSettings: openSettings)
+                PDFTranslationStatusControl(model: model, layout: pdfLayout, openSettings: { openSettings(nil) })
             } else if model.mode == "translated", model.retainedReadingID == nil, let paper = model.currentEdition,
                 paper.usesSourceReflow
             {
@@ -393,7 +406,9 @@ struct ReaderView: View {
         if model.isModelReadyForRequests {
             model.startAIReflow(regenerate: regenerate)
         } else {
-            openSettings()
+            openSettings {
+                model.startAIReflow(regenerate: regenerate)
+            }
         }
     }
 }

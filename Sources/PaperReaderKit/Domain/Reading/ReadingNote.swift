@@ -90,4 +90,23 @@ public struct ReadingNote: Identifiable, Codable, Sendable, Equatable {
         backgroundSources = sources
         return true
     }
+
+    /// Restores a previous revision as the current note text, preserving the replaced version in history.
+    @discardableResult
+    public mutating func restoreRevision(_ revisionID: UUID, at date: Date = Date()) -> Bool {
+        guard deletedAt == nil, let target = revisions?.first(where: { $0.id == revisionID }),
+            target.markdown != markdown
+        else { return false }
+        var history = revisions ?? []
+        history.append(
+            Revision(
+                markdown: markdown, modifiedAt: modifiedAt,
+                author: backgroundSources == nil ? .reader : .ai, backgroundSources: backgroundSources))
+        if history.count > 20 { history.removeFirst(history.count - 20) }
+        revisions = history
+        markdown = target.markdown
+        modifiedAt = date
+        backgroundSources = target.author == .reader ? nil : target.backgroundSources
+        return true
+    }
 }

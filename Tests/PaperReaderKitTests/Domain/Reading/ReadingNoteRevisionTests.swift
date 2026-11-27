@@ -26,3 +26,32 @@ import Testing
     #expect(!applied)
     #expect(note.markdown == "Deleted note.")
 }
+
+@Test func restoringNoteRevisionRestoresReaderTextAndKeepsAIHistory() throws {
+    var note = ReadingNote(
+        paperID: UUID(), contentVersion: "v", anchors: [], markdown: "读者原稿：先看等算力对照。")
+    let applied = note.applyAIRevision("读者原稿：先看等算力对照。补充：见表 2。")
+    #expect(applied)
+    let readerRevision = try #require(note.revisions?.first)
+    #expect(readerRevision.author == .reader)
+
+    let restored = note.restoreRevision(readerRevision.id)
+    #expect(restored)
+    #expect(note.markdown == "读者原稿：先看等算力对照。")
+    #expect(note.backgroundSources == nil)
+    #expect(note.revisions?.count == 2)
+    #expect(note.revisions?.last?.markdown == "读者原稿：先看等算力对照。补充：见表 2。")
+}
+
+@Test func fastModelSettingsFallsBackToPrimaryAndRoutesWhenConfigured() throws {
+    var settings = ModelSettings()
+    settings.baseURL = ModelServicePreset.openAI.baseURL
+    settings.model = "gpt-5"
+    #expect(try settings.normalized().fastSettings.model == "gpt-5")
+
+    settings.fastModel = "  gpt-5-mini  "
+    let normalized = try settings.normalized()
+    #expect(normalized.fastModel == "gpt-5-mini")
+    #expect(normalized.fastSettings.model == "gpt-5-mini")
+    #expect(normalized.fastSettings.baseURL == normalized.baseURL)
+}

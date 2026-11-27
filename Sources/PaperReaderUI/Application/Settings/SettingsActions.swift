@@ -2,6 +2,8 @@ import Foundation
 import PaperReaderKit
 
 extension ReaderModel {
+    public var fastModelSettings: ModelSettings { modelSettings.fastSettings }
+
     public var isModelReadyForRequests: Bool {
         guard (try? modelSettings.normalized()) != nil else { return false }
         return usesLocalModelKey(for: modelSettings) || hasConfiguredModelCredential

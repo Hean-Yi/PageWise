@@ -89,6 +89,11 @@ public enum AgentLoopRunner {
         var callIDs = Set(prior.flatMap { $0 }.flatMap { $0.toolCalls ?? [] }.map(\.id))
         var repeatCounts: [String: Int] = [:]
         var roundSignatures: [String] = []
+        var seenSearchResultIDs: Set<String> = []
+        var consecutiveNoGainReadRounds = 0
+        let searchReadTools: Set<String> = [
+            "search_library", "search_reading_notes", "search_online", "recommend_related",
+        ]
 
         toolLoop: while true {
             try await beforeRequest()
@@ -170,7 +175,9 @@ public enum AgentLoopRunner {
             let calls = response.toolCalls ?? []
             if calls.isEmpty {
                 try await onAssistantResponse(response, false)
-                try await onFinalAnswer(response, system, current, prior)
+                // Pass `currentWithNotes` so persisted history matches the exact bytes sent to the
+                // provider, preserving server-side KV Prompt Cache across subsequent user turns.
+                try await onFinalAnswer(response, system, currentWithNotes, prior)
                 return
             }
             remainingRounds -= 1
@@ -261,18 +268,43 @@ public enum AgentLoopRunner {
                 }
                 outcome = executed
             }
-            if outcome.changedResearchOverview {
-                prior.removeAll()
-                let outdated = Set(
-                    current.flatMap { $0.toolCalls ?? [] }.filter { $0.function.name == "research_overview" }
-                        .map(\.id))
-                for index in current.indices where current[index].toolCallID.map(outdated.contains) == true {
-                    current[index].content = #"{"research_overview_changed":true}"#
+            var finalOutcome = outcome
+            let isSearchOnlyRound =
+                !calls.isEmpty && calls.allSatisfy { searchReadTools.contains($0.function.name) }
+            if isSearchOnlyRound, finalReason == nil, warnIndices.isEmpty, stuckIndices.isEmpty {
+                let batchIDs = Self.extractResultIDs(from: finalOutcome.toolMessages)
+                let newlyDiscovered = batchIDs.subtracting(seenSearchResultIDs)
+                seenSearchResultIDs.formUnion(batchIDs)
+                if newlyDiscovered.isEmpty {
+                    consecutiveNoGainReadRounds += 1
+                    if consecutiveNoGainReadRounds >= 3 {
+                        finalReason = "连续三轮检索未获得新增有效资料，已停止继续检索，请直接依据已有证据作答。"
+                    } else if consecutiveNoGainReadRounds == 2,
+                        let lastIndex = finalOutcome.toolMessages.indices.last,
+                        let raw = finalOutcome.toolMessages[lastIndex].content,
+                        let annotated = Self.annotatingStallWarning(raw)
+                    {
+                        finalOutcome.toolMessages[lastIndex].content = annotated
+                    }
+                } else {
+                    consecutiveNoGainReadRounds = 0
                 }
+            } else if !calls.isEmpty, !isSearchOnlyRound {
+                consecutiveNoGainReadRounds = 0
             }
-            current.append(contentsOf: outcome.toolMessages)
-            try await onCheckpoint(current, prior, system)
-            if outcome.shouldStopEarly { return }
+            // Do not mutate earlier `research_overview` payloads or wipe `prior` when the library
+            // changes: the mutation tool's own receipt already carries `research_overview_changed`,
+            // so keeping earlier messages untouched preserves the KV Prompt Cache prefix.
+            current.append(contentsOf: finalOutcome.toolMessages)
+            var checkpointCurrent =
+                fitted.includedPersonalContext
+                ? AgentContextCompactor.applyingPersonalContext(personalContext, to: current) : current
+            for (index, note) in roundBudgetNotes where checkpointCurrent.indices.contains(index) {
+                checkpointCurrent[index].content = Self.attachingBudgetNote(
+                    note, to: checkpointCurrent[index].content)
+            }
+            try await onCheckpoint(checkpointCurrent, prior, system)
+            if finalOutcome.shouldStopEarly { return }
         }
     }
 
@@ -310,5 +342,35 @@ public enum AgentLoopRunner {
             return nil
         }
         return String(decoding: data, as: UTF8.self)
+    }
+
+    private static func annotatingStallWarning(_ raw: String) -> String? {
+        guard var object = try? JSONSerialization.jsonObject(with: Data(raw.utf8)) as? [String: Any] else {
+            return nil
+        }
+        object["stall_warning"] = "连续两轮检索未发现新的有效资料，请更换完全不同的检索策略或直接依据已有证据作答。"
+        guard let data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]) else {
+            return nil
+        }
+        return String(decoding: data, as: UTF8.self)
+    }
+
+    private static func extractResultIDs(from toolMessages: [AgentMessage]) -> Set<String> {
+        var ids = Set<String>()
+        for message in toolMessages {
+            guard let raw = message.content,
+                let object = try? JSONSerialization.jsonObject(with: Data(raw.utf8)) as? [String: Any],
+                let results = object["results"] as? [[String: Any]]
+            else { continue }
+            for row in results {
+                for key in ["paper_id", "candidate_id", "reading_note_id", "memory_id", "block_id", "result_id"] {
+                    if let value = row[key] as? String, !value.isEmpty {
+                        ids.insert("\(key):\(value)")
+                        break
+                    }
+                }
+            }
+        }
+        return ids
     }
 }
