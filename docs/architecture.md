@@ -83,7 +83,7 @@ DesignSystem ──▶ SwiftUI
 ### Agent 编排、混合检索与研究记忆
 - **统一循环与压缩**：`AgentLoopRunner` 与 `AgentContextCompactor`（`PaperReaderKit/Application/Assistant`）由书库助理与论文助读共用，负责有界多轮工具调用、Prompt Cache 稳定前缀、渐进上下文压缩、同轮只读工具并发与 `propose_memory` 事务提交。
 - **模型兼容与思考流**：`ModelCapabilities` 集中管理各模型家族与端点的参数兼容；`ChatCompletionStream` 支持 `reasoning_content` 与全程 `<think>/<thought>/<thinking>` 增量路由。
-- **设备端检索**：`DeviceSemanticEncoder` 优先加载随包内置的 4-bit Core ML 模型；`SemanticPassageIndex` 负责派生向量与冷启动覆盖度门控；`LibraryFTSIndex` 提供 SQLite `FTS5` BM25 论文检索；`Retriever` 融合词项与语义候选。
+- **设备端检索**：`DeviceSemanticEncoder` 优先加载随包内置的 4-bit Core ML 模型；`SemanticPassageIndex` 负责派生向量与冷启动覆盖度门控，7 类派生向量通过命名空间收敛至单一 `DerivedIndexes/vectors.sqlite`（WAL 模式）；`LibraryFTSIndex` 提供 SQLite `FTS5` BM25 论文检索；`Retriever` 融合词项与语义候选（单篇上限提升至 2,000 段）。
 - **研究记忆与定期整理**：主库事务内写入 `research_events` 并推进 `research_generation`，`ResearchBriefIndex` 按水位增量更新简报；`MemoryItem` 支持双时态窗口、显著性衰减与 `revisionFingerprint` 乐观校验；`MemorySleepSession` 与 `NoteReviewSession` 分别负责空闲记忆整理与定期静默笔记修订。
 
 ### 书库与界面性能约定

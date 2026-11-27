@@ -13,15 +13,19 @@ public enum PDFSentenceExtractor {
     }
 
     /// PDFKit objects stay inside this call. The UI can run extraction off the main actor.
-    public static func extractPage(url: URL, pageIndex: Int, includingIllustrations: Bool = false) throws
-        -> PDFSentenceExtraction
-    {
-        try extractPage(url: url, pageIndex: pageIndex, illustrations: includingIllustrations ? .reading : .none)
+    public static func extractPage(
+        url: URL, pageIndex: Int, includingIllustrations: Bool = false, allowOCR: Bool = false
+    ) throws -> PDFSentenceExtraction {
+        try extractPage(
+            url: url, pageIndex: pageIndex, illustrations: includingIllustrations ? .reading : .none,
+            allowOCR: allowOCR)
     }
 
     enum IllustrationUse { case none, reading, translation }
 
-    static func extractPage(url: URL, pageIndex: Int, illustrations: IllustrationUse) throws -> PDFSentenceExtraction {
+    static func extractPage(
+        url: URL, pageIndex: Int, illustrations: IllustrationUse, allowOCR: Bool = false
+    ) throws -> PDFSentenceExtraction {
         guard let document = PDFDocument(url: url), !document.isLocked,
             (0..<document.pageCount).contains(pageIndex)
         else { throw ReaderError.message("无法读取原始 PDF 的这一页。") }
@@ -36,7 +40,8 @@ public enum PDFSentenceExtractor {
             regions = detected
             return detected
         }
-        let text = try extractText(on: page, document: document, pageIndex: pageIndex, captionRegions: captionRegions)
+        let text = try extractText(
+            on: page, document: document, pageIndex: pageIndex, captionRegions: captionRegions, allowOCR: allowOCR)
         guard illustrations != .none else { return text }
         return try PDFIllustratedPage.compose(
             text: text, on: page, pageIndex: pageIndex, includeSourceReading: illustrations == .reading,
@@ -44,13 +49,19 @@ public enum PDFSentenceExtractor {
     }
 
     private static func extractText(
-        on page: PDFPage, document: PDFDocument, pageIndex: Int, captionRegions: () throws -> [PDFCaptionRegion]
+        on page: PDFPage, document: PDFDocument, pageIndex: Int, captionRegions: () throws -> [PDFCaptionRegion],
+        allowOCR: Bool = false
     ) throws
         -> PDFSentenceExtraction
     {
         let empty = PDFSentenceExtraction(sentences: [], notice: "本页没有可提取的正文，请查看原页。")
         let uncertain = PDFSentenceExtraction(sentences: [], notice: "本页文字位置或分栏顺序无法可靠核对，请查看原页或手动选译。")
         guard let string = page.string, !string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            if allowOCR, let recognized = try? PDFScannedPageOCR.recognize(on: page, pageIndex: pageIndex),
+                !recognized.isEmpty
+            {
+                return PDFSentenceExtraction(sentences: recognized, notice: "本页由设备端 Vision OCR 识别，请按需核对原页。")
+            }
             return empty
         }
         let source = string as NSString

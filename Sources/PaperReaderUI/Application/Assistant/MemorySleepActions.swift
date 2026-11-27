@@ -20,15 +20,16 @@ final class MemorySleepSession {
     }
 
     init(store: LibraryStore, root: URL, encoder: (any SemanticTextEncoder)? = nil, minimumScore: Float? = nil) {
-        let indexDirectory = root.appendingPathComponent("DerivedIndexes", isDirectory: true)
+        let unifiedVectors = root.appendingPathComponent("DerivedIndexes", isDirectory: true)
+            .appendingPathComponent("vectors.sqlite")
         let batchSearch = SemanticPassageIndex(
-            encoder: encoder, cacheURL: indexDirectory.appendingPathComponent("sleep-batch.sqlite"),
+            encoder: encoder, cacheURL: unifiedVectors, namespace: "sleep-batch",
             minimumScore: minimumScore)
         index = MemorySleepStore(store: store, semantic: batchSearch)
         defaultsKey = "pagewise.memorySleep." + root.standardizedFileURL.path
         enabled = UserDefaults.standard.object(forKey: defaultsKey) as? Bool ?? true
         search = SemanticPassageIndex(
-            encoder: encoder, cacheURL: indexDirectory.appendingPathComponent("sleep-summaries.sqlite"),
+            encoder: encoder, cacheURL: unifiedVectors, namespace: "sleep-summaries",
             minimumScore: minimumScore)
     }
 

@@ -127,8 +127,8 @@ public actor LibraryAgentSearchIndex {
     ) {
         self.root = root
         semantic = SemanticPassageIndex(
-            encoder: encoder, cacheURL: root?.appendingPathComponent("DerivedIndexes/papers.sqlite"),
-            minimumScore: minimumScore)
+            encoder: encoder, cacheURL: root?.appendingPathComponent("DerivedIndexes/vectors.sqlite"),
+            namespace: "papers", minimumScore: minimumScore)
     }
 
     private func corpus() -> [SemanticPassage] {

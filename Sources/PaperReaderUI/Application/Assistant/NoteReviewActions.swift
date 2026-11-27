@@ -90,7 +90,8 @@ final class NoteReviewSession {
         semantic = SemanticPassageIndex(
             encoder: encoder,
             cacheURL: root.appendingPathComponent("DerivedIndexes", isDirectory: true)
-                .appendingPathComponent("note-relations.sqlite"),
+                .appendingPathComponent("vectors.sqlite"),
+            namespace: "note-relations",
             minimumScore: minimumScore)
         defaultsKey = "pagewise.noteReview." + root.standardizedFileURL.path
         enabled = UserDefaults.standard.object(forKey: defaultsKey + ".enabled") as? Bool ?? false

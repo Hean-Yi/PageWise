@@ -21,7 +21,7 @@ public enum Retriever {
     ) async -> [Evidence] {
         var semanticScores: [UUID: Double] = [:]
         if let semantic, !current.blocks.isEmpty {
-            let passages = current.blocks.prefix(400).map {
+            let passages = current.blocks.prefix(2_000).map {
                 SemanticPassage(sourceID: $0.id, text: String($0.text.prefix(900)))
             }
             let query = String((question + " " + selection).prefix(1_600))

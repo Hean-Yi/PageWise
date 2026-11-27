@@ -171,15 +171,15 @@ public final class ReaderModel {
             store: store, root: location, encoder: semanticEncoder,
             minimumScore: hasSemanticModel ? 0.15 : nil)
         let indexDirectory = location.appendingPathComponent("DerivedIndexes", isDirectory: true)
+        let unifiedVectors = indexDirectory.appendingPathComponent("vectors.sqlite")
         readingNoteIndex = ReadingNoteMemoryIndex(
-            encoder: semanticEncoder, cacheURL: indexDirectory.appendingPathComponent("notes.sqlite"),
+            encoder: semanticEncoder, cacheURL: unifiedVectors,
             minimumScore: hasSemanticModel ? 0.15 : nil)
         researchMemory = ResearchMemory(
-            encoder: semanticEncoder, cacheURL: indexDirectory.appendingPathComponent("memories.sqlite"),
+            encoder: semanticEncoder, cacheURL: unifiedVectors, namespace: "memories",
             minimumScore: hasSemanticModel ? 0.15 : nil)
         paperEvidenceIndex = SemanticPassageIndex(
-            encoder: semanticEncoder,
-            cacheURL: indexDirectory.appendingPathComponent("paper-evidence.sqlite"),
+            encoder: semanticEncoder, cacheURL: unifiedVectors, namespace: "paper-evidence",
             minimumScore: hasSemanticModel ? 0.15 : nil)
         researchBriefMaintenance = ResearchBriefMaintenance(
             store: store, notes: readingNoteIndex, memories: researchMemory)
@@ -300,7 +300,7 @@ public final class ReaderModel {
         reflowBodyCount = 0
         if let paper = currentEdition, !paper.blocks.isEmpty {
             let index = paperEvidenceIndex
-            let passages = paper.blocks.prefix(400).map {
+            let passages = paper.blocks.prefix(2_000).map {
                 SemanticPassage(sourceID: $0.id, text: String($0.text.prefix(900)))
             }
             Task(priority: .utility) { try? await index.prepare(Array(passages)) }

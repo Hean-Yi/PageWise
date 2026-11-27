@@ -63,8 +63,12 @@ public actor ResearchMemory {
     private let semantic: SemanticPassageIndex
     private let usesVectors: Bool
 
-    public init(encoder: (any SemanticTextEncoder)? = nil, cacheURL: URL? = nil, minimumScore: Float? = nil) {
-        semantic = SemanticPassageIndex(encoder: encoder, cacheURL: cacheURL, minimumScore: minimumScore)
+    public init(
+        encoder: (any SemanticTextEncoder)? = nil, cacheURL: URL? = nil, namespace: String = "memories",
+        minimumScore: Float? = nil
+    ) {
+        semantic = SemanticPassageIndex(
+            encoder: encoder, cacheURL: cacheURL, namespace: namespace, minimumScore: minimumScore)
         usesVectors = encoder != nil
     }
 

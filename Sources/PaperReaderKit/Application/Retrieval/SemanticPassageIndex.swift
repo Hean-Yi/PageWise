@@ -60,9 +60,12 @@ public actor SemanticPassageIndex {
 
     public func warmupCancellationCount() -> Int { cancelledWarmups }
 
-    public init(encoder: (any SemanticTextEncoder)? = nil, cacheURL: URL? = nil, minimumScore: Float? = nil) {
+    public init(
+        encoder: (any SemanticTextEncoder)? = nil, cacheURL: URL? = nil, namespace: String = "default",
+        minimumScore: Float? = nil
+    ) {
         self.encoder = encoder
-        self.disk = cacheURL.map(SemanticVectorCache.init)
+        self.disk = cacheURL.map { SemanticVectorCache(url: $0, namespace: namespace) }
         self.minimumScore = minimumScore
     }
 
