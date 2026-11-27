@@ -491,13 +491,14 @@ func changingAgentServiceOrModelStartsFreshWireHistoryAndKeepsDisplayedTurns(cha
     try await eventually { !agent.isRunning }
     #expect(agent.turns[0].activities.map(\.toolName) == ["search_online", "prepare_import"])
     let rounds = await model.requestLimits
-    #expect(
-        rounds.first?.availableToolNames == [
-            "search_online", "search_library", "search_reading_notes", "ask_user", "list_library", "research_overview",
-        ])
+    let expectedTools: Set<String> = [
+        "search_online", "search_library", "search_reading_notes", "ask_user", "list_library", "research_overview",
+        "open_paper", "read_paper", "present_results", "prepare_import",
+    ]
+    #expect(rounds.first?.availableToolNames == expectedTools)
     let afterSearch = try #require(rounds.dropFirst().first?.availableToolNames)
-    #expect(afterSearch.contains("prepare_import") && afterSearch.contains("present_results"))
-    #expect(afterSearch.isDisjoint(with: ["read_paper", "create_reading_note", "close_read_paper"]))
+    #expect(afterSearch == expectedTools)
+    #expect(afterSearch.isDisjoint(with: ["create_reading_note", "close_read_paper"]))
     #expect(await discovery.searchCount == 1)
     #expect(await discovery.downloadCount == 0)
     let card = try #require(agent.turns[0].cards.first { $0.importState == .ready })
@@ -1326,8 +1327,8 @@ func closeReadingToolBecomesAvailableAsSoonAsTheTargetPaperIsRegistered(selected
     agent.send("请精读《Attention》")
     try await eventually { !agent.isRunning }
     let offered = await client.requestLimits.compactMap(\.availableToolNames)
-    #expect(offered.map { $0.contains("close_read_paper") } == (selected ? [true] : [false, true]))
-    #expect(offered.allSatisfy { !$0.contains("create_reading_note") })
+    #expect(offered.allSatisfy { $0.contains("close_read_paper") && !$0.contains("create_reading_note") })
+    #expect(Set(offered).count == 1)
 }
 
 @Test @MainActor func libraryAgentLinksRetrievedNotesFromAnotherPaperButRejectsOriginalTextAndForgedIDs() async throws {
@@ -1403,8 +1404,8 @@ func closeReadingToolBecomesAvailableAsSoonAsTheTargetPaperIsRegistered(selected
     agent.send("请把讨论观点写成阅读笔记，并引用另一篇本地论文的笔记。")
     try await eventually { !agent.isRunning }
     let offered = await client.requestLimits.compactMap(\.availableToolNames)
-    #expect(offered.first?.contains("create_reading_note") == false)
-    #expect(offered.dropFirst(2).first?.contains("create_reading_note") == true)
+    #expect(offered.allSatisfy { $0.contains("create_reading_note") && !$0.contains("close_read_paper") })
+    #expect(Set(offered).count == 1)
     let turn = try #require(agent.turns.first)
     #expect(turn.error == nil)
     #expect(
@@ -1611,8 +1612,8 @@ func publicationCardImportsTheSelectedPDFOrOpensTheMatchingShelfImport(importFro
     #expect(card.sourceURL?.absoluteString == discovery.publication.id)
     #expect(card.canImport && !card.hasDownload && agent.turns[0].presentedResults.first?.id == card.id)
     let scopes = await model.requestLimits
-    #expect(scopes.first?.availableToolNames?.contains("prepare_import") == false)
-    #expect(scopes.dropFirst().allSatisfy { $0.availableToolNames?.contains("prepare_import") == true })
+    #expect(scopes.allSatisfy { $0.availableToolNames?.contains("prepare_import") == true })
+    #expect(Set(scopes.compactMap(\.availableToolNames)).count == 1)
     let file = root.appendingPathComponent("user-selected.pdf")
     try AttentionFixture.write(to: file)
     agent.importPublisherPDF(file, cardID: UUID())

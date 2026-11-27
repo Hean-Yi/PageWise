@@ -312,3 +312,101 @@ private final class NoteReviewProbe {
             "The method improves accuracy on the held-out split.",
             "The method does not improve accuracy on the held-out split.") == .conflict)
 }
+
+private struct DeterministicSemanticEncoder: SemanticTextEncoder {
+    let identifier = "fixture-deterministic-e5"
+
+    func encode(_ texts: [String], as role: SemanticTextRole) async throws -> [[Float]] {
+        texts.map { text in
+            let lower = text.lowercased()
+            let budget: Float = (lower.contains("budget") || lower.contains("预算") || lower.contains("算力")) ? 1 : 0
+            let latency: Float = (lower.contains("latency") || lower.contains("延迟")) ? 1 : 0
+            return [budget + 0.1, latency + 0.1, 0.05]
+        }
+    }
+}
+
+@Test @MainActor func noteReviewUsesStableCorpusWithoutCancellingSemanticWarmup() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let reader = try ReaderModel(root: root)
+    await reader.load()
+    var settings = reader.modelSettings
+    settings.baseURL = ModelServicePreset.openAI.baseURL
+    settings.model = "gpt-5-mini"
+    try reader.saveSettings(settings, key: "test-only")
+    let paper = Paper(
+        title: "Batch Relations", digest: "batch-rel", originalPath: "unused.pdf", pageCount: 1,
+        blocks: [], warnings: [], canReflow: false)
+    let base = Date(timeIntervalSinceReferenceDate: 5_000)
+    let notes = (0..<12).map { index -> ReadingNote in
+        let body =
+            index.isMultiple(of: 2)
+            ? "Matched compute budget experiment \(index)."
+            : "等算力预算实验记录 \(index)。"
+        var note = ReadingNote(paperID: paper.id, contentVersion: "v", anchors: [], markdown: body)
+        note.createdAt = base.addingTimeInterval(Double(index))
+        note.modifiedAt = note.createdAt
+        return note
+    }
+    reader.state.papers = [paper]
+    reader.state.readingNotes = notes
+    #expect(await reader.save())
+
+    let session = NoteReviewSession(
+        store: reader.store, root: root, encoder: DeterministicSemanticEncoder(), minimumScore: 0.5)
+    var capturedTargets: [NoteReviewInput.Target] = []
+    session.reviewOverride = { _, input in
+        capturedTargets = input.targets
+        return #"{"revisions":[]}"#
+    }
+    session.run(reader: reader, automatic: false, withModel: true)
+    for _ in 0..<200 where session.running {
+        try await Task.sleep(for: .milliseconds(10))
+    }
+    #expect(capturedTargets.count == 8)
+    #expect(capturedTargets.allSatisfy { !$0.relations.isEmpty })
+    #expect(await session.semantic.warmupCancellationCount() == 0)
+}
+
+@Test @MainActor func recallTelemetryPersistsWithoutDisturbingResearchGenerationAndSleepSupersedesMainRecords()
+    async throws
+{
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let reader = try ReaderModel(root: root)
+    await reader.load()
+    let base = Date(timeIntervalSinceReferenceDate: 10_000)
+    var old = MemoryItem(agentStatement: "旧计划比较十组吞吐量", sourceID: UUID(), source: .reader(quote: "旧计划比较十组吞吐量"))
+    old.createdAt = base
+    var newer = MemoryItem(agentStatement: "改为比较两组等算力准确率", sourceID: UUID(), source: .reader(quote: "改为比较两组等算力准确率"))
+    newer.createdAt = base.addingTimeInterval(60)
+    #expect(old.validFrom != nil)
+    reader.state.memories = [old, newer]
+    #expect(await reader.save())
+
+    let generationBefore = try await reader.store.researchGeneration()
+    reader.recordMemoryRecall([old.id], at: base.addingTimeInterval(120))
+    for _ in 0..<100 where (try? await reader.store.load().memories.first { $0.id == old.id }?.recallCount) != 1 {
+        try await Task.sleep(for: .milliseconds(10))
+    }
+    let recalled = try #require(try await reader.store.load().memories.first { $0.id == old.id })
+    #expect(recalled.recallCount == 1)
+    #expect(recalled.lastRecalledAt == base.addingTimeInterval(120))
+    #expect(try await reader.store.researchGeneration() == generationBefore)
+
+    // Materialize a consolidated sleep supersedence onto the main MemoryItem record.
+    let oldID = old.id
+    let newerID = newer.id
+    let sleepStore = MemorySleepStore(store: reader.store)
+    let edition = try await sleepStore.run { _ in
+        #"{"groups":[{"kind":"superseded","members":["\#(oldID)","\#(newerID)"],"current":"\#(newerID)","summary":"采用新的两组等算力方案。"}]}"#
+    }
+    await reader.applySleepSupersedence(edition, at: base.addingTimeInterval(300))
+    let updatedOld = try #require(reader.state.memories.first { $0.id == old.id })
+    #expect(!updatedOld.isActive)
+    #expect(updatedOld.supersededBy == newer.id)
+    #expect(updatedOld.invalidAt != nil)
+    let activeDirect = try await reader.researchMemory.relevant(to: "比较", state: reader.state)
+    #expect(activeDirect.map(\.id) == [newer.id])
+}

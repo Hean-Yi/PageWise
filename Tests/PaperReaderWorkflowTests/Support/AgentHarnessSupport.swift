@@ -192,17 +192,48 @@ enum TrajectoryAssertion {
     }
 
     /// Asserts that `messages[0]` (system) never changes across rounds, and every round's
-    /// completed message prefix survives byte-for-byte into the subsequent round.
+    /// completed message prefix (including round 0 -> round 1) survives byte-for-byte into the
+    /// subsequent round.
     static func verifyPrefixStability(_ requests: [[AgentMessage]]) -> Bool {
         guard requests.count >= 2 else { return true }
         let systems = requests.compactMap { $0.first(where: { $0.role == "system" })?.content }
-        guard Set(systems).count == 1 else { return false }
-        for index in 1..<(requests.count - 1) {
+        guard systems.count == requests.count, Set(systems).count == 1 else { return false }
+        for index in 0..<(requests.count - 1) {
             let earlier = requests[index]
             let later = requests[index + 1]
             guard later.count >= earlier.count, Array(later.prefix(earlier.count)) == earlier else {
                 return false
             }
+        }
+        return true
+    }
+
+    /// Verifies full KV Prompt Cache stability across raw HTTP JSON request bodies:
+    /// 1) `system` and message prefixes survive byte-for-byte from round 0 onward;
+    /// 2) serialized `tools` definitions stay 100% byte-for-byte identical across all tool-enabled rounds.
+    static func verifyFullRequestPrefixStability(_ bodies: [String]) -> Bool {
+        guard bodies.count >= 2 else { return true }
+        var decodedMessages: [[AgentMessage]] = []
+        var toolPayloads: [Data] = []
+        struct MessageEnvelope: Decodable {
+            let messages: [AgentMessage]
+        }
+        for body in bodies {
+            let data = Data(body.utf8)
+            guard let envelope = try? JSONDecoder().decode(MessageEnvelope.self, from: data),
+                let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            else { return false }
+            decodedMessages.append(envelope.messages)
+            let toolChoice = object["tool_choice"] as? String
+            if toolChoice != "none", let tools = object["tools"],
+                let serialized = try? JSONSerialization.data(withJSONObject: tools, options: [.sortedKeys])
+            {
+                toolPayloads.append(serialized)
+            }
+        }
+        guard verifyPrefixStability(decodedMessages) else { return false }
+        if toolPayloads.count >= 2, Set(toolPayloads).count != 1 {
+            return false
         }
         return true
     }

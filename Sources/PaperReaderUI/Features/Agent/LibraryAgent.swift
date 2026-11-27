@@ -499,18 +499,23 @@ public final class LibraryAgent {
             }
         }
         var explicitlyPresented = false
+        var didRecordRecall = false
         var textCadence = AssistantDraftCadence()
         var reasoningCadence = AssistantDraftCadence()
         var currentRoundThoughtIndex: Int?
         let capturedVersions = versions
         let capturedPersonalContext = personalContext
+        let recalledMemoryIDs = versions.memoryIDs
+        // Freeze the tool catalog for the entire turn so `tools` JSON remains byte-for-byte
+        // identical across tool rounds (preserving server-side KV Prompt Cache). Runtime guards
+        // in `execute(...)` continue to enforce registered IDs, cards and per-call preconditions.
+        let turnTools = self.availableToolNames(
+            for: noteRequest, canRecommend: seed != nil, organization: organization)
         try await AgentLoopRunner.run(
             client: client, settings: settings, key: key, limits: limits,
             instructions: instructions, userQuestion: question, personalContext: personalContext,
             priorHistory: history,
-            availableTools: { @MainActor in
-                self.availableToolNames(for: noteRequest, canRecommend: seed != nil, organization: organization)
-            },
+            availableTools: { turnTools },
             beforeRequest: { @MainActor in
                 try self.check(epoch)
                 try self.checkSourceContext()
@@ -523,6 +528,10 @@ public final class LibraryAgent {
                     self.remember(capturedVersions)
                     self.updateTurn(turnID) { $0.suppliedPreferences = capturedVersions }
                     try self.checkSourceContext()
+                    if !didRecordRecall, !recalledMemoryIDs.isEmpty {
+                        didRecordRecall = true
+                        self.reader.recordMemoryRecall(recalledMemoryIDs)
+                    }
                 }
             },
             onPartialText: { text in
@@ -863,8 +872,12 @@ public final class LibraryAgent {
     private func availableToolNames(for noteRequest: AgentNoteRequest?, canRecommend: Bool, organization: Set<String>)
         -> Set<String>
     {
+        // Keep read/navigation/presentation/import-card tools stable from round 1 so tool schemas
+        // never mutate mid-turn and invalidate the provider KV prompt cache. Execution still
+        // validates registered paper IDs, candidates and evidence cards on every call.
         var names: Set<String> = [
             "search_online", "search_library", "search_reading_notes", "ask_user", "list_library", "research_overview",
+            "open_paper", "read_paper", "present_results", "prepare_import",
         ]
         names.formUnion(organization)
         if let turn = activeTurn, !ReaderPreference.declaredClauses(in: turn.question).isEmpty {
@@ -884,8 +897,7 @@ public final class LibraryAgent {
         }
         if let turn = activeTurn, ReaderPreference.permitsExtraction(turn.question),
             !ResearchQuestionProposal.isRecallRequest(turn.question),
-            turn.activities.contains(where: { $0.toolName == "research_overview" && $0.status == .succeeded })
-                || ResearchQuestionProposal.isWriteRequest(turn.question)
+            ResearchQuestionProposal.isWriteRequest(turn.question)
                 || turn.question.range(
                     of: #"(?i)记忆|记住|记录|更正|修订|memory"#, options: .regularExpression) != nil
                 || (!ResearchQuestionProposal.isOperational(turn.question)
@@ -893,16 +905,11 @@ public final class LibraryAgent {
         {
             names.formUnion(["propose_memory", "revise_memory"])
         }
-        if candidates.values.contains(where: \.canAttemptDownload) { names.insert("prepare_import") }
         if canRecommend { names.insert("recommend_related") }
-        if !paperRegistry.isEmpty { names.formUnion(["open_paper", "read_paper"]) }
-        if turns.reversed().contains(where: { !$0.cards.isEmpty }) { names.insert("present_results") }
         if let noteRequest {
             if CloseReadingIntent.isRequested(noteRequest.instruction) {
-                if !paperRegistry.isEmpty { names.insert("close_read_paper") }
-            } else if turns.reversed().contains(where: { turn in
-                turn.cards.contains { $0.kind == .evidence && $0.readingNoteID == nil }
-            }) {
+                names.insert("close_read_paper")
+            } else {
                 names.insert("create_reading_note")
             }
         }

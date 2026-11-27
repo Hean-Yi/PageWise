@@ -28,7 +28,7 @@ struct LibraryRecords {
         let notes = try sync("notes", old.readingNotes, state.readingNotes)
         try sync("highlights", old.highlights, state.highlights)
         let chats = try sync("chats", old.chats, state.chats)
-        let memories = try sync("memories", old.memories, state.memories)
+        let memories = try sync("memories", old.memories, state.memories) { !$0.sameResearchContent(as: $1) }
         try sync("reading", old.reading, state.reading)
         try sync("bookmarks", old.bookmarks, state.bookmarks)
         if old.workspace != state.workspace {

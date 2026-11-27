@@ -22,9 +22,14 @@ public struct MemorySleepEdition: Codable, Equatable, Sendable {
     public init() {}
 
     static func signature(_ item: MemoryItem) throws -> Data {
+        // Recall telemetry (`lastRecalledAt`, `recallCount`) is salience metadata, not a content
+        // revision. Exclude it so reading a memory never invalidates consolidated connections.
+        var normalized = item
+        normalized.lastRecalledAt = nil
+        normalized.recallCount = nil
         let encoder = JSONEncoder()
         encoder.outputFormatting = .sortedKeys
-        return Data(SHA256.hash(data: try encoder.encode(item)))
+        return Data(SHA256.hash(data: try encoder.encode(normalized)))
     }
 
     public func liveConnections(for items: [MemoryItem]) -> [Connection] {
@@ -122,13 +127,16 @@ public struct MemorySleepEdition: Codable, Equatable, Sendable {
         let earlier = items.filter { reviewed.contains($0.id) && $0.preference?.scope == first.preference?.scope }
         var semanticScores: [UUID: Double] = [:]
         if let semantic, !changed.isEmpty, !earlier.isEmpty {
-            let passages = earlier.map {
+            let passages = items.map {
                 SemanticPassage(sourceID: $0.id, text: String($0.text.prefix(400)))
+            }
+            if await semantic.isAvailable() {
+                try? await semantic.prepare(passages)
             }
             let query = String(changed.map(\.text).joined(separator: " ").prefix(1_600))
             let matches =
                 (try? await semantic.matches(
-                    query, passages: passages, allowed: Set(passages.map(\.sourceID)), limit: 16)) ?? []
+                    query, passages: passages, allowed: Set(earlier.map(\.id)), limit: 16)) ?? []
             for (rank, match) in matches.enumerated() {
                 semanticScores[match.passage.sourceID] = Double(matches.count - rank) / Double(max(1, matches.count))
             }

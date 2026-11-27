@@ -241,3 +241,57 @@ private func sseAnswer(_ text: String) throws -> String {
     #expect(!turn.answer.contains("[S99]"))
     #expect(turn.answer.contains("[未验证引用]"))
 }
+
+@Test @MainActor func libraryAgentMultiRoundFlowPreservesFullToolsAndMessagesPrefixStability() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let reader = try ReaderModel(root: root, credentials: WorkflowCredentials())
+    await reader.load()
+    var settings = reader.modelSettings
+    settings.baseURL = ModelServicePreset.openAI.baseURL
+    settings.model = "gpt-5-mini"
+    try reader.saveSettings(settings, key: "test-only")
+    let block = TextBlock(sourcePage: 0, text: "Matched compute experiments show stable accuracy.")
+    let paper = Paper(
+        title: "Stable Prefix Study", digest: "stable-prefix", originalPath: "stable.pdf", pageCount: 1,
+        blocks: [block], warnings: [], canReflow: true)
+    reader.state.papers = [paper]
+    #expect(await reader.save())
+
+    let searchArgs = #"{"query":"Matched compute"}"#
+    let readArgs = #"{"paper_id":"\#(paper.id.uuidString)","source_page":1}"#
+    let cassette = HTTPCassette(entries: [
+        .sse([try sseToolCall(id: "c_search", name: "search_library", arguments: searchArgs)]),
+        .sse([try sseToolCall(id: "c_read", name: "read_paper", arguments: readArgs)]),
+        .sse([try sseAnswer("已核对第 1 页原文，等算力实验表现稳定。")]),
+    ])
+    let transport = CassetteTransport(cassette: cassette)
+    let agent = LibraryAgent(reader: reader, client: AgentClient(transport: transport))
+    agent.send("查找 Stable Prefix Study 里关于等算力的原文。")
+    for _ in 0..<200 where agent.isRunning { try await Task.sleep(for: .milliseconds(10)) }
+
+    let turn = try #require(agent.turns.last)
+    #expect(turn.error == nil)
+    #expect(TrajectoryAssertion.succeededToolNames(in: turn) == ["search_library", "read_paper"])
+    let bodies = await transport.recordedBodies
+    #expect(bodies.count == 3)
+    #expect(TrajectoryAssertion.verifyFullRequestPrefixStability(bodies))
+}
+
+@Test func prefixStabilityAssertionCatchesRoundZeroMutationSystemDriftAndToolsMutation() throws {
+    let req0 =
+        #"{"messages":[{"role":"system","content":"S"},{"role":"user","content":"Q"}],"tools":[{"type":"function","function":{"name":"a"}}],"tool_choice":"auto"}"#
+    let req1Valid =
+        #"{"messages":[{"role":"system","content":"S"},{"role":"user","content":"Q"},{"role":"assistant","content":"ok"}],"tools":[{"type":"function","function":{"name":"a"}}],"tool_choice":"auto"}"#
+    let req1MutatedUser =
+        #"{"messages":[{"role":"system","content":"S"},{"role":"user","content":"Q_CHANGED"},{"role":"assistant","content":"ok"}],"tools":[{"type":"function","function":{"name":"a"}}],"tool_choice":"auto"}"#
+    let req1MutatedSystem =
+        #"{"messages":[{"role":"system","content":"S2"},{"role":"user","content":"Q"},{"role":"assistant","content":"ok"}],"tools":[{"type":"function","function":{"name":"a"}}],"tool_choice":"auto"}"#
+    let req1MutatedTools =
+        #"{"messages":[{"role":"system","content":"S"},{"role":"user","content":"Q"},{"role":"assistant","content":"ok"}],"tools":[{"type":"function","function":{"name":"a"}},{"type":"function","function":{"name":"b"}}],"tool_choice":"auto"}"#
+
+    #expect(TrajectoryAssertion.verifyFullRequestPrefixStability([req0, req1Valid]))
+    #expect(!TrajectoryAssertion.verifyFullRequestPrefixStability([req0, req1MutatedUser]))
+    #expect(!TrajectoryAssertion.verifyFullRequestPrefixStability([req0, req1MutatedSystem]))
+    #expect(!TrajectoryAssertion.verifyFullRequestPrefixStability([req0, req1MutatedTools]))
+}

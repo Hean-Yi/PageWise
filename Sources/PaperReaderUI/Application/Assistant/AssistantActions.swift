@@ -258,6 +258,8 @@ extension ReaderModel {
             var collectedReasoning: [String] = []
             var finalAnswer = ""
             let capturedPersonalSources = personalSources
+            let recalledMemoryIDs = Set(effective.sources.map(\.id))
+            var didRecordRecall = false
             try await AgentLoopRunner.run(
                 client: client.agentClient(), settings: config, key: key, limits: paperLimits,
                 instructions: systemInstructions, userQuestion: userPrompt, personalContext: personalContext,
@@ -280,6 +282,10 @@ extension ReaderModel {
                         draft.backgroundSources = liveSources
                         draft.suppliedPreferenceIDs = suppliedPreferences
                         self.assistantDraft = draft
+                    }
+                    if !didRecordRecall, !recalledMemoryIDs.isEmpty {
+                        didRecordRecall = true
+                        self.recordMemoryRecall(recalledMemoryIDs)
                     }
                 },
                 onPartialText: { text in

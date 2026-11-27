@@ -181,7 +181,11 @@ public actor LibraryStore {
     /// Avoid decoding and hashing the sleep edition on those frequent foreground writes.
     private static func mayRevokeMemory(from old: LibraryState, to next: LibraryState) -> Bool {
         if old.papers.count > next.papers.count || old.chats.count > next.chats.count { return true }
-        if old.memories != next.memories && !next.memories.starts(with: old.memories) { return true }
+        if old.memories != next.memories {
+            if next.memories.count < old.memories.count { return true }
+            let prefixUnchanged = zip(old.memories, next.memories).allSatisfy { $0.sameResearchContent(as: $1) }
+            if !prefixUnchanged { return true }
+        }
         if old.readingNotes != next.readingNotes && !next.readingNotes.starts(with: old.readingNotes) { return true }
         if old.papers != next.papers {
             let retained = Set(next.papers.map(\.id))

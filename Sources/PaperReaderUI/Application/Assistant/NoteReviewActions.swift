@@ -57,7 +57,7 @@ final class NoteReviewSession {
     private(set) var running = false
     var message: String?
     private let store: LibraryStore
-    private let semantic: SemanticPassageIndex
+    let semantic: SemanticPassageIndex
     private let defaultsKey: String
     private var job: Task<Void, Never>?
     private var nextCheck = Date.distantPast
@@ -214,6 +214,10 @@ final class NoteReviewSession {
         let titles = Dictionary(
             reader.state.papers.map { ($0.id, $0.title) }, uniquingKeysWith: { first, _ in first })
         let byID = Dictionary(notes.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        // Keep a single stable corpus across all targets in this batch so `SemanticPassageIndex`
+        // warms once instead of cancelling its background warmup on every target note.
+        let allPassages = notes.map { SemanticPassage(sourceID: $0.id, text: String($0.markdown.prefix(900))) }
+        var semanticPrepared = false
         var targets: [NoteReviewInput.Target] = []
         for note in selected {
             let cached = try? await store.noteRelations(sourceID: note.id, sourceModifiedAt: note.modifiedAt)
@@ -233,7 +237,11 @@ final class NoteReviewSession {
             if let cachedRelations {
                 relations = cachedRelations
             } else {
-                relations = await computeRelations(for: note, notes: notes)
+                if !semanticPrepared, !allPassages.isEmpty, await semantic.isAvailable() {
+                    try? await semantic.prepare(allPassages)
+                    semanticPrepared = true
+                }
+                relations = await computeRelations(for: note, notes: notes, allPassages: allPassages)
                 try? await store.saveNoteRelations(
                     relations.map {
                         NoteRelation(
@@ -262,15 +270,15 @@ final class NoteReviewSession {
     }
 
     private func computeRelations(
-        for note: ReadingNote, notes: [ReadingNote]
+        for note: ReadingNote, notes: [ReadingNote], allPassages: [SemanticPassage]
     ) async -> [(note: ReadingNote, overlap: Int, kind: NoteRelation.Kind)] {
         let terms = Retriever.expandedTokens(note.markdown)
         let others = notes.filter { $0.id != note.id }
         let byID = Dictionary(others.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        let passages = others.map { SemanticPassage(sourceID: $0.id, text: String($0.markdown.prefix(900))) }
-        if !passages.isEmpty {
+        let allowed = Set(byID.keys)
+        if !allowed.isEmpty, !allPassages.isEmpty {
             if let matches = try? await semantic.matches(
-                note.markdown, passages: passages, allowed: Set(passages.map(\.sourceID)), limit: 8),
+                note.markdown, passages: allPassages, allowed: allowed, limit: 8),
                 !matches.isEmpty
             {
                 return matches.compactMap { match -> (ReadingNote, Int, NoteRelation.Kind)? in

@@ -26,7 +26,11 @@ public struct MemoryItem: Identifiable, Codable, Sendable, Equatable {
     private(set) var evidenceFingerprint: String?
     public var userEdited = false
     public var deleted = false
-    public var createdAt = Date()
+    public var createdAt = Date() {
+        didSet {
+            if validFrom == oldValue { validFrom = createdAt }
+        }
+    }
     /// Bi-temporal validity window for real-world fact evolution, separate from system `createdAt`.
     public var validFrom: Date?
     public var invalidAt: Date?
@@ -63,6 +67,30 @@ public struct MemoryItem: Identifiable, Codable, Sendable, Equatable {
         return true
     }
 
+    public func sameResearchContent(as other: MemoryItem) -> Bool {
+        id == other.id
+            && text == other.text
+            && sourceID == other.sourceID
+            && librarySource == other.librarySource
+            && preference == other.preference
+            && correctionRevision == other.correctionRevision
+            && evidenceFingerprint == other.evidenceFingerprint
+            && userEdited == other.userEdited
+            && deleted == other.deleted
+            && createdAt == other.createdAt
+            && validFrom == other.validFrom
+            && invalidAt == other.invalidAt
+            && supersededBy == other.supersededBy
+            && originalFingerprint == other.originalFingerprint
+            && forgottenFingerprint == other.forgottenFingerprint
+    }
+
+    public mutating func recordRecall(at date: Date = Date()) {
+        guard isActive else { return }
+        lastRecalledAt = date
+        recallCount = (recallCount ?? 0) + 1
+    }
+
     /// Salience multiplier in `[0.35, 1.15]`. User-edited memories and explicit preferences never decay.
     public func salienceWeight(at now: Date = Date()) -> Double {
         if userEdited || isResponsePreference { return 1.0 }
@@ -94,6 +122,7 @@ public struct MemoryItem: Identifiable, Codable, Sendable, Equatable {
     public init(text: String, sourceID: UUID) {
         self.text = text
         self.sourceID = sourceID
+        self.validFrom = createdAt
         if text.hasPrefix(Self.automaticPrefix) {
             originalFingerprint = Self.fingerprint(text)
         }

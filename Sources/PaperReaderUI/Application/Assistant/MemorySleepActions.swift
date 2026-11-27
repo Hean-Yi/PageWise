@@ -20,14 +20,40 @@ final class MemorySleepSession {
     }
 
     init(store: LibraryStore, root: URL, encoder: (any SemanticTextEncoder)? = nil, minimumScore: Float? = nil) {
-        let batchSearch = SemanticPassageIndex(encoder: encoder, minimumScore: minimumScore)
+        let indexDirectory = root.appendingPathComponent("DerivedIndexes", isDirectory: true)
+        let batchSearch = SemanticPassageIndex(
+            encoder: encoder, cacheURL: indexDirectory.appendingPathComponent("sleep-batch.sqlite"),
+            minimumScore: minimumScore)
         index = MemorySleepStore(store: store, semantic: batchSearch)
         defaultsKey = "pagewise.memorySleep." + root.standardizedFileURL.path
         enabled = UserDefaults.standard.object(forKey: defaultsKey) as? Bool ?? true
-        search = SemanticPassageIndex(encoder: encoder, minimumScore: minimumScore)
+        search = SemanticPassageIndex(
+            encoder: encoder, cacheURL: indexDirectory.appendingPathComponent("sleep-summaries.sqlite"),
+            minimumScore: minimumScore)
     }
 
-    func restore() async { edition = (try? await index.load()) ?? MemorySleepEdition() }
+    func restore() async {
+        edition = (try? await index.load()) ?? MemorySleepEdition()
+        warmSummaryIndex(for: edition)
+    }
+
+    func warmSummaryIndex(for edition: MemorySleepEdition) {
+        let passages = Self.summaryPassages(for: edition)
+        guard !passages.isEmpty else { return }
+        let search = self.search
+        Task(priority: .utility) {
+            if await search.isAvailable() {
+                try? await search.prepare(passages)
+            }
+        }
+    }
+
+    static func summaryPassages(for edition: MemorySleepEdition) -> [SemanticPassage] {
+        edition.connections.enumerated().compactMap { index, group -> SemanticPassage? in
+            guard let id = group.members.first, let summary = group.summary, !summary.isEmpty else { return nil }
+            return SemanticPassage(sourceID: id, chunk: index, text: summary)
+        }
+    }
 
     private var foregroundWork = 0
     /// Test seam: hosts or CI may themselves be in Low Power Mode.
@@ -78,6 +104,10 @@ final class MemorySleepSession {
                 let next = try await index.run(review: review)
                 try Task.checkCancellation()
                 edition = next
+                warmSummaryIndex(for: next)
+                if withModel {
+                    await reader.applySleepSupersedence(next)
+                }
                 nextCheck = Date().addingTimeInterval(withModel && next.hasPendingReview ? 180 : 6 * 3600)
                 if !automatic { message = "已整理，本轮可见 \(next.connections.count) 组关联" }
             } catch {
@@ -168,14 +198,19 @@ extension ReaderModel {
         guard !groups.isEmpty else { return EffectiveResearchMemory(originals: raw, sources: raw) }
         let lookup = Dictionary(uniqueKeysWithValues: allowed.map { ($0.id, $0) })
         let researchGroups = groups.filter { $0.members.allSatisfy { lookup[$0]?.isResponsePreference == false } }
-        let corpus = researchGroups.enumerated().compactMap { index, group -> SemanticPassage? in
-            guard let id = group.members.first, let summary = group.summary else { return nil }
-            return SemanticPassage(sourceID: id, chunk: index, text: summary)
-        }
+        // Feed the edition's stable summary corpus and restrict via `allowed` so switching papers
+        // or shelves never churns `SemanticPassageIndex.reconcile` or cancels background warmup.
+        let fullCorpus = MemorySleepSession.summaryPassages(for: edition)
+        let allowedFirstMembers = Set(researchGroups.compactMap(\.members.first))
+        let summaryByText = Dictionary(
+            researchGroups.enumerated().compactMap { index, group -> (String, Int)? in
+                guard let summary = group.summary else { return nil }
+                return (summary, index)
+            }, uniquingKeysWith: { first, _ in first })
         let hits = try await memorySleep.search.matches(
-            question, passages: corpus, allowed: Set(corpus.map(\.sourceID)), limit: 3)
+            question, passages: fullCorpus, allowed: allowedFirstMembers, limit: 3)
         guard edition.revision == memorySleep.edition.revision else { throw CancellationError() }
-        let semanticGroups = Set(hits.map(\.passage.chunk))
+        let semanticGroups = Set(hits.compactMap { summaryByText[$0.passage.text] })
         let ids = Set(raw.map(\.id))
         let terms = Retriever.tokens(question)
         let ranked = researchGroups.enumerated().compactMap { index, g -> (MemorySleepEdition.Connection, Int)? in

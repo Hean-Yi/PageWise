@@ -54,8 +54,11 @@ public actor SemanticPassageIndex {
     private var keys: [SemanticPassage: Data] = [:]
     private var vectors: [Data: [Float]] = [:]
     private var generation: UInt64 = 0
+    private var cancelledWarmups = 0
     private var warmer: Task<Void, Error>?
     private let minimumScore: Float?
+
+    public func warmupCancellationCount() -> Int { cancelledWarmups }
 
     public init(encoder: (any SemanticTextEncoder)? = nil, cacheURL: URL? = nil, minimumScore: Float? = nil) {
         self.encoder = encoder
@@ -70,8 +73,11 @@ public actor SemanticPassageIndex {
         } else if next == passages {
             return
         }
-        warmer?.cancel()
-        warmer = nil
+        if let existing = warmer {
+            existing.cancel()
+            cancelledWarmups += 1
+            warmer = nil
+        }
         generation &+= 1
         passages = next
         var wanted: [SemanticPassage: Data] = [:]

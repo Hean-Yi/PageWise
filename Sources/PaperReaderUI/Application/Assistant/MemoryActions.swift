@@ -5,6 +5,7 @@ struct MemoryRecordMutation {
     enum Operation {
         case revise(id: UUID, statement: String, expectedRevision: String? = nil)
         case forget(id: UUID, expectedRevision: String? = nil)
+        case supersede(oldID: UUID, replacementID: UUID, at: Date = Date())
     }
 
     let operation: Operation
@@ -12,7 +13,7 @@ struct MemoryRecordMutation {
 
     var memoryID: UUID {
         switch operation {
-        case .revise(let id, _, _), .forget(let id, _): id
+        case .revise(let id, _, _), .forget(let id, _), .supersede(let id, _, _): id
         }
     }
 
@@ -20,6 +21,7 @@ struct MemoryRecordMutation {
         switch operation {
         case .revise: "revise"
         case .forget: "forget"
+        case .supersede: "supersede"
         }
     }
 
@@ -37,6 +39,12 @@ struct MemoryRecordMutation {
                 expectedRevision == nil || state.memories[index].matchesRevision(expectedRevision!)
             else { return false }
             return state.memories[index].forget()
+        case .supersede(let oldID, let replacementID, let date):
+            guard let index = state.memories.firstIndex(where: { $0.id == oldID }),
+                state.memories.contains(where: { $0.id == replacementID && $0.isActive }),
+                state.memories[index].isActive, !state.memories[index].userEdited
+            else { return false }
+            return state.memories[index].supersede(by: replacementID, at: date)
         }
     }
 }
@@ -88,6 +96,43 @@ extension ReaderModel {
         }
         state.memories.append(MemoryItem(paperID: paperID, statement: statement))
         await save()
+    }
+
+    /// Update salience recall telemetry without disturbing research revisions or sleep signatures.
+    func recordMemoryRecall(_ ids: Set<UUID>, at now: Date = Date()) {
+        guard !ids.isEmpty else { return }
+        var updated = false
+        for index in state.memories.indices {
+            let item = state.memories[index]
+            guard ids.contains(item.id), item.isActive, !item.userEdited, !item.isResponsePreference else { continue }
+            if let last = item.lastRecalledAt, now.timeIntervalSince(last) < 60, item.recallCount != nil {
+                continue
+            }
+            state.memories[index].recordRecall(at: now)
+            updated = true
+        }
+        guard updated, loaded else { return }
+        Task(priority: .utility) { [weak self] in
+            _ = await self?.save()
+        }
+    }
+
+    /// Materialize consolidated `superseded` sleep decisions onto the main `MemoryItem` records so
+    /// direct retrieval and settings immediately reflect the bi-temporal `invalidAt` window.
+    func applySleepSupersedence(_ edition: MemorySleepEdition, at now: Date = Date()) async {
+        let superseded = edition.recallConnections(for: state.memories).filter {
+            $0.kind == .superseded && $0.current != nil
+        }
+        guard !superseded.isEmpty else { return }
+        for group in superseded {
+            guard let currentID = group.current else { continue }
+            for memberID in group.members where memberID != currentID {
+                let mutation = MemoryRecordMutation(
+                    operation: .supersede(oldID: memberID, replacementID: currentID, at: now),
+                    auditTrigger: "memory_sleep:\(currentID.uuidString)")
+                _ = await save(cancellable: true, memoryMutation: mutation)
+            }
+        }
     }
 }
 
