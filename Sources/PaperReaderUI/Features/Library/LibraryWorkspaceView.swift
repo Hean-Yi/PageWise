@@ -29,13 +29,14 @@ struct LibraryWorkspaceView: View {
     @Binding var selectedShelfID: UUID?
     @Bindable var onlineSearch: OnlinePaperSearch
     let findRequest: Int
+    var leadingInset: CGFloat = 0
     var trailingInset: CGFloat = 0
     let openSample: () -> Void
 
     var body: some View {
         ShelfWorkspaceContent(
             model: model, collection: $collection, selectedShelfID: $selectedShelfID, onlineSearch: onlineSearch,
-            findRequest: findRequest, trailingInset: trailingInset, openSample: openSample,
+            findRequest: findRequest, leadingInset: leadingInset, trailingInset: trailingInset, openSample: openSample,
             listing: ShelfListing(state: model.state, collection: collection, shelfID: selectedShelfID))
     }
 }
@@ -70,6 +71,7 @@ private struct ShelfWorkspaceContent: View {
     @Binding var selectedShelfID: UUID?
     @Bindable var onlineSearch: OnlinePaperSearch
     let findRequest: Int
+    let leadingInset: CGFloat
     let trailingInset: CGFloat
     let openSample: () -> Void
     let listing: ShelfListing
@@ -153,9 +155,16 @@ private struct ShelfWorkspaceContent: View {
         }
     }
 
+    private struct SidebarInsets: Equatable {
+        let leading: CGFloat
+        let trailing: CGFloat
+    }
+
     private var workspace: some View {
-        GeometryReader { geometry in
-            let metrics = ShelfGridMetrics.compute(width: max(1, geometry.size.width - trailingInset))
+        let sidebarInsets = SidebarInsets(leading: leadingInset, trailing: trailingInset)
+        return GeometryReader { geometry in
+            let metrics = ShelfGridMetrics.compute(
+                width: max(1, geometry.size.width - leadingInset - trailingInset))
             let compact = metrics.compact
             let inset = metrics.inset
             let count = metrics.columns
@@ -194,7 +203,7 @@ private struct ShelfWorkspaceContent: View {
                         .animation(ReaderMotion.disclosure(reduceMotion), value: sort)
                         .animation(ReaderMotion.navigation(reduceMotion), value: selection)
                         .animation(ReaderMotion.sidebar(reduceMotion), value: count)
-                        .animation(ReaderMotion.sidebar(reduceMotion), value: trailingInset)
+                        .animation(ReaderMotion.sidebar(reduceMotion), value: sidebarInsets)
                     if model.state.papers.isEmpty && collection == .all {
                         HStack(spacing: 14) {
                             Text("也可以拖入 PDF").foregroundStyle(ReaderTheme.muted)
@@ -206,11 +215,11 @@ private struct ShelfWorkspaceContent: View {
                         Text("这个书架还没有论文").foregroundStyle(ReaderTheme.muted)
                             .font(.system(size: 12)).padding(.top, 22)
                     }
-                }.padding(.leading, inset).padding(.trailing, inset + trailingInset)
+                }.padding(.leading, inset + leadingInset).padding(.trailing, inset + trailingInset)
                     .padding(.top, compact ? 22 : 30).padding(.bottom, 44)
                     .animation(ReaderMotion.disclosure(reduceMotion), value: onlineSearch.isExpanded)
                     .animation(ReaderMotion.sidebar(reduceMotion), value: compact)
-                    .animation(ReaderMotion.sidebar(reduceMotion), value: trailingInset)
+                    .animation(ReaderMotion.sidebar(reduceMotion), value: sidebarInsets)
             }
             .contentMargins(.trailing, trailingInset, for: .scrollIndicators)
             .onChange(of: count) { _, _ in
@@ -232,6 +241,7 @@ private struct ShelfWorkspaceContent: View {
                         self.preview = nil
                         model.select(paper.id)
                     }
+                    .padding(.leading, leadingInset)
                     .padding(.trailing, trailingInset)
                     .id(paper.id)
                     .transition(.identity)

@@ -18,8 +18,19 @@ enum ReaderTheme {
     static let line = adaptive(light: 0xDFDDD3, dark: 0x44413A)
     static let searchHighlight = adaptive(light: 0xF5DFA5, dark: 0x66502B)
 
+    private struct EditorialFontKey: Hashable {
+        let sizeTenths: Int
+        let weight: Font.Weight
+    }
+
+    @MainActor private static var editorialCache: [EditorialFontKey: Font] = [:]
+
     @MainActor static func editorial(_ size: CGFloat, weight: Font.Weight = .regular) -> Font {
-        Font(CTFontCreateWithFontDescriptor(editorialDescriptor, size, nil)).weight(weight)
+        let key = EditorialFontKey(sizeTenths: Int((size * 10).rounded()), weight: weight)
+        if let cached = editorialCache[key] { return cached }
+        let font = Font(CTFontCreateWithFontDescriptor(editorialDescriptor, size, nil)).weight(weight)
+        editorialCache[key] = font
+        return font
     }
 
     @MainActor private static let editorialDescriptor: CTFontDescriptor = {
