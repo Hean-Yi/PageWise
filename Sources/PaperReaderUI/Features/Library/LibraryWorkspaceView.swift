@@ -153,15 +153,13 @@ private struct ShelfWorkspaceContent: View {
 
     private var workspace: some View {
         GeometryReader { geometry in
-            let compact = geometry.size.width < 650
-            let inset: CGFloat = compact ? 22 : 42
-            let available = max(150, geometry.size.width - inset * 2)
-            let count = max(1, Int((available + 36) / 226))
-            let columns = Array(
-                repeating: GridItem(.flexible(minimum: 150, maximum: 236), spacing: 36, alignment: .top), count: count)
+            let metrics = ShelfGridMetrics.compute(width: geometry.size.width)
+            let compact = metrics.compact
+            let inset = metrics.inset
+            let count = metrics.columns
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
-                    header(compact: compact).padding(.bottom, compact ? 22 : 30).id(ScrollTarget.header)
+                    header(compact: compact).padding(.bottom, compact ? 20 : 28).id(ScrollTarget.header)
                     if let recent = listing.recent {
                         continueReading(recent)
                             .scrollTransition(
@@ -189,26 +187,11 @@ private struct ShelfWorkspaceContent: View {
                             .transition(reduceMotion ? .identity : .opacity.combined(with: .offset(y: -8)))
                             .padding(.bottom, 26)
                     }
-                    LazyVGrid(columns: columns, alignment: .leading, spacing: 32) {
-                        if leadingCoverCount != 0 {
-                            AddPaperCover { onlineSearch.open(shelfID: selection.shelfID) }
-                                .quickStartTarget(onlineSearch.isExpanded ? nil : .discovery)
-                        }
-                        ForEach(listing.entries, id: \.element.id) { index, paper in
-                            bookshelfItem(
-                                paper, index: index, columns: count,
-                                width: min(236, (available - CGFloat(count - 1) * 36) / CGFloat(count))
-                            )
-                            .id(ScrollTarget.paper(paper.id))
-                            .transition(
-                                reduceMotion
-                                    ? .identity
-                                    : ShelfBookArrival.transition(position: index + leadingCoverCount, columns: count))
-                        }
-                    }
-                    .padding(.top, 5)
-                    .animation(ReaderMotion.disclosure(reduceMotion), value: sort)
-                    .animation(ReaderMotion.navigation(reduceMotion), value: selection)
+                    shelfGrid(metrics: metrics)
+                        .padding(.top, 5)
+                        .animation(ReaderMotion.disclosure(reduceMotion), value: sort)
+                        .animation(ReaderMotion.navigation(reduceMotion), value: selection)
+                        .animation(ReaderMotion.sidebar(reduceMotion), value: metrics)
                     if model.state.papers.isEmpty && collection == .all {
                         HStack(spacing: 14) {
                             Text("也可以拖入 PDF").foregroundStyle(ReaderTheme.muted)
@@ -220,8 +203,12 @@ private struct ShelfWorkspaceContent: View {
                         Text("这个书架还没有论文").foregroundStyle(ReaderTheme.muted)
                             .font(.system(size: 12)).padding(.top, 22)
                     }
-                }.padding(.horizontal, inset).padding(.top, compact ? 24 : 32).padding(.bottom, 44)
+                }.padding(.horizontal, inset).padding(.top, compact ? 22 : 30).padding(.bottom, 44)
                     .animation(ReaderMotion.disclosure(reduceMotion), value: onlineSearch.isExpanded)
+                    .animation(ReaderMotion.sidebar(reduceMotion), value: compact)
+            }
+            .onChange(of: count) { _, _ in
+                if preview != nil { _ = dismissPreview() }
             }
             .allowsHitTesting(preview == nil)
             .accessibilityHidden(preview != nil)
@@ -281,13 +268,54 @@ private struct ShelfWorkspaceContent: View {
     // The add tile occupies the first slot but is never a reorder destination.
     private var leadingCoverCount: Int { collection == .reading || collection == .finished ? 0 : 1 }
 
-    private func bookshelfItem(_ paper: Paper, index: Int, columns: Int, width: CGFloat) -> some View {
+    @ViewBuilder private func shelfGrid(metrics: ShelfGridMetrics) -> some View {
+        // Use a flat custom Layout for typical shelves so SwiftUI smoothly interpolates every cover's
+        // frame when the sidebars slide open or closed; fall back to LazyVGrid for very large shelves.
+        if listing.entries.count <= 60 {
+            ShelfBookGridLayout(
+                columns: metrics.columns, spacing: metrics.spacing, rowSpacing: metrics.rowSpacing,
+                cellWidth: metrics.cellWidth
+            ) {
+                shelfGridItems(metrics: metrics)
+            }
+        } else {
+            let gridColumns = Array(
+                repeating: GridItem(
+                    .fixed(metrics.cellWidth), spacing: metrics.spacing, alignment: .top),
+                count: metrics.columns)
+            LazyVGrid(columns: gridColumns, alignment: .leading, spacing: metrics.rowSpacing) {
+                shelfGridItems(metrics: metrics)
+            }
+        }
+    }
+
+    @ViewBuilder private func shelfGridItems(metrics: ShelfGridMetrics) -> some View {
+        if leadingCoverCount != 0 {
+            AddPaperCover { onlineSearch.open(shelfID: selection.shelfID) }
+                .quickStartTarget(onlineSearch.isExpanded ? nil : .discovery)
+        }
+        ForEach(listing.entries, id: \.element.id) { index, paper in
+            bookshelfItem(
+                paper, index: index, columns: metrics.columns,
+                width: metrics.cellWidth, spacing: metrics.spacing, rowSpacing: metrics.rowSpacing
+            )
+            .id(ScrollTarget.paper(paper.id))
+            .transition(
+                reduceMotion
+                    ? .identity
+                    : ShelfBookArrival.transition(position: index + leadingCoverCount, columns: metrics.columns))
+        }
+    }
+
+    private func bookshelfItem(
+        _ paper: Paper, index: Int, columns: Int, width: CGFloat, spacing: CGFloat, rowSpacing: CGFloat
+    ) -> some View {
         let destination = index + arrangement.offset(for: paper.id)
         let from = index + leadingCoverCount
         let to = destination + leadingCoverCount
         let offset = CGSize(
-            width: CGFloat(to % columns - from % columns) * (width + 36),
-            height: CGFloat(to / columns - from / columns) * (width / 0.70 + 77))
+            width: CGFloat(to % columns - from % columns) * (width + spacing),
+            height: CGFloat(to / columns - from / columns) * (width / 0.70 + 45 + rowSpacing))
         return BookshelfItem(
             model: model, paper: paper,
             recordFrame: { locations.frames[paper.id] = $0 },
@@ -335,15 +363,15 @@ private struct ShelfWorkspaceContent: View {
 
     @ViewBuilder private func header(compact: Bool) -> some View {
         if compact {
-            VStack(alignment: .leading, spacing: 20) {
+            VStack(alignment: .leading, spacing: 18) {
                 heading
                 LibrarySearchField()
             }
         } else {
-            HStack(alignment: .center) {
+            HStack(alignment: .center, spacing: 16) {
                 heading
-                Spacer(minLength: 24)
-                LibrarySearchField().frame(width: 250)
+                Spacer(minLength: 12)
+                LibrarySearchField().frame(minWidth: 160, idealWidth: 220, maxWidth: 250)
             }
         }
     }
@@ -414,5 +442,84 @@ func readingModeTitle(_ mode: String) -> String {
     case "original": "原文"
     case "translated": "双语"
     default: "重排"
+    }
+}
+
+private struct ShelfGridMetrics: Equatable {
+    let compact: Bool
+    let inset: CGFloat
+    let spacing: CGFloat
+    let rowSpacing: CGFloat
+    let columns: Int
+    let cellWidth: CGFloat
+
+    static func compute(width: CGFloat) -> Self {
+        let compact = width < 500
+        let inset: CGFloat = width < 500 ? 20 : (width < 700 ? 28 : 40)
+        let spacing: CGFloat = compact ? 20 : (width < 700 ? 24 : 28)
+        let rowSpacing: CGFloat = compact ? 24 : 30
+        let available = max(144, width - inset * 2)
+        let columns = max(1, Int((available + spacing) / (170 + spacing)))
+        let rawCell = (available - CGFloat(columns - 1) * spacing) / CGFloat(columns)
+        let cellWidth = min(210, max(144, rawCell))
+        return Self(
+            compact: compact, inset: inset, spacing: spacing, rowSpacing: rowSpacing,
+            columns: columns, cellWidth: cellWidth)
+    }
+}
+
+/// Flat grid layout that lets SwiftUI smoothly interpolate every cover's position when sidebars open or close.
+private struct ShelfBookGridLayout: Layout {
+    let columns: Int
+    let spacing: CGFloat
+    let rowSpacing: CGFloat
+    let cellWidth: CGFloat
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let width =
+            proposal.width.flatMap { $0.isFinite ? $0 : nil }
+            ?? CGFloat(columns) * cellWidth + CGFloat(max(0, columns - 1)) * spacing
+        guard !subviews.isEmpty else { return CGSize(width: width, height: 0) }
+        let safeColumns = max(1, columns)
+        let itemProposal = ProposedViewSize(width: cellWidth, height: nil)
+        var totalHeight: CGFloat = 0
+        var rowHeight: CGFloat = 0
+        for (index, subview) in subviews.enumerated() {
+            let size = subview.sizeThatFits(itemProposal)
+            rowHeight = max(rowHeight, size.height)
+            let isRowEnd = (index % safeColumns) == (safeColumns - 1) || index == subviews.count - 1
+            if isRowEnd {
+                totalHeight += rowHeight
+                if index != subviews.count - 1 { totalHeight += rowSpacing }
+                rowHeight = 0
+            }
+        }
+        return CGSize(width: width, height: totalHeight)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let safeColumns = max(1, columns)
+        let itemProposal = ProposedViewSize(width: cellWidth, height: nil)
+        var y = bounds.minY
+        var index = 0
+        while index < subviews.count {
+            let rowEnd = min(index + safeColumns, subviews.count)
+            var rowHeight: CGFloat = 0
+            var sizes: [CGSize] = []
+            sizes.reserveCapacity(rowEnd - index)
+            for i in index..<rowEnd {
+                let size = subviews[i].sizeThatFits(itemProposal)
+                sizes.append(size)
+                rowHeight = max(rowHeight, size.height)
+            }
+            for offset in 0..<(rowEnd - index) {
+                let x = bounds.minX + CGFloat(offset) * (cellWidth + spacing)
+                subviews[index + offset].place(
+                    at: CGPoint(x: x, y: y), anchor: .topLeading,
+                    proposal: ProposedViewSize(width: cellWidth, height: sizes[offset].height))
+            }
+            y += rowHeight + rowSpacing
+            index = rowEnd
+        }
     }
 }

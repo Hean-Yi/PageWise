@@ -238,6 +238,7 @@ public struct LibraryView: View {
                 WorkspaceArrival(destination: CGPoint(x: isReading ? 9 : 0, y: 0), background: sidebarBackground)
             )
             .navigationSplitViewColumnWidth(min: 210, ideal: 244, max: 320)
+            .toolbar(removing: .sidebarToggle)
         } detail: {
             detailContent
         }
@@ -284,17 +285,23 @@ public struct LibraryView: View {
             let inline = width >= 840
             let sidebarWidth = min(340, max(1, width - 36))
             let sidebarVisible = assistantTab != nil
+            let reservesSidebar = inline && sidebarVisible
             ZStack(alignment: .trailing) {
                 workspaceContent
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .padding(.trailing, inline && sidebarVisible ? sidebarWidth : 0)
-                    // Give PDFKit and WebKit the new viewport once, independent of the pane's slide.
-                    .transaction(value: sidebarVisible) { $0.animation = nil }
+                    .padding(.trailing, reservesSidebar ? sidebarWidth : 0)
+                    // Give PDFKit and WebKit the new viewport once; animate bookshelf & workspace layouts smoothly.
+                    .animation(isReading ? nil : ReaderMotion.sidebar(reduceMotion), value: reservesSidebar)
+                    .transaction(value: sidebarVisible) {
+                        if isReading { $0.animation = nil }
+                    }
                 if !inline && sidebarVisible {
                     Color.black.opacity(0.14)
                         .ignoresSafeArea()
                         .contentShape(Rectangle())
-                        .onTapGesture { self.assistantTab = nil }
+                        .onTapGesture {
+                            withAnimation(ReaderMotion.sidebar(reduceMotion)) { self.assistantTab = nil }
+                        }
                         .accessibilityAddTraits(.isButton)
                         .accessibilityLabel("收起助读侧栏")
                         .transition(.opacity)
@@ -305,14 +312,16 @@ public struct LibraryView: View {
                             model: model, agent: agent, isReading: isReading, tab: isReading ? assistantTab : .library,
                             select: { self.assistantTab = $0 }, question: $paperQuestion, agentDraft: $agentDraft,
                             showsCloseButton: !inline,
-                            onClose: { self.assistantTab = nil },
+                            onClose: {
+                                withAnimation(ReaderMotion.sidebar(reduceMotion)) { self.assistantTab = nil }
+                            },
                             openSettings: {
                                 settingsHint = "请先选择模型服务并保存 API 密钥，即可使用助读与精读功能。"
                                 showSettings = true
                             },
                             didNavigate: {
                                 if !inline {
-                                    self.assistantTab = nil
+                                    withAnimation(ReaderMotion.sidebar(reduceMotion)) { self.assistantTab = nil }
                                 } else if assistantTab == .library {
                                     paperOpenedFromAgent = model.selectedPaperID
                                 }
@@ -346,9 +355,26 @@ public struct LibraryView: View {
             .toolbar(removing: .title)
         #endif
         .toolbar {
+            ToolbarItem(placement: .navigation) {
+                Button(action: toggleNavigationSidebar) {
+                    Label(
+                        "导航侧栏",
+                        systemImage: navigationSidebarVisible ? "rectangle.lefthalf.inset.filled" : "sidebar.left"
+                    )
+                    .labelStyle(ReaderSymbolLabelStyle(iconOnly: true))
+                    .contentTransition(reduceMotion ? .identity : .symbolEffect(.replace))
+                }
+                .readerIconButtonStyle(.automatic)
+                .keyboardShortcut("s", modifiers: [.command, .control])
+                .help(navigationSidebarVisible ? "收起导航侧栏（⌃⌘S）" : "打开导航侧栏（⌃⌘S）")
+                .accessibilityLabel(navigationSidebarVisible ? "收起导航侧栏" : "打开导航侧栏")
+                .foregroundStyle(navigationSidebarVisible ? ReaderTheme.accent : ReaderTheme.muted)
+            }
             ToolbarItem(placement: .primaryAction) {
                 Button {
-                    assistantTab = assistantTab == nil ? (isReading ? .paper : .library) : nil
+                    withAnimation(ReaderMotion.sidebar(reduceMotion)) {
+                        assistantTab = assistantTab == nil ? (isReading ? .paper : .library) : nil
+                    }
                 } label: {
                     Label(
                         "助读侧栏", systemImage: assistantTab == nil ? "sidebar.right" : "rectangle.righthalf.inset.filled"
@@ -427,6 +453,25 @@ public struct LibraryView: View {
         }
         .modifier(
             WorkspaceArrival(destination: page.location(origin: model.readerOrigin), background: ReaderTheme.canvas))
+    }
+
+    private var navigationSidebarVisible: Bool {
+        #if os(iOS)
+            if horizontalSizeClass == .compact { return preferredColumn == .sidebar }
+        #endif
+        return columns != .detailOnly
+    }
+
+    private func toggleNavigationSidebar() {
+        withAnimation(ReaderMotion.sidebar(reduceMotion)) {
+            #if os(iOS)
+                if horizontalSizeClass == .compact {
+                    preferredColumn = preferredColumn == .sidebar ? .detail : .sidebar
+                    return
+                }
+            #endif
+            columns = columns == .detailOnly ? .all : .detailOnly
+        }
     }
 
     private var readerSidebarOpen: Bool {

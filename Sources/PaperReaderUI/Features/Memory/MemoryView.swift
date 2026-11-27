@@ -17,23 +17,15 @@ struct MemoryView: View {
                 maintenanceDisclosure
             }
             if memories.isEmpty {
-                ContentUnavailableView {
-                    Label("暂无研究记忆", systemImage: "brain.head.profile")
-                } description: {
-                    Text("在论文助读或书库助理中提及你的研究关注点与阅读偏好，或开启自动整理后，记录会出现在这里。")
-                }
-                .frame(maxWidth: .infinity, minHeight: 220)
+                ContentUnavailableView("暂无研究记忆", systemImage: "brain.head.profile")
+                    .frame(maxWidth: .infinity, minHeight: 190)
             } else {
                 let groups = onlyID == nil ? currentGroups : []
                 let organized = Set(groups.flatMap(\.members))
                 if onlyID == nil {
-                    HStack(alignment: .firstTextBaseline) {
-                        Text("共 \(memories.count) 条记忆")
-                            .font(.subheadline.weight(.semibold))
-                        Spacer(minLength: 8)
-                        Text("点击即可编辑，手动编辑后 AI 不会覆盖")
-                            .font(.caption).foregroundStyle(ReaderTheme.muted)
-                    }
+                    Text("共 \(memories.count) 条")
+                        .font(.caption.weight(.medium)).foregroundStyle(ReaderTheme.muted)
+                        .help("点击文字即可编辑，手动编辑后 AI 不会覆盖")
                 }
                 if !groups.isEmpty {
                     VStack(alignment: .leading, spacing: 10) {
@@ -84,9 +76,9 @@ struct MemoryView: View {
         @Bindable var sleep = model.memorySleep
         let semantic = SemanticModelSettings.shared
         let summaryText =
-            (sleep.enabled ? "自动整理已开启" : "自动整理已关闭")
+            (sleep.enabled ? "自动整理开" : "自动整理关")
             + " · "
-            + (semantic.isBundled || semantic.installed ? "语义检索就绪" : "语义检索未安装")
+            + (semantic.isBundled || semantic.installed ? "语义检索就绪" : "语义未安装")
         return VStack(alignment: .leading, spacing: 0) {
             Button {
                 withAnimation(ReaderMotion.disclosure(reduceMotion)) { maintenanceExpanded.toggle() }
@@ -116,11 +108,11 @@ struct MemoryView: View {
             }
             if maintenanceExpanded {
                 Divider().padding(.horizontal, 14)
-                VStack(alignment: .leading, spacing: 14) {
-                    VStack(alignment: .leading, spacing: 10) {
+                VStack(alignment: .leading, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 8) {
                         HStack {
-                            Label("记忆空闲整理", systemImage: "sparkles").font(.subheadline.weight(.semibold))
-                            Spacer()
+                            Toggle("空闲时自动维护记忆", isOn: $sleep.enabled).font(.callout)
+                            Spacer(minLength: 6)
                             if sleep.running {
                                 ProgressView().controlSize(.small)
                                 Button("停止") { sleep.interrupt() }.buttonStyle(.borderless).font(.caption)
@@ -129,15 +121,12 @@ struct MemoryView: View {
                                     .buttonStyle(.borderless).font(.caption).disabled(memories.isEmpty)
                             }
                         }
-                        Toggle("空闲时自动维护记忆", isOn: $sleep.enabled).font(.callout)
-                        Text("使用当前模型服务，发送本批记忆并计入 API 用量；不会覆盖你手动编辑过的记忆。")
-                            .font(.caption).foregroundStyle(ReaderTheme.muted)
-                            .fixedSize(horizontal: false, vertical: true)
                         if let message = sleep.message {
                             Text(verbatim: message).font(.caption).foregroundStyle(ReaderTheme.accent)
                                 .fixedSize(horizontal: false, vertical: true)
                         }
                     }
+                    .help("按批调用当前模型整理记忆并计入 API 用量，不覆盖手动编辑")
                     Divider()
                     SemanticModelSettingsRow(model: model)
                 }
@@ -181,9 +170,9 @@ private struct MemoryCardEditor: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 20) {
+        VStack(alignment: .leading, spacing: 12) {
             TextField("研究关注点", text: $draft, axis: .vertical)
-                .textFieldStyle(.plain).font(.system(size: 16)).lineSpacing(5)
+                .textFieldStyle(.plain).font(.system(size: 15)).lineSpacing(4)
                 .focused($focused)
                 .accessibilityLabel("编辑研究记忆")
                 .onChange(of: draft) { _, newValue in
@@ -256,8 +245,8 @@ private struct MemoryCardEditor: View {
                     .font(.caption).foregroundStyle(ReaderTheme.muted)
             }
         }
-        .padding(22).frame(maxWidth: .infinity, alignment: .leading)
-        .background(ReaderTheme.surface, in: RoundedRectangle(cornerRadius: 14))
-        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(ReaderTheme.line))
+        .padding(16).frame(maxWidth: .infinity, alignment: .leading)
+        .background(ReaderTheme.surface, in: RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(ReaderTheme.line))
     }
 }
