@@ -23,20 +23,31 @@ struct ShelfSearchReveal: Identifiable {
     }
 }
 
+// Tracks the live container width without invalidating the bookshelf on intermediate NSSplitView animation frames.
+@MainActor private final class ShelfWidthBox {
+    var width: CGFloat = 0
+    var lastToggleOrigin: CGFloat?
+    var lastSidebarDelta: CGFloat?
+}
+
 struct LibraryWorkspaceView: View {
     @Bindable var model: ReaderModel
     @Binding var collection: LibraryCollection
     @Binding var selectedShelfID: UUID?
     @Bindable var onlineSearch: OnlinePaperSearch
     let findRequest: Int
-    var leadingInset: CGFloat = 0
     var trailingInset: CGFloat = 0
+    var navigationSidebarVisible = true
+    var expectedLeftSidebarWidth: () -> CGFloat = { 244 }
     let openSample: () -> Void
 
     var body: some View {
         ShelfWorkspaceContent(
             model: model, collection: $collection, selectedShelfID: $selectedShelfID, onlineSearch: onlineSearch,
-            findRequest: findRequest, leadingInset: leadingInset, trailingInset: trailingInset, openSample: openSample,
+            findRequest: findRequest, trailingInset: trailingInset,
+            navigationSidebarVisible: navigationSidebarVisible,
+            expectedLeftSidebarWidth: expectedLeftSidebarWidth,
+            openSample: openSample,
             listing: ShelfListing(state: model.state, collection: collection, shelfID: selectedShelfID))
     }
 }
@@ -71,8 +82,9 @@ private struct ShelfWorkspaceContent: View {
     @Binding var selectedShelfID: UUID?
     @Bindable var onlineSearch: OnlinePaperSearch
     let findRequest: Int
-    let leadingInset: CGFloat
     let trailingInset: CGFloat
+    let navigationSidebarVisible: Bool
+    let expectedLeftSidebarWidth: () -> CGFloat
     let openSample: () -> Void
     let listing: ShelfListing
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -80,6 +92,11 @@ private struct ShelfWorkspaceContent: View {
     private var sort: LibrarySort { model.state.preferredSort }
     @State private var searchReveal: ShelfSearchReveal?
     @State private var dismissSearchRequest = 0
+    @State private var shelfWidth: CGFloat?
+    @State private var lockedWidth: CGFloat?
+    @State private var lockRevision = 0
+    @State private var sidebarTransitionToken = 0
+    @State private var measuredWidth = ShelfWidthBox()
     private enum ScrollTarget: Hashable {
         case header
         case paper(UUID)
@@ -155,131 +172,178 @@ private struct ShelfWorkspaceContent: View {
         }
     }
 
-    private struct SidebarInsets: Equatable {
-        let leading: CGFloat
-        let trailing: CGFloat
-    }
-
     private var workspace: some View {
-        let sidebarInsets = SidebarInsets(leading: leadingInset, trailing: trailingInset)
-        return GeometryReader { geometry in
-            let metrics = ShelfGridMetrics.compute(
-                width: max(1, geometry.size.width - leadingInset - trailingInset))
-            let compact = metrics.compact
-            let inset = metrics.inset
-            let count = metrics.columns
-            ScrollView {
-                VStack(alignment: .leading, spacing: 0) {
-                    header(compact: compact).padding(.bottom, compact ? 20 : 28).id(ScrollTarget.header)
-                    if let recent = listing.recent {
-                        continueReading(recent)
-                            .scrollTransition(
-                                topLeading: reduceMotion ? .identity : .interactive,
-                                bottomTrailing: .identity, axis: .vertical
-                            ) { card, phase in
-                                card.opacity(phase.isIdentity ? 1 : 0.55)
-                                    .offset(y: phase.isIdentity ? 0 : -4)
-                            }
-                            .padding(.bottom, 18)
-                    }
-                    if collection == .all {
-                        TopicShelvesView(
-                            model: model, selectedShelfID: $selectedShelfID, dragActive: arrangement.sourceID != nil
-                        ) { sortMenu }
-                    } else {
-                        HStack {
-                            Spacer(minLength: 0)
-                            sortMenu
-                        }.frame(height: 44)
-                    }
-                    Rectangle().fill(ReaderTheme.line).frame(height: 1).padding(.bottom, 24)
-                    if onlineSearch.isExpanded {
-                        SearchView(search: onlineSearch, targetName: onlineTargetName)
-                            .transition(reduceMotion ? .identity : .opacity.combined(with: .offset(y: -8)))
-                            .padding(.bottom, 26)
-                    }
-                    shelfGrid(metrics: metrics)
-                        .padding(.top, 5)
-                        .animation(ReaderMotion.disclosure(reduceMotion), value: sort)
-                        .animation(ReaderMotion.navigation(reduceMotion), value: selection)
-                        .animation(ReaderMotion.sidebar(reduceMotion), value: count)
-                        .animation(ReaderMotion.sidebar(reduceMotion), value: sidebarInsets)
-                    if model.state.papers.isEmpty && collection == .all {
-                        HStack(spacing: 14) {
-                            Text("也可以拖入 PDF").foregroundStyle(ReaderTheme.muted)
-                            Button("试读内置示例", action: openSample)
-                                .disabled(model.isImporting)
-                                .buttonStyle(.plain).foregroundStyle(ReaderTheme.accent)
-                        }.font(.system(size: 12)).padding(.top, 22)
-                    } else if listing.entries.isEmpty {
-                        Text("这个书架还没有论文").foregroundStyle(ReaderTheme.muted)
-                            .font(.system(size: 12)).padding(.top, 22)
-                    }
-                }.padding(.leading, inset + leadingInset).padding(.trailing, inset + trailingInset)
-                    .padding(.top, compact ? 22 : 30).padding(.bottom, 44)
-                    .animation(ReaderMotion.disclosure(reduceMotion), value: onlineSearch.isExpanded)
-                    .animation(ReaderMotion.sidebar(reduceMotion), value: compact)
-                    .animation(ReaderMotion.sidebar(reduceMotion), value: sidebarInsets)
-            }
-            .contentMargins(.trailing, trailingInset, for: .scrollIndicators)
-            .onChange(of: count) { _, _ in
-                if preview != nil { _ = dismissPreview() }
-            }
-            .allowsHitTesting(preview == nil)
-            .accessibilityHidden(preview != nil)
-            .overlay {
-                if let preview, let paper = model.state.papers.first(where: { $0.id == preview.target.paperID }) {
-                    ShelfPaperPreview(paper: paper, model: model, flight: preview.flight) {
-                        if self.preview?.flight == preview.flight, preview.flight.awaitingLift {
-                            self.preview?.flight = preview.flight.lifted(at: .now)
+        let effectiveWidth = max(1, (shelfWidth ?? 960) - trailingInset)
+        let metrics = ShelfGridMetrics.compute(width: effectiveWidth)
+        let compact = metrics.compact
+        let inset = metrics.inset
+        let count = metrics.columns
+        let ready = shelfWidth != nil
+        return ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                header(compact: compact).padding(.bottom, compact ? 20 : 28).id(ScrollTarget.header)
+                if let recent = listing.recent {
+                    continueReading(recent)
+                        .scrollTransition(
+                            topLeading: reduceMotion ? .identity : .interactive,
+                            bottomTrailing: .identity, axis: .vertical
+                        ) { card, phase in
+                            card.opacity(phase.isIdentity ? 1 : 0.55)
+                                .offset(y: phase.isIdentity ? 0 : -4)
                         }
-                    } dismiss: {
-                        dismissPreview()
-                    } landed: {
-                        if self.preview?.flight == preview.flight { self.preview = nil }
-                    } open: {
-                        self.preview = nil
-                        model.select(paper.id)
+                        .padding(.bottom, 18)
+                }
+                if collection == .all {
+                    TopicShelvesView(
+                        model: model, selectedShelfID: $selectedShelfID, dragActive: arrangement.sourceID != nil
+                    ) { sortMenu }
+                } else {
+                    HStack {
+                        Spacer(minLength: 0)
+                        sortMenu
+                    }.frame(height: 44)
+                }
+                Rectangle().fill(ReaderTheme.line).frame(height: 1).padding(.bottom, 24)
+                if onlineSearch.isExpanded {
+                    SearchView(search: onlineSearch, targetName: onlineTargetName)
+                        .transition(reduceMotion ? .identity : .opacity.combined(with: .offset(y: -8)))
+                        .padding(.bottom, 26)
+                }
+                shelfGrid(metrics: metrics)
+                    .padding(.top, 5)
+                    .animation(ReaderMotion.disclosure(reduceMotion), value: sort)
+                    .animation(ReaderMotion.navigation(reduceMotion), value: selection)
+                    .animation(ready ? ReaderMotion.sidebar(reduceMotion) : nil, value: count)
+                    .animation(ready ? ReaderMotion.sidebar(reduceMotion) : nil, value: trailingInset)
+                    .animation(ready ? ReaderMotion.sidebar(reduceMotion) : nil, value: sidebarTransitionToken)
+                if model.state.papers.isEmpty && collection == .all {
+                    HStack(spacing: 14) {
+                        Text("也可以拖入 PDF").foregroundStyle(ReaderTheme.muted)
+                        Button("试读内置示例", action: openSample)
+                            .disabled(model.isImporting)
+                            .buttonStyle(.plain).foregroundStyle(ReaderTheme.accent)
+                    }.font(.system(size: 12)).padding(.top, 22)
+                } else if listing.entries.isEmpty {
+                    Text("这个书架还没有论文").foregroundStyle(ReaderTheme.muted)
+                        .font(.system(size: 12)).padding(.top, 22)
+                }
+            }.padding(.leading, inset).padding(.trailing, inset + trailingInset)
+                .padding(.top, compact ? 22 : 30).padding(.bottom, 44)
+                .animation(ReaderMotion.disclosure(reduceMotion), value: onlineSearch.isExpanded)
+                .animation(ready ? ReaderMotion.sidebar(reduceMotion) : nil, value: compact)
+                .animation(ready ? ReaderMotion.sidebar(reduceMotion) : nil, value: trailingInset)
+        }
+        .contentMargins(.trailing, trailingInset, for: .scrollIndicators)
+        .onGeometryChange(for: CGFloat.self) {
+            $0.size.width
+        } action: { width in
+            guard width > 0 else { return }
+            measuredWidth.width = width
+            if let locked = lockedWidth {
+                if abs(width - locked) < 2 {
+                    if let origin = measuredWidth.lastToggleOrigin {
+                        let actual = abs(width - origin)
+                        if actual >= 160 && actual <= 360 { measuredWidth.lastSidebarDelta = actual }
                     }
-                    .padding(.leading, leadingInset)
-                    .padding(.trailing, trailingInset)
-                    .id(paper.id)
-                    .transition(.identity)
+                    measuredWidth.lastToggleOrigin = nil
+                    lockedWidth = nil
+                    if shelfWidth == nil || abs((shelfWidth ?? 0) - width) > 0.5 {
+                        shelfWidth = width
+                    }
                 }
+                return
             }
-            #if os(macOS)
-                .background {
-                    ShelfPreviewKeys(
-                        hovered: { point in
-                            listing.ids.first { locations.frames[$0]?.contains(point) == true } ?? locations.paperID
-                                ?? (preview?.flight.returning == true ? preview?.target.paperID : nil)
-                        },
-                        press: { showPreview(.held($0)) }, release: releasePreview, dismiss: dismissPreview)
+            if shelfWidth == nil || abs((shelfWidth ?? 0) - width) > 0.5 {
+                shelfWidth = width
+            }
+        }
+        .onChange(of: navigationSidebarVisible) { _, visible in
+            let base = lockedWidth ?? measuredWidth.width
+            guard base > 0 else { return }
+            // Jump directly to the destination detail width once so NavigationSplitView's
+            // per-frame resize does not cause covers to grow then shrink mid-animation.
+            let step = measuredWidth.lastSidebarDelta ?? expectedLeftSidebarWidth()
+            let delta = visible ? -step : step
+            let target = max(200, base + delta)
+            measuredWidth.lastToggleOrigin = base
+            lockedWidth = target
+            shelfWidth = target
+            sidebarTransitionToken += 1
+            lockRevision += 1
+        }
+        .task(id: lockRevision) {
+            guard lockedWidth != nil else { return }
+            do {
+                try await Task.sleep(for: .milliseconds(380))
+            } catch { return }
+            guard lockedWidth != nil else { return }
+            if let origin = measuredWidth.lastToggleOrigin, measuredWidth.width > 0 {
+                let actual = abs(measuredWidth.width - origin)
+                if actual >= 160 && actual <= 360 { measuredWidth.lastSidebarDelta = actual }
+            }
+            measuredWidth.lastToggleOrigin = nil
+            lockedWidth = nil
+            if measuredWidth.width > 0, abs((shelfWidth ?? 0) - measuredWidth.width) > 0.5 {
+                shelfWidth = measuredWidth.width
+            }
+        }
+        .onChange(of: count) { _, _ in
+            if preview != nil { _ = dismissPreview() }
+        }
+        .allowsHitTesting(preview == nil)
+        .accessibilityHidden(preview != nil)
+        .overlay {
+            if let preview, let paper = model.state.papers.first(where: { $0.id == preview.target.paperID }) {
+                ShelfPaperPreview(paper: paper, model: model, flight: preview.flight) {
+                    if self.preview?.flight == preview.flight, preview.flight.awaitingLift {
+                        self.preview?.flight = preview.flight.lifted(at: .now)
+                    }
+                } dismiss: {
+                    dismissPreview()
+                } landed: {
+                    if self.preview?.flight == preview.flight { self.preview = nil }
+                } open: {
+                    self.preview = nil
+                    model.select(paper.id)
                 }
-            #endif
-        }.coordinateSpace(.named(ShelfCoverFlight.coordinateSpace))
-            .onChange(of: selection, initial: true) { previous, current in
-                if onlineSearch.isExpanded { onlineSearch.open(shelfID: current.shelfID) }
-                guard previous != current else { return }
-                dismissSearchRequest += 1
-                arrangement.end()
-                preview = nil
+                .padding(.trailing, trailingInset)
+                .id(paper.id)
+                .transition(.identity)
             }
-            .onChange(of: sort) { _, _ in arrangement.end() }
-            .onChange(of: listing.ids) { _, ids in
-                if let preview, !ids.contains(preview.target.paperID) { self.preview = nil }
-                if arrangement.sourceID != nil { arrangement.end() }
+        }
+        #if os(macOS)
+            .background {
+                ShelfPreviewKeys(
+                    hovered: { point in
+                        listing.ids.first { locations.frames[$0]?.contains(point) == true } ?? locations.paperID
+                            ?? (preview?.flight.returning == true ? preview?.target.paperID : nil)
+                    },
+                    press: { showPreview(.held($0)) }, release: releasePreview, dismiss: dismissPreview)
             }
-            .onDisappear {
-                arrangement.end()
-                preview = nil
+        #endif
+        .coordinateSpace(.named(ShelfCoverFlight.coordinateSpace))
+        .onChange(of: selection, initial: true) { previous, current in
+            if onlineSearch.isExpanded { onlineSearch.open(shelfID: current.shelfID) }
+            guard previous != current else { return }
+            dismissSearchRequest += 1
+            arrangement.end()
+            preview = nil
+        }
+        .onChange(of: sort) { _, _ in arrangement.end() }
+        .onChange(of: listing.ids) { _, ids in
+            if let preview, !ids.contains(preview.target.paperID) { self.preview = nil }
+            if arrangement.sourceID != nil { arrangement.end() }
+        }
+        .onDisappear {
+            arrangement.end()
+            preview = nil
+        }
+        .onChange(of: onlineSearch.isExpanded) { _, expanded in if expanded { dismissSearchRequest += 1 } }
+        .onChange(of: model.state.shelves, initial: true) { _, shelves in
+            if let selectedShelfID, !shelves.contains(where: { $0.id == selectedShelfID }) {
+                self.selectedShelfID = nil
             }
-            .onChange(of: onlineSearch.isExpanded) { _, expanded in if expanded { dismissSearchRequest += 1 } }
-            .onChange(of: model.state.shelves, initial: true) { _, shelves in
-                if let selectedShelfID, !shelves.contains(where: { $0.id == selectedShelfID }) {
-                    self.selectedShelfID = nil
-                }
-            }
+        }
     }
 
     // The add tile occupies the first slot but is never a reorder destination.

@@ -16,6 +16,7 @@ public struct LibraryView: View {
     @State private var openingSample = false
     @AppStorage("completedQuickStart") private var completedQuickStart = false
     @State private var detailMetrics = DetailSidebarMetrics(width: 1100)
+    @State private var leftSidebarWidth = SidebarWidthBox()
     @State private var onlineSearch: OnlinePaperSearch
     @State private var selectedShelfID: UUID?
     @State private var calendarDate = Date()
@@ -252,95 +253,76 @@ public struct LibraryView: View {
     }
 
     private var navigationSurface: some View {
-        #if os(macOS)
-            macOSNavigationSurface
-        #else
-            NavigationSplitView(columnVisibility: $columns, preferredCompactColumn: $preferredColumn) {
-                leadingSidebarContent
-                    .navigationSplitViewColumnWidth(min: 210, ideal: 244, max: 320)
-                    .toolbar(removing: .sidebarToggle)
-            } detail: {
-                detailContent(leadingInset: 0)
-            }
-            .modifier(libraryWindowChrome)
-        #endif
-    }
-
-    #if os(macOS)
-        private static let macLeftSidebarWidth: CGFloat = 244
-
-        private var macOSNavigationSurface: some View {
-            let leftVisible = columns != .detailOnly
-            return ZStack(alignment: .leading) {
-                detailContent(leadingInset: leftVisible ? Self.macLeftSidebarWidth : 0)
-                ZStack(alignment: .leading) {
-                    if leftVisible {
-                        leadingSidebarContent
-                            .frame(width: Self.macLeftSidebarWidth)
-                            .overlay(alignment: .trailing) {
-                                Rectangle().fill(ReaderTheme.line).frame(width: 1)
-                            }
-                            .transition(reduceMotion ? .identity : .move(edge: .leading))
-                    }
+        NavigationSplitView(columnVisibility: $columns, preferredCompactColumn: $preferredColumn) {
+            ZStack {
+                if isReading {
+                    ReaderNavigator(model: model, findRequest: findRequest) { preferredColumn = .detail }
+                } else {
+                    sidebar
                 }
-                .frame(width: Self.macLeftSidebarWidth)
-                .allowsHitTesting(leftVisible)
-                .accessibilityHidden(!leftVisible)
-                .animation(ReaderMotion.sidebar(reduceMotion), value: leftVisible)
             }
-            .clipped()
-            .modifier(libraryWindowChrome)
-        }
-    #endif
-
-    private var leadingSidebarContent: some View {
-        ZStack {
-            if isReading {
-                ReaderNavigator(model: model, findRequest: findRequest) { preferredColumn = .detail }
-            } else {
-                sidebar
+            .modifier(
+                WorkspaceArrival(destination: CGPoint(x: isReading ? 9 : 0, y: 0), background: sidebarBackground)
+            )
+            .onGeometryChange(for: CGFloat.self) {
+                $0.size.width
+            } action: { width in
+                if width >= 180 { leftSidebarWidth.width = width }
             }
+            .navigationSplitViewColumnWidth(min: 210, ideal: 244, max: 320)
+            .toolbar(removing: .sidebarToggle)
+        } detail: {
+            detailContent
         }
-        .modifier(
-            WorkspaceArrival(destination: CGPoint(x: isReading ? 9 : 0, y: 0), background: sidebarBackground)
-        )
-    }
-
-    private var libraryWindowChrome: some ViewModifier {
-        LibraryWindowChrome(
-            isReading: isReading, reduceMotion: reduceMotion, dragTarget: $dragTarget,
-            onFind: {
+        .tint(ReaderTheme.accent)
+        .background {
+            Button("查找") {
                 findRequest += 1
                 if isReading {
-                    withAnimation(ReaderMotion.sidebar(reduceMotion)) {
-                        columns = .all
-                    }
+                    columns = .all
                     preferredColumn = .sidebar
                 }
-            },
-            onOpenImporter: { showImporter = true },
-            onDropPDFs: importLibraryFiles)
+            }.keyboardShortcut("f").hidden().accessibilityHidden(true)
+        }
+        .background {
+            Button("导入 PDF") { showImporter = true }
+                .keyboardShortcut("o").hidden().accessibilityHidden(true)
+        }
+        .overlay {
+            if dragTarget {
+                RoundedRectangle(cornerRadius: 18).fill(ReaderTheme.accent.opacity(0.12))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 18).strokeBorder(
+                            ReaderTheme.accent, style: StrokeStyle(lineWidth: 2, dash: [8]))
+                    )
+                    .overlay {
+                        Label("添加到书库", systemImage: "arrow.down.doc").font(.title2.weight(.medium)).padding(30)
+                            .readerGlassSurface(in: RoundedRectangle(cornerRadius: 14), bordered: true)
+                    }.padding(12).allowsHitTesting(false).transition(.opacity)
+            }
+        }
+        .dropDestination(for: URL.self) { urls, _ in
+            let pdfs = urls.filter { $0.isFileURL && $0.pathExtension.lowercased() == "pdf" }
+            guard !pdfs.isEmpty else { return false }
+            importLibraryFiles(pdfs)
+            return true
+        } isTargeted: { targeted in
+            withAnimation(ReaderMotion.feedback(reduceMotion)) { dragTarget = targeted }
+        }
     }
 
-    private func detailContent(leadingInset: CGFloat) -> some View {
-        let availableWidth = max(1, detailMetrics.width - leadingInset)
-        let inline = availableWidth >= 840
-        let sidebarWidth = availableWidth >= 376 ? 340 : max(1, floor(availableWidth - 36))
+    private var detailContent: some View {
+        let inline = detailMetrics.inline
+        let sidebarWidth = detailMetrics.sidebarWidth
         let sidebarVisible = assistantTab != nil
         let reservesSidebar = inline && sidebarVisible
-        let trailingInset: CGFloat = reservesSidebar ? sidebarWidth : 0
         let isShelf = workspacePage == .shelf
         return ZStack(alignment: .trailing) {
-            workspaceContent(
-                leadingInset: isShelf ? leadingInset : 0,
-                trailingInset: isShelf ? trailingInset : 0
-            )
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .padding(.leading, isShelf ? 0 : leadingInset)
-            .padding(.trailing, isShelf ? 0 : trailingInset)
-            // Give PDFKit, WebKit and non-shelf pages their final width once; bookshelf animates its single reflow via insets.
-            .transaction(value: leadingInset) { $0.animation = nil }
-            .transaction(value: trailingInset) { $0.animation = nil }
+            workspaceContent(trailingInset: isShelf && reservesSidebar ? sidebarWidth : 0)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding(.trailing, !isShelf && reservesSidebar ? sidebarWidth : 0)
+                // Give PDFKit, WebKit and non-shelf pages their final width once; bookshelf animates its single reflow via trailingInset.
+                .transaction(value: reservesSidebar) { $0.animation = nil }
             if !inline && sidebarVisible {
                 Color.black.opacity(0.14)
                     .ignoresSafeArea()
@@ -401,7 +383,9 @@ public struct LibraryView: View {
         .background(ReaderTheme.canvas)
         .task { HTMLWebViewPool.prewarm() }
         .readerSystemToolbarBackground()
-        .toolbar(removing: .title)
+        #if os(iOS)
+            .toolbar(removing: .title)
+        #endif
         .toolbar {
             ToolbarItem(placement: .navigation) {
                 Button(action: toggleNavigationSidebar) {
@@ -443,7 +427,7 @@ public struct LibraryView: View {
         }
     }
 
-    private func workspaceContent(leadingInset: CGFloat, trailingInset: CGFloat) -> some View {
+    private func workspaceContent(trailingInset: CGFloat) -> some View {
         let page = workspacePage
         return ZStack {
             if let failure = model.loadFailure {
@@ -474,7 +458,9 @@ public struct LibraryView: View {
                     LibraryWorkspaceView(
                         model: model, collection: $collection, selectedShelfID: $selectedShelfID,
                         onlineSearch: onlineSearch, findRequest: findRequest,
-                        leadingInset: leadingInset, trailingInset: trailingInset,
+                        trailingInset: trailingInset,
+                        navigationSidebarVisible: navigationSidebarVisible,
+                        expectedLeftSidebarWidth: { leftSidebarWidth.width },
                         openSample: openSample)
                 }
             }
@@ -544,15 +530,11 @@ public struct LibraryView: View {
     }
 
     private var sidebarBackground: Color {
-        #if os(macOS)
-            return ReaderTheme.sidebar
-        #else
-            if #available(iOS 26, *), !reduceTransparency {
-                // Let NavigationSplitView supply the native sidebar material.
-                return .clear
-            }
-            return ReaderTheme.sidebar
-        #endif
+        if #available(macOS 26, iOS 26, *), !reduceTransparency {
+            // Let NavigationSplitView supply the native sidebar material.
+            return .clear
+        }
+        return ReaderTheme.sidebar
     }
 
     private var sidebar: some View {
@@ -672,59 +654,17 @@ public struct LibraryView: View {
     }
 }
 
-private struct LibraryWindowChrome: ViewModifier {
-    let isReading: Bool
-    let reduceMotion: Bool
-    @Binding var dragTarget: Bool
-    let onFind: () -> Void
-    let onOpenImporter: () -> Void
-    let onDropPDFs: ([URL]) -> Void
-
-    func body(content: Content) -> some View {
-        content
-            .tint(ReaderTheme.accent)
-            .background {
-                Button("查找", action: onFind).keyboardShortcut("f").hidden().accessibilityHidden(true)
-            }
-            .background {
-                Button("导入 PDF", action: onOpenImporter).keyboardShortcut("o").hidden().accessibilityHidden(true)
-            }
-            .overlay {
-                if dragTarget {
-                    RoundedRectangle(cornerRadius: 18).fill(ReaderTheme.accent.opacity(0.12))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 18).strokeBorder(
-                                ReaderTheme.accent, style: StrokeStyle(lineWidth: 2, dash: [8]))
-                        )
-                        .overlay {
-                            Label("添加到书库", systemImage: "arrow.down.doc").font(.title2.weight(.medium)).padding(30)
-                                .readerGlassSurface(in: RoundedRectangle(cornerRadius: 14), bordered: true)
-                        }.padding(12).allowsHitTesting(false).transition(.opacity)
-                }
-            }
-            .dropDestination(for: URL.self) { urls, _ in
-                let pdfs = urls.filter { $0.isFileURL && $0.pathExtension.lowercased() == "pdf" }
-                guard !pdfs.isEmpty else { return false }
-                onDropPDFs(pdfs)
-                return true
-            } isTargeted: { targeted in
-                withAnimation(ReaderMotion.feedback(reduceMotion)) { dragTarget = targeted }
-            }
-    }
+@MainActor private final class SidebarWidthBox {
+    var width: CGFloat = 244
 }
 
 private struct DetailSidebarMetrics: Equatable {
-    let width: CGFloat
+    let inline: Bool
+    let sidebarWidth: CGFloat
 
     init(width: CGFloat) {
-        // Bucket wide windows to avoid unnecessary body updates during live window resize while preserving exact breakpoints.
-        if width >= 1084 {
-            self.width = 1200
-        } else if width >= 840 {
-            self.width = 900
-        } else {
-            self.width = floor(width)
-        }
+        inline = width >= 840
+        sidebarWidth = width >= 376 ? 340 : max(1, floor(width - 36))
     }
 }
 
