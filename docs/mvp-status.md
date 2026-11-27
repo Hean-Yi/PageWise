@@ -1,5 +1,15 @@
 # PageWise 验证记录
 
+## 0.4.0 设备端语义记忆、Agent 编排与界面性能
+
+自 `0.3.0` 起新增并验证的核心变化：
+
+- **随包内置 4-bit 中英语义检索与 FTS5 混合底座**：将约 61 MB 的 4-bit 量化 `multilingual-e5-small` Core ML 模型随应用打包（详见 [E5 4-bit 量化实验](experiment-e5-int4.md)），接入渐进式冷启动、覆盖度门控与 SQLite `FTS5` BM25 论文检索，避免冷启动等待或半截向量子集扭曲排序。
+- **Agent 循环与记忆安全加固**：统一 `AgentLoopRunner` / `AgentContextCompactor`（双入口共用并发只读工具、循环检测、Prompt Cache 稳定前缀与历史压缩）；接入实时 `<think>` / `reasoning_content` 思考流、双时态记忆（`validFrom`/`invalidAt`/`supersededBy`）与显著性衰减、乐观并发修订校验（`expected_revision`）、书架作用域隔离与离线 HTTP Cassette 轨迹评测框架（`AgentTrajectoryEvalTests`）。
+- **快速上手引导精简与内容补全**：将初始引导从 11 步精简为 6 步，新增「如何记录笔记」流程示意与「笔记悬停状态展示」可交互预览组件（波浪线原句轻浮、虚线连接、页边卡片展开），并改为先预加载示例论文再切换引导步骤以消除跳动。
+- **侧边栏、书架与引导动画性能优化**：修复 macOS 左右侧栏开合期间书架逐帧重排与“先变大后变小”的问题（右侧栏离散 `trailingInset`、左侧栏保留原生 `NavigationSplitView` 同时锁定目标布局宽度），书封改为标准版面光栅化 + GPU 缩放与 `shadowPath`，缓存 `ReaderTheme.editorial` CoreText 字体，并对 WebKit 窗口尺寸变化增加 48 ms 防抖。
+- **本轮检查范围**：严格 `swift-format` 检查通过；`QuickStartNavigationTests`、`WorkspaceNavigationViewTests`、`ShelfCoverCanvasTests`、`ReadingNoteCardTests`、`ReadingNoteHoverTests`、`PDFMarginNoteTests` 等回归通过；macOS Debug 构建与通用 Release（`arm64` + `x86_64`）DMG 打包（`scripts/package-mac.sh` 架构、签名、路径隔离、资源比对与镜像完整性校验）均通过。iPad 真机触控、Pencil 与大书库实机长测仍属后续验收范围。
+
 ## 0.3.0 科研助理与精读
 
 - 全仓 645 项自动化测试通过。另用真实 DeepSeek 和自建示例库分别验证三次新对话：提议研究问题后，重开 SQLite 可见一条；回顾时保持一条；删除后活跃记录为零，再问时没有把已删的观点归给读者。旧版跨论文批注间接继承、私有来源混入新提议和只读回顾误写等情形，使用可重复的本地回归覆盖。

@@ -10,8 +10,8 @@ settings:
     SWIFT_VERSION: "6.0"
     GENERATE_INFOPLIST_FILE: YES
     INFOPLIST_FILE: App/Info.plist
-    CURRENT_PROJECT_VERSION: 4
-    MARKETING_VERSION: 0.3.0
+    CURRENT_PROJECT_VERSION: 5
+    MARKETING_VERSION: 0.4.0
 packages:
   PaperReader:
     path: .
