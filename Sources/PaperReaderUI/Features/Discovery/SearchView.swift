@@ -55,7 +55,6 @@ struct SearchView: View {
             }
             .padding(.horizontal, 12).frame(minHeight: 42)
             .readerGlassSurface(in: RoundedRectangle(cornerRadius: 9), bordered: true)
-            .quickStartTarget(.discovery)
             HStack(spacing: 6) {
                 ReaderIcon(.library, size: 13)
                 Text("导入到 \(targetName)").lineLimit(1).accessibilityIdentifier("online-import-destination")

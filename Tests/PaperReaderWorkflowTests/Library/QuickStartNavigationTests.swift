@@ -7,9 +7,6 @@ import Testing
 @Test func quickStartChoosingAPaperAdvancesWithoutUsingItAsTheSample() {
     var guide = QuickStartNavigation(step: .importPaper)
     guide.didChooseLibraryPaper()
-    #expect(guide.step == .discovery && guide.sampleID == nil)
-    guide.request(.shelves, closeReadingActive: false)
-    guide.didChooseLibraryPaper()
     #expect(guide.step == .modelSettings && guide.sampleID == nil)
     guide.request(.bilingual, closeReadingActive: false)
     guide.didChooseLibraryPaper()
@@ -18,15 +15,15 @@ import Testing
 
 @Test func quickStartWaitsForCloseReadingAndAllowsChangingDirection() {
     var guide = QuickStartNavigation(step: .assistant)
-    guide.request(.notebook, closeReadingActive: true)
-    #expect(guide.step == .assistant && guide.deferred == .notebook)
-    guide.request(.annotation, closeReadingActive: true)
+    guide.request(.modelSettings, closeReadingActive: true)
+    #expect(guide.step == .assistant && guide.deferred == .modelSettings)
+    guide.request(.noteHover, closeReadingActive: true)
     guide.resumeDeferredNavigation()
-    #expect(guide.step == .annotation && guide.deferred == nil)
+    #expect(guide.step == .noteHover && guide.deferred == nil)
     guide.request(.assistant, closeReadingActive: true)
-    guide.request(.notebook, closeReadingActive: true)
+    guide.request(.importPaper, closeReadingActive: true)
     guide.resumeDeferredNavigation()
-    #expect(guide.step == .notebook && guide.deferred == nil)
+    #expect(guide.step == .importPaper && guide.deferred == nil)
 }
 
 @Test @MainActor func quickStartSampleAnnotationKeepsItsOriginalPage() async throws {
@@ -46,14 +43,14 @@ import Testing
     #expect(!reader.pdfBilingual.isOpen && reader.visiblePage == 1 && reader.selectedPaperID == id)
 }
 
-@Test func guideCanVisitExportDuringCloseReadingAndWaitsBeforeResearchReview() {
-    var guide = QuickStartNavigation(step: .assistant)
-    guide.request(.export, closeReadingActive: true)
-    #expect(guide.step == .export && guide.deferred == nil)
-    for next in [QuickStartStep.notebook, .calendar, .research] {
-        guide.request(next, closeReadingActive: true)
-        #expect(guide.step == .export && guide.deferred == next)
+@Test func streamlinedQuickStartIncludesNoteRecordingAndHoverSteps() {
+    #expect(QuickStartStep.allCases == [.importPaper, .modelSettings, .bilingual, .annotation, .noteHover, .assistant])
+    #expect(QuickStartStep.noteHover.usesSample)
+    #expect(!QuickStartStep.noteHover.requiresAnchor)
+    #expect(QuickStartStep.annotation.requiresAnchor)
+    #expect(QuickStartStep.annotation.instruction.contains("添加笔记"))
+    #expect(QuickStartStep.noteHover.instruction.contains("悬停"))
+    for step in QuickStartStep.allCases {
+        #expect(!step.title.isEmpty && !step.instruction.isEmpty && !step.chapter.isEmpty)
     }
-    guide.resumeDeferredNavigation()
-    #expect(guide.step == QuickStartStep.allCases.last && guide.deferred == nil)
 }

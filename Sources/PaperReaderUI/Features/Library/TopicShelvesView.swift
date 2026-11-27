@@ -1,6 +1,11 @@
 import PaperReaderKit
 import SwiftUI
 
+// Plain reference box avoids invalidating TopicShelvesView on every frame of sidebar resize while collapsed.
+@MainActor private final class StripWidthBox {
+    var width: CGFloat = 0
+}
+
 struct TopicShelvesView<SortMenu: View>: View {
     @Bindable var model: ReaderModel
     @Binding var selectedShelfID: UUID?
@@ -9,6 +14,7 @@ struct TopicShelvesView<SortMenu: View>: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var expanded = false
     @State private var stripWidth: CGFloat = 0
+    @State private var measuredWidth = StripWidthBox()
     @State private var overflows = false
     @State private var editing = false
     @State private var editingID: UUID?
@@ -26,6 +32,7 @@ struct TopicShelvesView<SortMenu: View>: View {
                     sortMenu.padding(.trailing, 6)
                     if expanded || overflows {
                         Button {
+                            if !expanded { stripWidth = measuredWidth.width }
                             withAnimation(ReaderMotion.disclosure(reduceMotion)) { expanded.toggle() }
                         } label: {
                             ReaderIcon(.chevron, size: 14)
@@ -45,7 +52,6 @@ struct TopicShelvesView<SortMenu: View>: View {
                     }
                     .readerIconButtonStyle(.plain)
                     .help("新建书架").accessibilityLabel("新建书架").disabled(saving)
-                    .quickStartTarget(editing ? nil : .shelves)
                 }
                 .buttonStyle(.plain).font(.system(size: 12, weight: .medium))
                 .foregroundStyle(ReaderTheme.muted)
@@ -57,7 +63,6 @@ struct TopicShelvesView<SortMenu: View>: View {
             .readerGlassGroup()
             if editing {
                 nameEditor
-                    .quickStartTarget(.shelves)
                     .transition(reduceMotion ? .identity : .opacity.combined(with: .offset(y: -6)))
             }
         }
@@ -97,15 +102,16 @@ struct TopicShelvesView<SortMenu: View>: View {
             .scrollIndicators(.hidden)
             .onGeometryChange(for: CGFloat.self) {
                 $0.size.width
-            } action: {
-                stripWidth = $0
+            } action: { width in
+                measuredWidth.width = width
+                if expanded && abs(stripWidth - width) > 0.5 { stripWidth = width }
             }
-            .onScrollGeometryChange(for: CGFloat.self) { geometry in
+            .onScrollGeometryChange(for: Bool.self) { geometry in
                 // Compare against the room available without the disclosure to avoid a resize feedback loop.
                 let available = geometry.containerSize.width + (overflows ? shelfControlSize : 0)
-                return geometry.contentSize.width - available
-            } action: { _, overflow in
-                if !expanded { overflows = overflow > 0.5 }
+                return geometry.contentSize.width - available > 0.5
+            } action: { _, next in
+                if !expanded && overflows != next { overflows = next }
             }
             .onChange(of: selectedShelfID, initial: true) { previous, selected in
                 // The first unclassified shelf already starts at the leading edge. Enqueuing

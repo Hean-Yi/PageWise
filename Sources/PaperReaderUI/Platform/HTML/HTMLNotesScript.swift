@@ -359,8 +359,10 @@ enum HTMLNotesScript {
           });
           document.addEventListener('mouseleave',()=>{lastPoint=null;if(!choiceOwner)leave();});
           document.addEventListener('keydown',event=>{if(event.key==='Escape'&&active)finish();});
-          const resized=()=>{closeChoices();layout.invalidate();schedule();};
-          window.addEventListener('resize',resized);
+          let resizeTimer=null;
+          const resized=()=>{clearTimeout(resizeTimer);resizeTimer=null;closeChoices();layout.invalidate();schedule();};
+          const onResize=()=>{closeChoices();layout.invalidate();if(!records.size&&!active)return;clearTimeout(resizeTimer);resizeTimer=setTimeout(()=>{resizeTimer=null;schedule();},48);};
+          window.addEventListener('resize',onResize);
           document.addEventListener('scroll',()=>{
             closeChoices();
             layout.scrolled();
@@ -369,7 +371,7 @@ enum HTMLNotesScript {
               const {x,y}=lastPoint;track(document.elementFromPoint(x,y),x,y,null,true);
             });}
           },{passive:true});
-          new ResizeObserver(resized).observe(root);document.fonts?.ready.then(resized);document.fonts?.addEventListener('loadingdone',resized);
+          new ResizeObserver(onResize).observe(root);document.fonts?.ready.then(resized);document.fonts?.addEventListener('loadingdone',resized);
           // The appendix follows the published reader; it never becomes a paper section or an annotation anchor.
           let appendix=null,appendixEditor=null;
           const summary=(id,source,html)=>{

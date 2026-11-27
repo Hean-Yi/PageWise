@@ -13,7 +13,9 @@ public struct LibraryView: View {
     @State private var showSettings = false
     @State private var settingsHint: String?
     @State private var guide = QuickStartNavigation()
+    @State private var openingSample = false
     @AppStorage("completedQuickStart") private var completedQuickStart = false
+    @State private var detailMetrics = DetailSidebarMetrics(width: 1100)
     @State private var onlineSearch: OnlinePaperSearch
     @State private var selectedShelfID: UUID?
     @State private var calendarDate = Date()
@@ -47,6 +49,7 @@ public struct LibraryView: View {
 
     public var body: some View {
         navigationSurface
+            .environment(\.quickStartStep, guide.step)
             .onChange(of: selectedShelfID, initial: true) { _, shelf in model.activeShelfID = shelf }
             .overlayPreferenceValue(QuickStartAnchors.self) { anchors in
                 if let step = guide.step {
@@ -54,6 +57,7 @@ public struct LibraryView: View {
                         QuickStartOverlay(
                             step: step, targetRect: anchors[step].map { geometry[$0] },
                             nextTitle: guideNextTitle,
+                            isBusy: openingSample,
                             onBack: { moveGuide(-1) }, onNext: { moveGuide(1) }, onSkip: finishGuide,
                             onReadSample: openSample)
                     }
@@ -148,8 +152,9 @@ public struct LibraryView: View {
     }
 
     private var guideNextTitle: String? {
+        if openingSample { return "正在打开…" }
         if guide.deferred != nil { return "等待精读…" }
-        if guide.step == .modelSettings { return "打开内置示例" }
+        if guide.step == .modelSettings { return "试读示例" }
         return nil
     }
 
@@ -168,9 +173,13 @@ public struct LibraryView: View {
     }
 
     private func moveGuide(_ distance: Int) {
-        guard let current = guide.step else { return }
+        guard let current = guide.step, !openingSample else { return }
         if let next = QuickStartStep(rawValue: current.rawValue + distance) {
             if model.isImporting && (next == .bilingual || current == .bilingual) { return }
+            if next.usesSample && (guide.sampleID == nil || model.selectedPaperID != guide.sampleID || !isReading) {
+                openSampleForGuide(target: next)
+                return
+            }
             guide.request(next, closeReadingActive: model.closeReadingPaperID != nil)
         } else if distance > 0 {
             finishGuide()
@@ -189,22 +198,40 @@ public struct LibraryView: View {
     }
 
     private func openSample() {
-        guard !model.isImporting else { return }
+        guard !model.isImporting, !openingSample else { return }
         if guide.step != nil {
-            guide.request(.bilingual, closeReadingActive: model.closeReadingPaperID != nil)
+            openSampleForGuide(target: .bilingual)
         } else {
             Task { await model.openBundledSample() }
         }
     }
 
+    private func openSampleForGuide(target: QuickStartStep) {
+        guard !openingSample, !model.isImporting else { return }
+        openingSample = true
+        Task {
+            defer { openingSample = false }
+            let sampleID = await model.openBundledSample()
+            guard !Task.isCancelled, guide.step != nil else { return }
+            guard let sampleID else {
+                guide.step = .modelSettings
+                return
+            }
+            guide.sampleID = sampleID
+            guide.request(target, closeReadingActive: model.closeReadingPaperID != nil)
+        }
+    }
+
     private func navigateGuide(to step: QuickStartStep) async {
-        columns = .all
         if !step.usesSample {
+            columns = .all
             if model.selectedPaperID != nil { model.select(nil) }
             model.selectedSection = "library"
             collection = .all
-            assistantTab = step == .research ? .library : nil
-            preferredColumn = [.discovery, .shelves, .research].contains(step) ? .detail : .sidebar
+            if assistantTab != nil {
+                withAnimation(ReaderMotion.sidebar(reduceMotion)) { assistantTab = nil }
+            }
+            preferredColumn = .sidebar
         } else {
             if guide.sampleID == nil || model.selectedPaperID != guide.sampleID || !isReading {
                 let sampleID = await model.openBundledSample()
@@ -216,10 +243,9 @@ public struct LibraryView: View {
                 guide.sampleID = sampleID
             }
             preferredColumn = .detail
-            switch step {
-            case .assistant: assistantTab = .paper
-            case .export: assistantTab = .notes
-            default: assistantTab = nil
+            let targetTab: AssistantTab? = step == .assistant ? .paper : nil
+            if assistantTab != targetTab {
+                withAnimation(ReaderMotion.sidebar(reduceMotion)) { assistantTab = targetTab }
             }
             if step == .annotation { model.showOriginalReading() }
         }
@@ -280,72 +306,72 @@ public struct LibraryView: View {
     }
 
     private var detailContent: some View {
-        GeometryReader { proxy in
-            let width = proxy.size.width
-            let inline = width >= 840
-            let sidebarWidth = min(340, max(1, width - 36))
-            let sidebarVisible = assistantTab != nil
-            let reservesSidebar = inline && sidebarVisible
-            ZStack(alignment: .trailing) {
-                workspaceContent
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .padding(.trailing, reservesSidebar ? sidebarWidth : 0)
-                    // Give PDFKit and WebKit the new viewport once; animate bookshelf & workspace layouts smoothly.
-                    .animation(isReading ? nil : ReaderMotion.sidebar(reduceMotion), value: reservesSidebar)
-                    .transaction(value: sidebarVisible) {
-                        if isReading { $0.animation = nil }
+        let inline = detailMetrics.inline
+        let sidebarWidth = detailMetrics.sidebarWidth
+        let sidebarVisible = assistantTab != nil
+        let reservesSidebar = inline && sidebarVisible
+        let isShelf = workspacePage == .shelf
+        return ZStack(alignment: .trailing) {
+            workspaceContent(trailingInset: isShelf && reservesSidebar ? sidebarWidth : 0)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding(.trailing, !isShelf && reservesSidebar ? sidebarWidth : 0)
+                // Give PDFKit, WebKit and non-shelf pages their final width once; bookshelf animates its single reflow via trailingInset.
+                .transaction(value: reservesSidebar) { $0.animation = nil }
+            if !inline && sidebarVisible {
+                Color.black.opacity(0.14)
+                    .ignoresSafeArea()
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        withAnimation(ReaderMotion.sidebar(reduceMotion)) { self.assistantTab = nil }
                     }
-                if !inline && sidebarVisible {
-                    Color.black.opacity(0.14)
-                        .ignoresSafeArea()
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            withAnimation(ReaderMotion.sidebar(reduceMotion)) { self.assistantTab = nil }
-                        }
-                        .accessibilityAddTraits(.isButton)
-                        .accessibilityLabel("收起助读侧栏")
-                        .transition(.opacity)
-                }
-                ZStack(alignment: .trailing) {
-                    if let assistantTab {
-                        WorkspaceAssistantSidebar(
-                            model: model, agent: agent, isReading: isReading, tab: isReading ? assistantTab : .library,
-                            select: { self.assistantTab = $0 }, question: $paperQuestion, agentDraft: $agentDraft,
-                            showsCloseButton: !inline,
-                            onClose: {
-                                withAnimation(ReaderMotion.sidebar(reduceMotion)) { self.assistantTab = nil }
-                            },
-                            openSettings: {
-                                settingsHint = "请先选择模型服务并保存 API 密钥，即可使用助读与精读功能。"
-                                showSettings = true
-                            },
-                            didNavigate: {
-                                if !inline {
-                                    withAnimation(ReaderMotion.sidebar(reduceMotion)) { self.assistantTab = nil }
-                                } else if assistantTab == .library {
-                                    paperOpenedFromAgent = model.selectedPaperID
-                                }
-                            }
-                        )
-                        .frame(width: sidebarWidth)
-                        .background(alignment: .leading) {
-                            if !inline {
-                                LinearGradient(
-                                    colors: [.clear, .black.opacity(0.09)], startPoint: .leading, endPoint: .trailing
-                                )
-                                .frame(width: 8).offset(x: -8).allowsHitTesting(false).accessibilityHidden(true)
-                            }
-                        }
-                        .accessibilityAction(.escape) { self.assistantTab = nil }
-                        .transition(reduceMotion ? .identity : .move(edge: .trailing))
-                    }
-                }
-                .frame(width: sidebarWidth)
-                .allowsHitTesting(sidebarVisible)
-                .accessibilityHidden(!sidebarVisible)
-                .animation(ReaderMotion.sidebar(reduceMotion), value: sidebarVisible)
+                    .accessibilityAddTraits(.isButton)
+                    .accessibilityLabel("收起助读侧栏")
+                    .transition(.opacity)
             }
-            .clipped()
+            ZStack(alignment: .trailing) {
+                if let assistantTab {
+                    WorkspaceAssistantSidebar(
+                        model: model, agent: agent, isReading: isReading, tab: isReading ? assistantTab : .library,
+                        select: { self.assistantTab = $0 }, question: $paperQuestion, agentDraft: $agentDraft,
+                        showsCloseButton: !inline,
+                        onClose: {
+                            withAnimation(ReaderMotion.sidebar(reduceMotion)) { self.assistantTab = nil }
+                        },
+                        openSettings: {
+                            settingsHint = "请先选择模型服务并保存 API 密钥，即可使用助读与精读功能。"
+                            showSettings = true
+                        },
+                        didNavigate: {
+                            if !inline {
+                                withAnimation(ReaderMotion.sidebar(reduceMotion)) { self.assistantTab = nil }
+                            } else if assistantTab == .library {
+                                paperOpenedFromAgent = model.selectedPaperID
+                            }
+                        }
+                    )
+                    .frame(width: sidebarWidth)
+                    .background(alignment: .leading) {
+                        if !inline {
+                            LinearGradient(
+                                colors: [.clear, .black.opacity(0.09)], startPoint: .leading, endPoint: .trailing
+                            )
+                            .frame(width: 8).offset(x: -8).allowsHitTesting(false).accessibilityHidden(true)
+                        }
+                    }
+                    .accessibilityAction(.escape) { self.assistantTab = nil }
+                    .transition(reduceMotion ? .identity : .move(edge: .trailing))
+                }
+            }
+            .frame(width: sidebarWidth)
+            .allowsHitTesting(sidebarVisible)
+            .accessibilityHidden(!sidebarVisible)
+            .animation(ReaderMotion.sidebar(reduceMotion), value: sidebarVisible)
+        }
+        .clipped()
+        .onGeometryChange(for: DetailSidebarMetrics.self) {
+            DetailSidebarMetrics(width: $0.size.width)
+        } action: { next in
+            if detailMetrics != next { detailMetrics = next }
         }
         .obsidianExportPresentation(model: model)
         .background(ReaderTheme.canvas)
@@ -391,33 +417,11 @@ public struct LibraryView: View {
             }
         }
         .overlay(alignment: .bottom) {
-            let busy = model.isImporting || (!isReading && !model.translating.isEmpty)
-            ZStack(alignment: .bottom) {
-                if busy {
-                    HStack(spacing: 10) {
-                        if model.isImporting, let progress = model.importProgress {
-                            VStack(alignment: .leading, spacing: 6) {
-                                Text(progress).font(.caption).lineLimit(1)
-                                ProgressView().progressViewStyle(.linear)
-                                    .accessibilityLabel(progress)
-                            }.frame(width: 250)
-                        } else {
-                            ProgressView().controlSize(.small)
-                            Text(model.status).font(.caption).lineLimit(1)
-                        }
-                    }.padding(.horizontal, 18).padding(.vertical, 12)
-                        .readerGlassSurface(in: Capsule(), bordered: true).padding(18)
-                } else if let toast {
-                    Label(toast, systemImage: "checkmark.circle.fill").font(.caption).lineLimit(2)
-                        .padding(.horizontal, 18).padding(.vertical, 12)
-                        .readerGlassSurface(in: Capsule(), bordered: true).padding(18).allowsHitTesting(false)
-                }
-            }
-            .animation(ReaderMotion.feedback(reduceMotion), value: busy || toast != nil)
+            LibraryStatusOverlay(model: model, isReading: isReading, toast: toast)
         }
     }
 
-    private var workspaceContent: some View {
+    private func workspaceContent(trailingInset: CGFloat) -> some View {
         let page = workspacePage
         return ZStack {
             if let failure = model.loadFailure {
@@ -447,7 +451,8 @@ public struct LibraryView: View {
                 case .shelf:
                     LibraryWorkspaceView(
                         model: model, collection: $collection, selectedShelfID: $selectedShelfID,
-                        onlineSearch: onlineSearch, findRequest: findRequest, openSample: openSample)
+                        onlineSearch: onlineSearch, findRequest: findRequest, trailingInset: trailingInset,
+                        openSample: openSample)
                 }
             }
         }
@@ -552,12 +557,12 @@ public struct LibraryView: View {
                     model.endReading()
                     model.selectedSection = "calendar"
                     preferredColumn = .detail
-                }.environment(\.calendarIconTurns, calendarIconTurns).quickStartTarget(.calendar)
+                }.environment(\.calendarIconTurns, calendarIconTurns)
                 navigation("阅读笔记", icon: .notebook, selected: model.selectedSection == "notebooks") {
                     model.endReading()
                     model.selectedSection = "notebooks"
                     preferredColumn = .detail
-                }.quickStartTarget(.notebook)
+                }
             }
             .sidebarSelectionIndicator(
                 for: model.selectedSection == "library" ? collection.id : model.selectedSection,
@@ -640,6 +645,49 @@ public struct LibraryView: View {
     }
 }
 
+private struct DetailSidebarMetrics: Equatable {
+    let inline: Bool
+    let sidebarWidth: CGFloat
+
+    init(width: CGFloat) {
+        inline = width >= 840
+        sidebarWidth = width >= 376 ? 340 : max(1, floor(width - 36))
+    }
+}
+
+private struct LibraryStatusOverlay: View {
+    let model: ReaderModel
+    let isReading: Bool
+    let toast: String?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        let busy = model.isImporting || (!isReading && !model.translating.isEmpty)
+        ZStack(alignment: .bottom) {
+            if busy {
+                HStack(spacing: 10) {
+                    if model.isImporting, let progress = model.importProgress {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text(progress).font(.caption).lineLimit(1)
+                            ProgressView().progressViewStyle(.linear)
+                                .accessibilityLabel(progress)
+                        }.frame(width: 250)
+                    } else {
+                        ProgressView().controlSize(.small)
+                        Text(model.status).font(.caption).lineLimit(1)
+                    }
+                }.padding(.horizontal, 18).padding(.vertical, 12)
+                    .readerGlassSurface(in: Capsule(), bordered: true).padding(18)
+            } else if let toast {
+                Label(toast, systemImage: "checkmark.circle.fill").font(.caption).lineLimit(2)
+                    .padding(.horizontal, 18).padding(.vertical, 12)
+                    .readerGlassSurface(in: Capsule(), bordered: true).padding(18).allowsHitTesting(false)
+            }
+        }
+        .animation(ReaderMotion.feedback(reduceMotion), value: busy || toast != nil)
+    }
+}
+
 /// Only the bundled document can become the guide's reading example.
 struct QuickStartNavigation {
     var step: QuickStartStep?
@@ -650,7 +698,7 @@ struct QuickStartNavigation {
         self.step = step
     }
 
-    var isChoosingPaper: Bool { step == .importPaper || step == .discovery || step == .shelves }
+    var isChoosingPaper: Bool { step == .importPaper }
 
     mutating func didChooseLibraryPaper() {
         guard isChoosingPaper, let step else { return }

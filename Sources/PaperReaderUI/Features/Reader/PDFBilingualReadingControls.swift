@@ -2,7 +2,7 @@ import SwiftUI
 
 struct PDFBilingualAppearanceMenu: View {
     @Binding var layout: PDFBilingualLayoutPreference
-    let width: CGFloat
+    let allowsSplit: Bool
     @AppStorage("PDFBilingualFontSize") private var fontSize = 16
 
     var body: some View {
@@ -17,7 +17,7 @@ struct PDFBilingualAppearanceMenu: View {
         ]
         var items: [ReaderMenuItem] = [.section("对照布局")]
         items += layouts.map { title, value in
-            .action(title, selected: layout == value, enabled: value != .split || width >= 570) {
+            .action(title, selected: layout == value, enabled: value != .split || allowsSplit) {
                 layout = value
             }
         }

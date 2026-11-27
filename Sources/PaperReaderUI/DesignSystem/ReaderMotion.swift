@@ -14,7 +14,7 @@ enum ReaderMotion {
     }
 
     static func sidebar(_ reduceMotion: Bool) -> Animation? {
-        reduceMotion ? nil : .smooth(duration: 0.34)
+        reduceMotion ? nil : .smooth(duration: 0.26)
     }
 
     static func arrival(y: CGFloat = 0) -> AnyTransition {

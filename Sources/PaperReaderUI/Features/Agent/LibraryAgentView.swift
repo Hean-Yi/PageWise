@@ -123,7 +123,6 @@ struct LibraryAgentView: View {
             .frame(minHeight: prompt == nil ? 52 : 40, alignment: .top)
             .focused($composerFocused).onSubmit(send)
             .accessibilityLabel(prompt == nil ? "向书库 Agent 提问" : "自定义回答")
-            .quickStartTarget(.research)
             HStack {
                 if !agent.turns.isEmpty {
                     Button {

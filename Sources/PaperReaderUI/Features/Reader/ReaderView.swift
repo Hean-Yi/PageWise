@@ -12,20 +12,26 @@ struct ReaderView: View {
     @State private var penEnabled = false
     @State private var peekingAtOriginal = false
     @State private var mountedSourcePaperID: UUID?
+    @State private var viewport = ReaderViewportClass(width: 900)
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @AppStorage("PDFBilingualDisplayLayout") private var pdfLayout = PDFBilingualLayoutPreference.paragraph
 
     var body: some View {
-        GeometryReader { proxy in content(width: proxy.size.width) }
+        content
+            .onGeometryChange(for: ReaderViewportClass.self) {
+                ReaderViewportClass(width: $0.size.width)
+            } action: { next in
+                if viewport != next { viewport = next }
+            }
             .sheet(item: $model.notePassageSheet) { sheet in
                 NotePassageSheetView(model: model, sheet: sheet)
             }
     }
 
-    private func content(width: CGFloat) -> some View {
+    private var content: some View {
         let summary = model.presentedDocumentSummary
         return VStack(spacing: 0) {
-            header(width: width)
+            header(compact: viewport.compactHeader)
             Divider()
             VStack(spacing: 0) {
                 // A direct notebook entry only needs its editor. Once the reader has shown the
@@ -33,7 +39,7 @@ struct ReaderView: View {
                 if summary == nil || mountedSourcePaperID == model.selectedPaperID {
                     documentCanvas
                         .onChange(of: model.selectedPaperID, initial: true) { _, id in mountedSourcePaperID = id }
-                    if !model.showingReflowLoading { readingBar(width: width) }
+                    if !model.showingReflowLoading { readingBar(allowsSplit: viewport.allowsSplit) }
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -131,7 +137,7 @@ struct ReaderView: View {
 
     private var isLocalPDF: Bool { model.currentEdition?.usesSourceReflow == false }
 
-    private func header(width: CGFloat) -> some View {
+    private func header(compact: Bool) -> some View {
         HStack(spacing: 12) {
             Button(action: model.returnFromReader) {
                 Label("返回\(model.readerOrigin.title)", systemImage: "chevron.left")
@@ -169,7 +175,7 @@ struct ReaderView: View {
             .readerGlassSurface(in: Capsule(), fallback: ReaderTheme.elevated)
         }
         .readerGlassGroup()
-        .buttonStyle(.borderless).padding(.horizontal, width < 520 ? 12 : 22).frame(height: 56)
+        .buttonStyle(.borderless).padding(.horizontal, compact ? 12 : 22).frame(height: 56)
         .background(ReaderTheme.canvas)
     }
 
@@ -257,11 +263,12 @@ struct ReaderView: View {
         }
     }
 
-    private func readingBar(width: CGFloat) -> some View {
+    private func readingBar(allowsSplit: Bool) -> some View {
         let pageCount = model.displayedPageKeys.count
-        let originalVisible = !model.pdfBilingual.isOpen || peekingAtOriginal || pdfLayout.resolved(at: width) == .split
+        let resolvedLayout = pdfLayout.resolved(allowsSplit: allowsSplit)
+        let originalVisible = !model.pdfBilingual.isOpen || peekingAtOriginal || resolvedLayout == .split
         let continuousParagraphs =
-            model.pdfBilingual.isOpen && pdfLayout.resolved(at: width) == .paragraph && !peekingAtOriginal
+            model.pdfBilingual.isOpen && resolvedLayout == .paragraph && !peekingAtOriginal
         return HStack(spacing: 12) {
             if pageCount == 0 {
                 Text("等待正文就绪").font(.caption).foregroundStyle(ReaderTheme.muted)
@@ -312,7 +319,7 @@ struct ReaderView: View {
             .keyboardShortcut("d")
             if let paper = model.currentEdition { editionControls(for: paper) }
             if model.pdfBilingual.isOpen && isLocalPDF && !peekingAtOriginal {
-                PDFBilingualAppearanceMenu(layout: $pdfLayout, width: width)
+                PDFBilingualAppearanceMenu(layout: $pdfLayout, allowsSplit: allowsSplit)
             }
             Spacer()
             if model.pdfBilingual.isOpen && isLocalPDF && (model.selectionText.isEmpty || !originalVisible) {
@@ -388,5 +395,15 @@ struct ReaderView: View {
         } else {
             openSettings()
         }
+    }
+}
+
+private struct ReaderViewportClass: Equatable {
+    let compactHeader: Bool
+    let allowsSplit: Bool
+
+    init(width: CGFloat) {
+        compactHeader = width < 520
+        allowsSplit = width >= 570
     }
 }

@@ -29,12 +29,13 @@ struct LibraryWorkspaceView: View {
     @Binding var selectedShelfID: UUID?
     @Bindable var onlineSearch: OnlinePaperSearch
     let findRequest: Int
+    var trailingInset: CGFloat = 0
     let openSample: () -> Void
 
     var body: some View {
         ShelfWorkspaceContent(
             model: model, collection: $collection, selectedShelfID: $selectedShelfID, onlineSearch: onlineSearch,
-            findRequest: findRequest, openSample: openSample,
+            findRequest: findRequest, trailingInset: trailingInset, openSample: openSample,
             listing: ShelfListing(state: model.state, collection: collection, shelfID: selectedShelfID))
     }
 }
@@ -69,6 +70,7 @@ private struct ShelfWorkspaceContent: View {
     @Binding var selectedShelfID: UUID?
     @Bindable var onlineSearch: OnlinePaperSearch
     let findRequest: Int
+    let trailingInset: CGFloat
     let openSample: () -> Void
     let listing: ShelfListing
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -153,7 +155,7 @@ private struct ShelfWorkspaceContent: View {
 
     private var workspace: some View {
         GeometryReader { geometry in
-            let metrics = ShelfGridMetrics.compute(width: geometry.size.width)
+            let metrics = ShelfGridMetrics.compute(width: max(1, geometry.size.width - trailingInset))
             let compact = metrics.compact
             let inset = metrics.inset
             let count = metrics.columns
@@ -191,7 +193,8 @@ private struct ShelfWorkspaceContent: View {
                         .padding(.top, 5)
                         .animation(ReaderMotion.disclosure(reduceMotion), value: sort)
                         .animation(ReaderMotion.navigation(reduceMotion), value: selection)
-                        .animation(ReaderMotion.sidebar(reduceMotion), value: metrics)
+                        .animation(ReaderMotion.sidebar(reduceMotion), value: count)
+                        .animation(ReaderMotion.sidebar(reduceMotion), value: trailingInset)
                     if model.state.papers.isEmpty && collection == .all {
                         HStack(spacing: 14) {
                             Text("也可以拖入 PDF").foregroundStyle(ReaderTheme.muted)
@@ -203,10 +206,13 @@ private struct ShelfWorkspaceContent: View {
                         Text("这个书架还没有论文").foregroundStyle(ReaderTheme.muted)
                             .font(.system(size: 12)).padding(.top, 22)
                     }
-                }.padding(.horizontal, inset).padding(.top, compact ? 22 : 30).padding(.bottom, 44)
+                }.padding(.leading, inset).padding(.trailing, inset + trailingInset)
+                    .padding(.top, compact ? 22 : 30).padding(.bottom, 44)
                     .animation(ReaderMotion.disclosure(reduceMotion), value: onlineSearch.isExpanded)
                     .animation(ReaderMotion.sidebar(reduceMotion), value: compact)
+                    .animation(ReaderMotion.sidebar(reduceMotion), value: trailingInset)
             }
+            .contentMargins(.trailing, trailingInset, for: .scrollIndicators)
             .onChange(of: count) { _, _ in
                 if preview != nil { _ = dismissPreview() }
             }
@@ -226,6 +232,7 @@ private struct ShelfWorkspaceContent: View {
                         self.preview = nil
                         model.select(paper.id)
                     }
+                    .padding(.trailing, trailingInset)
                     .id(paper.id)
                     .transition(.identity)
                 }
@@ -292,7 +299,6 @@ private struct ShelfWorkspaceContent: View {
     @ViewBuilder private func shelfGridItems(metrics: ShelfGridMetrics) -> some View {
         if leadingCoverCount != 0 {
             AddPaperCover { onlineSearch.open(shelfID: selection.shelfID) }
-                .quickStartTarget(onlineSearch.isExpanded ? nil : .discovery)
         }
         ForEach(listing.entries, id: \.element.id) { index, paper in
             bookshelfItem(
@@ -468,55 +474,70 @@ private struct ShelfGridMetrics: Equatable {
     }
 }
 
-/// Flat grid layout that lets SwiftUI smoothly interpolate every cover's position when sidebars open or close.
+/// Flat grid layout that lets SwiftUI smoothly interpolate every cover's position when columns change.
 private struct ShelfBookGridLayout: Layout {
     let columns: Int
     let spacing: CGFloat
     let rowSpacing: CGFloat
     let cellWidth: CGFloat
 
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+    struct Cache {
+        var measuredWidth: CGFloat = -1
+        var heights: [CGFloat] = []
+    }
+
+    func makeCache(subviews: Subviews) -> Cache { Cache() }
+
+    func updateCache(_ cache: inout Cache, subviews: Subviews) {
+        if cache.heights.count != subviews.count { cache.measuredWidth = -1 }
+    }
+
+    private func ensureMeasured(_ cache: inout Cache, subviews: Subviews) {
+        guard cache.heights.count != subviews.count || abs(cache.measuredWidth - cellWidth) > 0.01 else { return }
+        let itemProposal = ProposedViewSize(width: cellWidth, height: nil)
+        cache.heights = subviews.map { $0.sizeThatFits(itemProposal).height }
+        cache.measuredWidth = cellWidth
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) -> CGSize {
         let width =
             proposal.width.flatMap { $0.isFinite ? $0 : nil }
             ?? CGFloat(columns) * cellWidth + CGFloat(max(0, columns - 1)) * spacing
         guard !subviews.isEmpty else { return CGSize(width: width, height: 0) }
+        ensureMeasured(&cache, subviews: subviews)
         let safeColumns = max(1, columns)
-        let itemProposal = ProposedViewSize(width: cellWidth, height: nil)
         var totalHeight: CGFloat = 0
         var rowHeight: CGFloat = 0
-        for (index, subview) in subviews.enumerated() {
-            let size = subview.sizeThatFits(itemProposal)
-            rowHeight = max(rowHeight, size.height)
-            let isRowEnd = (index % safeColumns) == (safeColumns - 1) || index == subviews.count - 1
+        for (index, height) in cache.heights.enumerated() {
+            rowHeight = max(rowHeight, height)
+            let isRowEnd = (index % safeColumns) == (safeColumns - 1) || index == cache.heights.count - 1
             if isRowEnd {
                 totalHeight += rowHeight
-                if index != subviews.count - 1 { totalHeight += rowSpacing }
+                if index != cache.heights.count - 1 { totalHeight += rowSpacing }
                 rowHeight = 0
             }
         }
         return CGSize(width: width, height: totalHeight)
     }
 
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) {
+        guard !subviews.isEmpty else { return }
+        ensureMeasured(&cache, subviews: subviews)
         let safeColumns = max(1, columns)
-        let itemProposal = ProposedViewSize(width: cellWidth, height: nil)
         var y = bounds.minY
         var index = 0
         while index < subviews.count {
             let rowEnd = min(index + safeColumns, subviews.count)
             var rowHeight: CGFloat = 0
-            var sizes: [CGSize] = []
-            sizes.reserveCapacity(rowEnd - index)
             for i in index..<rowEnd {
-                let size = subviews[i].sizeThatFits(itemProposal)
-                sizes.append(size)
-                rowHeight = max(rowHeight, size.height)
+                rowHeight = max(rowHeight, cache.heights[i])
             }
             for offset in 0..<(rowEnd - index) {
                 let x = bounds.minX + CGFloat(offset) * (cellWidth + spacing)
+                let height = cache.heights[index + offset]
                 subviews[index + offset].place(
                     at: CGPoint(x: x, y: y), anchor: .topLeading,
-                    proposal: ProposedViewSize(width: cellWidth, height: sizes[offset].height))
+                    proposal: ProposedViewSize(width: cellWidth, height: height))
             }
             y += rowHeight + rowSpacing
             index = rowEnd

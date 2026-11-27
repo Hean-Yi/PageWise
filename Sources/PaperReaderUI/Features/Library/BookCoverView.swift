@@ -5,49 +5,80 @@ import SwiftUI
 struct BookCoverView: View {
     let paper: Paper
     var progress: ReadingProgress? = nil
+    /// Rasterizing the canonical plate lets bookshelf reflow scale on the GPU without re-running CoreText layout.
+    var rasterize = false
+
+    private static let canonicalWidth: CGFloat = 220
+    private static let canonicalHeight: CGFloat = 220 / 0.70
 
     var body: some View {
-        let palette = CoverPalette.forDigest(paper.digest)
         GeometryReader { geometry in
-            let scale = geometry.size.width / 220
-            ZStack(alignment: .leading) {
-                palette.paper
-                Rectangle().fill(palette.ink.opacity(0.12)).frame(width: 3 * scale)
-                VStack(alignment: .leading, spacing: 0) {
-                    Rectangle().fill(palette.ink.opacity(0.65)).frame(width: 32 * scale, height: 1.5 * scale)
-                        .padding(.bottom, 35 * scale)
-                    Text(paper.displayTitle)
-                        .font(ReaderTheme.editorial(28 * scale, weight: .medium))
-                        .tracking(-0.6 * scale).lineSpacing(2 * scale)
-                        .lineLimit(8).minimumScaleFactor(0.62)
-                        .multilineTextAlignment(.leading)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    Spacer(minLength: 22 * scale)
-                    if paper.pageCount > 0 {
-                        Rectangle().fill(palette.ink.opacity(0.24)).frame(height: 0.7 * scale)
-                        Text("\(paper.pageCount) 页").font(.system(size: 10 * scale, weight: .medium))
-                            .foregroundStyle(palette.ink.opacity(0.8)).padding(.top, 9 * scale)
-                    }
+            let scale = geometry.size.width / Self.canonicalWidth
+            plateView
+                .scaleEffect(scale, anchor: .topLeading)
+                .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)
+                .clipShape(
+                    UnevenRoundedRectangle(
+                        topLeadingRadius: 2, bottomLeadingRadius: 2, bottomTrailingRadius: 5, topTrailingRadius: 5)
+                )
+                .overlay {
+                    RoundedRectangle(cornerRadius: 3).strokeBorder(.black.opacity(0.09), lineWidth: 0.5)
                 }
-                .foregroundStyle(palette.ink)
-                .padding(.leading, 23 * scale).padding(.trailing, 20 * scale)
-                .padding(.top, 28 * scale).padding(.bottom, 19 * scale)
-            }
-            .clipShape(
-                UnevenRoundedRectangle(
-                    topLeadingRadius: 2, bottomLeadingRadius: 2, bottomTrailingRadius: 5, topTrailingRadius: 5)
-            )
-            .overlay {
-                RoundedRectangle(cornerRadius: 3).strokeBorder(.black.opacity(0.09), lineWidth: 0.5)
-            }
-            .overlay(alignment: .topTrailing) {
-                if let progress {
-                    CoverProgressRing(progress: progress, ink: palette.ink)
-                        .frame(width: 26 * scale, height: 26 * scale)
-                        .padding(16 * scale)
-                }
-            }
         }.aspectRatio(0.70, contentMode: .fit).accessibilityHidden(true)
+    }
+
+    @ViewBuilder private var plateView: some View {
+        let plate = BookCoverPlate(
+            title: paper.displayTitle, digest: paper.digest, pageCount: paper.pageCount, progress: progress
+        )
+        .equatable()
+        .frame(width: Self.canonicalWidth, height: Self.canonicalHeight)
+        if rasterize {
+            plate.drawingGroup(opaque: true)
+        } else {
+            plate
+        }
+    }
+}
+
+private struct BookCoverPlate: View, Equatable {
+    let title: String
+    let digest: String
+    let pageCount: Int
+    let progress: ReadingProgress?
+
+    var body: some View {
+        let palette = CoverPalette.forDigest(digest)
+        ZStack(alignment: .leading) {
+            palette.paper
+            Rectangle().fill(palette.ink.opacity(0.12)).frame(width: 3)
+            VStack(alignment: .leading, spacing: 0) {
+                Rectangle().fill(palette.ink.opacity(0.65)).frame(width: 32, height: 1.5)
+                    .padding(.bottom, 35)
+                Text(title)
+                    .font(ReaderTheme.editorial(28, weight: .medium))
+                    .tracking(-0.6).lineSpacing(2)
+                    .lineLimit(8).minimumScaleFactor(0.62)
+                    .multilineTextAlignment(.leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                Spacer(minLength: 22)
+                if pageCount > 0 {
+                    Rectangle().fill(palette.ink.opacity(0.24)).frame(height: 0.7)
+                    Text("\(pageCount) 页").font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(palette.ink.opacity(0.8)).padding(.top, 9)
+                }
+            }
+            .foregroundStyle(palette.ink)
+            .padding(.leading, 23).padding(.trailing, 20)
+            .padding(.top, 28).padding(.bottom, 19)
+        }
+        .overlay(alignment: .topTrailing) {
+            if let progress {
+                CoverProgressRing(progress: progress, ink: palette.ink)
+                    .frame(width: 26, height: 26)
+                    .padding(16)
+            }
+        }
     }
 }
 
@@ -57,24 +88,23 @@ private struct CoverProgressRing: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        GeometryReader { geometry in
-            let lineWidth = geometry.size.width / 13
-            ZStack {
-                Circle().stroke(
-                    ink.opacity(0.22),
-                    style: StrokeStyle(lineWidth: lineWidth, dash: progress.fraction == nil ? [2, 3] : []))
-                if let fraction = progress.fraction {
-                    Circle().trim(from: 0, to: fraction)
-                        .stroke(ink.opacity(0.85), style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
-                        .rotationEffect(.degrees(-90))
-                    if fraction == 1 {
-                        Image(systemName: "checkmark")
-                            .font(.system(size: geometry.size.width * 0.4, weight: .medium))
-                            .foregroundStyle(ink.opacity(0.85))
-                    }
+        let lineWidth: CGFloat = 2
+        ZStack {
+            Circle().stroke(
+                ink.opacity(0.22),
+                style: StrokeStyle(lineWidth: lineWidth, dash: progress.fraction == nil ? [2, 3] : []))
+            if let fraction = progress.fraction {
+                Circle().trim(from: 0, to: fraction)
+                    .stroke(ink.opacity(0.85), style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
+                    .rotationEffect(.degrees(-90))
+                if fraction == 1 {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 10.4, weight: .medium))
+                        .foregroundStyle(ink.opacity(0.85))
                 }
-            }.padding(lineWidth / 2)
+            }
         }
+        .padding(lineWidth / 2)
         .animation(ReaderMotion.feedback(reduceMotion), value: progress)
         .allowsHitTesting(false)
     }
@@ -139,7 +169,14 @@ struct BookshelfItem: View {
     }
 
     private func placedCover(_ progress: ReadingProgress) -> some View {
-        BookCoverView(paper: paper, progress: progress)
+        BookCoverView(paper: paper, progress: progress, rasterize: true)
+            .background {
+                RoundedRectangle(cornerRadius: 4)
+                    .fill(ReaderTheme.surface)
+                    .shadow(
+                        color: .black.opacity(highlighted ? 0.16 : 0.09), radius: highlighted ? 10 : 4,
+                        y: highlighted ? 8 : 3)
+            }
             .overlay {
                 RoundedRectangle(cornerRadius: 6)
                     .strokeBorder(ReaderTheme.accent, lineWidth: 2)
@@ -153,9 +190,6 @@ struct BookshelfItem: View {
             } action: { frame in
                 recordFrame(frame)
             }
-            .shadow(
-                color: .black.opacity(highlighted ? 0.16 : 0.09), radius: highlighted ? 10 : 4, y: highlighted ? 8 : 3
-            )
     }
 
     var body: some View {

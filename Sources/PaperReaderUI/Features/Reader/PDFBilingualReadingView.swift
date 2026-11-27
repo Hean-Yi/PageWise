@@ -20,8 +20,16 @@ enum PDFBilingualLayoutPreference: RawRepresentable, Equatable {
     }
 
     func resolved(at width: CGFloat) -> PDFSentenceTextCanvas.Layout {
-        self == .split && width >= 570 ? .split : .paragraph
+        resolved(allowsSplit: width >= 570)
     }
+
+    func resolved(allowsSplit: Bool) -> PDFSentenceTextCanvas.Layout {
+        self == .split && allowsSplit ? .split : .paragraph
+    }
+}
+
+@MainActor private final class SplitWidthBox {
+    var width: CGFloat = 900
 }
 
 struct PDFBilingualReadingView: View {
@@ -35,6 +43,9 @@ struct PDFBilingualReadingView: View {
     @AppStorage("PDFBilingualFontSize") private var fontSize = 16
     @SceneStorage("PDFBilingualOriginalFraction") private var originalFraction = 0.53
     @State private var dragStart: Double?
+    @State private var allowsSplit = true
+    @State private var splitWidth: CGFloat = 900
+    @State private var measuredSplitWidth = SplitWidthBox()
     @Environment(\.layoutDirection) private var layoutDirection
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -43,73 +54,60 @@ struct PDFBilingualReadingView: View {
     private var paragraphVisible: Bool { session.isOpen && !peekingAtOriginal }
 
     var body: some View {
-        GeometryReader { geometry in
-            let width = geometry.size.width
-            let textLayout = layout.resolved(at: width)
-            let historicalInk =
-                textLayout == .paragraph && !peekingAtOriginal ? session.historicalHighlights(in: model) : []
-            let spread = textLayout == .split && session.isOpen && !peekingAtOriginal
-            let pdfVisible = !session.isOpen || peekingAtOriginal || spread
-            let pdfWidth = spread ? min(width - 268, max(240, width * originalFraction)) : width
-            ZStack(alignment: .leading) {
-                PDFCanvas(model: model, penEnabled: pdfVisible && penEnabled, isReaderVisible: pdfVisible)
-                    .frame(maxWidth: spread ? .infinity : 820)
-                    .frame(width: pdfWidth)
-                    .allowsHitTesting(pdfVisible)
-                    .accessibilityHidden(!pdfVisible)
-                ZStack {
-                    if session.isOpen && (!peekingAtOriginal || textLayout == .paragraph) {
-                        HStack(spacing: 0) {
-                            if spread {
-                                Color.clear.frame(width: pdfWidth).allowsHitTesting(false)
-                                splitter(width: width).frame(width: 8)
-                            }
-                            pane(textLayout: textLayout)
-                        }
-                        // Fade the surface as a unit. PDFKit and WebKit lay out once at their final widths.
-                        .transaction { $0.animation = nil }
-                        .opacity(peekingAtOriginal ? 0 : 1)
-                        .transition(.opacity)
+        let textLayout = layout.resolved(allowsSplit: allowsSplit)
+        let historicalInk =
+            textLayout == .paragraph && !peekingAtOriginal ? session.historicalHighlights(in: model) : []
+        let spread = textLayout == .split && session.isOpen && !peekingAtOriginal
+        let pdfVisible = !session.isOpen || peekingAtOriginal || spread
+        let pdfWidth: CGFloat? = spread ? min(splitWidth - 268, max(240, splitWidth * originalFraction)) : nil
+        return readingSurface(
+            textLayout: textLayout, spread: spread, pdfVisible: pdfVisible,
+            pdfWidth: pdfWidth, splitWidth: splitWidth
+        )
+        .onGeometryChange(for: CGFloat.self) {
+            $0.size.width
+        } action: { width in
+            measuredSplitWidth.width = width
+            let canSplit = width >= 570
+            if allowsSplit != canSplit { allowsSplit = canSplit }
+            if spread && abs(splitWidth - width) > 0.5 { splitWidth = width }
+        }
+        .onChange(of: spread) { _, isSpread in
+            if isSpread && abs(splitWidth - measuredSplitWidth.width) > 0.5 {
+                splitWidth = measuredSplitWidth.width
+            }
+        }
+        .overlay(alignment: .topTrailing) {
+            ZStack {
+                if session.isOpen && peekingAtOriginal {
+                    Button {
+                        peekingAtOriginal = false
+                    } label: {
+                        Label("返回双语重排", systemImage: "arrow.uturn.backward").labelStyle(
+                            ReaderSymbolLabelStyle(motion: .left)
+                        )
+                        .font(.callout.weight(.medium))
                     }
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .animation(ReaderMotion.navigation(reduceMotion), value: session.isOpen)
-                .animation(ReaderMotion.navigation(reduceMotion), value: peekingAtOriginal)
-                .allowsHitTesting(session.isOpen && !peekingAtOriginal)
-                .accessibilityHidden(!session.isOpen || peekingAtOriginal)
-            }
-            .overlay(alignment: .topTrailing) {
-                ZStack {
-                    if session.isOpen && peekingAtOriginal {
-                        Button {
-                            peekingAtOriginal = false
-                        } label: {
-                            Label("返回双语重排", systemImage: "arrow.uturn.backward").labelStyle(
-                                ReaderSymbolLabelStyle(motion: .left)
-                            )
-                            .font(.callout.weight(.medium))
-                        }
-                        .readerFloatingButton(.capsule).padding(16)
-                        .transition(.opacity)
-                    }
-                }
-                .animation(ReaderMotion.feedback(reduceMotion), value: peekingAtOriginal)
-                .allowsHitTesting(session.isOpen && peekingAtOriginal)
-            }
-            .onChange(of: session.isOpen && textLayout == .paragraph && !peekingAtOriginal, initial: true) {
-                _, visible in
-                if visible {
-                    session.prepareParagraphReading(model)
-                    session.consumeParagraphJump(model)
+                    .readerFloatingButton(.capsule).padding(16)
+                    .transition(.opacity)
                 }
             }
-            .onChange(of: model.jumpPage) { _, _ in
-                if paragraphVisible && textLayout == .paragraph { session.consumeParagraphJump(model) }
+            .animation(ReaderMotion.feedback(reduceMotion), value: peekingAtOriginal)
+            .allowsHitTesting(session.isOpen && peekingAtOriginal)
+        }
+        .onChange(of: session.isOpen && textLayout == .paragraph && !peekingAtOriginal, initial: true) {
+            _, visible in
+            if visible {
+                session.prepareParagraphReading(model)
+                session.consumeParagraphJump(model)
             }
-            .task(id: historicalInk) { await session.locateHistoricalInk(historicalInk, model: model) }
-            .onChange(of: model.outlineArrival?.revision) { _, _ in
-                if paragraphVisible && textLayout == .paragraph { session.consumeParagraphJump(model) }
-            }
+        }
+        .onChange(of: model.jumpPage) { _, _ in
+            if paragraphVisible && textLayout == .paragraph { session.consumeParagraphJump(model) }
+        }
+        .task(id: historicalInk) { await session.locateHistoricalInk(historicalInk, model: model) }
+        .onChange(of: model.outlineArrival?.revision) { _, _ in
+            if paragraphVisible && textLayout == .paragraph { session.consumeParagraphJump(model) }
         }
         .onChange(of: session.isOpen) { _, open in
             peekingAtOriginal = false
@@ -122,6 +120,41 @@ struct PDFBilingualReadingView: View {
         .onChange(of: layout) { _, newLayout in
             peekingAtOriginal = false
             if session.isOpen { session.setParagraphLayout(newLayout == .paragraph, model: model) }
+        }
+    }
+
+    private func readingSurface(
+        textLayout: PDFSentenceTextCanvas.Layout, spread: Bool, pdfVisible: Bool, pdfWidth: CGFloat?,
+        splitWidth: CGFloat
+    ) -> some View {
+        ZStack(alignment: .leading) {
+            PDFCanvas(model: model, penEnabled: pdfVisible && penEnabled, isReaderVisible: pdfVisible)
+                .frame(maxWidth: spread ? .infinity : 820)
+                .frame(width: pdfWidth)
+                .frame(maxWidth: spread ? nil : .infinity)
+                .allowsHitTesting(pdfVisible)
+                .accessibilityHidden(!pdfVisible)
+            ZStack {
+                if session.isOpen && (!peekingAtOriginal || textLayout == .paragraph) {
+                    HStack(spacing: 0) {
+                        if spread, let pdfWidth {
+                            Color.clear.frame(width: pdfWidth).allowsHitTesting(false)
+                            splitter(width: splitWidth).frame(width: 8)
+                        }
+                        pane(textLayout: textLayout)
+                    }
+                    // Fade the surface as a unit. PDFKit and WebKit lay out once at their final widths.
+                    .transaction { $0.animation = nil }
+                    .opacity(peekingAtOriginal ? 0 : 1)
+                    .transition(.opacity)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .animation(ReaderMotion.navigation(reduceMotion), value: session.isOpen)
+            .animation(ReaderMotion.navigation(reduceMotion), value: peekingAtOriginal)
+            .allowsHitTesting(session.isOpen && !peekingAtOriginal)
+            .accessibilityHidden(!session.isOpen || peekingAtOriginal)
+            .quickStartTarget(session.isOpen && !peekingAtOriginal ? .annotation : nil)
         }
     }
 
