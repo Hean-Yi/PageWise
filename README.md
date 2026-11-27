@@ -3,7 +3,7 @@
   <h1>PageWise</h1>
   <p><strong>本地优先的学术论文双语阅读、页边笔记与研究记忆工作台</strong></p>
   <p>
-    <code>v0.4.0</code> ·
+    <code>v0.5.0</code> ·
     <code>macOS 15+ (Apple Silicon &amp; Intel)</code> ·
     <code>iPadOS 18+</code> ·
     <code>Swift 6</code> ·

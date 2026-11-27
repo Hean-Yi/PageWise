@@ -4,6 +4,21 @@
 
 ---
 
+## v0.5.0（2026-11-27）Agent 稳定性、阅读交互与检索底座
+
+### 本版本核心验证
+- **P1 · Agent 稳定性与阅读交互**：稳定跨轮 KV Cache 前缀与工具轨迹保真、新增只读零增量停滞熔断、修复 4+ 反引号代码块内 `<think>` 误判、放宽非用户编辑记忆的自然修正识别；新增 `fastModel` 双档模型路由与配置后自动续行；优化阅读器顶栏/宽屏页边布局/右侧栏拖拽调宽、笔记来源分层与历史版本一键回滚；为书库搜索、阅读笔记与研究记忆接入本地混合检索。回归验证：`AgentTrajectoryEvalTests`、`ReadingNoteRevisionTests` 共 37 项通过，`swift-format lint --strict` 通过。
+- **P2 · 阅读与书库工作流**：新增 HTML 内部引用悬停预览浮窗、书库助理 `@ 论文` 多篇显式点选与论文助读「新对话」/工具调用轨迹展示、`pagewise://open` 双向深链与 Obsidian YAML Frontmatter、封面菜单手动编辑论文标题与来源链接。回归验证：`ObsidianReadingDocumentTests`、`AgentTrajectoryEvalTests`、`NoteWriterTests`（9 项）通过，`swift-format lint --strict` 通过。
+- **P3 · 派生向量与离线 OCR**：将 7 个派生语义向量缓存统一收敛至单一 `DerivedIndexes/vectors.sqlite`（WAL 模式 + 命名空间隔离），随后优化为 rowid 行表 + 16 KiB 页 + 大命名空间线性扫描与紧凑连续矩阵 `SemanticVectorMatrix`（`vDSP_mmul` 批量打分，兼容原地迁移旧 `vectors_ns`）；单篇语义索引上限由 `400` 提至 `2,000` 区块，并新增基于 Apple `Vision` 的设备端离线 OCR 引擎 `PDFScannedPageOCR`（`allowOCR` 按需开启，保留无文字层扫描页默认原排回退不变量）。在 Apple M2 / 8 GiB Release 实测（384 维合成单位向量）：对比优化前，20 万条 SQLite 文件体积缩小 64%（`894 → 323 MiB`），冷启动+首查提速 19.3×（`22.8 s → 1.18 s`），端到端 `SemanticPassageIndex.matches` 热查询 p50 提速 55×（`755 → 13.7 ms`）；同机对比静态编译的 `sqlite-vec v0.1.9`（ARM NEON），热查询比 `float32` 快 16–37×、比 `int8` 快 5× 且保持 100% 精确召回，因此不引入第三方 C 扩展。回归验证：`SemanticVectorMatrixTests`、`SemanticPassageIndexTests`、`RetrieverTests` 共 16 项通过，`swift-format lint --strict` 通过。
+- **0.5.0 打包与分发校验**：`bash scripts/package-mac.sh` 生成 `Artifacts/PageWise-0.5.0-macOS.dmg`（78 MB，Build 6，SHA-256 `22c9fc379000c74d78e4a5957133c2c2834ffa87b6b6662da094f3ddfd78665c`），通过 `arm64 + x86_64` 双架构校验、严格代码签名校验、零本机路径泄漏检查、内置资源逐文件比对与 `hdiutil verify`。
+- **回归验证**：2026-11-27 全量 817 项测试中 813 项直接通过；4 项 macOS UI 时序用例在并行下偶发失败，串行复跑全部通过（`selectingAnOriginalPDFQuoteOpensTheFloatingNoteActionAtItsExactRange`、`iconButtonActivatesOnceAndItsInkReturnsToRest`、`wrappedNoteHoverCanCrossToFloatingPreviewWithoutMovingIt`、`marginNoteHoverTracksWrappedTextAndCardWithoutMeasuringOtherPages`）；`swift-format lint --strict` 通过。
+
+### 未覆盖边界
+- 0.5.0 发布前未执行 iPad 模拟器/真机构建与自动化 Computer Use Mac 窗口视觉验收；Mac Release DMG 已构建并通过签名、架构、资源与校验和检查。
+- 真实模型结果受服务商版本与网络波动影响，静默笔记整理链路已跑通但复杂改写质量与大书库长测仍待后续评估。
+
+---
+
 ## v0.4.0（2026-11-27）设备端语义记忆、Agent 编排与界面性能
 
 ### 本版本核心验证
@@ -21,13 +36,8 @@
 - **0.4.0 打包与分发校验**：
   - `bash scripts/package-mac.sh` 生成 `Artifacts/PageWise-0.4.0-macOS.dmg`（77 MB，SHA-256 `fb4819d54eb7ca9ea8747ea6519d9c8c9c35839a49c261d19b393065e541c2c6`），通过 `arm64 + x86_64` 双架构校验、严格代码签名校验、零本机路径泄漏检查、内置资源逐文件比对与 `hdiutil verify`。
 
-- **P1–P3 审查修复（Agent 稳定性、阅读交互与检索底座）**：
-  - **P1**：稳定跨轮 KV Cache 前缀与工具轨迹保真、新增只读零增量停滞熔断、修复 4+ 反引号代码块内 `<think>` 误判、放宽非用户编辑记忆的自然修正识别；新增 `fastModel` 双档模型路由与配置后自动续行；优化阅读器顶栏/宽屏页边布局/右侧栏拖拽调宽、笔记来源分层与历史版本一键回滚；为书库搜索、阅读笔记与研究记忆接入本地混合检索。回归验证：`AgentTrajectoryEvalTests`、`ReadingNoteRevisionTests` 共 37 项通过，`swift-format lint --strict` 通过。
-  - **P2**：新增 HTML 内部引用悬停预览浮窗、书库助理 `@ 论文` 多篇显式点选与论文助读「新对话」/工具调用轨迹展示、`pagewise://open` 双向深链与 Obsidian YAML Frontmatter、封面菜单手动编辑论文标题与来源链接。回归验证：`ObsidianReadingDocumentTests`、`AgentTrajectoryEvalTests`、`NoteWriterTests`（9 项）通过，`swift-format lint --strict` 通过。
-  - **P3**：将 7 个派生语义向量缓存统一收敛至单一 `DerivedIndexes/vectors.sqlite`（WAL 模式 + 命名空间隔离），随后优化为 rowid 行表 + 16 KiB 页 + 大命名空间线性扫描与紧凑连续矩阵 `SemanticVectorMatrix`（`vDSP_mmul` 批量打分，兼容原地迁移旧 `vectors_ns`）；单篇语义索引上限由 `400` 提至 `2,000` 区块，并新增基于 Apple `Vision` 的设备端离线 OCR 引擎 `PDFScannedPageOCR`（`allowOCR` 按需开启，保留无文字层扫描页默认原排回退不变量）。在 Apple M2 / 8 GiB Release 实测（384 维合成单位向量）：对比优化前，20 万条 SQLite 文件体积缩小 64%（`894 → 323 MiB`），冷启动+首查提速 19.3×（`22.8 s → 1.18 s`），端到端 `SemanticPassageIndex.matches` 热查询 p50 提速 55×（`755 → 13.7 ms`）；同机对比静态编译的 `sqlite-vec v0.1.9`（ARM NEON），热查询比 `float32` 快 16–37×、比 `int8` 快 5× 且保持 100% 精确召回，因此不引入第三方 C 扩展。回归验证：`SemanticVectorMatrixTests`、`SemanticPassageIndexTests`、`RetrieverTests` 共 16 项通过，`swift-format lint --strict` 通过。
-
 ### 未覆盖边界
-- 2026-11-27 界面性能优化、引导改版及 P1–P3 审查修复后，尚未执行全量 `scripts/check.sh`（738+ 项测试与 Mac/iPad `xcodebuild` 构建）、自动化 Computer Use Mac 窗口视觉验收，以及 iPad 模拟器/真机验收。
+- 2026-11-27 界面性能优化与引导改版后，按用户要求交由用户直接体验验收，未执行自动化 Computer Use 视觉回归，也未完成全量 `scripts/check.sh` 与 iPad 模拟器/真机验收。
 - 真实模型结果受服务商版本与网络波动影响，静默笔记整理链路已跑通但复杂改写质量与大书库长测仍待后续评估。
 
 ---
