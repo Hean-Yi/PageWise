@@ -71,6 +71,33 @@ public struct MemoryItem: Identifiable, Codable, Sendable, Equatable {
         return true
     }
 
+    /// Create an agent-authored revision of an automatic memory while preserving its origin and
+    /// unverified (`userEdited == false`) provenance so silent tool updates never masquerade as
+    /// reader-edited endorsements.
+    public static func revisedAutomatic(
+        from original: MemoryItem, id: UUID = UUID(), statement: String, at date: Date = Date()
+    ) -> MemoryItem {
+        let cleaned = strippedPrefix(statement)
+        var item = MemoryItem(text: Self.automaticPrefix + cleaned, sourceID: original.sourceID)
+        item.id = id
+        item.librarySource = original.librarySource
+        item.preference = original.preference
+        item.createdAt = date
+        item.validFrom = date
+        item.userEdited = false
+        return item
+    }
+
+    public static func strippedPrefix(_ text: String) -> String {
+        var value = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if value.hasPrefix(Self.automaticPrefix) {
+            value = String(value.dropFirst(Self.automaticPrefix.count))
+        } else if value.hasPrefix(Self.paperObservationPrefix) {
+            value = String(value.dropFirst(Self.paperObservationPrefix.count))
+        }
+        return value.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     public func sameResearchContent(as other: MemoryItem) -> Bool {
         id == other.id
             && text == other.text
@@ -106,7 +133,7 @@ public struct MemoryItem: Identifiable, Codable, Sendable, Equatable {
         return min(1.15, decayed + boost)
     }
 
-    static let automaticPrefix = "AI 整理（待核实）："
+    public static let automaticPrefix = "AI 整理（待核实）："
     public static let paperObservationPrefix = "AI 阅读记录："
 
     /// A reading observation is grounded in the paper itself, not in a chat turn.

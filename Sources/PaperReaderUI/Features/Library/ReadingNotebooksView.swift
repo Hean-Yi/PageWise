@@ -17,6 +17,7 @@ struct ReadingNotebooksView: View {
     @Binding var expandedHistory: Set<UUID>
     let bookmark: NotebookScrollBookmark
     @Binding var expandedAnnotations: Set<UUID>
+    @State private var expandedMarginPapers = Set<UUID>()
     @State private var scrollPosition = ScrollPosition()
     @State private var restoredViewport = false
     @Environment(\.displayScale) private var displayScale
@@ -243,8 +244,10 @@ struct ReadingNotebooksView: View {
                 .accessibilityLabel("打开论文原文：\(group.title)")
                 ObsidianExportButton(model: model, paperID: group.id).font(.callout)
             }
+            let showAll = expandedMarginPapers.contains(group.id)
+            let visibleNotes = showAll ? group.notes : Array(group.notes.prefix(8))
             VStack(alignment: .leading, spacing: 4) {
-                ForEach(group.notes.prefix(8)) { note in
+                ForEach(visibleNotes) { note in
                     Button {
                         open(note)
                     } label: {
@@ -261,6 +264,14 @@ struct ReadingNotebooksView: View {
                     .readerIconButtonStyle(.plain).multilineTextAlignment(.leading)
                     .font(.callout)
                     .accessibilityHint("在原文位置打开阅读笔记")
+                }
+            }
+            if group.notes.count > 8 {
+                disclosure(
+                    showAll ? "收起部分页边笔记" : "展开其余 \(group.notes.count - 8) 条页边笔记",
+                    expanded: showAll
+                ) {
+                    toggle(group.id, in: $expandedMarginPapers)
                 }
             }
             Text(

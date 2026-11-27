@@ -137,7 +137,7 @@ struct ReaderView: View {
                 Label("返回\(model.readerOrigin.title)", systemImage: "chevron.left")
             }
             .readerIconButtonStyle(.borderless).labelStyle(ReaderSymbolLabelStyle(iconOnly: true, motion: .left)).help(
-                "返回\(model.readerOrigin.title)"
+                "返回\(model.readerOrigin.title)（⇧⌘L）"
             )
             .keyboardShortcut("l", modifiers: [.command, .shift])
             Text(model.paper?.displayTitle ?? "").font(ReaderTheme.editorial(18, weight: .medium))
@@ -306,7 +306,7 @@ struct ReaderView: View {
                 ReaderActionSymbol(model.isCurrentPageBookmarked ? "bookmark.fill" : "bookmark")
                     .foregroundStyle(model.isCurrentPageBookmarked ? ReaderTheme.accent : ReaderTheme.muted)
             }.readerIconButtonStyle(.borderless).disabled(pageCount == 0).help(
-                model.isCurrentPageBookmarked ? "移除书签" : "添加书签"
+                model.isCurrentPageBookmarked ? "移除书签（⌘D）" : "添加书签（⌘D）"
             )
             .accessibilityLabel(model.isCurrentPageBookmarked ? "移除当前页书签" : "添加当前页书签")
             .keyboardShortcut("d")
@@ -383,7 +383,7 @@ struct ReaderView: View {
     }
 
     private func translate(regenerate: Bool = false) {
-        if (try? model.modelSettings.normalized()) != nil {
+        if model.isModelReadyForRequests {
             model.startAIReflow(regenerate: regenerate)
         } else {
             openSettings()

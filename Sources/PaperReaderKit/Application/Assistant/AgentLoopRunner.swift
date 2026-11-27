@@ -88,6 +88,7 @@ public enum AgentLoopRunner {
         var finalReason: String?
         var callIDs = Set(prior.flatMap { $0 }.flatMap { $0.toolCalls ?? [] }.map(\.id))
         var repeatCounts: [String: Int] = [:]
+        var roundSignatures: [String] = []
 
         toolLoop: while true {
             try await beforeRequest()
@@ -99,22 +100,21 @@ public enum AgentLoopRunner {
             let system = AgentMessage(role: "system", content: baseInstructions)
             let toolNames = await availableTools()
             var trailingBudget: AgentMessage?
-            if let lastAssistant = current.lastIndex(where: {
-                $0.role == "assistant" && $0.toolCalls?.isEmpty == false
-            }) {
-                // Stamp each completed tool round at most once so earlier assistant messages NEVER
-                // mutate on later rounds (preserving KV Prompt Cache). When an answer-only
+            if let lastTool = current.lastIndex(where: { $0.role == "tool" }) {
+                // Stamp each completed tool round at most once on its trailing `tool` payload so
+                // assistant messages remain pure model output and earlier prefixes NEVER mutate
+                // across rounds (preserving server-side KV Prompt Cache). When an answer-only
                 // transition reuses an already-stamped round (e.g. overdraw or compaction), emit
                 // the transition state in a trailing ephemeral user message instead.
-                if roundBudgetNotes[lastAssistant] == nil {
-                    roundBudgetNotes[lastAssistant] = "（系统状态）" + budget
+                if roundBudgetNotes[lastTool] == nil {
+                    roundBudgetNotes[lastTool] = budget
                 } else if answerOnly {
                     trailingBudget = AgentMessage(role: "user", content: "（系统状态）" + budget)
                 }
             } else if answerOnly, finalReason != nil {
                 trailingBudget = AgentMessage(role: "user", content: "（系统状态）" + budget)
             }
-            let budgetNoteBytes = roundBudgetNotes.values.reduce(0) { $0 + $1.utf8.count + 8 }
+            let budgetNoteBytes = roundBudgetNotes.values.reduce(0) { $0 + $1.utf8.count + 32 }
             let capabilities = ModelCapabilities.resolve(settings)
             let toolReserve =
                 (answerOnly && !capabilities.keepsToolsWhenDisabled)
@@ -135,8 +135,7 @@ public enum AgentLoopRunner {
                 fitted.includedPersonalContext
                 ? AgentContextCompactor.applyingPersonalContext(personalContext, to: current) : current
             for (index, note) in roundBudgetNotes where currentWithNotes.indices.contains(index) {
-                let existing = currentWithNotes[index].content ?? ""
-                currentWithNotes[index].content = existing + (existing.isEmpty ? "" : "\n") + note
+                currentWithNotes[index].content = Self.attachingBudgetNote(note, to: currentWithNotes[index].content)
             }
             var messages = [system] + prior.flatMap { $0 } + currentWithNotes
             if let trailingBudget { messages.append(trailingBudget) }
@@ -186,6 +185,13 @@ public enum AgentLoopRunner {
             try await onAssistantResponse(response, true)
             current.append(response)
             let signatures = calls.map(Self.canonicalSignature)
+            let roundSignature = signatures.joined(separator: ";;")
+            let pingPongDetected =
+                roundSignatures.count >= 3
+                && roundSignature == roundSignatures[roundSignatures.count - 2]
+                && roundSignatures[roundSignatures.count - 1] == roundSignatures[roundSignatures.count - 3]
+                && roundSignature != roundSignatures[roundSignatures.count - 1]
+            roundSignatures.append(roundSignature)
             let roundUnique = Set(signatures)
             var stuckIndices = Set<Int>()
             var warnIndices = Set<Int>()
@@ -201,7 +207,17 @@ public enum AgentLoopRunner {
                 repeatCounts[signature, default: 0] += 1
             }
             let outcome: BatchOutcome
-            if stuckIndices.count == calls.count {
+            if pingPongDetected {
+                let blocked = calls.map { call in
+                    AgentMessage(
+                        role: "tool",
+                        content:
+                            #"{"ok":false,"loop_detected":true,"message":"检测到交替重复的工具调用循环（A→B→A→B），已停止重复执行，请依据已有结果直接作答。"}"#,
+                        toolCallID: call.id)
+                }
+                finalReason = "检测到交替重复的工具调用循环，已停止重复执行。"
+                outcome = BatchOutcome(toolMessages: blocked)
+            } else if stuckIndices.count == calls.count {
                 let blocked = calls.map { call in
                     AgentMessage(
                         role: "tool",
@@ -270,6 +286,19 @@ public enum AgentLoopRunner {
             return call.function.name + "|" + String(decoding: canonical, as: UTF8.self)
         }
         return call.function.name + "|" + trimmed
+    }
+
+    private static func attachingBudgetNote(_ note: String, to raw: String?) -> String {
+        let existing = raw ?? ""
+        if let data = existing.data(using: .utf8),
+            var object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        {
+            object["_system_budget"] = note
+            if let encoded = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]) {
+                return String(decoding: encoded, as: UTF8.self)
+            }
+        }
+        return existing + (existing.isEmpty ? "" : "\n") + "（系统状态）" + note
     }
 
     private static func annotatingLoopWarning(_ raw: String) -> String? {

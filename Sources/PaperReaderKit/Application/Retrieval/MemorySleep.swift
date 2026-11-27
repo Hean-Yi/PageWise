@@ -81,21 +81,50 @@ public struct MemorySleepEdition: Codable, Equatable, Sendable {
         let preference: ReaderPreference?
         let protected: Bool
         let source: String
+        let scope: String
+        let shelf: String?
         let recorded: Date
+    }
+
+    /// Resolve the project/shelf isolation key for any research memory. Memories originating from
+    /// papers on different shelves must never be batched, merged or superseded across projects.
+    static func scopeKey(
+        for item: MemoryItem, origins: ResearchMemoryOrigins, state: LibraryState
+    ) -> (key: String, shelfName: String?) {
+        if let scope = item.preference?.scope {
+            switch scope {
+            case .library:
+                return ("library", nil)
+            case .shelf(let id):
+                let name = state.shelves.first { $0.id == id }?.name
+                return ("shelf:" + id.uuidString, name)
+            case .paper(let id):
+                if let shelfID = state.paperShelfIDs[id.uuidString] {
+                    let name = state.shelves.first { $0.id == shelfID }?.name
+                    return ("shelf:" + shelfID.uuidString, name)
+                }
+                return ("paper:" + id.uuidString, nil)
+            }
+        }
+        switch origins.resolve(item) {
+        case .reader:
+            return ("library", nil)
+        case .paper(let paperID):
+            if let shelfID = state.paperShelfIDs[paperID.uuidString] {
+                let name = state.shelves.first { $0.id == shelfID }?.name
+                return ("shelf:" + shelfID.uuidString, name)
+            }
+            return ("unfiled", nil)
+        case nil:
+            return ("unknown", nil)
+        }
     }
 
     static func eligible(_ state: LibraryState) -> [MemoryItem] {
         let origins = ResearchMemoryOrigins(state: state, excluding: [])
-        func order(_ item: MemoryItem) -> String {
-            switch item.preference?.scope {
-            case nil, .library: return item.isResponsePreference ? "1" : "0"
-            case .paper(let id): return "p" + id.uuidString
-            case .shelf(let id): return "s" + id.uuidString
-            }
-        }
         return state.memories.filter { $0.isActive && !$0.isResponsePreference && origins.resolve($0) != nil }.sorted {
-            let left = order($0)
-            let right = order($1)
+            let left = scopeKey(for: $0, origins: origins, state: state).key
+            let right = scopeKey(for: $1, origins: origins, state: state).key
             if left != right { return left < right }
             return $0.createdAt != $1.createdAt ? $0.createdAt < $1.createdAt : $0.id.uuidString < $1.id.uuidString
         }
@@ -123,8 +152,13 @@ public struct MemorySleepEdition: Codable, Equatable, Sendable {
         guard hasPendingReview else { return [] }
         let remaining = items.filter { !reviewed.contains($0.id) }
         guard let first = remaining.first else { return [] }
-        let changed = Array(remaining.filter { $0.preference?.scope == first.preference?.scope }.prefix(20))
-        let earlier = items.filter { reviewed.contains($0.id) && $0.preference?.scope == first.preference?.scope }
+        let origins = ResearchMemoryOrigins(state: state, for: items)
+        let targetScope = Self.scopeKey(for: first, origins: origins, state: state).key
+        let changed = Array(
+            remaining.filter { Self.scopeKey(for: $0, origins: origins, state: state).key == targetScope }.prefix(20))
+        let earlier = items.filter {
+            reviewed.contains($0.id) && Self.scopeKey(for: $0, origins: origins, state: state).key == targetScope
+        }
         var semanticScores: [UUID: Double] = [:]
         if let semantic, !changed.isEmpty, !earlier.isEmpty {
             let passages = items.map {
@@ -143,7 +177,6 @@ public struct MemorySleepEdition: Codable, Equatable, Sendable {
         }
         let anchors = Self.anchorOrder(changed: changed, earlier: earlier, semanticScores: semanticScores)
         let selected = changed + anchors
-        let origins = ResearchMemoryOrigins(state: state, for: selected)
         return selected.map { item in
             let source: String
             switch origins.resolve(item) {
@@ -151,9 +184,11 @@ public struct MemorySleepEdition: Codable, Equatable, Sendable {
             case .paper(let id): source = "paper/" + id.uuidString
             case nil: source = "unknown"
             }
+            let resolvedScope = Self.scopeKey(for: item, origins: origins, state: state)
             return Candidate(
                 id: item.id, text: String(item.text.prefix(400)), preference: item.preference,
-                protected: item.userEdited || item.isResponsePreference, source: source, recorded: item.createdAt)
+                protected: item.userEdited || item.isResponsePreference, source: source, scope: resolvedScope.key,
+                shelf: resolvedScope.shelfName, recorded: item.createdAt)
         }
     }
 
@@ -216,7 +251,8 @@ public struct MemorySleepEdition: Codable, Equatable, Sendable {
                 !summary.isEmpty, summary.count <= 240,
                 let first = available[members[0]],
                 members.allSatisfy({
-                    available[$0] != nil && available[$0]?.preference?.scope == first.preference?.scope
+                    available[$0] != nil && available[$0]?.scope == first.scope
+                        && available[$0]?.preference?.scope == first.preference?.scope
                 }),
                 group.kind != .refine || first.protected == false
             else { continue }

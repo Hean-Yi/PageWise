@@ -14,6 +14,7 @@ struct TopicShelvesView<SortMenu: View>: View {
     @State private var editingID: UUID?
     @State private var name = ""
     @State private var saving = false
+    @State private var pendingDeleteShelf: (shelf: Shelf, count: Int)?
     @FocusState private var nameFocused: Bool
     @Namespace private var shelfSelection
 
@@ -61,6 +62,27 @@ struct TopicShelvesView<SortMenu: View>: View {
             }
         }
         .animation(ReaderMotion.disclosure(reduceMotion), value: editing)
+        .confirmationDialog(
+            "删除书架「\(pendingDeleteShelf?.shelf.name ?? "")」？",
+            isPresented: Binding(
+                get: { pendingDeleteShelf != nil }, set: { if !$0 { pendingDeleteShelf = nil } }),
+            titleVisibility: .visible
+        ) {
+            Button("删除书架", role: .destructive) {
+                guard let target = pendingDeleteShelf?.shelf else { return }
+                pendingDeleteShelf = nil
+                Task {
+                    if await model.deleteShelf(target.id), selectedShelfID == target.id {
+                        selectedShelfID = nil
+                    }
+                }
+            }
+            Button("取消", role: .cancel) { pendingDeleteShelf = nil }
+        } message: {
+            if let count = pendingDeleteShelf?.count, count > 0 {
+                Text("书架内的 \(count) 篇论文将移回「未分类论文」，不会被删除。")
+            }
+        }
     }
 
     private var scrollingShelves: some View {
@@ -118,9 +140,14 @@ struct TopicShelvesView<SortMenu: View>: View {
                         .action("改名", icon: .annotation, enabled: !saving) { beginEditing(shelf) },
                         .divider,
                         .action("删除书架", icon: .delete, enabled: !saving, destructive: true) {
-                            Task {
-                                if await model.deleteShelf(shelf.id), selectedShelfID == shelf.id {
-                                    selectedShelfID = nil
+                            let count = counts[shelf.id, default: 0]
+                            if count > 0 {
+                                pendingDeleteShelf = (shelf, count)
+                            } else {
+                                Task {
+                                    if await model.deleteShelf(shelf.id), selectedShelfID == shelf.id {
+                                        selectedShelfID = nil
+                                    }
                                 }
                             }
                         },
@@ -141,8 +168,15 @@ struct TopicShelvesView<SortMenu: View>: View {
     private var nameEditor: some View {
         HStack(spacing: 8) {
             TextField(editingID == nil ? "书架名称" : "新的书架名称", text: $name)
-                .textFieldStyle(.roundedBorder).focused($nameFocused)
+                .textFieldStyle(.plain).focused($nameFocused)
                 .onSubmit { saveName() }.disabled(saving)
+                .padding(.horizontal, 10).frame(height: 32)
+                .background(ReaderTheme.surface, in: RoundedRectangle(cornerRadius: 8))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .strokeBorder(
+                            nameFocused ? ReaderTheme.accent : ReaderTheme.line, lineWidth: nameFocused ? 1.5 : 1)
+                )
                 .frame(maxWidth: 280)
             Button(action: saveName) {
                 ReaderActionSymbol("checkmark").frame(width: 32, height: 32)

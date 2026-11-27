@@ -3,7 +3,9 @@ import PaperReaderKit
 
 struct MemoryRecordMutation {
     enum Operation {
-        case revise(id: UUID, statement: String, expectedRevision: String? = nil, allowUserEdited: Bool = false)
+        case revise(
+            id: UUID, statement: String, expectedRevision: String? = nil, allowUserEdited: Bool = false,
+            replacementID: UUID = UUID(), at: Date = Date())
         case forget(id: UUID, expectedRevision: String? = nil, allowUserEdited: Bool = false)
         case supersede(oldID: UUID, replacementID: UUID, at: Date = Date())
     }
@@ -13,7 +15,15 @@ struct MemoryRecordMutation {
 
     var memoryID: UUID {
         switch operation {
-        case .revise(let id, _, _, _), .forget(let id, _, _), .supersede(let id, _, _): id
+        case .revise(let id, _, _, _, _, _), .forget(let id, _, _), .supersede(let id, _, _): id
+        }
+    }
+
+    var replacementID: UUID? {
+        switch operation {
+        case .revise(_, _, _, _, let replacementID, _): replacementID
+        case .supersede(_, let replacementID, _): replacementID
+        case .forget: nil
         }
     }
 
@@ -27,13 +37,23 @@ struct MemoryRecordMutation {
 
     func apply(to state: inout LibraryState) -> Bool {
         switch operation {
-        case .revise(let id, let statement, let expectedRevision, let allowUserEdited):
+        case .revise(let id, let statement, let expectedRevision, let allowUserEdited, let replacementID, let date):
             guard let index = state.memories.firstIndex(where: { $0.id == id }),
                 state.memories[index].isActive,
                 allowUserEdited || !state.memories[index].userEdited,
                 expectedRevision == nil || state.memories[index].matchesRevision(expectedRevision!)
             else { return false }
-            return state.memories[index].correct(to: statement)
+            let cleaned = MemoryItem.strippedPrefix(statement)
+            guard !cleaned.isEmpty else { return false }
+            if state.memories[index].userEdited {
+                return state.memories[index].correct(to: cleaned)
+            }
+            guard cleaned != MemoryItem.strippedPrefix(state.memories[index].text) else { return false }
+            let replacement = MemoryItem.revisedAutomatic(
+                from: state.memories[index], id: replacementID, statement: cleaned, at: date)
+            guard state.memories[index].supersede(by: replacement.id, at: date) else { return false }
+            state.memories.append(replacement)
+            return true
         case .forget(let id, let expectedRevision, let allowUserEdited):
             guard let index = state.memories.firstIndex(where: { $0.id == id }),
                 state.memories[index].isActive,
@@ -52,22 +72,47 @@ struct MemoryRecordMutation {
 }
 
 extension ReaderModel {
-    static func hasExplicitRevisionIntent(_ question: String) -> Bool {
+    /// Strict directive gate required to touch a `userEdited == true` memory. Common ML/academic
+    /// vocabulary ("不是…而是", "修改", "调整", "更新", "update", "change", "instead") never
+    /// unlocks reader-edited memories unless the reader explicitly targets a memory or tracking item.
+    static func hasExplicitMemoryRevisionDirective(_ question: String) -> Bool {
         question.range(
             of:
-                #"(?i)更正|改正|纠正|修正|修改|改成|改为|更新|调整|记错|写错|说错|不是|而是|不再|改变主意|改主意|不用再|无需再|停止追踪|取消追踪|其实我现在更在意|后来发现|现在只看|转向|改关注|重心放到|correct|change|update|instead|no longer|replace|changed my mind|stop tracking"#,
+                #"(?i)(?:更正|改正|纠正|修正|修改|更新|改成|改为|替换).{0,18}(?:记忆|记录|关注点|研究方向|研究问题|这条|那条|刚才记)|(?:记忆|记录|关注点|研究方向|研究问题|这条|那条|刚才记).{0,18}(?:更正|改正|纠正|修正|修改|更新|改成|改为|替换)|请把.{1,30}(?:改成|改为|更新成|更新为|修正为|修正成)|\b(?:correct|revise|update|change|replace)\b.{0,24}\b(?:memory|memories|record|focus|direction|preference)\b"#,
             options: .regularExpression) != nil
     }
 
-    static func hasExplicitForgetIntent(_ question: String) -> Bool {
+    /// Strict directive gate required to delete a `userEdited == true` memory. Uses explicit word
+    /// boundaries so terms like "dropout" or "early stopping" never match "drop" or "stop".
+    static func hasExplicitMemoryForgetDirective(_ question: String) -> Bool {
         question.range(
-            of: #"(?i)忘掉|忘记|删除|移除|撤回|不用再|无需再|不再|停止|取消|forget|remove|delete|stop|drop|no longer"#,
+            of:
+                #"(?i)(?:忘掉|忘记|删除|移除|撤回).{0,24}(?:记忆|记录|关注点|研究方向|研究问题|这条|那条|关于|旧)|(?:记忆|记录|关注点|研究方向|研究问题|这条|那条).{0,18}(?:忘掉|忘记|删除|移除|撤回|不用再追|不再追|停止追|不用再记|不再记)|(?:不用再|无需再|不再|停止|取消)(?:追查|追踪|跟踪|关注|记录|记住)|\b(?:forget|erase)\b.{0,24}\b(?:memory|memories|record|that|it|this|old|my)\b|\b(?:remove|delete)\b.{0,24}\b(?:memory|memories|record|preference)\b|\b(?:stop tracking|no longer track|drop\s+(?:this|that|the|my)\s+(?:memory|record|topic))\b"#,
             options: .regularExpression) != nil
+    }
+
+    /// Broader natural shift signal permitted ONLY for revising automatic (`userEdited == false`)
+    /// memories; never unlocks reader-edited records.
+    static func hasExplicitRevisionIntent(_ question: String) -> Bool {
+        hasExplicitMemoryRevisionDirective(question)
+            || question.range(
+                of:
+                    #"(?i)更正|改正|纠正|修正|改变主意|改主意|其实我现在更在意|我现在更在意|放后面|现在只看|现在只关注|改关注|重心放到|转向.{0,12}(?:研究|关注|比较)|改成|改为|\bchanged my mind\b|\bnow focus(?:ing)? on\b|\bno longer (?:track|focus|study|care)\b|\bstop tracking\b"#,
+                options: .regularExpression) != nil
+    }
+
+    /// Natural forget signal for automatic memories, still guarded by word boundaries.
+    static func hasExplicitForgetIntent(_ question: String) -> Bool {
+        hasExplicitMemoryForgetDirective(question)
+            || question.range(
+                of:
+                    #"(?i)忘掉|忘记|\bforget\b|\bstop tracking\b|\bno longer track\b|(?:不用再|无需再|不再)(?:追查|追踪|关注)"#,
+                options: .regularExpression) != nil
     }
 
     /// Shared validator for both LibraryAgent and Paper Assistant declarative `revise_memory`.
-    /// Explicit reader revision requests may silently update even `userEdited` memories; implicit
-    /// requests and background processes remain blocked from touching `userEdited` records.
+    /// Explicit memory-targeted reader directives may update `userEdited` memories; automatic
+    /// memories use bi-temporal supersedence (`userEdited == false`) and never escalate provenance.
     func buildMemoryRevisionMutation(
         memoryID: UUID, statement: String, expectedRevision: String?, question: String
     ) throws -> MemoryRecordMutation {
@@ -77,21 +122,25 @@ extension ReaderModel {
         if let expectedRevision, !current.matchesRevision(expectedRevision) {
             throw ReaderError.message("这条研究记忆已更新，请重新核对最新版本。")
         }
-        let explicitIntent = Self.hasExplicitRevisionIntent(question)
-        guard explicitIntent || expectedRevision != nil else {
-            throw ReaderError.message("本轮没有明确要求更正已有记忆。")
+        let explicitDirective = Self.hasExplicitMemoryRevisionDirective(question)
+        let naturalShift = Self.hasExplicitRevisionIntent(question)
+        if current.userEdited {
+            guard explicitDirective else {
+                throw ReaderError.message("读者手动修订的记忆仅在明确指令下才可修改。")
+            }
+        } else {
+            guard naturalShift else {
+                throw ReaderError.message("本轮没有明确要求更正已有记忆。")
+            }
         }
-        if current.userEdited, !explicitIntent {
-            throw ReaderError.message("读者手动修订的记忆仅在明确指令下才可修改。")
-        }
-        var probe = current
-        guard probe.correct(to: statement) else {
+        let cleaned = MemoryItem.strippedPrefix(statement)
+        guard !cleaned.isEmpty, cleaned != MemoryItem.strippedPrefix(current.text) else {
             throw ReaderError.message("新的记忆措辞没有变化。")
         }
         return MemoryRecordMutation(
             operation: .revise(
-                id: memoryID, statement: statement, expectedRevision: expectedRevision,
-                allowUserEdited: explicitIntent),
+                id: memoryID, statement: cleaned, expectedRevision: expectedRevision,
+                allowUserEdited: explicitDirective),
             auditTrigger: question)
     }
 
@@ -105,12 +154,16 @@ extension ReaderModel {
         if let expectedRevision, !target.matchesRevision(expectedRevision) {
             throw ReaderError.message("这条研究记忆已更新，请重新核对最新版本。")
         }
-        let explicitIntent = Self.hasExplicitForgetIntent(question)
-        guard explicitIntent || expectedRevision != nil else {
-            throw ReaderError.message("本轮没有明确要求删除这条记忆。")
-        }
-        if target.userEdited, !explicitIntent {
-            throw ReaderError.message("读者手动修订的记忆仅在明确指令下才可删除。")
+        let explicitDirective = Self.hasExplicitMemoryForgetDirective(question)
+        let naturalForget = Self.hasExplicitForgetIntent(question)
+        if target.userEdited {
+            guard explicitDirective else {
+                throw ReaderError.message("读者手动修订的记忆仅在明确指令下才可删除。")
+            }
+        } else {
+            guard naturalForget else {
+                throw ReaderError.message("本轮没有明确要求删除这条记忆。")
+            }
         }
         let ignored: Set<String> = ["的", "了", "在", "和", "与", "及", "这", "那", "个", "记录", "记忆", "旧", "新"]
         let questionTerms = Retriever.tokens(question).subtracting(ignored)
@@ -128,7 +181,7 @@ extension ReaderModel {
                 || (topOverlap > 0 && uniqueTop.count == 1 && uniqueTop.first?.0.id == target.id)
         else { throw ReaderError.message("记忆删除目标不唯一或与请求不匹配。") }
         return MemoryRecordMutation(
-            operation: .forget(id: target.id, expectedRevision: expectedRevision, allowUserEdited: explicitIntent),
+            operation: .forget(id: target.id, expectedRevision: expectedRevision, allowUserEdited: explicitDirective),
             auditTrigger: question)
     }
 }

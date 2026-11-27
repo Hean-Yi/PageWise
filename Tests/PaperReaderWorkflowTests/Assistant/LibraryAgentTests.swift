@@ -741,7 +741,7 @@ func downloadsFromTwoRecommendationCardsQueueOnceAndRespectCancellation(cancelSe
             ? messages.last?.content : nil
         let roundState =
             trailingState
-            ?? messages.last { $0.role == "assistant" && $0.toolCalls?.isEmpty == false }?.content ?? ""
+            ?? messages.last { $0.role == "tool" }?.content ?? ""
         switch count {
         case 1:
             #expect(prompt.contains("工具预算为 2 轮、3 次调用"))
@@ -2425,7 +2425,12 @@ private func libraryPayload(_ messages: [AgentMessage], _ call: String) throws -
     agent.send("请修正旧预算记录，改成只比较匹配预算的实验。")
     try await eventually { !agent.isRunning }
     #expect(agent.turns.last?.error == nil)
-    #expect(reader.state.memories.first(where: { $0.id == existing.id })?.text == "只比较匹配预算的实验。")
+    let oldRevised = try #require(reader.state.memories.first { $0.id == existing.id })
+    #expect(!oldRevised.isActive)
+    #expect(oldRevised.supersededBy != nil)
+    let activeRevised = try #require(reader.state.memories.first { $0.id == oldRevised.supersededBy })
+    #expect(activeRevised.text.contains("只比较匹配预算的实验。"))
+    #expect(!activeRevised.userEdited)
 
     agent.send("请把 volcanology 的旧记录移除。")
     try await eventually { !agent.isRunning }
@@ -2461,7 +2466,12 @@ private func libraryPayload(_ messages: [AgentMessage], _ call: String) throws -
     agent.send("请把这条记忆的内容更新成新记录。")
     try await eventually { !agent.isRunning }
     #expect(agent.turns.last?.activities.first?.status == .succeeded)
-    #expect(reader.state.memories.first?.text == "新记录")
+    let oldSuperseded = try #require(reader.state.memories.first { $0.id == old.id })
+    #expect(!oldSuperseded.isActive)
+    #expect(oldSuperseded.supersededBy != nil)
+    let updatedItem = try #require(reader.state.memories.first { $0.id == oldSuperseded.supersededBy })
+    #expect(updatedItem.text == MemoryItem.automaticPrefix + "新记录")
+    #expect(!updatedItem.userEdited)
 }
 
 @Test @MainActor func implicitChangeOfMindCanForgetAMemoryTheReaderNoLongerTracks() async throws {

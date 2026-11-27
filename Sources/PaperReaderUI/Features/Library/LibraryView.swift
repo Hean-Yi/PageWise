@@ -69,7 +69,12 @@ public struct LibraryView: View {
             }
             .sheet(
                 isPresented: $showSettings,
-                onDismiss: { settingsHint = nil }
+                onDismiss: {
+                    settingsHint = nil
+                    if guide.step == .modelSettings && model.isModelReadyForRequests {
+                        moveGuide(1)
+                    }
+                }
             ) {
                 SettingsView(
                     model: model,
@@ -285,11 +290,22 @@ public struct LibraryView: View {
                     .padding(.trailing, inline && sidebarVisible ? sidebarWidth : 0)
                     // Give PDFKit and WebKit the new viewport once, independent of the pane's slide.
                     .transaction(value: sidebarVisible) { $0.animation = nil }
+                if !inline && sidebarVisible {
+                    Color.black.opacity(0.14)
+                        .ignoresSafeArea()
+                        .contentShape(Rectangle())
+                        .onTapGesture { self.assistantTab = nil }
+                        .accessibilityAddTraits(.isButton)
+                        .accessibilityLabel("收起助读侧栏")
+                        .transition(.opacity)
+                }
                 ZStack(alignment: .trailing) {
                     if let assistantTab {
                         WorkspaceAssistantSidebar(
                             model: model, agent: agent, isReading: isReading, tab: isReading ? assistantTab : .library,
                             select: { self.assistantTab = $0 }, question: $paperQuestion, agentDraft: $agentDraft,
+                            showsCloseButton: !inline,
+                            onClose: { self.assistantTab = nil },
                             openSettings: {
                                 settingsHint = "请先选择模型服务并保存 API 密钥，即可使用助读与精读功能。"
                                 showSettings = true
@@ -342,7 +358,7 @@ public struct LibraryView: View {
                 }
                 .readerIconButtonStyle(.automatic)
                 .keyboardShortcut("i", modifiers: [.command, .option])
-                .help(assistantTab == nil ? "打开助读侧栏" : "收起助读侧栏")
+                .help(assistantTab == nil ? "打开助读侧栏（⌥⌘I）" : "收起助读侧栏（⌥⌘I）")
                 .accessibilityLabel(assistantTab == nil ? "打开助读侧栏" : "收起助读侧栏")
                 .foregroundStyle(assistantTab != nil ? ReaderTheme.accent : ReaderTheme.muted)
                 .disabled(!model.loaded || model.loadFailure != nil)
@@ -539,7 +555,9 @@ public struct LibraryView: View {
                 }
                 .readerIconButtonStyle(.plain).quickStartTarget(.importPaper)
                 Button {
-                    settingsHint = nil
+                    settingsHint =
+                        guide.step == .modelSettings
+                        ? "选择一个模型服务并保存 API 密钥后，即可继续体验双语重排与助读。" : nil
                     showSettings = true
                 } label: {
                     Label("设置", systemImage: "gearshape").labelStyle(

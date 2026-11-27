@@ -182,10 +182,28 @@ extension LibraryAgent {
                 throw ReaderError.message("来源已变化或保存失败，此次未修改记忆。")
             }
             try check(epoch)
+            let updated =
+                mutation.replacementID.flatMap { id in reader.state.memories.first { $0.id == id && $0.isActive } }
+                ?? reader.state.memories.first { $0.id == memoryID && $0.isActive }
+            if let updated {
+                if recalledSources == nil {
+                    var versions = ChatSourceVersions()
+                    versions.include(updated)
+                    remember(versions)
+                } else {
+                    recalledSources?.replaceMemory(memoryID, with: updated)
+                }
+            } else {
+                recalledSources?.removeMemory(memoryID)
+            }
             onSubject("研究记忆已静默修订")
+            let activeID = updated?.id ?? memoryID
+            let revision = updated?.revisionFingerprint ?? ""
+            let supersededPart = activeID != memoryID ? ",\"superseded_memory_id\":\"\(memoryID.uuidString)\"" : ""
             return AgentToolOutcome(
-                content: "{\"ok\":true,\"memory_id\":\"\(memoryID.uuidString)\"}", cards: [], truncated: false,
-                message: nil)
+                content:
+                    "{\"ok\":true,\"memory_id\":\"\(activeID.uuidString)\",\"revision\":\"\(revision)\"\(supersededPart)}",
+                cards: [], truncated: false, message: nil)
         case .forgetMemory(let memoryID, let expectedRevision):
             guard let turn = activeTurn, limits.availableToolNames?.contains(call.function.name) != false else {
                 throw ReaderError.message("本轮没有明确要求删除这条记忆。")
@@ -198,6 +216,7 @@ extension LibraryAgent {
                 throw ReaderError.message("来源已变化或保存失败，此次未删除记忆。")
             }
             try check(epoch)
+            recalledSources?.removeMemory(memoryID)
             onSubject("研究记忆已静默删除")
             return AgentToolOutcome(
                 content: "{\"ok\":true,\"memory_id\":\"\(memoryID.uuidString)\"}", cards: [], truncated: false,

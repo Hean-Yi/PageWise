@@ -29,7 +29,11 @@ struct SemanticModelSettingsRow: View {
                     }
                 }
             }
-            if let error = settings.errorMessage { Text(error).font(.caption).foregroundStyle(.secondary) }
+            if let error = settings.errorMessage {
+                Label(error, systemImage: "exclamationmark.circle")
+                    .font(.caption).foregroundStyle(Color.red)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
         .task { await settings.refresh() }
     }

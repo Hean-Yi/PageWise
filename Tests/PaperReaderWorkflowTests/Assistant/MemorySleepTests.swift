@@ -225,3 +225,51 @@ private func sleepSource(_ statement: String) throws -> MemoryItem {
     #expect(ordered.first?.id == english.id)
     #expect(ordered.contains { $0.id == literal.id })
 }
+
+@Test @MainActor func sleepIsolatesMemoriesAcrossTopicShelvesInBatchAndAccept() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let reader = try ReaderModel(root: root)
+    await reader.load()
+    let shelfA = try Shelf(name: "推理加速")
+    let shelfB = try Shelf(name: "视觉分割")
+    let paperA = Paper(
+        title: "Inference Paper", digest: "inf-a", originalPath: "a.pdf", pageCount: 1, blocks: [], warnings: [],
+        canReflow: false)
+    let paperB = Paper(
+        title: "Vision Paper", digest: "vis-b", originalPath: "b.pdf", pageCount: 1, blocks: [], warnings: [],
+        canReflow: false)
+    let turnA = ChatTurn(paperID: paperA.id, question: "等算力预算", selection: "", answer: "ok", evidence: [])
+    let turnB = ChatTurn(paperID: paperB.id, question: "等算力预算", selection: "", answer: "ok", evidence: [])
+    let memA = MemoryItem(text: MemoryItem.automaticPrefix + "推理加速等算力对照", sourceID: turnA.id)
+    var memB = MemoryItem(text: MemoryItem.automaticPrefix + "视觉分割等算力对照", sourceID: turnB.id)
+    memB.createdAt = memA.createdAt.addingTimeInterval(60)
+    reader.state.shelves = [shelfA, shelfB]
+    reader.state.papers = [paperA, paperB]
+    reader.state.paperShelfIDs[paperA.id.uuidString] = shelfA.id
+    reader.state.paperShelfIDs[paperB.id.uuidString] = shelfB.id
+    reader.state.chats = [turnA, turnB]
+    reader.state.memories = [memA, memB]
+    #expect(await reader.save())
+
+    actor BatchCapture {
+        var payloads: [String] = []
+        func record(_ value: String) { payloads.append(value) }
+    }
+    let capture = BatchCapture()
+    let idA = memA.id
+    let idB = memB.id
+    let store = MemorySleepStore(store: reader.store)
+    let firstPass = try await store.run { input in
+        await capture.record(input.json)
+        // Attempt an illegal cross-shelf supersedence; only one shelf should appear in each batch.
+        return
+            #"{"groups":[{"kind":"superseded","members":["\#(idA)","\#(idB)"],"current":"\#(idB)","summary":"跨书架误合并"}]}"#
+    }
+    #expect(firstPass.connections.isEmpty)
+    #expect(firstPass.hasPendingReview)
+    let firstBatchJSON = try #require(await capture.payloads.first)
+    // The two shelves must NEVER appear in the same LLM review batch.
+    #expect(firstBatchJSON.contains(idA.uuidString) != firstBatchJSON.contains(idB.uuidString))
+    #expect(firstBatchJSON.contains("\"scope\":\"shelf:"))
+}

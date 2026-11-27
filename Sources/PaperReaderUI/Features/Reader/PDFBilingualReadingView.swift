@@ -165,6 +165,21 @@ struct PDFBilingualReadingView: View {
                 Text(notice).font(.caption).foregroundStyle(ReaderTheme.muted)
                     .fixedSize(horizontal: false, vertical: true).padding(.horizontal, 20).padding(.top, 8)
             }
+            if paragraphs && translations.isEmpty && !sentences.isEmpty && !model.isModelReadyForRequests
+                && session.error == nil
+            {
+                HStack(spacing: 10) {
+                    Image(systemName: "slider.horizontal.3").foregroundStyle(ReaderTheme.accent)
+                    Text("当前先展示英文重排段落 · 配置模型服务后自动生成中文对照")
+                        .font(.caption).foregroundStyle(ReaderTheme.muted)
+                    Spacer(minLength: 4)
+                    Button("模型设置", action: openSettings)
+                        .buttonStyle(.borderless).font(.caption.weight(.medium)).fixedSize()
+                }
+                .padding(.horizontal, 16).padding(.vertical, 10)
+                .background(ReaderTheme.elevated)
+                Divider()
+            }
             if let error = session.error {
                 HStack(alignment: .firstTextBaseline) {
                     Text(error).font(.callout).textSelection(.enabled)

@@ -16,20 +16,42 @@ struct PaperAssistantView: View {
         model.currentChats + (model.currentAssistantDraft.map { [$0] } ?? [])
     }
 
+    private var currentFailure: PaperAssistantFailure? {
+        guard let failure = model.lastAssistantFailure, failure.paperID == model.selectedPaperID else { return nil }
+        return failure
+    }
+
     var body: some View {
         let chats = displayedChats
+        let failure = currentFailure
         return VStack(alignment: .leading, spacing: 0) {
             CloseReadingControl(model: model, openSettings: openSettings)
             ScrollViewReader { scroll in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 24) {
                         if chats.isEmpty {
-                            VStack(spacing: 0) {
-                                prompt("核心贡献", icon: "lightbulb", question: "这篇论文主要解决什么问题，有哪些核心贡献？")
-                                prompt(
-                                    "方法思路", icon: "point.3.connected.trianglepath.dotted",
-                                    question: "这篇论文的方法是如何工作的？")
-                                prompt("局限与不足", icon: "scope", question: "这项方法有哪些局限？")
+                            VStack(alignment: .leading, spacing: 14) {
+                                if !model.isModelReadyForRequests {
+                                    HStack(spacing: 8) {
+                                        Image(systemName: "slider.horizontal.3").foregroundStyle(ReaderTheme.accent)
+                                        Text("配置模型服务后即可开始助读与精读").font(.caption).foregroundStyle(ReaderTheme.muted)
+                                        Spacer(minLength: 4)
+                                        Button("去设置", action: openSettings)
+                                            .buttonStyle(.borderless).font(.caption.weight(.medium))
+                                    }
+                                    .padding(11)
+                                    .background(ReaderTheme.surface, in: RoundedRectangle(cornerRadius: 10))
+                                    .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(ReaderTheme.line))
+                                }
+                                Text("选中原文可直接解释，或从下方开始提问")
+                                    .font(.caption).foregroundStyle(ReaderTheme.muted)
+                                VStack(spacing: 0) {
+                                    prompt("核心贡献", icon: "lightbulb", question: "这篇论文主要解决什么问题，有哪些核心贡献？")
+                                    prompt(
+                                        "方法思路", icon: "point.3.connected.trianglepath.dotted",
+                                        question: "这篇论文的方法是如何工作的？")
+                                    prompt("局限与不足", icon: "scope", question: "这项方法有哪些局限？")
+                                }
                             }
                         }
                         ForEach(chats) { turn in
@@ -83,7 +105,9 @@ struct PaperAssistantView: View {
                                     scroll.scrollTo(
                                         AssistantCitationAnchor(turn: turn.id, source: sourceID), anchor: .top)
                                 }
-                                if model.assistantDraft?.id == turn.id, turn.answer.isEmpty {
+                                if model.assistantDraft?.id == turn.id,
+                                    turn.answer.isEmpty || model.assistantActivityStatus != nil
+                                {
                                     HStack(spacing: 8) {
                                         ProgressView().controlSize(.mini)
                                         Text(model.assistantActivityStatus ?? "正在准备回答…")
@@ -93,15 +117,63 @@ struct PaperAssistantView: View {
                                 }
                             }
                         }
+                        if let failure {
+                            failureCard(failure)
+                        }
                         Color.clear.frame(height: 1).id("paper-chat-bottom")
                     }.padding(20)
                 }
+                .modifier(
+                    JumpToLatest(
+                        target: .init(turn: chats.last?.id, awaitsReply: failure != nil)
+                    ) { scroll.scrollTo("paper-chat-bottom", anchor: .bottom) }
+                )
                 .onChange(of: chats.last?.readingNoteID) { _, id in
                     if id != nil { scroll.scrollTo("paper-chat-bottom", anchor: .bottom) }
                 }
             }
             composer
         }
+    }
+
+    private func failureCard(_ failure: PaperAssistantFailure) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: "exclamationmark.circle").foregroundStyle(Color.red)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(failure.question).font(.caption.weight(.medium)).foregroundStyle(ReaderTheme.ink).lineLimit(2)
+                    Text(failure.message).font(.caption).foregroundStyle(ReaderTheme.muted)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 4)
+                Button {
+                    model.lastAssistantFailure = nil
+                } label: {
+                    ReaderIcon(.close, size: 12).readerIconTarget(macOS: 22)
+                }
+                .readerIconButtonStyle(.plain).foregroundStyle(ReaderTheme.muted).accessibilityLabel("关闭错误提示")
+            }
+            HStack(spacing: 12) {
+                Button("重试") {
+                    guard model.isModelReadyForRequests else {
+                        openSettings()
+                        return
+                    }
+                    model.startAsking(failure.question)
+                }
+                .buttonStyle(.borderless).font(.caption.weight(.medium)).foregroundStyle(ReaderTheme.accent)
+                .disabled(model.busyAI)
+                Button("重新编辑") {
+                    question = failure.question
+                    model.lastAssistantFailure = nil
+                    composerFocused = true
+                }
+                .buttonStyle(.borderless).font(.caption).foregroundStyle(ReaderTheme.muted)
+            }
+        }
+        .padding(12)
+        .background(ReaderTheme.surface, in: RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(ReaderTheme.line))
     }
 
     private func prompt(_ title: String, icon: String, question value: String) -> some View {
@@ -126,8 +198,8 @@ struct PaperAssistantView: View {
                 }.fixedSize(horizontal: false, vertical: true)
             }
             TextField("问这篇论文…", text: $question, axis: .vertical)
-                .textFieldStyle(.plain).font(.title3).lineLimit(3...6)
-                .frame(minHeight: 60, alignment: .top)
+                .textFieldStyle(.plain).font(.body).lineLimit(3...6)
+                .frame(minHeight: 52, alignment: .top)
                 .focused($composerFocused).onSubmit(send).accessibilityLabel("向论文助读提问")
             HStack {
                 Button(action: relatedPapers) {
@@ -138,7 +210,7 @@ struct PaperAssistantView: View {
                 .help("查找与当前论文相关的研究").disabled(!canFindRelated)
                 if let last = model.currentChats.last, last.readingNoteID == nil, !last.answer.isEmpty {
                     Button {
-                        guard (try? model.modelSettings.normalized()) != nil else {
+                        guard model.isModelReadyForRequests else {
                             openSettings()
                             return
                         }
@@ -170,7 +242,7 @@ struct PaperAssistantView: View {
     }
 
     private func send() {
-        guard (try? model.modelSettings.normalized()) != nil else {
+        guard model.isModelReadyForRequests else {
             openSettings()
             return
         }

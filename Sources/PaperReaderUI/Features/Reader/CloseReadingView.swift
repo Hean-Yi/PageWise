@@ -34,8 +34,7 @@ struct CloseReadingControl: View {
                     .help("停止精读").accessibilityLabel("停止精读")
                 } else {
                     Button {
-                        if model.existingCloseReading(for: id) == nil && (try? model.modelSettings.normalized()) == nil
-                        {
+                        if model.existingCloseReading(for: id) == nil && !model.isModelReadyForRequests {
                             openSettings()
                         } else {
                             Task { await model.showCloseReading(id) }

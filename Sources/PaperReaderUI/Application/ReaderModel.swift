@@ -14,6 +14,12 @@ enum ReaderOrigin: String {
     }
 }
 
+public struct PaperAssistantFailure: Equatable, Sendable {
+    public let paperID: UUID
+    public let question: String
+    public let message: String
+}
+
 @MainActor @Observable
 public final class ReaderModel {
     public var state = LibraryState() { didSet { stateRevision &+= 1 } }
@@ -61,6 +67,7 @@ public final class ReaderModel {
     let researchBriefMaintenance: ResearchBriefMaintenance
     public var assistantDraft: ChatTurn?
     public var assistantActivityStatus: String?
+    public var lastAssistantFailure: PaperAssistantFailure?
     public var busyAI = false
     @ObservationIgnored var assistantTask: Task<Void, Never>?
     var closeReadingPaperID: UUID?
@@ -74,6 +81,7 @@ public final class ReaderModel {
     @ObservationIgnored var deletedDigests: [String: Date] = [:]
     @ObservationIgnored var deletedPublications: [String: Date] = [:]
     public private(set) var modelSettings = ModelSettings()
+    public internal(set) var hasConfiguredModelCredential = false
     public var selectionText = ""
     public var selectionRects: [[Double]] = []
     public var selectionPage = 0
@@ -177,6 +185,9 @@ public final class ReaderModel {
         configurationStore = ModelConfigurationStore(directory: location, credentials: credentials)
         let saved = try configurationStore.load()
         modelSettings = saved.model.isEmpty ? self.translationValidation?.settings ?? saved : saved
+        hasConfiguredModelCredential =
+            self.translationValidation?.key(for: modelSettings) != nil
+            || (saved.hasStoredCredential ?? !saved.model.isEmpty)
     }
 
     var currentEdition: Paper? {
@@ -266,6 +277,7 @@ public final class ReaderModel {
         if changedPaper {
             outlineArrival = nil
             assistantTask?.cancel()
+            lastAssistantFailure = nil
             closeReadingTask?.cancel()
             pdfBilingual.close()
             translationPauseReason = nil
@@ -631,6 +643,15 @@ public final class ReaderModel {
         let changed = modelSettings != result.settings || removeKey || key?.isEmpty == false
         let previous = modelSettings
         modelSettings = result.settings
+        if usesLocalModelKey(for: result.settings) {
+            hasConfiguredModelCredential = true
+        } else if let stored = result.settings.hasStoredCredential {
+            hasConfiguredModelCredential = stored
+        } else if removeKey {
+            hasConfiguredModelCredential = false
+        } else {
+            hasConfiguredModelCredential = !result.settings.model.isEmpty
+        }
         if changed {
             pdfBilingual.settingsChanged(self, previous: previous, credentialRemoved: removeKey)
             for id in translationTasks.keys { pauseReflow(id) }

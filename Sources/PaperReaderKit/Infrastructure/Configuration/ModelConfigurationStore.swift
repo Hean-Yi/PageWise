@@ -64,9 +64,16 @@ public struct DeviceModelCredentials: ModelCredentialStore {
         let replacesCredential =
             removeKey || !replacement.isEmpty || (try? previous.endpointURL()) != (try? next.endpointURL())
         next.credentialID = replacesCredential ? UUID().uuidString : previous.credentialID
-        let data = try JSONEncoder().encode(next)
         let account = next.credentialID ?? "model-key"
         let writesKey = replacesCredential && !removeKey && !replacement.isEmpty
+        if writesKey {
+            next.hasStoredCredential = true
+        } else if replacesCredential {
+            next.hasStoredCredential = false
+        } else {
+            next.hasStoredCredential = previous.hasStoredCredential
+        }
+        let data = try JSONEncoder().encode(next)
         if writesKey { try credentials.save(replacement, account: account) }
         do {
             try data.write(to: file, options: .atomic)

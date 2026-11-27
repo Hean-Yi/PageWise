@@ -5,21 +5,71 @@ struct MemoryView: View {
     @Bindable var model: ReaderModel
     var onlyID: UUID?
     let openPaper: (UUID) -> Void
+    @State private var maintenanceExpanded = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     private var memories: [MemoryItem] {
         model.state.memories.filter { $0.isActive && (onlyID == nil || $0.id == onlyID) }
     }
 
     var body: some View {
-        if onlyID == nil {
-            sleepPanel
-        }
-        if memories.isEmpty {
-            ContentUnavailableView("暂无研究记忆", systemImage: "brain.head.profile")
-                .frame(maxWidth: .infinity, minHeight: 240)
-        } else {
-            LazyVStack(spacing: 12) {
-                let organized = onlyID == nil ? Set(currentGroups.flatMap(\.members)) : []
-                ForEach(memories.filter { !organized.contains($0.id) }) { memory in memoryCard(memory) }
+        VStack(alignment: .leading, spacing: 16) {
+            if onlyID == nil {
+                maintenanceDisclosure
+            }
+            if memories.isEmpty {
+                ContentUnavailableView {
+                    Label("暂无研究记忆", systemImage: "brain.head.profile")
+                } description: {
+                    Text("在论文助读或书库助理中提及你的研究关注点与阅读偏好，或开启自动整理后，记录会出现在这里。")
+                }
+                .frame(maxWidth: .infinity, minHeight: 220)
+            } else {
+                let groups = onlyID == nil ? currentGroups : []
+                let organized = Set(groups.flatMap(\.members))
+                if onlyID == nil {
+                    HStack(alignment: .firstTextBaseline) {
+                        Text("共 \(memories.count) 条记忆")
+                            .font(.subheadline.weight(.semibold))
+                        Spacer(minLength: 8)
+                        Text("点击即可编辑，手动编辑后 AI 不会覆盖")
+                            .font(.caption).foregroundStyle(ReaderTheme.muted)
+                    }
+                }
+                if !groups.isEmpty {
+                    VStack(alignment: .leading, spacing: 10) {
+                        ForEach(Array(groups.enumerated()), id: \.offset) { _, group in
+                            DisclosureGroup {
+                                VStack(spacing: 10) {
+                                    ForEach(group.members, id: \.self) { id in
+                                        if let memory = memories.first(where: { $0.id == id }) {
+                                            memoryCard(memory)
+                                        }
+                                    }
+                                }
+                                .padding(.top, 8)
+                            } label: {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(
+                                        (group.kind == .superseded || group.kind == .refine)
+                                            ? "已更新"
+                                            : group.kind == .compare
+                                                ? "保留分歧" : group.kind == .duplicate ? "已归并" : "研究主题"
+                                    )
+                                    .font(.caption.weight(.medium)).foregroundStyle(ReaderTheme.accent)
+                                    if let summary = group.summary {
+                                        Text(verbatim: summary).font(.callout).foregroundStyle(ReaderTheme.ink)
+                                    }
+                                }
+                            }
+                            .padding(14)
+                            .background(ReaderTheme.surface, in: RoundedRectangle(cornerRadius: 12))
+                            .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(ReaderTheme.line))
+                        }
+                    }
+                }
+                LazyVStack(spacing: 12) {
+                    ForEach(memories.filter { !organized.contains($0.id) }) { memory in memoryCard(memory) }
+                }
             }
         }
     }
@@ -30,103 +80,72 @@ struct MemoryView: View {
         return model.memorySleep.edition.recallConnections(for: live)
     }
 
-    private static let reviewIntervals: [(label: String, seconds: TimeInterval)] = [
-        ("30 分钟", 1_800), ("1 小时", 3_600), ("3 小时", 10_800),
-        ("6 小时", 21_600), ("12 小时", 43_200), ("一天", 86_400),
-    ]
-
-    private var sleepPanel: some View {
+    private var maintenanceDisclosure: some View {
         @Bindable var sleep = model.memorySleep
-        @Bindable var noteReview = model.noteReview
-        let groups = currentGroups
-        let currentIntervalLabel =
-            Self.reviewIntervals.first { abs($0.seconds - noteReview.interval) < 1 }?.label ?? "6 小时"
-        return VStack(alignment: .leading, spacing: 14) {
-            VStack(alignment: .leading, spacing: 12) {
-                HStack {
-                    Label("记忆空闲整理", systemImage: "moon.stars").font(.subheadline.weight(.semibold))
-                    Spacer()
+        let semantic = SemanticModelSettings.shared
+        let summaryText =
+            (sleep.enabled ? "自动整理已开启" : "自动整理已关闭")
+            + " · "
+            + (semantic.isBundled || semantic.installed ? "语义检索就绪" : "语义检索未安装")
+        return VStack(alignment: .leading, spacing: 0) {
+            Button {
+                withAnimation(ReaderMotion.disclosure(reduceMotion)) { maintenanceExpanded.toggle() }
+            } label: {
+                HStack(spacing: 10) {
+                    ReaderActionSymbol("moon.stars").foregroundStyle(ReaderTheme.accent)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("维护与检索").font(.subheadline.weight(.semibold)).foregroundStyle(ReaderTheme.ink)
+                        Text(summaryText).font(.caption).foregroundStyle(ReaderTheme.muted)
+                    }
+                    Spacer(minLength: 6)
                     if sleep.running {
                         ProgressView().controlSize(.small)
-                        Button("停止") { sleep.interrupt() }.buttonStyle(.borderless).font(.caption)
-                    } else {
-                        Button("用 AI 整理") { sleep.run(reader: model, automatic: false, withModel: true) }
-                            .buttonStyle(.borderless).font(.caption).disabled(memories.isEmpty)
                     }
+                    ReaderActionSymbol("chevron.right")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(ReaderTheme.muted)
+                        .rotationEffect(.degrees(maintenanceExpanded ? 90 : 0))
                 }
-                Toggle("空闲时自动维护记忆", isOn: $sleep.enabled).font(.callout)
-                Text("使用当前模型服务，发送本批记忆并计入 API 用量。")
-                    .font(.caption).foregroundStyle(ReaderTheme.muted)
-                if let message = sleep.message {
-                    Text(verbatim: message).font(.caption).foregroundStyle(ReaderTheme.accent)
-                }
+                .padding(14).contentShape(Rectangle())
             }
-            .padding(16)
-            .background(ReaderTheme.surface, in: RoundedRectangle(cornerRadius: 12))
-            .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(ReaderTheme.line))
-
-            VStack(alignment: .leading, spacing: 12) {
-                HStack {
-                    Toggle("空闲时整理笔记", isOn: $noteReview.enabled).font(.callout)
-                    Spacer()
-                    if noteReview.running {
-                        ProgressView().controlSize(.small)
-                        Button("停止") { noteReview.interrupt() }.buttonStyle(.borderless).font(.caption)
-                    } else {
-                        Button("整理笔记") { noteReview.run(reader: model, automatic: false, withModel: true) }
-                            .buttonStyle(.borderless).font(.caption)
-                            .disabled(model.state.readingNotes.allSatisfy { $0.deletedAt != nil })
-                    }
-                }
-                HStack {
-                    Text("整理间隔").font(.callout).foregroundStyle(ReaderTheme.muted)
-                    Spacer()
-                    ReaderPopupMenu(
-                        "整理间隔",
-                        items: Self.reviewIntervals.map { option in
-                            .action(option.label, selected: abs(option.seconds - noteReview.interval) < 1) {
-                                noteReview.interval = option.seconds
+            .readerIconButtonStyle(.plain)
+            .accessibilityValue(maintenanceExpanded ? "已展开" : "已收起")
+            if !maintenanceExpanded, let message = sleep.message {
+                Text(verbatim: message).font(.caption).foregroundStyle(ReaderTheme.accent)
+                    .padding(.horizontal, 14).padding(.bottom, 12)
+            }
+            if maintenanceExpanded {
+                Divider().padding(.horizontal, 14)
+                VStack(alignment: .leading, spacing: 14) {
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack {
+                            Label("记忆空闲整理", systemImage: "sparkles").font(.subheadline.weight(.semibold))
+                            Spacer()
+                            if sleep.running {
+                                ProgressView().controlSize(.small)
+                                Button("停止") { sleep.interrupt() }.buttonStyle(.borderless).font(.caption)
+                            } else {
+                                Button("用 AI 整理") { sleep.run(reader: model, automatic: false, withModel: true) }
+                                    .buttonStyle(.borderless).font(.caption).disabled(memories.isEmpty)
                             }
-                        }, width: 150
-                    ) {
-                        ReaderMenuValueLabel(currentIntervalLabel).font(.callout)
-                    }
-                    .accessibilityValue(currentIntervalLabel)
-                }
-                Text("只有新增笔记或阅读状态变化时才调用模型；更新会追加为新修订，保留原笔记。")
-                    .font(.caption).foregroundStyle(ReaderTheme.muted)
-                if let reviewMessage = noteReview.message {
-                    Text(verbatim: reviewMessage).font(.caption).foregroundStyle(ReaderTheme.accent)
-                }
-            }
-            .padding(16)
-            .background(ReaderTheme.surface, in: RoundedRectangle(cornerRadius: 12))
-            .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(ReaderTheme.line))
-
-            SemanticModelSettingsRow(model: model)
-                .padding(16)
-                .background(ReaderTheme.surface, in: RoundedRectangle(cornerRadius: 12))
-                .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(ReaderTheme.line))
-
-            ForEach(Array(groups.enumerated()), id: \.offset) { _, group in
-                DisclosureGroup {
-                    ForEach(group.members, id: \.self) { id in
-                        if let memory = memories.first(where: { $0.id == id }) {
-                            memoryCard(memory)
+                        }
+                        Toggle("空闲时自动维护记忆", isOn: $sleep.enabled).font(.callout)
+                        Text("使用当前模型服务，发送本批记忆并计入 API 用量；不会覆盖你手动编辑过的记忆。")
+                            .font(.caption).foregroundStyle(ReaderTheme.muted)
+                            .fixedSize(horizontal: false, vertical: true)
+                        if let message = sleep.message {
+                            Text(verbatim: message).font(.caption).foregroundStyle(ReaderTheme.accent)
+                                .fixedSize(horizontal: false, vertical: true)
                         }
                     }
-                } label: {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(
-                            (group.kind == .superseded || group.kind == .refine)
-                                ? "已更新" : group.kind == .compare ? "保留分歧" : group.kind == .duplicate ? "已归并" : "研究主题"
-                        )
-                        .font(.caption).foregroundStyle(ReaderTheme.accent)
-                        if let summary = group.summary { Text(verbatim: summary) }
-                    }
+                    Divider()
+                    SemanticModelSettingsRow(model: model)
                 }
+                .padding(14)
             }
-        }.padding(.bottom, 12)
+        }
+        .background(ReaderTheme.surface, in: RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(ReaderTheme.line))
     }
 
     private func memoryCard(_ memory: MemoryItem) -> some View {

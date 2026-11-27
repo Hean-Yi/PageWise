@@ -2,6 +2,11 @@ import Foundation
 import PaperReaderKit
 
 extension ReaderModel {
+    public var isModelReadyForRequests: Bool {
+        guard (try? modelSettings.normalized()) != nil else { return false }
+        return usesLocalModelKey(for: modelSettings) || hasConfiguredModelCredential
+    }
+
     func usesLocalModelKey(for settings: ModelSettings) -> Bool {
         translationValidation?.key(for: settings) != nil
     }
@@ -13,6 +18,18 @@ extension ReaderModel {
 
     public func hasSavedAPIKey() async throws -> Bool {
         try await !configurationStore.keyForDraftRequest(modelSettings).isEmpty
+    }
+
+    public func refreshModelCredentialState() async {
+        if usesLocalModelKey(for: modelSettings) {
+            hasConfiguredModelCredential = true
+            return
+        }
+        hasConfiguredModelCredential = (try? await hasSavedAPIKey()) == true
+    }
+
+    func updateModelCredentialReady(_ ready: Bool) {
+        hasConfiguredModelCredential = usesLocalModelKey(for: modelSettings) || ready
     }
 
     public func testModelConnection(_ draft: ModelSettings, key: String, removeKey: Bool = false) async throws {

@@ -561,20 +561,23 @@ private actor ScriptedAgentLoopClient: AgentCompleting {
     #expect(requests[0].last?.content?.contains("PERSONAL CONTEXT") == true)
     #expect(!requests[0].contains { $0.content == "old private thought" })
     #expect(!requests[0].contains { $0.reasoningContent == "old private thought" })
-    // Each completed tool round is stamped once on its own assistant carrier, so Round 2's entire
-    // message prefix survives byte-for-byte into Round 3 while keeping the trailing tool message last.
+    // Each completed tool round is stamped once on its trailing `tool` payload, keeping assistant
+    // messages pure model output while preserving Round 2's byte-for-byte prefix into Round 3.
     let round2Prefix = requests[1]
     let round3Prefix = Array(requests[2].prefix(round2Prefix.count))
     #expect(round2Prefix == round3Prefix)
-    let round2Carrier = requests[1].last { $0.role == "assistant" && $0.toolCalls?.isEmpty == false }
-    let round3Carrier = requests[2].last { $0.role == "assistant" && $0.toolCalls?.isEmpty == false }
-    #expect(round2Carrier?.content?.contains("当前剩余 2 轮") == true)
-    #expect(round3Carrier?.content?.contains("当前剩余 1 轮") == true)
+    let round2Assistant = requests[1].last { $0.role == "assistant" && $0.toolCalls?.isEmpty == false }
+    let round3Assistant = requests[2].last { $0.role == "assistant" && $0.toolCalls?.isEmpty == false }
+    #expect(round2Assistant?.content?.contains("系统状态") != true)
+    #expect(round3Assistant?.content?.contains("系统状态") != true)
     #expect(requests[1].last?.role == "tool")
     #expect(requests[2].last?.role == "tool")
+    #expect(requests[1].last?.content?.contains("当前剩余 2 轮") == true)
+    #expect(requests[2].last?.content?.contains("当前剩余 1 轮") == true)
     // The ephemeral budget note is never persisted into the transcript.
     #expect(checkpoints.count == 2)
     #expect(checkpoints.allSatisfy { !$0.contains { $0.content?.contains("系统状态") == true } })
+    #expect(checkpoints.allSatisfy { !$0.contains { $0.content?.contains("_system_budget") == true } })
     #expect(checkpoints.allSatisfy { !$0.contains { $0.content?.contains("PERSONAL CONTEXT") == true } })
 }
 

@@ -22,6 +22,8 @@ struct WorkspaceAssistantSidebar: View {
     let select: (AssistantTab) -> Void
     @Binding var question: String
     @Binding var agentDraft: String
+    var showsCloseButton = false
+    var onClose: (() -> Void)?
     let openSettings: () -> Void
     let didNavigate: () -> Void
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -40,6 +42,13 @@ struct WorkspaceAssistantSidebar: View {
                     .font(.headline).accessibilityAddTraits(.isHeader)
                     Spacer(minLength: 0)
                 }
+                if showsCloseButton, let onClose {
+                    Button(action: onClose) {
+                        ReaderIcon(.close, size: 14).readerIconTarget(macOS: 28)
+                    }
+                    .readerIconButtonStyle(.plain).foregroundStyle(ReaderTheme.muted)
+                    .help("收起助读侧栏（⌥⌘I）").accessibilityLabel("收起助读侧栏")
+                }
             }.padding(.horizontal, 14).frame(height: 56)
             Divider()
             let index = AssistantTab.allCases.firstIndex(of: tab) ?? 0
@@ -52,6 +61,11 @@ struct WorkspaceAssistantSidebar: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(ReaderTheme.canvas)
         .overlay(alignment: .leading) { Rectangle().fill(ReaderTheme.line).frame(width: 1) }
+        .onKeyPress(.escape) {
+            guard showsCloseButton, let onClose else { return .ignored }
+            onClose()
+            return .handled
+        }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("助读侧栏")
     }
@@ -112,7 +126,7 @@ struct WorkspaceAssistantSidebar: View {
             ReaderNotesView(
                 model: model,
                 summarize: {
-                    if (try? model.modelSettings.normalized()) != nil {
+                    if model.isModelReadyForRequests {
                         Task { await model.summarize() }
                     } else {
                         openSettings()
@@ -122,7 +136,7 @@ struct WorkspaceAssistantSidebar: View {
             PaperAssistantView(
                 model: model, question: $question, openSettings: openSettings, didNavigate: didNavigate,
                 relatedPapers: {
-                    guard (try? model.modelSettings.normalized()) != nil else {
+                    guard model.isModelReadyForRequests else {
                         openSettings()
                         return
                     }

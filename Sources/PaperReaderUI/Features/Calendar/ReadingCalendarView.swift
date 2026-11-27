@@ -15,7 +15,8 @@ struct ReadingCalendarView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 28) {
                 HStack(alignment: .center) {
-                    Text("阅读日历").font(.system(size: 32, weight: .regular, design: .serif))
+                    Text("阅读日历").font(ReaderTheme.editorial(32, weight: .medium))
+                        .accessibilityAddTraits(.isHeader)
                     Spacer()
                     Button {
                         addPaper = model.selectedPaperID ?? model.state.papers.first?.id
@@ -78,17 +79,23 @@ struct ReadingCalendarView: View {
                     }
                     DatePicker("开始时间", selection: $date)
                     Stepper("阅读 \(Int(minutes)) 分钟", value: $minutes, in: 1...480, step: 5)
-                }.padding().navigationTitle("补记阅读")
-                    .toolbar {
-                        ToolbarItem(placement: .confirmationAction) {
-                            Button("保存") {
-                                if let addPaper { model.addReading(paperID: addPaper, date: date, minutes: minutes) }
-                                showAdd = false
-                            }
+                }
+                .scrollContentBackground(.hidden)
+                .padding()
+                .background(ReaderTheme.canvas)
+                .foregroundStyle(ReaderTheme.ink)
+                .navigationTitle("补记阅读")
+                .toolbar {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("保存") {
+                            if let addPaper { model.addReading(paperID: addPaper, date: date, minutes: minutes) }
+                            showAdd = false
                         }
-                        ToolbarItem(placement: .cancellationAction) { Button("取消") { showAdd = false } }
                     }
+                    ToolbarItem(placement: .cancellationAction) { Button("取消") { showAdd = false } }
+                }
             }
+            .background(ReaderTheme.canvas)
             .tint(ReaderTheme.accent)
             #if os(macOS)
                 .frame(minWidth: 380, minHeight: 250)
@@ -109,14 +116,14 @@ struct ReadingCalendarView: View {
                 .font(.subheadline).foregroundStyle(ReaderTheme.muted)
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Text("\(minutes)")
-                    .font(.system(size: 64, weight: .regular, design: .serif))
+                    .font(ReaderTheme.editorial(64, weight: .regular))
                     .foregroundStyle(ReaderTheme.accent)
                     .monospacedDigit()
                 Text("分钟").font(.subheadline).foregroundStyle(ReaderTheme.muted)
             }
             .accessibilityElement(children: .combine)
             HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text("\(paperCount)").font(.system(size: 32, weight: .regular, design: .serif)).monospacedDigit()
+                Text("\(paperCount)").font(ReaderTheme.editorial(32, weight: .regular)).monospacedDigit()
                 Text("篇论文").font(.subheadline).foregroundStyle(ReaderTheme.muted)
                 Spacer()
                 Image(systemName: "book.pages").font(.system(size: 24, weight: .light))

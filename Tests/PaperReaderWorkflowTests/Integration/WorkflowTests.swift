@@ -52,7 +52,8 @@ private struct FakeModelTransport: HTTPTransport {
     model.select(scanned.id)
     await model.ask("attention")
     #expect(model.state.chats.isEmpty)
-    #expect(model.message?.contains("没有可读取的文字") == true)
+    #expect(model.lastAssistantFailure?.message.contains("没有可读取的文字") == true)
+    #expect(model.message == nil)
 }
 
 @Test @MainActor func importedPDFAnswersWithSelectedOrVisibleOriginalPageCitations() async throws {

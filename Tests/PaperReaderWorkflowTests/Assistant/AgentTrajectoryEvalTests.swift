@@ -146,7 +146,13 @@ private func sseAnswer(_ text: String) throws -> String {
     #expect(turn.activities.count == 2)
     #expect(turn.activities[0].status == .failed)
     #expect(turn.activities[1].status == .succeeded)
-    #expect(reader.state.memories.first { $0.id == auto.id }?.text == "改为优先比较等算力准确率")
+    let oldAuto = try #require(reader.state.memories.first { $0.id == auto.id })
+    #expect(!oldAuto.isActive)
+    #expect(oldAuto.invalidAt != nil)
+    #expect(oldAuto.supersededBy != nil)
+    let newAuto = try #require(reader.state.memories.first { $0.id == oldAuto.supersededBy })
+    #expect(newAuto.text == MemoryItem.automaticPrefix + "改为优先比较等算力准确率")
+    #expect(!newAuto.userEdited)
 
     // 2) Implicit turn without forget intent still protects user-edited memory; explicit reader
     // instruction silently updates/forgets it with an audit trail.
@@ -375,13 +381,17 @@ private func sseAnswer(_ text: String) throws -> String {
     #expect(await reader.save())
 
     await reader.ask("请把吞吐量那条研究记忆改成优先比较等算力准确率，并结合这篇论文说明。")
-    let updated = try #require(reader.state.memories.first { $0.id == memory.id })
-    #expect(updated.text == "改为优先比较等算力准确率")
+    let oldRecord = try #require(reader.state.memories.first { $0.id == memory.id })
+    #expect(!oldRecord.isActive)
+    #expect(oldRecord.supersededBy != nil)
+    let updated = try #require(reader.state.memories.first { $0.id == oldRecord.supersededBy })
+    #expect(updated.text == MemoryItem.automaticPrefix + "改为优先比较等算力准确率")
+    #expect(!updated.userEdited)
     #expect(await transport.recordedBodies.count == 2)
 
     // Paper assistant also supports the local forget fast-path without hitting the model.
     await reader.ask("忘掉等算力准确率。")
-    #expect(reader.state.memories.first { $0.id == memory.id }?.deleted == true)
+    #expect(reader.state.memories.first { $0.id == updated.id }?.deleted == true)
     #expect(await transport.recordedBodies.count == 2)
 }
 
@@ -611,4 +621,182 @@ private func sseAnswer(_ text: String) throws -> String {
     #expect(turn.answer.contains("KV Cache Quantization"))
     #expect(reader.state.memories.contains { $0.isActive && $0.text.contains("KV 量化") })
     #expect(TrajectoryAssertion.verifyFullRequestPrefixStability(await transport.recordedBodies))
+}
+
+@Test @MainActor func academicMLTermsNeverUnlockUserEditedMemoryProtection() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let reader = try ReaderModel(root: root, credentials: WorkflowCredentials())
+    await reader.load()
+    var settings = reader.modelSettings
+    settings.baseURL = ModelServicePreset.openAI.baseURL
+    settings.model = "gpt-5-mini"
+    try reader.saveSettings(settings, key: "test-only")
+
+    var protected = MemoryItem(
+        agentStatement: "始终检查随机种子方差", sourceID: UUID(), source: .reader(quote: "始终检查随机种子方差"))
+    _ = protected.correct(to: "读者手改：优先核对多随机种子方差区间")
+    reader.state.memories = [protected]
+    #expect(await reader.save())
+
+    let adversarialQuestions = [
+        "作者是不是调整了学习率，而不是只修改了 batch size？",
+        "How does early stopping interact with dropout when updating KV cache instead of recomputing?",
+        "请说明模型为什么停止训练并调整权重衰减，而不是增加层数。",
+    ]
+    for question in adversarialQuestions {
+        #expect(!ReaderModel.hasExplicitMemoryRevisionDirective(question))
+        #expect(!ReaderModel.hasExplicitMemoryForgetDirective(question))
+    }
+
+    let forgetArgs =
+        #"{"memory_id":"\#(protected.id.uuidString)","expected_revision":"\#(protected.revisionFingerprint)"}"#
+    let reviseArgs =
+        #"{"memory_id":"\#(protected.id.uuidString)","statement":"改写手改记录","expected_revision":"\#(protected.revisionFingerprint)"}"#
+    let cassette = HTTPCassette(entries: [
+        .sse([try sseToolCall(id: "bad_f", name: "forget_memory", arguments: forgetArgs)]),
+        .sse([try sseToolCall(id: "bad_r", name: "revise_memory", arguments: reviseArgs)]),
+        .sse([try sseAnswer("已回答关于 dropout 与 early stopping 的问题，未修改受保护记忆。")]),
+    ])
+    let agent = LibraryAgent(reader: reader, client: AgentClient(transport: CassetteTransport(cassette: cassette)))
+    agent.send("How does early stopping interact with dropout when updating KV cache instead of recomputing?")
+    for _ in 0..<200 where agent.isRunning { try await Task.sleep(for: .milliseconds(10)) }
+
+    let turn = try #require(agent.turns.last)
+    #expect(TrajectoryAssertion.verifyNoForbiddenSucceededTools(turn, forbidden: ["forget_memory", "revise_memory"]))
+    let surviving = try #require(reader.state.memories.first { $0.id == protected.id })
+    #expect(surviving.isActive)
+    #expect(surviving.userEdited)
+    #expect(surviving.text == "读者手改：优先核对多随机种子方差区间")
+}
+
+@Test @MainActor func pingPongToolLoopCircuitBreaksAndKeepsAssistantContentPure() async throws {
+    let cassette = HTTPCassette(entries: [
+        .sse([try sseToolCall(id: "p1", name: "search_library", arguments: #"{"query":"alpha"}"#)]),
+        .sse([try sseToolCall(id: "p2", name: "search_reading_notes", arguments: #"{"query":"beta"}"#)]),
+        .sse([try sseToolCall(id: "p3", name: "search_library", arguments: #"{"query":"alpha"}"#)]),
+        .sse([try sseToolCall(id: "p4", name: "search_reading_notes", arguments: #"{"query":"beta"}"#)]),
+        .sse([try sseAnswer("检测到交替循环后已直接总结。")]),
+    ])
+    let transport = CassetteTransport(cassette: cassette)
+    var settings = ModelSettings()
+    settings.baseURL = ModelServicePreset.openAI.baseURL
+    settings.model = "gpt-5-mini"
+    var limits = AgentLimits()
+    limits.maxRounds = 16
+    limits.maxToolCalls = 48
+    var executedCount = 0
+    var finalText = ""
+    try await AgentLoopRunner.run(
+        client: AgentClient(transport: transport), settings: settings, key: "test-only", limits: limits,
+        instructions: "STATIC", userQuestion: "找资料", personalContext: "", priorHistory: [],
+        availableTools: { ["search_library", "search_reading_notes"] }, beforeRequest: {},
+        onPersonalContextIncluded: {}, onPartialText: { _ in }, onPartialReasoning: nil,
+        onAssistantResponse: { _, _ in },
+        executeBatch: { calls, _ in
+            executedCount += calls.count
+            return .init(
+                toolMessages: calls.map {
+                    AgentMessage(role: "tool", content: #"{"ok":true,"results":[]}"#, toolCallID: $0.id)
+                })
+        },
+        onCheckpoint: { _, _, _ in },
+        onFinalAnswer: { response, _, _, _ in finalText = response.content ?? "" })
+
+    #expect(executedCount == 3)
+    #expect(finalText == "检测到交替循环后已直接总结。")
+    let requests = await transport.recordedMessages
+    #expect(requests.count == 5)
+    #expect(requests[4].last?.content?.contains("loop_detected") == true)
+    // Assistant messages must NEVER contain synthetic "（系统状态）" text.
+    for messages in requests {
+        for message in messages where message.role == "assistant" {
+            #expect(message.content?.contains("系统状态") != true)
+        }
+    }
+}
+
+@Test @MainActor func paperAssistantDisambiguatesPriorCitationsAndCommitsMutationsImmediately() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    let file = root.appendingPathComponent("paper.pdf")
+    try AttentionFixture.write(to: file)
+
+    let auto = MemoryItem(
+        agentStatement: "优先比较吞吐量", sourceID: UUID(), source: .reader(quote: "优先比较吞吐量"))
+    let staleReviseArgs =
+        #"{"memory_id":"\#(auto.id.uuidString)","statement":"改为等算力准确率","expected_revision":"deadbeef"}"#
+    let cassette = HTTPCassette(entries: [
+        .sse([try sseAnswer("第一轮结论依据 [S1]。")]),
+        .sse([try sseToolCall(id: "stale_rev", name: "revise_memory", arguments: staleReviseArgs)]),
+        .sse([try sseAnswer("修订因版本过期被拒绝，已据实告知，正文依据 [S1]。")]),
+    ])
+    let transport = CassetteTransport(cassette: cassette)
+    let reader = try ReaderModel(
+        root: root, client: ModelClient(transport: transport), credentials: WorkflowCredentials())
+    await reader.load()
+    var settings = reader.modelSettings
+    settings.baseURL = ModelServicePreset.openAI.baseURL
+    settings.model = "gpt-5-mini"
+    try reader.saveSettings(settings, key: "test-only")
+    let paperID = try #require(await reader.importURLs([file]).first)
+    reader.select(paperID)
+    reader.state.memories = [auto]
+    #expect(await reader.save())
+
+    await reader.ask("第一轮问题：这篇论文的注意力示例是什么？")
+    await reader.ask("第二轮问题：请把吞吐量那条研究记忆改成等算力准确率，并再解释一下示例。")
+
+    let requests = await transport.recordedMessages
+    #expect(requests.count == 3)
+    // Turn 2's priorHistory must disambiguate Turn 1's [S1] into [前轮S1].
+    let turn2HistoryAssistant = requests[1].first { $0.role == "assistant" }
+    #expect(turn2HistoryAssistant?.content?.contains("[前轮S1]") == true)
+    #expect(turn2HistoryAssistant?.content?.contains("[S1]") != true)
+    // The stale revision failure must be returned immediately in the tool response, not deferred.
+    let toolReply = try #require(requests[2].last { $0.role == "tool" }?.content)
+    #expect(toolReply.contains("\"ok\":false"))
+    #expect(reader.state.memories.first { $0.id == auto.id }?.isActive == true)
+    #expect(reader.state.chats.last?.answer.contains("未能保存") != true)
+}
+
+@Test @MainActor func compositeLibraryTurnRevisingRecalledMemoryDoesNotAbortAsStale() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let reader = try ReaderModel(root: root, credentials: WorkflowCredentials())
+    await reader.load()
+    var settings = reader.modelSettings
+    settings.baseURL = ModelServicePreset.openAI.baseURL
+    settings.model = "gpt-5-mini"
+    try reader.saveSettings(settings, key: "test-only")
+    let paper = Paper(
+        title: "KV Cache Study", digest: "kv-self", originalPath: "kv.pdf", pageCount: 1,
+        blocks: [TextBlock(sourcePage: 0, text: "INT4 KV cache")], warnings: [], canReflow: true)
+    let auto = MemoryItem(
+        agentStatement: "优先比较 KV 吞吐量", sourceID: UUID(), source: .reader(quote: "优先比较 KV 吞吐量"))
+    reader.state.papers = [paper]
+    reader.state.memories = [auto]
+    #expect(await reader.save())
+
+    let reviseArgs =
+        #"{"memory_id":"\#(auto.id.uuidString)","statement":"改为优先比较 KV 显存压缩率","expected_revision":"\#(auto.revisionFingerprint)"}"#
+    let cassette = HTTPCassette(entries: [
+        .sse([try sseToolCall(id: "l1", name: "list_library", arguments: #"{"scope":"papers","offset":0}"#)]),
+        .sse([try sseToolCall(id: "r1", name: "revise_memory", arguments: reviseArgs)]),
+        .sse([try sseAnswer("书库中有《KV Cache Study》，并已将你的研究记忆更新为显存压缩率。")]),
+    ])
+    let transport = CassetteTransport(cassette: cassette)
+    let agent = LibraryAgent(reader: reader, client: AgentClient(transport: transport))
+    agent.send("先帮我列一下书库里有哪些论文，另外请把 KV 吞吐量那条研究记忆改成优先比较 KV 显存压缩率。")
+    for _ in 0..<200 where agent.isRunning { try await Task.sleep(for: .milliseconds(10)) }
+
+    let turn = try #require(agent.turns.last)
+    #expect(turn.error == nil)
+    #expect(turn.answer.contains("KV Cache Study"))
+    let old = try #require(reader.state.memories.first { $0.id == auto.id })
+    #expect(!old.isActive)
+    let replacement = try #require(reader.state.memories.first { $0.id == old.supersededBy })
+    #expect(!replacement.userEdited)
+    #expect(replacement.text.contains("显存压缩率"))
 }

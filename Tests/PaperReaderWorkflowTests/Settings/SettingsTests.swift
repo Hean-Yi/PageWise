@@ -142,3 +142,70 @@ private actor ConnectionTransport: HTTPTransport {
     let json = try String(contentsOf: root.appendingPathComponent("model-settings.json"), encoding: .utf8)
     #expect(!json.contains("new-key"))
 }
+
+private struct FailingAssistantTransport: HTTPTransport {
+    func stream(for request: URLRequest, onData: @Sendable (Data) async throws -> Void) async throws -> HTTPURLResponse
+    {
+        throw ReaderError.message("模拟模型服务暂时不可用")
+    }
+    func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        throw ReaderError.message("模拟模型服务暂时不可用")
+    }
+}
+
+@Test @MainActor func isModelReadyForRequestsTracksKeySaveAndRemoval() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let credentials = WorkflowCredentials()
+    credentials.values = [:]
+    let model = try ReaderModel(root: root, credentials: credentials)
+    await model.load()
+    // Default model preset may be populated, but without a key requests must not be considered ready.
+    #expect(!model.isModelReadyForRequests)
+
+    var draft = model.modelSettings
+    draft.baseURL = "https://example.invalid/v1"
+    draft.model = "ready-check-model"
+    try model.saveSettings(draft, key: "secret-fixture")
+    #expect(model.isModelReadyForRequests)
+
+    try model.saveSettings(draft, key: "", removeKey: true)
+    #expect(!model.isModelReadyForRequests)
+
+    // Persisted credential removal survives restart without prompting Keychain at launch.
+    let reopened = try ReaderModel(root: root, credentials: credentials)
+    await reopened.load()
+    #expect(!reopened.isModelReadyForRequests)
+
+    // Local .env / validation key counts as ready even with empty Keychain.
+    let localModel = try ReaderModel(
+        root: root, credentials: credentials,
+        translationValidation: .init(settings: draft, key: "local-env-key"))
+    await localModel.load()
+    #expect(localModel.isModelReadyForRequests)
+}
+
+@Test @MainActor func paperAssistantRecordsInlineFailureWithOriginalQuestionForRetry() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let credentials = WorkflowCredentials()
+    let model = try ReaderModel(
+        root: root, client: ModelClient(transport: FailingAssistantTransport()), credentials: credentials)
+    await model.load()
+    var settings = model.modelSettings
+    settings.baseURL = "https://example.invalid/v1"
+    settings.model = "failing-model"
+    try model.saveSettings(settings, key: "fixture-key")
+    let paper = Paper(
+        title: "Inline Error Paper", digest: "inline-err", originalPath: "paper.pdf", pageCount: 1,
+        blocks: [.init(sourcePage: 0, text: "Sample text.")], warnings: [], canReflow: true)
+    model.state.papers = [paper]
+    model.select(paper.id)
+
+    await model.ask("核心贡献是什么？")
+    let failure = try #require(model.lastAssistantFailure)
+    #expect(failure.paperID == paper.id)
+    #expect(failure.question == "核心贡献是什么？")
+    #expect(failure.message.contains("模拟模型服务暂时不可用"))
+    #expect(model.message == nil)
+}

@@ -303,7 +303,13 @@ struct AddPaperCover: View {
     @FocusState private var focused: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    private var revealed: Bool { hovered || focused }
+    private var revealed: Bool {
+        #if os(iOS)
+            true
+        #else
+            hovered || focused
+        #endif
+    }
 
     var body: some View {
         VStack(spacing: 15) {

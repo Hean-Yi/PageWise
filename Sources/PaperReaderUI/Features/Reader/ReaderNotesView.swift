@@ -7,12 +7,20 @@ struct ReaderNotesView: View {
     let didNavigate: () -> Void
 
     var body: some View {
-        VStack(spacing: 0) {
+        let notes = model.currentReadingNotes
+        let marks = model.currentBookmarks
+        let highlightsList = model.currentHighlights
+        let isEmptyAll = notes.isEmpty && marks.isEmpty && highlightsList.isEmpty && model.lastDeletedNoteID == nil
+        return VStack(spacing: 0) {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 12) {
-                    readingNotes
-                    bookmarks
-                    highlights
+                    if isEmptyAll {
+                        emptyState
+                    } else {
+                        if !notes.isEmpty || model.lastDeletedNoteID != nil { readingNotes }
+                        bookmarks
+                        if !highlightsList.isEmpty { highlights }
+                    }
                     if let paper = model.paper, !paper.summary.isEmpty || !paper.blocks.isEmpty {
                         summary
                     }
@@ -24,6 +32,24 @@ struct ReaderNotesView: View {
                     .font(.callout.weight(.medium)).padding(12).quickStartTarget(.export)
             }
         }
+    }
+
+    private var emptyState: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Label("这篇论文还没有笔记", systemImage: "note.text")
+                .font(.subheadline.weight(.semibold)).foregroundStyle(ReaderTheme.ink)
+            Text("拖选原文可高亮或写页边笔记，按 ⌘D 可添加书签，也可以在「论文助读」中运行 AI 精读。")
+                .font(.caption).foregroundStyle(ReaderTheme.muted)
+                .fixedSize(horizontal: false, vertical: true)
+            Button(action: model.toggleBookmark) {
+                Label("标记当前页", readerIcon: .add, size: 14).font(.caption.weight(.medium))
+            }
+            .readerIconButtonStyle(.borderless).foregroundStyle(ReaderTheme.accent)
+            .disabled(model.displayedPageKeys.isEmpty)
+        }
+        .padding(14).frame(maxWidth: .infinity, alignment: .leading)
+        .background(ReaderTheme.surface, in: RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(ReaderTheme.line))
     }
 
     private var readingNotes: some View {
@@ -98,7 +124,19 @@ struct ReaderNotesView: View {
                 }
             }
         } header: {
-            heading("书签", icon: "bookmark", count: marks.count).padding(.top, 14)
+            HStack(spacing: 7) {
+                Label("书签", systemImage: "bookmark")
+                Text("\(marks.count)").foregroundStyle(ReaderTheme.muted)
+                Spacer()
+                if !marks.isEmpty {
+                    Button(action: model.toggleBookmark) {
+                        Text(model.isCurrentPageBookmarked ? "取消当前页" : "+ 当前页")
+                            .font(.system(size: 11)).foregroundStyle(ReaderTheme.accent)
+                    }
+                    .readerIconButtonStyle(.borderless).disabled(model.displayedPageKeys.isEmpty)
+                }
+            }
+            .font(.system(size: 12, weight: .medium)).padding(.top, model.currentReadingNotes.isEmpty ? 0 : 14)
         }
     }
 

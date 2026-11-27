@@ -152,6 +152,11 @@ struct SettingsView: View {
                     HStack(spacing: 9) {
                         ReaderActionSymbol(item.symbol).frame(width: 18)
                         Text(item.rawValue)
+                        Spacer(minLength: 4)
+                        if item == .model && hasModelEdits {
+                            Circle().fill(ReaderTheme.accent).frame(width: 6, height: 6)
+                                .accessibilityLabel("有未保存的更改")
+                        }
                     }
                     .font(.subheadline.weight(item == category ? .semibold : .regular))
                     .padding(.horizontal, 12).frame(maxWidth: .infinity, alignment: .leading).frame(minHeight: 37)
@@ -186,10 +191,16 @@ struct SettingsView: View {
                 Button {
                     category = item
                 } label: {
-                    Text(item.rawValue).font(.callout.weight(selected ? .semibold : .regular))
-                        .foregroundStyle(selected ? ReaderTheme.accent : ReaderTheme.muted)
-                        .frame(maxWidth: .infinity, minHeight: 44)
-                        .sidebarSelectionTarget(selected).contentShape(Capsule())
+                    HStack(spacing: 5) {
+                        Text(item.rawValue).font(.callout.weight(selected ? .semibold : .regular))
+                        if item == .model && hasModelEdits {
+                            Circle().fill(ReaderTheme.accent).frame(width: 5, height: 5)
+                                .accessibilityLabel("有未保存的更改")
+                        }
+                    }
+                    .foregroundStyle(selected ? ReaderTheme.accent : ReaderTheme.muted)
+                    .frame(maxWidth: .infinity, minHeight: 44)
+                    .sidebarSelectionTarget(selected).contentShape(Capsule())
                 }
                 .buttonStyle(.plain).accessibilityAddTraits(selected ? .isSelected : [])
             }
@@ -333,22 +344,76 @@ struct SettingsView: View {
             .overlay(shape.strokeBorder(focused ? ReaderTheme.accent : ReaderTheme.line, lineWidth: focused ? 1.5 : 1))
     }
 
+    private static let reviewIntervals: [(label: String, seconds: TimeInterval)] = [
+        ("30 分钟", 1_800), ("1 小时", 3_600), ("3 小时", 10_800),
+        ("6 小时", 21_600), ("12 小时", 43_200), ("一天", 86_400),
+    ]
+
     private var notesForm: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            fieldLabel("Obsidian 笔记目录")
-            HStack(spacing: 11) {
-                Image(systemName: "folder").foregroundStyle(ReaderTheme.accent)
-                Text(model.vaultName).lineLimit(2).truncationMode(.middle)
-                Spacer(minLength: 8)
-                Button("选择目录…") { chooseFolder = true }
+        @Bindable var noteReview = model.noteReview
+        let currentIntervalLabel =
+            Self.reviewIntervals.first { abs($0.seconds - noteReview.interval) < 1 }?.label ?? "6 小时"
+        return VStack(alignment: .leading, spacing: 18) {
+            VStack(alignment: .leading, spacing: 10) {
+                fieldLabel("Obsidian 笔记目录")
+                HStack(spacing: 11) {
+                    Image(systemName: "folder").foregroundStyle(ReaderTheme.accent)
+                    Text(model.vaultName).lineLimit(2).truncationMode(.middle)
+                    Spacer(minLength: 8)
+                    Button("选择目录…") { chooseFolder = true }
+                }
+                .padding(13).background(fieldBackground(focused: false))
+                Text("点击「整理到 Obsidian」时，阅读笔记会保存到这个目录。")
+                    .font(.callout).foregroundStyle(ReaderTheme.muted)
             }
-            .padding(13).background(fieldBackground(focused: false))
-            Text("点击「整理到 Obsidian」时，阅读笔记会保存到这个目录。")
-                .font(.callout).foregroundStyle(ReaderTheme.muted)
-            Divider().padding(.vertical, 5)
-            fieldLabel("设备存储")
-            Text("论文、阅读记录与批注保存在这台设备上。")
-                .font(.callout).foregroundStyle(ReaderTheme.muted)
+            Divider()
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(spacing: 8) {
+                    Label("空闲时整理笔记", systemImage: "doc.text.magnifyingglass")
+                        .font(.subheadline.weight(.semibold))
+                    Spacer()
+                    if noteReview.running {
+                        ProgressView().controlSize(.small)
+                        Button("停止") { noteReview.interrupt() }.buttonStyle(.borderless).font(.caption)
+                    } else {
+                        Button("立即整理") { noteReview.run(reader: model, automatic: false, withModel: true) }
+                            .buttonStyle(.borderless).font(.caption)
+                            .disabled(model.state.readingNotes.allSatisfy { $0.deletedAt != nil })
+                    }
+                }
+                Toggle("自动在空闲时整理笔记", isOn: $noteReview.enabled).font(.callout)
+                HStack {
+                    Text("整理间隔").font(.callout).foregroundStyle(ReaderTheme.muted)
+                    Spacer()
+                    ReaderPopupMenu(
+                        "整理间隔",
+                        items: Self.reviewIntervals.map { option in
+                            .action(option.label, selected: abs(option.seconds - noteReview.interval) < 1) {
+                                noteReview.interval = option.seconds
+                            }
+                        }, width: 150
+                    ) {
+                        ReaderMenuValueLabel(currentIntervalLabel).font(.callout)
+                    }
+                    .accessibilityValue(currentIntervalLabel)
+                }
+                Text("仅在有新增笔记或阅读状态变化时调用模型，计入 API 用量；更新以新修订追加，保留原笔记。")
+                    .font(.caption).foregroundStyle(ReaderTheme.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+                if let reviewMessage = noteReview.message {
+                    Text(verbatim: reviewMessage).font(.caption).foregroundStyle(ReaderTheme.accent)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .padding(16)
+            .background(ReaderTheme.surface, in: RoundedRectangle(cornerRadius: 12))
+            .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(ReaderTheme.line))
+            Divider()
+            VStack(alignment: .leading, spacing: 6) {
+                fieldLabel("设备存储")
+                Text("论文、阅读记录与批注均仅保存在这台设备上。")
+                    .font(.callout).foregroundStyle(ReaderTheme.muted)
+            }
         }
     }
 
@@ -358,6 +423,17 @@ struct SettingsView: View {
                 Label(feedback, systemImage: feedbackIsError ? "exclamationmark.circle" : "checkmark.circle")
                     .font(.callout).foregroundStyle(feedbackIsError ? Color.red : ReaderTheme.accent)
                     .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+            }
+            if category != .model && hasModelEdits {
+                HStack(spacing: 8) {
+                    Label("「模型服务」有未保存的更改", systemImage: "exclamationmark.circle")
+                        .font(.caption).foregroundStyle(ReaderTheme.accent)
+                    Spacer(minLength: 4)
+                    Button("查看模型设置") { category = .model }
+                        .buttonStyle(.borderless).font(.caption.weight(.medium))
+                }
+                .padding(.horizontal, 10).padding(.vertical, 7)
+                .background(ReaderTheme.elevated, in: RoundedRectangle(cornerRadius: 8))
             }
             HStack(spacing: 12) {
                 if compact { guideButton.labelStyle(.iconOnly) }
@@ -372,6 +448,8 @@ struct SettingsView: View {
                         .buttonStyle(.borderless).font(.subheadline.weight(.medium)).disabled(isTesting)
                         Text("测试会使用 API 额度").font(.caption2).foregroundStyle(ReaderTheme.muted)
                     }
+                } else if !hasModelEdits {
+                    Text("此页修改即时生效").font(.caption).foregroundStyle(ReaderTheme.muted)
                 }
                 Spacer(minLength: 0)
                 if category != .model && !hasModelEdits {
@@ -418,7 +496,11 @@ struct SettingsView: View {
             return
         }
         Task {
-            do { hasSavedKey = try await model.hasSavedAPIKey() } catch { showError(error) }
+            do {
+                let saved = try await model.hasSavedAPIKey()
+                hasSavedKey = saved
+                model.updateModelCredentialReady(saved)
+            } catch { showError(error) }
         }
     }
 
@@ -433,7 +515,10 @@ struct SettingsView: View {
             return
         }
         do {
+            let hadKeyBeforeSave =
+                canReuseKey || usesLocalModelKey || !key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             let warning = try model.saveSettings(draft, key: key, removeKey: removeKey)
+            model.updateModelCredentialReady(hadKeyBeforeSave && !removeKey)
             key = ""
             removeKey = false
             draft = model.modelSettings

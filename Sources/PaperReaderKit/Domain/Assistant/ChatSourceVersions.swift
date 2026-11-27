@@ -17,6 +17,17 @@ public struct ChatSourceVersions: Codable, Sendable, Equatable {
         if memories[memory.id] == nil { memories[memory.id] = Self.fingerprint(memory) }
     }
 
+    /// Update tracked fingerprints when the current turn itself legitimately revises or forgets
+    /// a recalled memory, preventing false stale-context aborts in composite turns.
+    public mutating func removeMemory(_ id: UUID) {
+        memories.removeValue(forKey: id)
+    }
+
+    public mutating func replaceMemory(_ oldID: UUID, with replacement: MemoryItem) {
+        memories.removeValue(forKey: oldID)
+        memories[replacement.id] = Self.fingerprint(replacement)
+    }
+
     public mutating func include(_ note: ReadingNote) {
         if let ancestors = note.backgroundSources { include(ancestors) }
         if notes[note.id] == nil { notes[note.id] = note.modifiedAt }

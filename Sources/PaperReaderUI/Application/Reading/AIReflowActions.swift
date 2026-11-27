@@ -55,7 +55,7 @@ extension ReaderModel {
             message = current.onlineSource?.notice
             return true
         }
-        guard (try? modelSettings.normalized()) != nil else { return false }
+        guard isModelReadyForRequests else { return false }
         startAIReflow(regenerate: current.reflowJob.map { !$0.supportsContinuation } ?? false)
         return true
     }

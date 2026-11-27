@@ -7,6 +7,8 @@ public struct ModelSettings: Codable, Equatable, Sendable {
     public var temperature = 0.2
     /// A Keychain account identifier, never the API key itself. Nil supports the original MVP account.
     public var credentialID: String?
+    /// Non-sensitive hint recorded on save so UI readiness checks avoid triggering Keychain prompts at launch.
+    public var hasStoredCredential: Bool?
     public init() {}
 
     public func endpointURL() throws -> URL {

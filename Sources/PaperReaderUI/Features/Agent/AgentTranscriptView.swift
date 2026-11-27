@@ -120,7 +120,7 @@ struct AgentTranscriptView: View {
 
 }
 
-private struct JumpToLatest: ViewModifier {
+struct JumpToLatest: ViewModifier {
     struct Target: Equatable {
         let turn: UUID?
         let awaitsReply: Bool

@@ -499,6 +499,7 @@ public final class LibraryAgent {
             }
         }
         var explicitlyPresented = false
+        var didIncludePersonalContext = false
         var didRecordRecall = false
         var textCadence = AssistantDraftCadence()
         var reasoningCadence = AssistantDraftCadence()
@@ -524,14 +525,16 @@ public final class LibraryAgent {
                 currentRoundThoughtIndex = nil
             },
             onPersonalContextIncluded: { @MainActor in
-                if !capturedPersonalContext.isEmpty {
+                guard !capturedPersonalContext.isEmpty else { return }
+                if !didIncludePersonalContext {
+                    didIncludePersonalContext = true
                     self.remember(capturedVersions)
                     self.updateTurn(turnID) { $0.suppliedPreferences = capturedVersions }
-                    try self.checkSourceContext()
-                    if !didRecordRecall, !recalledMemoryIDs.isEmpty {
-                        didRecordRecall = true
-                        self.reader.recordMemoryRecall(recalledMemoryIDs)
-                    }
+                }
+                try self.checkSourceContext()
+                if !didRecordRecall, !recalledMemoryIDs.isEmpty {
+                    didRecordRecall = true
+                    self.reader.recordMemoryRecall(recalledMemoryIDs)
                 }
             },
             onPartialText: { text in
@@ -896,9 +899,7 @@ public final class LibraryAgent {
         if let turn = activeTurn, ReaderPreference.permitsRecall(turn.question),
             !ResearchQuestionProposal.isRecallRequest(turn.question),
             reader.state.memories.contains(where: { $0.isActive && !$0.isResponsePreference })
-                || turn.question.range(
-                    of: #"(?i)忘掉|忘记|删除|移除|撤回|不用再|无需再|不再|停止|取消|forget|remove|delete|stop|drop|no longer"#,
-                    options: .regularExpression) != nil
+                || ReaderModel.hasExplicitForgetIntent(turn.question)
         {
             names.insert("forget_memory")
         }

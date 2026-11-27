@@ -162,8 +162,9 @@ struct ReaderNavigator: View {
                     if model.navigationLoading && items.isEmpty {
                         ProgressView().controlSize(.small).padding()
                     } else if items.isEmpty {
-                        Image(systemName: "list.bullet.rectangle").foregroundStyle(ReaderTheme.muted)
-                            .padding().accessibilityLabel("尚无章节标题")
+                        Label("尚无章节目录", systemImage: "list.bullet.rectangle")
+                            .font(.caption).foregroundStyle(ReaderTheme.muted)
+                            .padding(.horizontal, 18).padding(.vertical, 16)
                     } else if groups.isEmpty {
                         LazyVGrid(columns: [GridItem(.adaptive(minimum: 40), spacing: 6)], spacing: 6) {
                             ForEach(items) { item in

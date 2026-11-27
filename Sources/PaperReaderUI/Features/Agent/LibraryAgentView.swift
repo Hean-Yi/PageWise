@@ -12,7 +12,7 @@ struct LibraryAgentView: View {
     @State private var choicesContentHeight: CGFloat?
 
     private var isConfigured: Bool {
-        (try? model.modelSettings.normalized()) != nil
+        model.isModelReadyForRequests
     }
 
     private var clarificationTurn: AgentTurn? {
@@ -45,10 +45,24 @@ struct LibraryAgentView: View {
     }
 
     private var welcome: some View {
-        VStack(spacing: 0) {
-            suggestion("按主题整理书库", icon: "books.vertical", prompt: "帮我把未分类的论文按研究主题归到合适的书架。")
-            suggestion("检索阅读笔记", icon: "note.text", prompt: "我之前在哪些笔记里讨论过注意力机制？")
-            suggestion("在线查找论文", icon: "globe", prompt: "帮我在线查找 Attention Is All You Need")
+        VStack(alignment: .leading, spacing: 14) {
+            if !isConfigured {
+                HStack(spacing: 8) {
+                    Image(systemName: "slider.horizontal.3").foregroundStyle(ReaderTheme.accent)
+                    Text("配置模型服务后即可使用书库助理").font(.caption).foregroundStyle(ReaderTheme.muted)
+                    Spacer(minLength: 4)
+                    Button("去设置", action: openSettings)
+                        .buttonStyle(.borderless).font(.caption.weight(.medium))
+                }
+                .padding(11)
+                .background(ReaderTheme.surface, in: RoundedRectangle(cornerRadius: 10))
+                .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(ReaderTheme.line))
+            }
+            VStack(spacing: 0) {
+                suggestion("按主题整理书库", icon: "books.vertical", prompt: "帮我把未分类的论文按研究主题归到合适的书架。")
+                suggestion("检索阅读笔记", icon: "note.text", prompt: "我之前在哪些笔记里讨论过注意力机制？")
+                suggestion("在线查找论文", icon: "globe", prompt: "帮我在线查找 Attention Is All You Need")
+            }
         }.frame(maxWidth: .infinity, alignment: .leading)
     }
 
@@ -105,8 +119,8 @@ struct LibraryAgentView: View {
             TextField(
                 prompt == nil ? "问一个问题，或找一篇论文…" : "写下你的回答…", text: $draft, axis: .vertical
             )
-            .textFieldStyle(.plain).font(.title3).lineLimit(3...5)
-            .frame(minHeight: prompt == nil ? 60 : 44, alignment: .top)
+            .textFieldStyle(.plain).font(.body).lineLimit(3...5)
+            .frame(minHeight: prompt == nil ? 52 : 40, alignment: .top)
             .focused($composerFocused).onSubmit(send)
             .accessibilityLabel(prompt == nil ? "向书库 Agent 提问" : "自定义回答")
             .quickStartTarget(.research)
@@ -144,7 +158,7 @@ struct LibraryAgentView: View {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Image(systemName: "questionmark.bubble.fill")
                     .foregroundStyle(ReaderTheme.accent).accessibilityHidden(true)
-                Text(prompt.question).font(.title2.weight(.semibold))
+                Text(prompt.question).font(.headline.weight(.semibold))
                     .fixedSize(horizontal: false, vertical: true).accessibilityAddTraits(.isHeader)
             }.padding(.bottom, 9)
             ForEach(prompt.options, id: \.self) { option in

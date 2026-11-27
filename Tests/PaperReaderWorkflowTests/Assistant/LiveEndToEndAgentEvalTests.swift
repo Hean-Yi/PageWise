@@ -373,6 +373,10 @@ private enum LiveEvalSupport {
     #expect(allActivities.contains { $0.toolName == "propose_memory" && $0.status == .succeeded })
     #expect(allActivities.contains { $0.toolName == "revise_memory" && $0.status == .succeeded })
     #expect(reader.state.memories.contains { $0.id == oldThroughput.id && $0.deleted })
+    // A-1 invariant: agent silent revisions must NOT escalate automatic memories into userEdited.
+    let activeMemories = reader.state.memories.filter { $0.isActive }
+    #expect(activeMemories.allSatisfy { !$0.userEdited })
+    #expect(reader.state.memories.contains { $0.supersededBy != nil && $0.invalidAt != nil })
     // Composite Turn 1 ("list papers + remember direction") must still answer the paper list!
     #expect(firstTurnAnswer.contains("KV Cache Quantization"))
 }

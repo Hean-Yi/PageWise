@@ -168,7 +168,7 @@ private final class NoteReviewProbe {
 @Test @MainActor func readerTickSchedulesNoteReviewOnlyWhenEnabledAndIdle() async throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: root) }
-    let reader = try ReaderModel(root: root)
+    let reader = try ReaderModel(root: root, credentials: WorkflowCredentials())
     await reader.load()
     var settings = reader.modelSettings
     settings.baseURL = ModelServicePreset.deepSeek.baseURL
@@ -220,10 +220,17 @@ private final class NoteReviewProbe {
     let revise = MemoryRecordMutation(
         operation: .revise(id: item.id, statement: "新记录"), auditTrigger: "更正记忆")
     #expect(await reader.save(cancellable: true, memoryMutation: revise))
-    #expect(reader.state.memories.first?.text == "新记录")
-    #expect(try await LibraryStore(directory: root).load().memories.first?.text == "新记录")
+    let supersededOld = try #require(reader.state.memories.first { $0.id == item.id })
+    let revisedActive = try #require(reader.state.memories.first { $0.isActive })
+    #expect(!supersededOld.isActive)
+    #expect(supersededOld.invalidAt != nil)
+    #expect(supersededOld.supersededBy == revisedActive.id)
+    #expect(!revisedActive.userEdited)
+    #expect(revisedActive.text == MemoryItem.automaticPrefix + "新记录")
+    let reloaded = try await LibraryStore(directory: root).load()
+    #expect(reloaded.memories.first { $0.isActive }?.text == MemoryItem.automaticPrefix + "新记录")
 
-    var edited = try #require(reader.state.memories.first)
+    var edited = revisedActive
     let corrected = edited.correct(to: "读者自己改的记录")
     #expect(corrected)
     reader.state.memories = [edited]
@@ -337,7 +344,7 @@ private struct DeterministicSemanticEncoder: SemanticTextEncoder {
 @Test @MainActor func noteReviewUsesStableCorpusWithoutCancellingSemanticWarmup() async throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: root) }
-    let reader = try ReaderModel(root: root)
+    let reader = try ReaderModel(root: root, credentials: WorkflowCredentials())
     await reader.load()
     var settings = reader.modelSettings
     settings.baseURL = ModelServicePreset.openAI.baseURL
