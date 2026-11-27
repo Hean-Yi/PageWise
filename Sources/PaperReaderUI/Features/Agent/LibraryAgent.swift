@@ -8,6 +8,7 @@ public final class LibraryAgent {
     public private(set) var turns: [AgentTurn] = []
     public private(set) var isRunning = false
     private(set) var followUpCardID: UUID?
+    public private(set) var pinnedPaperIDs: [UUID] = []
     let reader: ReaderModel
     let client: any AgentCompleting
     let discovery: any PaperDiscovery
@@ -60,6 +61,17 @@ public final class LibraryAgent {
     }
 
     func clearFollowUp() { followUpCardID = nil }
+
+    public func togglePinnedPaper(_ id: UUID) {
+        guard !isRunning, reader.state.papers.contains(where: { $0.id == id }) else { return }
+        if let index = pinnedPaperIDs.firstIndex(of: id) {
+            pinnedPaperIDs.remove(at: index)
+        } else if pinnedPaperIDs.count < 6 {
+            pinnedPaperIDs.append(id)
+        }
+    }
+
+    public func clearPinnedPapers() { pinnedPaperIDs.removeAll() }
 
     private func presentedCard(_ id: UUID) -> AgentCard? {
         for turn in turns.reversed() {
@@ -133,6 +145,9 @@ public final class LibraryAgent {
         if let clarificationID { updateTurn(clarificationID) { $0.clarification?.reply = question } }
         turns.append(turn)
         followUpCardID = nil
+        let pinnedPapers = pinnedPaperIDs.compactMap { id in reader.state.papers.first { $0.id == id } }
+        for paper in pinnedPapers { paperRegistry.insert(paper.id) }
+        pinnedPaperIDs.removeAll()
         var organization = LibraryOrganizationIntent.tools(for: question)
         if let previous, clarification?.options.contains(question) == true, organization.isEmpty,
             !["取消", "不用", "cancel"].contains(where: { question.localizedCaseInsensitiveContains($0) })
@@ -186,7 +201,8 @@ public final class LibraryAgent {
                 }
             }
             do {
-                let message = try Self.userMessage(question, reference: reference, previous: previous)
+                let message = try Self.userMessage(
+                    question, reference: reference, pinnedPapers: pinnedPapers, previous: previous)
                 try await self.run(
                     message, turnID: turn.id, epoch: currentEpoch, noteRequest: request, reference: reference,
                     seed: seed, organization: organization)
@@ -198,7 +214,16 @@ public final class LibraryAgent {
         }
     }
 
-    private static func userMessage(_ question: String, reference: AgentCard?, previous: AgentTurn?) throws -> String {
+    private static func userMessage(
+        _ question: String, reference: AgentCard?, pinnedPapers: [Paper] = [], previous: AgentTurn?
+    ) throws -> String {
+        var result = question
+        if !pinnedPapers.isEmpty {
+            let lines = pinnedPapers.map { paper in
+                "- 《\(paper.displayTitle)》（paper_id=\(paper.id.uuidString)，共 \(paper.pageCount) 页）"
+            }
+            result += "\n\n读者通过 @ 显式选定对比或参考的本地论文（已登记 paper_id，可直接调用 read_paper 核对原页）：\n" + lines.joined(separator: "\n")
+        }
         if let reference {
             var record = [
                 "result_id": reference.id.uuidString, "title": String(reference.title.prefix(300)),
@@ -212,12 +237,12 @@ public final class LibraryAgent {
             record["block_id"] = reference.blockID?.uuidString
             record["reading_note_id"] = reference.readingNoteID?.uuidString
             let data = try JSONEncoder().encode(record)
-            return question + "\n\n读者选中的结果（资料）：\n" + String(decoding: data, as: UTF8.self)
+            return result + "\n\n读者选中的结果（资料）：\n" + String(decoding: data, as: UTF8.self)
         }
         if let previous, let clarification = previous.clarification {
-            return "原问题：\(previous.question)\n需要确认：\(clarification.question)\n读者答复：\(question)"
+            return "原问题：\(previous.question)\n需要确认：\(clarification.question)\n读者答复：\(result)"
         }
-        return question
+        return result
     }
 
     public func cancel() {

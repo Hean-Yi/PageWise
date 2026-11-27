@@ -30,7 +30,14 @@ public enum ObsidianReadingDocument {
 
         mutating func render() throws -> String {
             let runs = state.chats.reversed().filter { $0.paperID == paper.id && $0.closeReadingVersion != nil }
-            var sections = ["## 论文信息\n\n" + (paper.sourceURL ?? "本地导入 PDF")]
+            let deepLink = Self.deepLink(paperID: paper.id)
+            var infoLines = [paper.sourceURL ?? "本地导入 PDF", "[在 PageWise 中打开原文](\(deepLink))"]
+            if let shelfID = state.paperShelfIDs[paper.id.uuidString],
+                let shelf = state.shelves.first(where: { $0.id == shelfID })
+            {
+                infoLines.insert("书架：\(shelf.name)", at: 0)
+            }
+            var sections = ["## 论文信息\n\n" + infoLines.joined(separator: " · ")]
             for (index, run) in runs.enumerated() {
                 let date = run.createdAt.formatted(date: .abbreviated, time: .shortened)
                 let heading = index == 0 ? "AI 精读" : "历史精读"
@@ -99,7 +106,8 @@ public enum ObsidianReadingDocument {
             let number = annotationNumbers.count + 1
             annotationNumbers[note.id] = number
             let title = note.dimension.map { " · " + $0.title } ?? ""
-            var content = ["#### 批注 \(number)\(title)"]
+            let noteLink = Self.deepLink(paperID: paper.id, noteID: note.id)
+            var content = ["#### 批注 \(number)\(title) · [回跳原文](\(noteLink))"]
             for anchor in note.anchors {
                 anchorNumbers[Excerpt(version: note.contentVersion, pageKey: anchor.key, text: anchor.text)] = number
                 content.append(
@@ -201,6 +209,17 @@ public enum ObsidianReadingDocument {
 
         private static func quote(_ text: String) -> String {
             "> " + text.replacingOccurrences(of: "\n", with: "\n> ")
+        }
+
+        public static func deepLink(paperID: UUID, page: Int? = nil, noteID: UUID? = nil) -> String {
+            var components = URLComponents()
+            components.scheme = "pagewise"
+            components.host = "open"
+            var items = [URLQueryItem(name: "paper", value: paperID.uuidString)]
+            if let page { items.append(URLQueryItem(name: "page", value: String(page))) }
+            if let noteID { items.append(URLQueryItem(name: "note", value: noteID.uuidString)) }
+            components.queryItems = items
+            return components.url?.absoluteString ?? "pagewise://open?paper=\(paperID.uuidString)"
         }
     }
 }

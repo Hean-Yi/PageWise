@@ -29,6 +29,9 @@ struct PaperReaderApp: App {
     @ViewBuilder var content: some View {
         if let model {
             LibraryView(model: model)
+                .onOpenURL { url in
+                    _ = model.handleDeepLink(url)
+                }
         } else {
             ContentUnavailableView(
                 "无法打开书库", systemImage: "externaldrive.badge.exclamationmark",

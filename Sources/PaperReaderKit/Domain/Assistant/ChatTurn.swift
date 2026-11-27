@@ -8,6 +8,8 @@ public struct ChatTurn: Identifiable, Codable, Sendable, Equatable {
     public var answer: String
     /// Provider reasoning shown while the answer streams; nil when the model returns none.
     public var reasoning: String?
+    /// Human-readable summary of tool calls executed during this turn, preserved for review.
+    public var toolTrace: [String]?
     public var evidence: [Evidence]
     /// Absent on legacy turns, whose supplied background cannot be reconstructed safely.
     public var backgroundSources: ChatSourceVersions?

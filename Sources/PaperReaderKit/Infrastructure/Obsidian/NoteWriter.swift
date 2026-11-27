@@ -204,6 +204,24 @@ public actor VaultService {
         return try save(paper: paper, body: document)
     }
 
+    private static func initialDocument(for paper: Paper) -> String {
+        let safeTitle = paper.title.replacingOccurrences(of: "\n", with: " ")
+        let escapedTitle = safeTitle.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(
+            of: "\"", with: "\\\"")
+        var frontmatter = [
+            "---",
+            "title: \"\(escapedTitle)\"",
+            "paper_id: \"\(paper.id.uuidString)\"",
+            "pagewise_url: \"pagewise://open?paper=\(paper.id.uuidString)\"",
+        ]
+        if let source = paper.sourceURL, !source.isEmpty {
+            let escapedSource = source.replacingOccurrences(of: "\"", with: "\\\"")
+            frontmatter.append("source: \"\(escapedSource)\"")
+        }
+        frontmatter.append("---")
+        return frontmatter.joined(separator: "\n") + "\n\n# \(safeTitle)\n\n## 我的笔记\n\n"
+    }
+
     private static func titleStem(_ title: String) -> String {
         let separators = CharacterSet(charactersIn: #"/\:*?"<>|[]#^"#)
             .union(.controlCharacters).union(.whitespacesAndNewlines)
@@ -265,7 +283,7 @@ public actor VaultService {
                     let existing =
                         exists
                         ? try String(contentsOf: target, encoding: .utf8)
-                        : "# \(paper.title.replacingOccurrences(of: "\n", with: " "))\n\n## 我的笔记\n\n"
+                        : Self.initialDocument(for: paper)
                     let currentHash = NoteMerger.managedHash(existing, paperID: paper.id)
                     let prior = local.first { $0.filename == filename && $0.baseline == currentHash }
                     guard !exists || prior != nil else {

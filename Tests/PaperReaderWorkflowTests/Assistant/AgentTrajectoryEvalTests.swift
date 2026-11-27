@@ -872,3 +872,53 @@ private func sseAnswer(_ text: String) throws -> String {
     #expect(bodies.count == 3)
     #expect(TrajectoryAssertion.verifyFullRequestPrefixStability(bodies))
 }
+
+@Test @MainActor func libraryAgentPinnedPapersAndDeepLinkAndMetadataEditingWorkEndToEnd() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let reader = try ReaderModel(root: root, credentials: WorkflowCredentials())
+    await reader.load()
+    var settings = reader.modelSettings
+    settings.baseURL = ModelServicePreset.openAI.baseURL
+    settings.model = "gpt-5-mini"
+    try reader.saveSettings(settings, key: "test-only")
+
+    let paper1 = Paper(
+        title: "Original Draft Title", digest: "p2-1", originalPath: "a.pdf", pageCount: 3,
+        blocks: [TextBlock(sourcePage: 0, text: "Method A details.")], warnings: [], canReflow: true)
+    let paper2 = Paper(
+        title: "Comparison Baseline", digest: "p2-2", originalPath: "b.pdf", pageCount: 2,
+        blocks: [TextBlock(sourcePage: 0, text: "Method B details.")], warnings: [], canReflow: true)
+    reader.state.papers = [paper1, paper2]
+    #expect(await reader.save())
+
+    // 1) Metadata editing
+    let updated = await reader.updatePaperMetadata(
+        paperID: paper1.id, title: "Refined Paper Title", sourceURL: "https://arxiv.org/abs/2501.00001")
+    #expect(updated)
+    #expect(reader.state.papers.first { $0.id == paper1.id }?.title == "Refined Paper Title")
+    #expect(reader.state.papers.first { $0.id == paper1.id }?.sourceURL == "https://arxiv.org/abs/2501.00001")
+
+    // 2) Deep link navigation
+    let url = try #require(URL(string: "pagewise://open?paper=\(paper1.id.uuidString)&page=2"))
+    #expect(reader.handleDeepLink(url))
+    #expect(reader.selectedPaperID == paper1.id)
+    #expect(reader.jumpPage == 1)
+
+    // 3) @ multi-paper pinning in LibraryAgent
+    let cassette = HTTPCassette(entries: [
+        .sse([try sseAnswer("已对比两篇选定论文的方法差异。")])
+    ])
+    let transport = CassetteTransport(cassette: cassette)
+    let agent = LibraryAgent(reader: reader, client: AgentClient(transport: transport))
+    agent.togglePinnedPaper(paper1.id)
+    agent.togglePinnedPaper(paper2.id)
+    #expect(agent.pinnedPaperIDs.count == 2)
+    agent.send("请横向对比这两篇论文的方法。")
+    for _ in 0..<200 where agent.isRunning { try await Task.sleep(for: .milliseconds(10)) }
+    #expect(agent.pinnedPaperIDs.isEmpty)
+    let sentBody = try #require(await transport.recordedBodies.first)
+    #expect(sentBody.contains(paper1.id.uuidString))
+    #expect(sentBody.contains(paper2.id.uuidString))
+    #expect(sentBody.contains("Refined Paper Title"))
+}

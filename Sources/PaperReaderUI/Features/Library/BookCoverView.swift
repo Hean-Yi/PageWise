@@ -153,6 +153,7 @@ struct BookshelfItem: View {
     var moveLater: (() -> Void)?
     @State private var hovered = false
     @State private var menuOpen = false
+    @State private var editingMetadata = false
     @FocusState private var focus: Control?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -285,6 +286,9 @@ struct BookshelfItem: View {
             recordFrame(nil)
         }
         .animation(ReaderMotion.feedback(reduceMotion), value: highlighted)
+        .sheet(isPresented: $editingMetadata) {
+            PaperMetadataEditorSheet(model: model, paper: paper)
+        }
     }
 
     private var contextActions: [ReaderMenuItem] {
@@ -306,6 +310,7 @@ struct BookshelfItem: View {
         var items: [ReaderMenuItem] = [
             .submenu("移动到书架", icon: .library, items: shelfDestinations),
             .submenu("阅读状态", icon: .read, items: statuses),
+            .action("编辑论文信息…", icon: .annotation) { editingMetadata = true },
         ]
         if let moveEarlier { items.append(.action("向前移动") { moveEarlier() }) }
         if let moveLater { items.append(.action("向后移动") { moveLater() }) }
@@ -373,5 +378,59 @@ struct AddPaperCover: View {
                 .accessibilityHint("也可以拖拽 PDF 至此添加")
             Color.clear.frame(height: ReaderTheme.iconTarget(30)).accessibilityHidden(true)
         }
+    }
+}
+
+private struct PaperMetadataEditorSheet: View {
+    let model: ReaderModel
+    let paper: Paper
+    @Environment(\.dismiss) private var dismiss
+    @State private var title: String
+    @State private var sourceURL: String
+    @State private var saving = false
+
+    init(model: ReaderModel, paper: Paper) {
+        self.model = model
+        self.paper = paper
+        _title = State(initialValue: paper.title)
+        _sourceURL = State(initialValue: paper.sourceURL ?? "")
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("编辑论文信息").font(ReaderTheme.editorial(20, weight: .medium))
+            VStack(alignment: .leading, spacing: 6) {
+                Text("标题").font(.caption.weight(.semibold))
+                TextField("论文标题", text: $title, axis: .vertical)
+                    .textFieldStyle(.plain).font(.body).lineLimit(1...4)
+                    .padding(10)
+                    .background(ReaderTheme.surface, in: RoundedRectangle(cornerRadius: 8))
+                    .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(ReaderTheme.line))
+            }
+            VStack(alignment: .leading, spacing: 6) {
+                Text("来源链接或 DOI（可选）").font(.caption.weight(.semibold))
+                TextField("https://arxiv.org/abs/... 或 10.xxxx/...", text: $sourceURL)
+                    .textFieldStyle(.plain).font(.body)
+                    .padding(10)
+                    .background(ReaderTheme.surface, in: RoundedRectangle(cornerRadius: 8))
+                    .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(ReaderTheme.line))
+            }
+            HStack {
+                Spacer()
+                Button("取消") { dismiss() }.buttonStyle(.borderless).foregroundStyle(ReaderTheme.muted)
+                Button(saving ? "保存中…" : "保存") {
+                    saving = true
+                    Task {
+                        _ = await model.updatePaperMetadata(paperID: paper.id, title: title, sourceURL: sourceURL)
+                        saving = false
+                        dismiss()
+                    }
+                }
+                .buttonStyle(.borderedProminent).tint(ReaderTheme.accent)
+                .disabled(saving || title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+        .padding(20).frame(width: 420)
+        .background(ReaderTheme.canvas).foregroundStyle(ReaderTheme.ink)
     }
 }

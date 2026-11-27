@@ -68,6 +68,9 @@ public final class ReaderModel {
     public var assistantDraft: ChatTurn?
     public var assistantActivityStatus: String?
     public var lastAssistantFailure: PaperAssistantFailure?
+    /// Optional per-paper cutoff timestamp so the reader can start a fresh paper discussion
+    /// thread without deleting persisted close-reading reports or historical chat records.
+    public var paperDiscussionResetAt: [UUID: Date] = [:]
     public var busyAI = false
     @ObservationIgnored var assistantTask: Task<Void, Never>?
     var closeReadingPaperID: UUID?
@@ -229,7 +232,15 @@ public final class ReaderModel {
     }
     public var pageKeys: [String] { Array(displayedPageKeys) }
     public var currentHighlights: [Highlight] { state.highlights.filter { $0.paperID == selectedPaperID } }
-    public var currentChats: [ChatTurn] { state.chats.filter { $0.paperID == selectedPaperID } }
+    public var currentChats: [ChatTurn] {
+        guard let id = selectedPaperID else { return [] }
+        let resetAt = paperDiscussionResetAt[id]
+        return state.chats.filter { turn in
+            guard turn.paperID == id else { return false }
+            if let resetAt, turn.closeReadingVersion == nil, turn.createdAt <= resetAt { return false }
+            return true
+        }
+    }
 
     public func load() async {
         guard !loaded else { return }

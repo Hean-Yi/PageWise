@@ -10,6 +10,8 @@ struct LibraryAgentView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @FocusState private var composerFocused: Bool
     @State private var choicesContentHeight: CGFloat?
+    @State private var showPaperMentionPicker = false
+    @State private var mentionFilter = ""
 
     private var isConfigured: Bool {
         model.isModelReadyForRequests
@@ -101,6 +103,28 @@ struct LibraryAgentView: View {
                 .frame(height: min(choicesContentHeight ?? choicesHeight, choicesHeight))
                 Divider()
             }
+            if !agent.pinnedPaperIDs.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) {
+                        ForEach(agent.pinnedPaperIDs, id: \.self) { id in
+                            if let paper = model.state.papers.first(where: { $0.id == id }) {
+                                HStack(spacing: 5) {
+                                    Text("@" + paper.displayTitle).lineLimit(1).frame(maxWidth: 160)
+                                    Button {
+                                        agent.togglePinnedPaper(id)
+                                    } label: {
+                                        ReaderIcon(.close, size: 11)
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                                .font(.caption).foregroundStyle(ReaderTheme.accent)
+                                .padding(.vertical, 4).padding(.horizontal, 8)
+                                .background(ReaderTheme.accent.opacity(0.10), in: Capsule())
+                            }
+                        }
+                    }
+                }
+            }
             if let source = agent.followUpCard {
                 HStack(spacing: 6) {
                     Image(systemName: "text.quote").foregroundStyle(ReaderTheme.accent).accessibilityHidden(true)
@@ -133,6 +157,22 @@ struct LibraryAgentView: View {
                         ReaderActionSymbol("square.and.pencil").frame(minWidth: 30, minHeight: 30)
                     }.readerIconButtonStyle(.plain).foregroundStyle(ReaderTheme.muted)
                         .help("新对话").accessibilityLabel("新对话")
+                }
+                if !model.state.papers.isEmpty {
+                    Button {
+                        mentionFilter = ""
+                        showPaperMentionPicker.toggle()
+                    } label: {
+                        Label("论文", systemImage: "at").font(.caption.weight(.medium))
+                            .padding(.horizontal, 8).frame(minHeight: 28)
+                    }
+                    .readerIconButtonStyle(.plain)
+                    .foregroundStyle(agent.pinnedPaperIDs.isEmpty ? ReaderTheme.muted : ReaderTheme.accent)
+                    .help("点选多篇论文进行横向对比或针对性提问")
+                    .disabled(agent.isRunning)
+                    .popover(isPresented: $showPaperMentionPicker) {
+                        paperMentionPopover
+                    }
                 }
                 Spacer(minLength: 6)
                 Button {
@@ -190,6 +230,48 @@ struct LibraryAgentView: View {
         }
         agent.send(question, referencing: agent.followUpCard?.id)
         if agent.isRunning { draft = "" }
+    }
+
+    private var paperMentionPopover: some View {
+        let trimmed = mentionFilter.trimmingCharacters(in: .whitespacesAndNewlines)
+        let papers = model.state.papers.filter {
+            trimmed.isEmpty || $0.displayTitle.localizedCaseInsensitiveContains(trimmed)
+        }
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("选择对比论文（最多 6 篇）").font(.caption.weight(.semibold))
+                Spacer()
+                if !agent.pinnedPaperIDs.isEmpty {
+                    Button("清空") { agent.clearPinnedPapers() }.buttonStyle(.borderless).font(.caption)
+                }
+            }
+            TextField("筛选书库论文…", text: $mentionFilter)
+                .textFieldStyle(.plain).font(.callout)
+                .padding(.horizontal, 8).frame(height: 30)
+                .background(ReaderTheme.canvas, in: RoundedRectangle(cornerRadius: 7))
+                .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(ReaderTheme.line))
+            ScrollView {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(papers) { paper in
+                        let selected = agent.pinnedPaperIDs.contains(paper.id)
+                        Button {
+                            agent.togglePinnedPaper(paper.id)
+                        } label: {
+                            HStack(spacing: 8) {
+                                Image(systemName: selected ? "checkmark.circle.fill" : "circle")
+                                    .foregroundStyle(selected ? ReaderTheme.accent : ReaderTheme.muted)
+                                Text(paper.displayTitle).font(.callout).lineLimit(2).multilineTextAlignment(.leading)
+                                Spacer(minLength: 0)
+                            }
+                            .padding(.vertical, 5).padding(.horizontal, 6).contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+        }
+        .padding(12).frame(width: 290, height: 280)
+        .readerPopupSurface()
     }
 
 }

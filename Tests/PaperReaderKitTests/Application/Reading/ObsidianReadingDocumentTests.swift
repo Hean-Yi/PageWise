@@ -141,4 +141,6 @@ private func exportRun(_ paper: Paper, summary: ReadingNote?, annotations: [Read
     #expect(!rendered.contains("源码第 1 段"))
     #expect(rendered.contains("参见[^pr-1]"))
     #expect(rendered.contains("`\(link)`"))
+    #expect(rendered.contains("pagewise://open?paper=\(paper.id.uuidString)"))
+    #expect(rendered.contains("note=\(note.id.uuidString)"))
 }

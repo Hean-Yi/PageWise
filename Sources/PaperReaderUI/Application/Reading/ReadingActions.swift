@@ -88,4 +88,54 @@ extension ReaderModel {
             lastInteraction = previousInteraction
         }
     }
+
+    /// Handles `pagewise://open?paper=<uuid>&page=<1-based>&note=<uuid>` deep links (e.g. from Obsidian).
+    @discardableResult
+    public func handleDeepLink(_ url: URL) -> Bool {
+        guard url.scheme?.lowercased() == "pagewise",
+            let components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+        else { return false }
+        let items = Dictionary(
+            uniqueKeysWithValues: (components.queryItems ?? []).compactMap { item in
+                item.value.map { (item.name.lowercased(), $0) }
+            })
+        guard let rawPaper = items["paper"], let paperID = UUID(uuidString: rawPaper),
+            let paper = state.papers.first(where: { $0.id == paperID })
+        else { return false }
+        select(paperID)
+        if let rawNote = items["note"], let noteID = UUID(uuidString: rawNote),
+            let note = referencedReadingNote(id: noteID, paperID: paperID)
+        {
+            openReadingNote(note)
+            return true
+        }
+        if let rawPage = items["page"], let oneBased = Int(rawPage), (1...max(1, paper.pageCount)).contains(oneBased) {
+            navigateToPage(oneBased - 1)
+        }
+        return true
+    }
+
+    /// Manually edits a paper's display title and/or source URL (e.g. DOI / arXiv link).
+    @discardableResult
+    public func updatePaperMetadata(paperID: UUID, title: String, sourceURL: String?) async -> Bool {
+        let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedTitle.isEmpty, let index = state.papers.firstIndex(where: { $0.id == paperID }) else {
+            return false
+        }
+        let trimmedSource = sourceURL?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedSource = trimmedSource?.isEmpty == true ? nil : trimmedSource
+        let previous = state.papers[index]
+        guard previous.title != trimmedTitle || previous.sourceURL != normalizedSource else { return true }
+        state.papers[index].title = trimmedTitle
+        state.papers[index].sourceURL = normalizedSource
+        if await save() {
+            paperSearchWarmup.enqueue([state.papers[index]])
+            status = "已更新论文信息"
+            return true
+        }
+        if let current = state.papers.firstIndex(where: { $0.id == paperID }) {
+            state.papers[current] = previous
+        }
+        return false
+    }
 }

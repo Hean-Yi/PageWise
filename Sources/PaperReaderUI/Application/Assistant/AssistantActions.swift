@@ -37,6 +37,12 @@ extension ReaderModel {
         assistantTask = nil
     }
 
+    public func startNewPaperDiscussion() {
+        guard let id = selectedPaperID, !busyAI else { return }
+        paperDiscussionResetAt[id] = Date()
+        lastAssistantFailure = nil
+    }
+
     public func ask(_ question: String) async {
         guard let paper, !busyAI, !question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         touch()
@@ -140,10 +146,12 @@ extension ReaderModel {
             try Task.checkCancellation()
             guard lastPaperDeletion[paper.id] == deletion else { return }
             let overrides = overriddenPreferences(for: question, paperID: paper.id)
+            let resetAt = paperDiscussionResetAt[paper.id]
             let history = Array(
                 state.chats.reversed().lazy.filter { turn in
                     useMemory && ResearchMemory.permitsConversationHistory(for: turn.question)
                         && turn.paperID == paper.id
+                        && (resetAt == nil || turn.createdAt > resetAt!)
                         && turn.readingNoteID == nil && turn.closeReadingVersion == nil
                         && self.canReplayResearchMemory(turn.backgroundSources)
                         && self.preferenceScopeIsCurrent(turn.backgroundSources, paperID: paper.id)
@@ -313,6 +321,7 @@ extension ReaderModel {
             var reasoningCadence = AssistantDraftCadence()
             var roundReasoning = ""
             var collectedReasoning: [String] = []
+            var collectedToolTrace: [String] = []
             var finalAnswer = ""
             let capturedPersonalSources = personalSources
             var recalledMemoryIDs = Set(effective.sources.map(\.id))
@@ -390,7 +399,10 @@ extension ReaderModel {
                     }
                 },
                 executeBatch: { @MainActor calls, _ in
-                    self.assistantActivityStatus = Self.paperAssistantToolStatus(for: calls)
+                    let statusLabel = Self.paperAssistantToolStatus(for: calls)
+                    self.assistantActivityStatus = statusLabel
+                    collectedToolTrace.append(
+                        statusLabel.replacingOccurrences(of: "正在", with: "").replacingOccurrences(of: "…", with: ""))
                     defer { self.assistantActivityStatus = nil }
                     let outcomes: [PaperAssistantToolOutcome]
                     if AgentToolConcurrency.canRunConcurrently(calls) {
@@ -464,6 +476,7 @@ extension ReaderModel {
             turn.reasoning =
                 collectedReasoning.isEmpty
                 ? nil : collectedReasoning.joined(separator: "\n\n")
+            turn.toolTrace = collectedToolTrace.isEmpty ? nil : collectedToolTrace
             guard lastPaperDeletion[paper.id] == deletion else { return }
             try validateAssistantBackground(sources, paperID: paper.id)
             let valid = Set(evidence.map(\.id))

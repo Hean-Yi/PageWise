@@ -11,6 +11,7 @@ struct PaperAssistantView: View {
     @FocusState private var composerFocused: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var expandedThinking: Set<UUID> = []
+    @State private var expandedToolTraces: Set<UUID> = []
 
     private var displayedChats: [ChatTurn] {
         model.currentChats + (model.currentAssistantDraft.map { [$0] } ?? [])
@@ -96,6 +97,47 @@ struct PaperAssistantView: View {
                                                     Rectangle().fill(ReaderTheme.line).frame(width: 1)
                                                 }
                                                 .padding(.leading, 7)
+                                        }
+                                    }
+                                    .foregroundStyle(ReaderTheme.muted)
+                                }
+                                if let trace = turn.toolTrace, !trace.isEmpty {
+                                    let expanded = expandedToolTraces.contains(turn.id)
+                                    VStack(alignment: .leading, spacing: 5) {
+                                        Button {
+                                            withAnimation(ReaderMotion.disclosure(reduceMotion)) {
+                                                if expanded {
+                                                    expandedToolTraces.remove(turn.id)
+                                                } else {
+                                                    expandedToolTraces.insert(turn.id)
+                                                }
+                                            }
+                                        } label: {
+                                            HStack(spacing: 7) {
+                                                ReaderActionSymbol("list.bullet.indent").frame(width: 15)
+                                                Text("检索与工具步骤 · \(trace.count) 步").fontWeight(.medium)
+                                                Spacer(minLength: 4)
+                                                ReaderActionSymbol("chevron.right").font(.caption2)
+                                                    .rotationEffect(.degrees(expanded ? 90 : 0))
+                                                    .accessibilityHidden(true)
+                                            }
+                                            .font(.caption).padding(.vertical, 3).contentShape(Rectangle())
+                                        }
+                                        .readerIconButtonStyle(.plain)
+                                        if expanded {
+                                            VStack(alignment: .leading, spacing: 4) {
+                                                ForEach(Array(trace.enumerated()), id: \.offset) { _, step in
+                                                    HStack(spacing: 6) {
+                                                        Image(systemName: "checkmark").font(.caption2)
+                                                        Text(step)
+                                                    }
+                                                }
+                                            }
+                                            .font(.caption).padding(.leading, 11)
+                                            .overlay(alignment: .leading) {
+                                                Rectangle().fill(ReaderTheme.line).frame(width: 1)
+                                            }
+                                            .padding(.leading, 7)
                                         }
                                     }
                                     .foregroundStyle(ReaderTheme.muted)
@@ -202,6 +244,16 @@ struct PaperAssistantView: View {
                 .frame(minHeight: 52, alignment: .top)
                 .focused($composerFocused).onSubmit(send).accessibilityLabel("向论文助读提问")
             HStack {
+                if !model.currentChats.isEmpty {
+                    Button {
+                        model.startNewPaperDiscussion()
+                    } label: {
+                        ReaderActionSymbol("square.and.pencil").frame(minWidth: 30, minHeight: 30)
+                    }
+                    .readerIconButtonStyle(.plain).foregroundStyle(ReaderTheme.muted)
+                    .help("新对话").accessibilityLabel("新对话")
+                    .disabled(model.busyAI)
+                }
                 Button(action: relatedPapers) {
                     Label("相关论文", systemImage: "point.3.connected.trianglepath.dotted").labelStyle(
                         ReaderSymbolLabelStyle())

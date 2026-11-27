@@ -4,6 +4,17 @@
 <dict>
     <key>CFBundleDisplayName</key>
     <string>$(PRODUCT_NAME)</string>
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleURLName</key>
+            <string>dev.paperreader.deeplink</string>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>pagewise</string>
+            </array>
+        </dict>
+    </array>
     <key>UTExportedTypeDeclarations</key>
     <array>
         <dict>
